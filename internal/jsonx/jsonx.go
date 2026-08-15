@@ -80,6 +80,19 @@ func DecodeForeign[T any](b []byte) (*T, error) {
 	return value, nil
 }
 
+// Marshal renders v as one JSON value in memory — the encode-side
+// counterpart of DecodeBytes, for building the Raw sub-documents and
+// statement bytes the emit leg signs. No trailing newline: the bytes
+// returned are exactly the bytes hashed, base64-carried and verified.
+func Marshal(v any) (Raw, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("jsonx: marshal: %w", err)
+	}
+
+	return b, nil
+}
+
 // Encode writes v to w followed by a newline, the canonical layout for
 // line-oriented evidence files.
 func Encode(w io.Writer, v any) error {

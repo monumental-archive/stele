@@ -10,6 +10,8 @@ package gitrepo
 
 import (
 	"bytes"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -141,10 +143,113 @@ func (r *Repo) Noted() ([]string, error) {
 	return revs, nil
 }
 
+// IsAncestor reports whether rev is an ancestor of (or equal to) the
+// commit ref names. git's exit status 1 is the false answer; any
+// other failure is a real error, kept distinct so an object-store
+// problem can never read as "not on the branch".
+func (r *Repo) IsAncestor(rev, ref string) (bool, error) {
+	_, err := r.git("merge-base", "--is-ancestor", rev, ref)
+	if err == nil {
+		return true, nil
+	}
+
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("gitrepo: ancestry of %s in %s: %w", rev, ref, err)
+}
+
+// Parents returns every parent of rev, first-parent first — the
+// provenance predicate records full ancestry, not just the walk edge.
+func (r *Repo) Parents(rev string) ([]string, error) {
+	out, err := r.git("rev-list", "--parents", "-n1", rev)
+	if err != nil {
+		return nil, fmt.Errorf("gitrepo: parents of %s: %w", rev, err)
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 || fields[0] != rev {
+		return nil, fmt.Errorf("gitrepo: rev-list for %s returned %q", rev, out)
+	}
+
+	return fields[1:], nil
+}
+
+// CommitTime returns rev's committer time in strict ISO 8601 — the
+// contemporaneity fact the provenance records.
+func (r *Repo) CommitTime(rev string) (string, error) {
+	out, err := r.git("show", "-s", "--format=%cI", rev+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("gitrepo: commit time of %s: %w", rev, err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+// AddNote writes note bytes as rev's note, replacing any existing
+// one. The bytes STORED are whatever git keeps (`notes add` applies
+// stripspace: a trailing newline is normalised on) — which is exactly
+// why callers must never hash what they passed in here, only what
+// Note reads back out of the object store (.github#434 rule 2). The
+// committer identity comes from the repository's local config: who
+// signs the ledger commit is the caller's storage contract, not this
+// package's.
+func (r *Repo) AddNote(rev string, note []byte) error {
+	if _, err := r.gitIn(note, "notes", "--ref", r.notesRef, "add", "-f", "-F", "-", rev); err != nil {
+		return fmt.Errorf("gitrepo: notes add %s: %w", rev, err)
+	}
+
+	return nil
+}
+
+// FetchNotes force-updates the local notes ref from the remote — the
+// refetch half of the append's compare-and-swap loop.
+func (r *Repo) FetchNotes(remote, token string) error {
+	if _, err := r.gitAuth(token, "fetch", "-q", remote, "+"+r.notesRef+":"+r.notesRef); err != nil {
+		return fmt.Errorf("gitrepo: fetch %s: %w", r.notesRef, err)
+	}
+
+	return nil
+}
+
+// PushNotes pushes the local notes ref to the remote WITHOUT force —
+// the fast-forward requirement is the compare-and-swap: a push that
+// lands proves the predecessor this run hashed was still the tail.
+func (r *Repo) PushNotes(remote, token string) error {
+	if _, err := r.gitAuth(token, "push", "-q", remote, r.notesRef+":"+r.notesRef); err != nil {
+		return fmt.Errorf("gitrepo: push %s: %w", r.notesRef, err)
+	}
+
+	return nil
+}
+
+// gitAuth runs one network subcommand, attaching the token as a basic
+// auth header when one is given — the same header shape GitHub's own
+// checkout uses; anonymous when empty (file-protocol remotes, tests).
+func (r *Repo) gitAuth(token string, args ...string) ([]byte, error) {
+	if token == "" {
+		return r.git(args...)
+	}
+
+	header := "AUTHORIZATION: basic " +
+		base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
+
+	return r.git(append([]string{"-c", "http.extraheader=" + header}, args...)...)
+}
+
 // git runs one subcommand against the repository with a hermetic
 // environment: no user config, no system config — a verifier's read
 // of the object store must not vary with the operator's dotfiles.
 func (r *Repo) git(args ...string) ([]byte, error) {
+	return r.gitIn(nil, args...)
+}
+
+// gitIn is git with bytes on stdin — how note content reaches
+// `notes add -F -` without ever transiting a string variable that
+// could normalise it.
+func (r *Repo) gitIn(stdin []byte, args ...string) ([]byte, error) {
 	full := append([]string{"-C", r.dir}, args...)
 
 	// The argument vector is built from validated inputs and this
@@ -159,6 +264,10 @@ func (r *Repo) git(args ...string) ([]byte, error) {
 	)
 
 	var stdout, stderr bytes.Buffer
+
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

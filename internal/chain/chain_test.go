@@ -270,3 +270,26 @@ func TestPredicateFullDecode(t *testing.T) {
 		t.Errorf("Controls = %+v, want the one property", p.Controls)
 	}
 }
+
+// The known answers are computed OUTSIDE this module
+// (`printf '{"k":"v"}\n' | sha256sum` and the same without the
+// newline), because a golden value the implementation computes for
+// itself lets the emit and verify legs drift together — the exact
+// mechanism of .github#434. The stripped form is asserted as the
+// named wrong answer so that regression has a face here.
+const (
+	kvRawSHA256      = "85fbce622d07ebfc3e81b7f7b842482ff0b5b24273a371f56537a4a654d4f139"
+	kvStrippedSHA256 = "666c1aa02e8068c6d5cc1d3295009432c16790bec28ec8ce119d0d1a18d61319"
+)
+
+func TestSHA256HexKnownAnswer(t *testing.T) {
+	t.Parallel()
+
+	if got := chain.SHA256Hex([]byte("{\"k\":\"v\"}\n")); got != kvRawSHA256 {
+		t.Errorf("SHA256Hex = %s, want %s (the externally computed answer)", got, kvRawSHA256)
+	}
+
+	if got := chain.SHA256Hex([]byte(`{"k":"v"}`)); got != kvStrippedSHA256 {
+		t.Errorf("SHA256Hex(stripped) = %s, want %s — the two forms must stay distinguishable", got, kvStrippedSHA256)
+	}
+}
