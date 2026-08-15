@@ -6,7 +6,15 @@
 name: gate
 
 "on":
-  pull_request: {}
+  # edited is load-bearing: the PR title is the squash subject, and a
+  # title or base edit must re-run the gate rather than keep a stale
+  # verdict (#427, #430).
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
   push:
     branches:
       - main

@@ -112,3 +112,44 @@ func TestDecodeBytes(t *testing.T) {
 		t.Error("DecodeBytes accepted an unknown field")
 	}
 }
+
+func TestDecodeForeign(t *testing.T) {
+	t.Parallel()
+
+	type envelope struct {
+		Kept *string `json:"kept"`
+	}
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "unknown fields are tolerated", input: `{"kept": "v", "novel": 1}`},
+		{name: "not json is refused", input: `nonsense`, wantErr: true},
+		{name: "trailing data is refused", input: `{"kept": "v"} {}`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := jsonx.DecodeForeign[envelope]([]byte(tt.input))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("DecodeForeign accepted what it must refuse")
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("DecodeForeign = %v", err)
+			}
+
+			if got.Kept == nil || *got.Kept != "v" {
+				t.Errorf("Kept = %v, want v", got.Kept)
+			}
+		})
+	}
+}

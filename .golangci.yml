@@ -112,6 +112,14 @@ linters:
         - all
     gocritic:
       enable-all: true
+    wrapcheck:
+      # Errors from this module's own internal packages are already
+      # namespaced diagnostics ("verify: …", "gitrepo: …") written to
+      # be shown verbatim; re-wrapping at the CLI seam would prefix
+      # the prefix. Foreign packages stay under the rule — their
+      # errors carry no context a caller's wrap must add.
+      ignore-package-globs:
+        - github.com/monumental-archive/stele/*
     nolintlint:
       # The disabled-rule law at line granularity: every //nolint names
       # its linter and carries a reason, and an ineffective directive is
@@ -122,11 +130,34 @@ linters:
     generated: strict
     # warn-unused keeps this section honest: an exclusion no finding
     # needs is itself flagged, so speculative carve-outs cannot
-    # accumulate. There are deliberately no rules yet — the first one
-    # to earn its place will likely be dupl on _test.go (table tests
-    # duplicate scaffolding by design), added when it actually fires.
+    # accumulate. Each rule below was added when it first fired, with
+    # the reason about the rule.
     warn-unused: true
-    rules: []
+    rules:
+      # Table tests carry their facts inline: a JSON key or an
+      # expected-error fragment repeated across rows is the test's
+      # DATA, and hoisting it into a named constant moves the fact
+      # away from the row that asserts it — the constant would exist
+      # for the linter, not the reader. Production code stays under
+      # the rule. (First fired: internal/verify's statement-builder
+      # tests, issue #3.)
+      - path: _test\.go
+        linters:
+          - goconst
+      # Shared fixtures (a policy document, one set of release
+      # coordinates) are the test package's constants in spirit; Go
+      # just has no const structs. They are never mutated — a test
+      # that needs a variant copies. (Same firing.)
+      - path: _test\.go
+        linters:
+          - gochecknoglobals
+      # Test helpers forward the engine's error VERBATIM because the
+      # table rows assert on the exact refusal text — wrapping in the
+      # helper would decorate the very surface under test. Production
+      # code stays under the rule. (Same firing.)
+      - path: _test\.go
+        linters:
+          - wrapcheck
 
 formatters:
   enable:

@@ -92,26 +92,9 @@ func NewVerifier(trusted root.TrustedMaterial) (*Verifier, error) {
 // there proves nothing. Every branch reachable through real signed
 // material is table-tested.
 func (t *Verifier) Verify(entity verify.SignedEntity, id Identity, alg, digestHex string) (*Verified, error) {
-	if id.SAN == "" || id.Issuer == "" {
-		return nil, errors.New("trust: identity must carry both SAN and issuer — a half identity matches half the world")
-	}
-
-	digest, err := hex.DecodeString(digestHex)
-	if err != nil || len(digest) == 0 {
-		return nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
-	}
-
-	ci, err := verify.NewShortCertificateIdentity(id.Issuer, "", id.SAN, "")
+	result, err := t.verifyEntity(entity, id, alg, digestHex)
 	if err != nil {
-		return nil, fmt.Errorf("trust: identity: %w", err)
-	}
-
-	result, err := t.v.Verify(entity, verify.NewPolicy(
-		verify.WithArtifactDigest(alg, digest),
-		verify.WithCertificateIdentity(ci),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("trust: verify: %w", err)
+		return nil, err
 	}
 
 	sig, err := entity.SignatureContent()
@@ -138,4 +121,88 @@ func (t *Verifier) Verify(entity verify.SignedEntity, id Identity, alg, digestHe
 		SAN:        result.Signature.Certificate.SubjectAlternativeName,
 		Extensions: result.Signature.Certificate.Extensions,
 	}, nil
+}
+
+// VerifyBlob proves one message-signature entity (a cosign
+// sign-blob bundle) over the artifact whose digest the caller
+// supplies: signature chain, identity, digest — the same stance as
+// Verify, minus the envelope, because a blob signature covers the
+// artifact bytes directly. Payload is nil by construction: the
+// caller already holds the artifact, and returning a copy would
+// invite parsing something other than what was hashed.
+func (t *Verifier) VerifyBlob(entity verify.SignedEntity, id Identity, alg, digestHex string) (*Verified, error) {
+	result, err := t.verifyEntity(entity, id, alg, digestHex)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Signature == nil || result.Signature.Certificate == nil {
+		return nil, errors.New("trust: verification returned no certificate — nothing to hold the policy against")
+	}
+
+	return &Verified{
+		SAN:        result.Signature.Certificate.SubjectAlternativeName,
+		Extensions: result.Signature.Certificate.Extensions,
+	}, nil
+}
+
+// verifyEntity runs the shared cryptographic core: both entry points
+// verify the same way and differ only in what a success returns.
+func (t *Verifier) verifyEntity(
+	entity verify.SignedEntity, id Identity, alg, digestHex string,
+) (*verify.VerificationResult, error) {
+	if id.SAN == "" || id.Issuer == "" {
+		return nil, errors.New("trust: identity must carry both SAN and issuer — a half identity matches half the world")
+	}
+
+	digest, err := hex.DecodeString(digestHex)
+	if err != nil || len(digest) == 0 {
+		return nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
+	}
+
+	ci, err := verify.NewShortCertificateIdentity(id.Issuer, "", id.SAN, "")
+	if err != nil {
+		return nil, fmt.Errorf("trust: identity: %w", err)
+	}
+
+	result, err := t.v.Verify(entity, verify.NewPolicy(
+		verify.WithArtifactDigest(alg, digest),
+		verify.WithCertificateIdentity(ci),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("trust: verify: %w", err)
+	}
+
+	return result, nil
+}
+
+// PeekStatement returns a bundle's DSSE payload bytes WITHOUT
+// verifying anything. It exists for exactly one job: selecting which
+// bundles from an attestation store are worth verifying (by
+// predicate type), the way a verifier filters a store that also
+// holds verdicts and VEX over the same subject. Nothing read through
+// this function may inform a verdict — the post-verification path
+// re-decodes from Verified.Payload, the bytes the signature covered.
+func PeekStatement(bundleJSON []byte) ([]byte, error) {
+	b, err := LoadBundle(bundleJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	sig, err := b.SignatureContent()
+	if err != nil {
+		return nil, fmt.Errorf("trust: signature content: %w", err)
+	}
+
+	env := sig.EnvelopeContent()
+	if env == nil || env.RawEnvelope() == nil {
+		return nil, errors.New("trust: the bundle carries no DSSE envelope — nothing to peek at")
+	}
+
+	payload, err := dsse.DecodeBase64(env.RawEnvelope().Payload)
+	if err != nil {
+		return nil, fmt.Errorf("trust: envelope payload: %w", err)
+	}
+
+	return payload, nil
 }

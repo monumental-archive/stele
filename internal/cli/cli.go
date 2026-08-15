@@ -10,6 +10,9 @@ import (
 	"runtime/debug"
 )
 
+// verbVerify names the one multi-mode verb.
+const verbVerify = "verify"
+
 // Exit codes: 0 success, 2 usage error, 3 output-stream failure.
 const (
 	exitOK    = 0
@@ -43,6 +46,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		return exitOK
+	case verbVerify:
+		return verifyCmd(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr, "stele: unknown command %q (run `stele help`)\n", args[0]); err != nil {
 			return exitIO
@@ -57,8 +62,19 @@ func usage(w io.Writer) error {
 	const text = `stele — SLSA evidence engine and verifier
 
 usage:
-  stele help      show this synopsis
-  stele version   report the build's module version
+  stele help             show this synopsis
+  stele version          report the build's module version
+  stele verify <mode>    verify published evidence; modes:
+    release   every attestation of one release against the pinned
+              signer identity, the four verifying-artifacts
+              comparisons, subject coverage, the release decision
+    vsa       the published verdict, as the spec's consumer procedure
+    chain     the source chain: coverage tip→genesis and the ledger
+    level     chain, then the honest computed source level
+
+verify flags: --policy --trusted-root --repo; release/vsa add
+--tag --subjects --signer-digest --canon-digest; chain/level add
+--git-dir [--ref]. GITHUB_TOKEN/GH_TOKEN authenticates store reads.
 `
 
 	if _, err := io.WriteString(w, text); err != nil {

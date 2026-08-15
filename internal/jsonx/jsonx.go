@@ -57,6 +57,29 @@ func DecodeBytes[T any](b []byte) (*T, error) {
 	return Decode[T](bytes.NewReader(b))
 }
 
+// DecodeForeign decodes one JSON value from b tolerating unknown
+// fields — for FOREIGN envelopes only: API responses whose schema
+// somebody else owns and extends (the GitHub attestations endpoint).
+// Evidence formats never come through here; an evidence decoder that
+// shrugged at unknown keys would wave through version skew and
+// forgery signals alike, which is the whole reason Decode refuses
+// them. Trailing data is still an error: one document means one
+// document.
+func DecodeForeign[T any](b []byte) (*T, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+
+	value := new(T)
+	if err := dec.Decode(value); err != nil {
+		return nil, fmt.Errorf("jsonx: decode: %w", err)
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, ErrTrailingData
+	}
+
+	return value, nil
+}
+
 // Encode writes v to w followed by a newline, the canonical layout for
 // line-oriented evidence files.
 func Encode(w io.Writer, v any) error {
