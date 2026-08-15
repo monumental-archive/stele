@@ -33,18 +33,24 @@ over whole, and only then does the next open. State and next step:
 1. **verify — DONE, authoritative** (#3, closed at .github#436):
    `audit:source-vsa` runs this binary; the bash walk is deleted; the
    org policy is canon `slsa/verify-policy.json`.
-2. **emit — NEXT, open as #21.** Carries the verify-release.yml and
-   source-attest emitter cutovers, the `source-policies/` deletion,
-   the structural .github#434 fix, and the re-emission that turns the
-   stele/.github chains green. Its non-negotiables are written in the
-   issue; do not soften them. **Until it lands, every push to any org
-   main mints another broken chain link through the live bash emitter
-   (the newline digest defect) — red chains on pushed-to repos are
-   CORRECT, and no heal may run through the bash emitter.**
-3. **derive and assert — deliberately unopened.** Scope them only once
-   emit is underway; their shape depends on what emit leaves behind.
-4. **Release wiring (#7) activates after emit** — nothing worth
-   shipping as a binary before the emitter is in it.
+2. **emit — DONE, authoritative** (#21, cut over at .github#437,
+   closed at #24): the source-attest action and verify-release.yml
+   call `stele emit`; chain.sh/emit.sh/lib.sh/append.sh,
+   `source-policies/` and `release/vsa-predicate.jq` are deleted. The
+   .github#434 digest class is structurally unrepresentable — one
+   `chain.SHA256Hex` shared by the emit and verify legs, predecessor
+   hashes taken from the note read back out of the object store, and
+   a compare-and-swap append that rebuilds on rejection. The
+   defective spans were deleted and re-emitted through this emitter
+   (31 links on .github, 15 here); all four org chains verify at
+   `SLSA_SOURCE_LEVEL_3`.
+3. **release wiring, then assert, then derive — open as #25.**
+   Release first (#7): the `go-binary` class, then N-1 self-release,
+   which retires the `go run @<sha>` pins the canon carries today.
+   Then assert, then derive — derive takes `claims.sh` and with it
+   `dryrun.sh`. #25 also carries the emit cutover's named residue:
+   the identity guard, `preflight.sh` and the clone prep are still
+   logic outside the binary, two of them unchecked checks.
 
 Each handover also moves that mechanism's documentation: the canon doc
 that used to specify the behavior shrinks to org narrative plus a
