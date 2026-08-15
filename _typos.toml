@@ -1,0 +1,5 @@
+[default.extend-words]
+# in-toto's attestation bundles are named `<artifact>.intoto.jsonl`. The
+# filename is fixed by the in-toto spec, so it appears verbatim in prose
+# (SECURITY-INSIGHTS.yml above all). `typos` reads it as "into".
+intoto = "intoto"

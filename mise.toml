@@ -36,7 +36,12 @@ GOTOOLCHAIN = "local"
 # edit here — CLAUDE.md carries the activation note.
 [tasks.test]
 description = "go test, race detector on"
-env = { GOPROXY = "off", GOFLAGS = "-trimpath" }
+# CGO_ENABLED=1 here and only here, measured: -race requires cgo on
+# linux (the gate runner), and the race runtime is a TEST instrument —
+# the shipped binary keeps the global CGO_ENABLED=0. Caught by the
+# gate's first cloud run; darwin tolerates race without cgo, which is
+# why the local run stayed green (stele#1).
+env = { GOPROXY = "off", GOFLAGS = "-trimpath", CGO_ENABLED = "1" }
 run = "go test -race ./..."
 
 [tasks.build]
