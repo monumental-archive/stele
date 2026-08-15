@@ -102,10 +102,15 @@ The canon speaks for the org; stele speaks for the mechanism.
   — by the disabled-rule law, a layout defect. What vendoring bought
   beyond go.sum was offline builds and upstream-deletion insurance;
   not worth that price.
-- **Shadow mode is the proof bar.** Ported logic runs beside the bash
-  on identical inputs and must byte-match before it becomes
-  authoritative; every published release and chain link is a real
-  oracle. Nothing is left half-ported as a standing state.
+- **The bash is a reference, not an oracle.** Ported logic runs beside
+  it on identical inputs and divergence is investigated — but the bar
+  is spec correctness (SLSA v1.2, in-toto/DSSE, git's actual storage
+  semantics), never byte-equality with the bash. The bash carries
+  defects (.github#434's newline digest bug among them) and homegrown
+  quirks; reproducing them is transliteration wearing a proof. The
+  real oracles are the published releases and chain links. Record
+  divergence as a finding; never contort output to match bash bytes.
+  Nothing is left half-ported as a standing state.
 - **pgrx upgrade derivation ports last, or never** — a written
   sequencing decision (#392): `generate-pgrx-upgrade.sh` is proven SQL
   text derivation whose oracle a byte-diff cannot capture; it moves
