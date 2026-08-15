@@ -22,4 +22,9 @@ jobs:
       # Stated, not inherited: a `uses:` job takes the workflow-level
       # default, never an ambient grant (the gate.yml convention).
       contents: read # checkout of this repo and of the toolbelt
+    secrets:
+      # Empty until the org CODECOV_TOKEN is ticked onto this repo —
+      # the coverage-upload job skips clean on an absent token, so this
+      # line is safe to carry ahead of the enrolment web steps.
+      codecov-token: ${{ secrets.CODECOV_TOKEN }}
     uses: monumental-archive/.github/.github/workflows/ci.yml@3803df9b88945d668bf263edd63ccbacbedbb0b7 # v1.26.0
