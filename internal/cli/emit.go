@@ -384,6 +384,12 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 		return err
 	}
 
+	// The fold's single answer, stated for the orchestration layer:
+	// enrichment fetches lockfiles at exactly this revision, and after
+	// a passing verdict there is exactly one (the fold refused any
+	// disagreement), so printing it here is the safe hand-off.
+	out.logf("emit: source revision %s", verdict.SourceRevision())
+
 	when := emitNow().UTC().Truncate(time.Second).Format(time.RFC3339)
 
 	pred, err := verdict.VSAPredicate(ea.p, ea.coords, ea.policyURI, ea.canonPin, when)
