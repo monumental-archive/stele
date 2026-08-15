@@ -34,22 +34,27 @@ code: the capability boundary lives strictly above it.
 
 ## Why a stranger would run it
 
-Today, verifying a monumental-archive release means re-deriving the
-verification recipe from documentation. `stele verify` is that recipe
-as an executable: point it at a release and a policy, and it checks
-what the documentation says a stranger can check — fail-closed,
-byte-for-byte the same data model the emitter used, because verifier
-and emitter are one binary sharing one set of types.
+`stele verify` is the org's verification recipe as an executable:
+point it at a release and a policy, and it checks what the
+documentation says a stranger can check — fail-closed, byte-for-byte
+the same data model the emitter used, because verifier and emitter
+are one binary sharing one set of types.
 
 ## Status
 
-Skeleton. The port from the canon's bash
+`verify` is authoritative
+([#3](https://github.com/monumental-archive/stele/issues/3), closed at
+[.github#436](https://github.com/monumental-archive/.github/pull/436)):
+release, vsa, chain and level modes shadow-proven against every
+published class and both identity worlds, and the canon's source-track
+audit runs this binary — the bash walk it replaced is deleted. The
+port from the canon's bash
 ([.github#392](https://github.com/monumental-archive/.github/issues/392))
-proceeds verb by verb under shadow mode: ported logic runs beside the
-bash on identical inputs and must byte-match real releases before it
-becomes authoritative. The gate, lint canon (`golangci-lint` at
-`default: all`), coverage ratchet and hermetic build are live from this
-first commit — the tooling was stood up before the logic, deliberately.
+continues verb by verb under the same bar — shadow mode against real
+artifacts before authority — with `emit` next
+([#21](https://github.com/monumental-archive/stele/issues/21)). The
+gate, lint canon (`golangci-lint` at `default: all`), coverage ratchet
+and hermetic build have been live since the first commit.
 
 ## Building
 
