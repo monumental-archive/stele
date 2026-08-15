@@ -25,6 +25,12 @@ import (
 // ErrTrailingData reports input that continues past the first value.
 var ErrTrailingData = errors.New("jsonx: trailing data after value")
 
+// Raw is a deferred JSON value, byte-preserved. It exists so decode
+// types outside this package can carry an arbitrary sub-document (an
+// in-toto predicate) without importing encoding/json themselves —
+// the boundary stays whole.
+type Raw = json.RawMessage
+
 // Decode reads exactly one JSON value from r into a fresh T, rejecting
 // unknown fields and trailing data.
 func Decode[T any](r io.Reader) (*T, error) {
