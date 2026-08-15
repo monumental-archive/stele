@@ -1,0 +1,104 @@
+# OpenSSF Security Insights (schema v2.2.0) — the machine-readable
+# statement of this repository's security posture. Copy per repository and
+# fill the <angle-bracket> fields; everything else is org canon.
+# Reference: https://github.com/ossf/security-insights-spec
+header:
+  schema-version: 2.2.0
+  last-updated: "2026-08-15"
+  last-reviewed: "2026-08-15"
+  url: https://github.com/monumental-archive/stele/blob/main/SECURITY-INSIGHTS.yml
+  comment: >
+    Org-wide posture is defined in monumental-archive/.github; this file
+    records the per-repository specifics.
+
+project:
+  name: stele
+  administrators:
+    - name: Carl Allen
+      affiliation: Monumental Archive
+      primary: true
+  repositories:
+    - name: stele
+      url: https://github.com/monumental-archive/stele
+      comment: Universal SLSA evidence engine and verifier — derive, assert, emit, verify
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    security-policy: https://github.com/monumental-archive/.github/blob/main/SECURITY.md
+    contact:
+      name: Carl Allen
+      email: carl.allen313@gmail.com
+      primary: true
+
+repository:
+  status: active
+  url: https://github.com/monumental-archive/stele
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  core-team:
+    - name: Carl Allen
+      affiliation: Monumental Archive
+      primary: true
+  license:
+    url: https://github.com/monumental-archive/stele/blob/main/LICENSE
+    expression: Apache-2.0
+  security:
+    assessments:
+      self:
+        comment: >
+          Gated by the org toolbelt (zizmor pedantic, trivy misconfig+secret,
+          actionlint/shellcheck at maximum) on every pull request; OpenSSF
+          Scorecard runs weekly and publishes; CodeQL default setup analyzes
+          every push.
+    tools:
+      - name: OpenSSF Scorecard
+        type: SCA
+        version: latest
+        rulesets: [default]
+        integration: {adhoc: false, ci: true, before-release: true}
+      - name: CodeQL
+        type: SAST
+        version: default-setup
+        rulesets: [default]
+        integration: {adhoc: false, ci: true, before-release: true}
+      - name: zizmor
+        type: SAST
+        version: pinned-by-toolbelt
+        rulesets: [pedantic]
+        integration: {adhoc: false, ci: true, before-release: true}
+      - name: trivy
+        type: SCA
+        version: pinned-by-toolbelt
+        rulesets: [misconfig, secret]
+        integration: {adhoc: false, ci: true, before-release: true}
+      - name: Renovate
+        type: SCA
+        version: hosted
+        rulesets: [org default.json preset]
+        integration: {adhoc: false, ci: true, before-release: false}
+    champions:
+      - name: Carl Allen
+        primary: true
+
+# Versioned repositories only — delete this block in a continuous one.
+release:
+  automated-pipeline: true
+  distribution-points:
+    - uri: https://github.com/monumental-archive/stele/releases
+      comment: GitHub releases with the canonical evidence bundle
+  attestations:
+    - name: SLSA build provenance
+      predicate-uri: https://slsa.dev/provenance/v1
+      location: attestations.intoto.jsonl release asset, and the GitHub
+        attestations API (gh attestation verify --signer-workflow
+        monumental-archive/signer/.github/workflows/sign.yml)
+      comment: >
+        Signed by the org's single Sigstore identity; the build runs in
+        shared reusable workflows and the signing job runs no repository
+        code (SLSA Build L3 topology).
+    - name: SPDX SBOM
+      predicate-uri: https://spdx.dev/Document
+      location: stele-<version>.spdx.json release asset
+  license:
+    url: https://github.com/monumental-archive/stele/blob/main/LICENSE
+    expression: Apache-2.0

@@ -1,0 +1,7 @@
+# Badge states nothing can derive (.github#316): one line per shield
+# that waits on a human step. Set each line LAST — audit:badges re-asks
+# the issuer, and an id set before the issuer agrees is a red Monday.
+# bestpractices: 'pending' until the form binds, then the BP_ID.
+# reuse: 'pending' until FSFE registration confirms, then 'registered'.
+bestpractices pending
+reuse pending

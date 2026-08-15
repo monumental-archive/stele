@@ -1,0 +1,56 @@
+# OpenSSF Scorecard, publishing to the public API (the badge).
+#
+# Deliberately NOT a reusable workflow, alone among this organisation's
+# workflows: scorecard's publish path validates the calling repository's
+# own workflow file and permits only its approved action list — a `uses:`
+# line pointing at shared machinery fails that validation. So this stub is
+# self-contained and copied per repository, and drift is accepted as the
+# price of the badge. Keep it minimal so there is nothing to drift.
+#
+# The publish job may hold `id-token: write` under the org's narrowed rule:
+# it is a standalone scheduled workflow that runs no caller-supplied code —
+# scorecard scans the repository; it does not build it.
+name: scorecard
+
+on:
+  schedule:
+    # Tuesdays 06:00 UTC — the day after the Monday audit, so a finding
+    # from one does not mask the other.
+    - cron: "0 6 * * 2"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# One analysis at a time; a fresher push supersedes a stale queued one.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Scorecard analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload the SARIF to code scanning
+      id-token: write # publish_results: sign the result for the public API
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: results.sarif

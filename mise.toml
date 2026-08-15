@@ -1,0 +1,45 @@
+# Repo-specific tools and tasks only; the org belt arrives globally.
+# ci is assembled by the toolbelt: define test/build/lint:* tasks here
+# and they are collected automatically.
+
+[settings]
+lockfile = true
+
+[tools]
+# The toolchain, exact-pinned; GOTOOLCHAIN=local below makes go.mod's
+# `go` directive and this pin agree loudly instead of auto-downloading.
+go = "1.26.5"
+# govulncheck is a build input (audit:go-vulns asserts it with this
+# remedy): no upstream binaries and no aqua package, so the go: backend
+# builds it from a pinned source version with the toolchain above —
+# the cargo-fuzz pattern, the belt's third documented backend
+# exception (tooling-verdicts.md, #392).
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.7.0"
+
+# Hermetic by construction (#392): the build is a pure function of the
+# tree — no cgo (one compiler, static output), no toolchain
+# auto-download (the pin above is the only toolchain). These two are
+# global; the proxy cutoff is NOT, and that is measured, not taste:
+# mise's [env] reaches the subprocesses that INSTALL tools (the uv
+# lesson, .github#82), so a global GOPROXY=off strangles the go:
+# backend building govulncheck. The cutoff lives on the tasks instead.
+[env]
+CGO_ENABLED = "0"
+GOTOOLCHAIN = "local"
+
+# GOPROXY=off on every task: a build that cannot fetch cannot be
+# confused, and with the closure in-tree there is nothing to fetch.
+# -trimpath keeps machine paths out of the binary (the reproducibility
+# half). The module has zero external dependencies today, which is the
+# strongest hermetic state there is; the first dependency that lands
+# also lands `go mod vendor` + `-mod=vendor` in GOFLAGS, as a reviewed
+# edit here — CLAUDE.md carries the activation note.
+[tasks.test]
+description = "go test, race detector on"
+env = { GOPROXY = "off", GOFLAGS = "-trimpath" }
+run = "go test -race ./..."
+
+[tasks.build]
+description = "Build every command"
+env = { GOPROXY = "off", GOFLAGS = "-trimpath" }
+run = "go build ./..."
