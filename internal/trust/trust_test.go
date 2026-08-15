@@ -242,3 +242,108 @@ func TestVerifyBareSignature(t *testing.T) {
 		t.Errorf("Verify error = %q, want it to name the missing envelope", err)
 	}
 }
+
+// blobHarness stands up one virtual sigstore and one BLOB-signed
+// entity — the cosign sign-blob shape a chain link's halves carry.
+func blobHarness(t *testing.T) (*trust.Verifier, *ca.TestEntity, string) {
+	t.Helper()
+
+	vs, err := ca.NewVirtualSigstore()
+	if err != nil {
+		t.Fatalf("NewVirtualSigstore = %v", err)
+	}
+
+	artifact := []byte("the statement bytes")
+
+	entity, err := vs.Sign(san, issuer, artifact)
+	if err != nil {
+		t.Fatalf("Sign = %v", err)
+	}
+
+	v, err := trust.NewVerifier(vs)
+	if err != nil {
+		t.Fatalf("NewVerifier = %v", err)
+	}
+
+	return v, entity, digestOf(artifact)
+}
+
+func TestVerifyBlob(t *testing.T) {
+	t.Parallel()
+
+	v, entity, digestHex := blobHarness(t)
+
+	got, err := v.VerifyBlob(entity, trust.Identity{SAN: san, Issuer: issuer}, algSHA256, digestHex)
+	if err != nil {
+		t.Fatalf("VerifyBlob = %v", err)
+	}
+
+	if got.SAN != san {
+		t.Errorf("SAN = %q, want %q", got.SAN, san)
+	}
+
+	if got.Payload != nil {
+		t.Errorf("Payload = %q, want nil — the caller already holds the artifact", got.Payload)
+	}
+}
+
+func TestVerifyBlobRefusals(t *testing.T) {
+	t.Parallel()
+
+	v, entity, digestHex := blobHarness(t)
+
+	tests := []struct {
+		name      string
+		id        trust.Identity
+		digestHex string
+		want      string
+	}{
+		{"half identity", trust.Identity{Issuer: issuer}, digestHex, "half identity"},
+		{
+			"wrong SAN",
+			trust.Identity{SAN: "https://github.com/acme/other/.github/workflows/x.yml@refs/heads/main", Issuer: issuer},
+			digestHex,
+			wantVerify,
+		},
+		{"digest not hex", trust.Identity{SAN: san, Issuer: issuer}, "zz", "not hex"},
+		{"wrong digest", trust.Identity{SAN: san, Issuer: issuer}, digestOf([]byte("tampered")), wantVerify},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := v.VerifyBlob(entity, tt.id, algSHA256, tt.digestHex); err == nil {
+				t.Fatal("VerifyBlob accepted what it must refuse")
+			} else if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("VerifyBlob error = %q, want it to name %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestPeekStatement(t *testing.T) {
+	t.Parallel()
+
+	bundleJSON, err := data.Bundle(t, "dsse.sigstore.json").MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON(bundle) = %v", err)
+	}
+
+	payload, err := trust.PeekStatement(bundleJSON)
+	if err != nil {
+		t.Fatalf("PeekStatement = %v", err)
+	}
+
+	if !strings.Contains(string(payload), "_type") {
+		t.Errorf("payload = %q, want an in-toto statement body", payload)
+	}
+}
+
+func TestPeekStatementRefusals(t *testing.T) {
+	t.Parallel()
+
+	if _, err := trust.PeekStatement([]byte("not json")); err == nil {
+		t.Error("PeekStatement accepted non-JSON")
+	}
+}

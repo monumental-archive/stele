@@ -1,0 +1,181 @@
+package gitrepo_test
+
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/monumental-archive/stele/internal/gitrepo"
+)
+
+const notesRef = "refs/notes/commits"
+
+// fixture is one built repository: its directory, the tip commit,
+// and the root commit.
+type fixture struct {
+	dir, tip, root string
+}
+
+// repo builds a real repository: two commits on main, a note on the
+// tip. Real git is the point — this package IS the git boundary, and
+// faking git here would leave the actual seam untested.
+func repo(t *testing.T) fixture {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	git := func(args ...string) string {
+		t.Helper()
+
+		cmd := exec.Command("git", //nolint:gosec,noctx // fixed executable, test-owned args
+			append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_SYSTEM=/dev/null",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+
+		var out bytes.Buffer
+
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out.String())
+		}
+
+		return strings.TrimSpace(out.String())
+	}
+
+	git("init", "-q", "-b", "main")
+
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	git("add", "f")
+	git("commit", "-q", "-m", "one")
+	root := git("rev-parse", "HEAD")
+
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	git("add", "f")
+	git("commit", "-q", "-m", "two")
+	tip := git("rev-parse", "HEAD")
+
+	git("notes", "add", "-m", `{"the":"note"}`, tip)
+
+	return fixture{dir: dir, tip: tip, root: root}
+}
+
+func TestRepo(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+
+	r, err := gitrepo.Open(fx.dir, notesRef)
+	if err != nil {
+		t.Fatalf("Open = %v", err)
+	}
+
+	got, err := r.Tip("refs/heads/main")
+	if err != nil || got != fx.tip {
+		t.Errorf("Tip = %q, %v — want %q", got, err, fx.tip)
+	}
+
+	parent, err := r.Parent(fx.tip)
+	if err != nil || parent != fx.root {
+		t.Errorf("Parent(tip) = %q, %v — want %q", parent, err, fx.root)
+	}
+
+	atRoot, err := r.Parent(fx.root)
+	if err != nil || atRoot != "" {
+		t.Errorf(`Parent(root) = %q, %v — want "" at a root commit`, atRoot, err)
+	}
+
+	note, err := r.Note(fx.tip)
+	if err != nil || string(note) != `{"the":"note"}`+"\n" {
+		t.Errorf("Note(tip) = %q, %v — want the raw blob bytes", note, err)
+	}
+
+	absent, err := r.Note(fx.root)
+	if err != nil || absent != nil {
+		t.Errorf("Note(root) = %q, %v — want nil for an unannotated commit", absent, err)
+	}
+
+	noted, err := r.Noted()
+	if err != nil || len(noted) != 1 || noted[0] != fx.tip {
+		t.Errorf("Noted = %v, %v — want exactly the tip", noted, err)
+	}
+}
+
+func TestRepoRefusals(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+
+	r, err := gitrepo.Open(fx.dir, notesRef)
+	if err != nil {
+		t.Fatalf("Open = %v", err)
+	}
+
+	t.Run("open on a non-repository", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := gitrepo.Open(t.TempDir(), notesRef); err == nil {
+			t.Error("Open accepted a directory git does not recognise")
+		}
+	})
+
+	t.Run("open with an unqualified notes ref", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := gitrepo.Open(fx.dir, "notes"); err == nil {
+			t.Error("Open accepted an unqualified notes ref")
+		}
+	})
+
+	t.Run("tip of a missing ref", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := r.Tip("refs/heads/absent"); err == nil {
+			t.Error("Tip resolved a ref that does not exist")
+		}
+	})
+
+	t.Run("parent of a garbage revision", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := r.Parent("0000000000000000000000000000000000000000"); err == nil {
+			t.Error("Parent accepted a revision the object store does not hold")
+		}
+	})
+
+	t.Run("note for a garbage revision", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := r.Note("not-a-revision"); err == nil {
+			t.Error("Note accepted an implausible revision")
+		}
+	})
+
+	t.Run("noted with no notes ref", func(t *testing.T) {
+		t.Parallel()
+
+		empty, err := gitrepo.Open(repo(t).dir, "refs/notes/absent")
+		if err != nil {
+			t.Fatalf("Open = %v", err)
+		}
+
+		noted, err := empty.Noted()
+		if err != nil || noted != nil {
+			t.Errorf("Noted = %v, %v — want empty for a repository with no ledger", noted, err)
+		}
+	})
+}
