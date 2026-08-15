@@ -19,21 +19,24 @@ go = "1.26.5"
 # Hermetic by construction (#392): the build is a pure function of the
 # tree — no cgo (one compiler, static output), no toolchain
 # auto-download (the pin above is the only toolchain). These two are
-# global; the proxy cutoff is NOT, and that is measured, not taste:
-# mise's [env] reaches the subprocesses that INSTALL tools (the uv
-# lesson, .github#82), so a global GOPROXY=off strangles the go:
-# backend building govulncheck. The cutoff lives on the tasks instead.
+# global; GOPROXY deliberately is not set anywhere: module fetches go
+# through the checksummed public proxy and go.sum refuses any byte
+# drift — the one accepted network dependency in the gate (the
+# un-vendoring decision, recorded below and in CLAUDE.md).
 [env]
 CGO_ENABLED = "0"
 GOTOOLCHAIN = "local"
 
-# GOPROXY=off on every task: a build that cannot fetch cannot be
-# confused, and with the closure in-tree there is nothing to fetch.
 # -trimpath keeps machine paths out of the binary (the reproducibility
-# half). The module has zero external dependencies today, which is the
-# strongest hermetic state there is; the first dependency that lands
-# also lands `go mod vendor` + `-mod=vendor` in GOFLAGS, as a reviewed
-# edit here — CLAUDE.md carries the activation note.
+# half). The first dependency (sigstore-go, the trust layer) was
+# vendored for one afternoon and deliberately un-vendored: a committed
+# vendor/ made REUSE.toml's aggregate annotation a false licensing
+# claim over upstream code, and the honest alternative was per-module
+# licence bookkeeping on every Renovate bump. go.sum keeps the
+# integrity guarantee (byte-identical modules or a failed build); the
+# build now fetches through the checksummed proxy, which is the one
+# deliberate network dependency in the gate — CLAUDE.md records the
+# decision.
 [tasks.test]
 description = "go test, race detector on"
 # CGO_ENABLED=1 here and only here, measured: -race requires cgo on
@@ -41,10 +44,10 @@ description = "go test, race detector on"
 # the shipped binary keeps the global CGO_ENABLED=0. Caught by the
 # gate's first cloud run; darwin tolerates race without cgo, which is
 # why the local run stayed green (stele#1).
-env = { GOPROXY = "off", GOFLAGS = "-trimpath", CGO_ENABLED = "1" }
+env = { GOFLAGS = "-trimpath", CGO_ENABLED = "1" }
 run = "go test -race ./..."
 
 [tasks.build]
 description = "Build every command"
-env = { GOPROXY = "off", GOFLAGS = "-trimpath" }
+env = { GOFLAGS = "-trimpath" }
 run = "go build ./..."

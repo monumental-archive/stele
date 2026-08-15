@@ -37,9 +37,9 @@ language's standard tools already walk.
   cannot touch Build L3's mechanism.
 - **Not the belt.** This is a belt member, not a belt replacement.
 - **No SLSA level is bought here.** The prize is a testable evidence
-  layer and a verifier strangers execute. The repo's vendored, hermetic
-  build is a Build-track choice; it is deliberately NOT a Dependency L3
-  claim (the org row stays L2, #121 stays closed).
+  layer and a verifier strangers execute. The repo's pinned build is a
+  Build-track choice; it is deliberately NOT a Dependency L3 claim
+  (the org row stays L2, #121 stays closed).
 
 ## Rules
 
@@ -58,14 +58,18 @@ language's standard tools already walk.
   The stdlib decoder turns absent into zero silently; evidence code
   must distinguish them, so decode types use pointer fields and
   validation rejects nil explicitly.
-- **Hermetic build**: `CGO_ENABLED=0`, `GOTOOLCHAIN=local`, tasks run
-  with `GOPROXY=off` and `-trimpath`. The module currently has zero
-  external dependencies. **The first dependency that lands also lands
-  `go mod vendor`, the committed `vendor/` tree, and `-mod=vendor` in
-  the task GOFLAGS — one reviewed edit.** (The proxy cutoff is
-  task-scoped, not `[env]`-global, because mise's `[env]` reaches tool
-  installs and would strangle the `go:` backend building govulncheck —
-  measured, .github#82's uv lesson.)
+- **Pinned build**: `CGO_ENABLED=0`, `GOTOOLCHAIN=local`, `-trimpath`.
+  Dependencies are pinned by `go.sum` (byte-identical modules or a
+  failed build) and fetched through the checksummed proxy — the one
+  accepted network dependency in the gate. **A committed `vendor/`
+  tree is deliberately refused** (decided 2026-08-15, reversing the
+  original vendor law after one afternoon of it): vendoring made
+  REUSE.toml's aggregate annotation a false licensing claim over
+  upstream code, put per-module licence bookkeeping on every Renovate
+  bump, and forced reach-shaped vendor exceptions into every org tool
+  — by the disabled-rule law, a layout defect. What vendoring bought
+  beyond go.sum was offline builds and upstream-deletion insurance;
+  not worth that price.
 - **Shadow mode is the proof bar.** Ported logic runs beside the bash
   on identical inputs and must byte-match before it becomes
   authoritative; every published release and chain link is a real
