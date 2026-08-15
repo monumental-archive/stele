@@ -1,0 +1,54 @@
+# The org's one written indentation rule (#403). Until this file, 2-space
+# was practice plus two tool settings (shfmt -i 2, biome indentStyle) and
+# no convention — docs/tooling-verdicts.md recorded the gap. This is the
+# single source; editorconfig-checker enforces it in the gate
+# (lint:editorconfig), and editors pick it up natively.
+#
+# Per-type sections defer to the formatter that owns the language: a cap
+# or width stated here never fights a belt formatter, it states the same
+# fact where every editor can read it.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# The formatters that own these languages indent 4 (ruff, rustfmt).
+[*.{py,pyi}]
+indent_size = 4
+
+[*.rs]
+indent_size = 4
+
+# Go's indentation is owned wholesale by gofumpt (lint:go), which
+# enforces tab-indented code the way ruff owns Python's layout. ec's
+# indent_style check is line-based and cannot distinguish code
+# indentation from bytes inside raw string literals, so under
+# `tab` it reds every space-indented fixture a Go test carries —
+# content gofumpt itself is required to leave verbatim. The reason is
+# about the check, not its reach: the same measured class as the
+# task-wide -disable-indent-size. Style stays enforced by the
+# language's owner; ec keeps charset, EOL, final-newline and
+# trailing-whitespace for Go files.
+[*.go]
+indent_style = unset
+
+[{Makefile,*.mk,makefile}]
+indent_style = tab
+
+# git itself writes config files tab-indented; the source-attest test
+# fixture mirrors real `git config` output byte-for-byte, and a fixture
+# reformatted away from what the tool emits stops being evidence.
+[{gitconfig,.gitconfig,.gitmodules}]
+indent_style = tab
+
+# The per-language column caps yamllint's single global knob could not
+# express (its 130 is the mandatory-pin-format ceiling, derived in
+# .yamllint.yaml). Here the caps are per-type, so each format gets the
+# tightest cap its content admits.
+[*.{yml,yaml}]
+max_line_length = 130
