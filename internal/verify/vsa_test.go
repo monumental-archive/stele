@@ -89,9 +89,13 @@ func TestVSALegacyRoot(t *testing.T) {
 	legacy := verify.Coords{Owner: "acme", Repo: "relic", Tag: "v0.1.0"}
 
 	w := newVSAWorld()
+	// Signed by the legacy signer, but claiming the org verifier as
+	// verifier.id — the real shape of the grandfathered epoch (the
+	// signer signed on the verifier's behalf and the predicate named
+	// the verifier throughout; proven on .github v1.13.0 and
+	// release-lab v0.20.1 in shadow).
 	w.san = "https://github.com/" + signerWF + "@" + signerPin
 	dig(w.stmt, "predicate")["resourceUri"] = "pkg:github/acme/relic@v0.1.0"
-	dig(w.stmt, "predicate", "verifier")["id"] = "https://github.com/" + signerWF
 
 	bundle := (&fakeBundle{
 		Stmt: mustJSON(t, w.stmt), SAN: w.san, Issuer: issuer, Digests: []string{w.appSHA},

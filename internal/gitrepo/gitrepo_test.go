@@ -2,6 +2,8 @@ package gitrepo_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +74,48 @@ func repo(t *testing.T) fixture {
 	git("notes", "add", "-m", `{"the":"note"}`, tip)
 
 	return fixture{dir: dir, tip: tip, root: root}
+}
+
+// The ledger digest is SHA-256 over the note blob bytes exactly as
+// git stores them — trailing newline included. The known answers are
+// computed OUTSIDE this module (`printf '{"the":"note"}\n' |
+// sha256sum`), because a golden value the implementation computes for
+// itself lets both legs drift together: the canon's bash emitter and
+// walker each hashed their own reading of the blob, a formatting pass
+// rewrote one into command substitution (which strips the trailing
+// newline), and every link emitted since points at bytes that exist
+// nowhere (.github#434). The stripped-form digest is asserted as the
+// named wrong answer so that exact regression has a face here.
+const (
+	noteRawSHA256      = "e5baf7a0b5edb3dfa1876c1ffdefe15c42fec3a9b941a70b0be5d0cbf2fc7843"
+	noteStrippedSHA256 = "09a4e09c68a0c8fd0a304b99f34488f89af722dd639528d2ef938a83554e3b0f"
+)
+
+func TestNoteDigestKnownAnswer(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+
+	r, err := gitrepo.Open(fx.dir, notesRef)
+	if err != nil {
+		t.Fatalf("Open = %v", err)
+	}
+
+	note, err := r.Note(fx.tip)
+	if err != nil {
+		t.Fatalf("Note = %v", err)
+	}
+
+	got := fmt.Sprintf("%x", sha256.Sum256(note))
+	if got == noteStrippedSHA256 {
+		t.Fatalf("Note digest = %s — the newline-stripped form: a string round-trip ate the trailing newline (.github#434)",
+			got)
+	}
+
+	if got != noteRawSHA256 {
+		t.Fatalf("Note digest = %s, want %s (sha256 over the stored blob bytes, trailing newline included)",
+			got, noteRawSHA256)
+	}
 }
 
 func TestRepo(t *testing.T) {
