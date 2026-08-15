@@ -142,19 +142,22 @@ linters:
       # the rule. (First fired: internal/verify's statement-builder
       # tests, issue #3.)
       - path: _test\.go
-        linters: [goconst]
+        linters:
+          - goconst
       # Shared fixtures (a policy document, one set of release
       # coordinates) are the test package's constants in spirit; Go
       # just has no const structs. They are never mutated — a test
       # that needs a variant copies. (Same firing.)
       - path: _test\.go
-        linters: [gochecknoglobals]
+        linters:
+          - gochecknoglobals
       # Test helpers forward the engine's error VERBATIM because the
       # table rows assert on the exact refusal text — wrapping in the
       # helper would decorate the very surface under test. Production
       # code stays under the rule. (Same firing.)
       - path: _test\.go
-        linters: [wrapcheck]
+        linters:
+          - wrapcheck
 
 formatters:
   enable:
