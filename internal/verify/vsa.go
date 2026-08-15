@@ -80,17 +80,24 @@ func verdictIdentity(p *policy.Policy, c Coords, pins Pins) verdictRoot {
 		}
 	}
 
+	// The claimed verifier is the org verifier in BOTH epochs: the
+	// grandfathered verdicts were signed by the org signer on the
+	// verifier's behalf, and their predicates already named
+	// verify-release as verifier.id. Only the signing identity and
+	// its pin switch on the legacy lookup — shadow mode on the real
+	// pre-v1.14.0 releases (.github v1.13.0, release-lab v0.20.1) is
+	// the proof of this shape.
 	return verdictRoot{
 		id:  trust.Identity{SAN: workflowSAN(workflow, identityRef(workflow, c, pin)), Issuer: *p.Issuer},
 		pin: pin,
-		uri: serverURL + "/" + workflow,
+		uri: serverURL + "/" + *p.Trust.Verdict.VerifierWorkflow,
 	}
 }
 
 // verdictRoot pairs the trust identity a verdict must verify under,
 // the commit pin its certificate must carry, and the verifier URI
-// its predicate must claim — resolved together because the legacy
-// lookup decides all three at once.
+// its predicate must claim — the first two switch together on the
+// legacy lookup, the claim never does.
 type verdictRoot struct {
 	id  trust.Identity
 	pin string
