@@ -29,5 +29,5 @@ jobs:
       # the coverage-upload job skips clean on an absent token, so this
       # line is safe to carry ahead of the enrolment web steps.
       codecov-token: ${{ secrets.CODECOV_TOKEN }}
-    uses: monumental-archive/.github/.github/workflows/ci.yml@57567c83e045322dce25b49608d6a86eb807689a # v1.27.0
+    uses: monumental-archive/.github/.github/workflows/ci.yml@617cbf2970db57c3bc95d15e8220a0989271c0ef # v1.28.1
 ...
