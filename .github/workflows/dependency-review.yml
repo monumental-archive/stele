@@ -1,8 +1,9 @@
+---
 # Dependency review on pull requests, via the shared org workflow.
 name: dependency-review
 
-on:
-  pull_request:
+"on":
+  pull_request: {}
 
 permissions: {}
 
@@ -11,3 +12,4 @@ jobs:
     uses: monumental-archive/.github/.github/workflows/dependency-review.yml@a0d05f53b7a937ea96bbeeed0f6f69e67a94df9d # v1.26.2
     permissions:
       contents: read # checkout for the diff of manifests
+...

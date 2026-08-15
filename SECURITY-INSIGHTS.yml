@@ -1,3 +1,4 @@
+---
 # OpenSSF Security Insights (schema v2.2.0) — the machine-readable
 # statement of this repository's security posture. Copy per repository and
 # fill the <angle-bracket> fields; everything else is org canon.
@@ -54,28 +55,49 @@ repository:
       - name: OpenSSF Scorecard
         type: SCA
         version: latest
-        rulesets: [default]
-        integration: {adhoc: false, ci: true, before-release: true}
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: true
+          before-release: true
       - name: CodeQL
         type: SAST
         version: default-setup
-        rulesets: [default]
-        integration: {adhoc: false, ci: true, before-release: true}
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: true
+          before-release: true
       - name: zizmor
         type: SAST
         version: pinned-by-toolbelt
-        rulesets: [pedantic]
-        integration: {adhoc: false, ci: true, before-release: true}
+        rulesets:
+          - pedantic
+        integration:
+          adhoc: false
+          ci: true
+          before-release: true
       - name: trivy
         type: SCA
         version: pinned-by-toolbelt
-        rulesets: [misconfig, secret]
-        integration: {adhoc: false, ci: true, before-release: true}
+        rulesets:
+          - misconfig
+          - secret
+        integration:
+          adhoc: false
+          ci: true
+          before-release: true
       - name: Renovate
         type: SCA
         version: hosted
-        rulesets: [org default.json preset]
-        integration: {adhoc: false, ci: true, before-release: false}
+        rulesets:
+          - org default.json preset
+        integration:
+          adhoc: false
+          ci: true
+          before-release: false
     champions:
       - name: Carl Allen
         primary: true
@@ -102,3 +124,4 @@ release:
   license:
     url: https://github.com/monumental-archive/stele/blob/main/LICENSE
     expression: Apache-2.0
+...

@@ -1,3 +1,4 @@
+---
 # The Go lint canon (#392): golangci-lint v2, `default: all` with
 # per-rule written disables, copied from scaffold/.golangci.yml with
 # the module-path holes filled; `lint:go` fails the gate if Go
@@ -107,7 +108,8 @@ linters:
         - fieldalignment
     staticcheck:
       # The default profile excludes several ST style checks; all means all.
-      checks: ["all"]
+      checks:
+        - all
     gocritic:
       enable-all: true
     nolintlint:
@@ -153,3 +155,4 @@ issues:
   # everything" when it did not).
   max-issues-per-linter: 0
   max-same-issues: 0
+...
