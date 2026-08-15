@@ -373,7 +373,7 @@ func TestNotesPushAndFetch(t *testing.T) {
 	// a fetch it fast-forwards.
 	otherDir := t.TempDir()
 	other := gitCmd(t, otherDir)
-	other("clone", "-q", remoteDir, ".")
+	other("clone", "-q", "-b", "main", remoteDir, ".")
 	other("fetch", "-q", "origin", "+"+notesRef+":"+notesRef)
 	other("notes", "add", "-f", "-m", `{"other":"note"}`, "HEAD~1")
 	other("push", "-q", "origin", notesRef+":"+notesRef)
