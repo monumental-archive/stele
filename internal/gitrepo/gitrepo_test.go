@@ -55,6 +55,10 @@ func repo(t *testing.T) fixture {
 	}
 
 	git("init", "-q", "-b", "main")
+	// The note committer identity is repo-local config by contract:
+	// the caller prepares the clone, this package only writes.
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@example.com")
 
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("one"), 0o600); err != nil {
 		t.Fatal(err)
