@@ -93,3 +93,22 @@ func TestEncodeWriteFailure(t *testing.T) {
 		t.Fatal("Encode to a failing writer succeeded, want error")
 	}
 }
+
+// TestDecodeBytes pins the deferred-sub-document entry point to the
+// same contract as Decode: strict fields, one value.
+func TestDecodeBytes(t *testing.T) {
+	t.Parallel()
+
+	type pair struct {
+		A *int `json:"a"`
+	}
+
+	got, err := jsonx.DecodeBytes[pair]([]byte(`{"a": 1}`))
+	if err != nil || got.A == nil || *got.A != 1 {
+		t.Fatalf("DecodeBytes = %+v, %v", got, err)
+	}
+
+	if _, err := jsonx.DecodeBytes[pair]([]byte(`{"a": 1, "b": 2}`)); err == nil {
+		t.Error("DecodeBytes accepted an unknown field")
+	}
+}

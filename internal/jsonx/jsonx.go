@@ -16,6 +16,7 @@
 package jsonx
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,13 @@ func Decode[T any](r io.Reader) (*T, error) {
 	}
 
 	return value, nil
+}
+
+// DecodeBytes decodes exactly one JSON value from b under the same
+// contract as Decode — the entry point for a Raw sub-document a
+// carrier type deferred (an in-toto predicate, a ledger pointer).
+func DecodeBytes[T any](b []byte) (*T, error) {
+	return Decode[T](bytes.NewReader(b))
 }
 
 // Encode writes v to w followed by a newline, the canonical layout for
