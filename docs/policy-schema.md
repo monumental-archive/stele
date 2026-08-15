@@ -139,9 +139,19 @@ dependency and a new refusal surface in every verification, in
 service of a finite frozen list. A try-each identity fallback is
 forbidden outright: a verifier that accepts whichever root happens
 to verify has no boundary at all. A release absent from this list
-verifies under the current root or refuses, loudly. The example
-entry is a placeholder shape; the real list is enumerated from the
-published releases at cutover, each entry verified as it is added.
+verifies under the current root or refuses, loudly.
+
+The enumeration happened at the verify cutover (stele#3 /
+.github#436) and closed at exactly two entries — `.github v1.13.0`
+and `release-lab v0.20.1` — each verified against its published
+bytes as it was added; the committed list lives in the canon's
+`slsa/verify-policy.json`. The epoch's shape, settled by that
+shadow: a grandfathered verdict is SIGNED by the entry's
+`signerWorkflow` but its predicate CLAIMS the current
+`verifierWorkflow` as `verifier.id` — the signer signed on the
+verifier's behalf, and the claim never moved. The verifier therefore
+switches only the signing identity and its pin on a legacy match;
+the claimed verifier URI is constant across both epochs.
 
 ### `trust.decision`
 

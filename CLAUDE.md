@@ -25,6 +25,32 @@ the canon's scripts, workflow `run:` blocks and belt task bodies. The
 port is the relocation — one language per file, each file where its
 language's standard tools already walk.
 
+## Port sequence (the standing order — follow it, do not reorder)
+
+One authority handover at a time; each verb ships, shadow-proves, cuts
+over whole, and only then does the next open. State and next step:
+
+1. **verify — DONE, authoritative** (#3, closed at .github#436):
+   `audit:source-vsa` runs this binary; the bash walk is deleted; the
+   org policy is canon `slsa/verify-policy.json`.
+2. **emit — NEXT, open as #21.** Carries the verify-release.yml and
+   source-attest emitter cutovers, the `source-policies/` deletion,
+   the structural .github#434 fix, and the re-emission that turns the
+   stele/.github chains green. Its non-negotiables are written in the
+   issue; do not soften them. **Until it lands, every push to any org
+   main mints another broken chain link through the live bash emitter
+   (the newline digest defect) — red chains on pushed-to repos are
+   CORRECT, and no heal may run through the bash emitter.**
+3. **derive and assert — deliberately unopened.** Scope them only once
+   emit is underway; their shape depends on what emit leaves behind.
+4. **Release wiring (#7) activates after emit** — nothing worth
+   shipping as a binary before the emitter is in it.
+
+Each handover also moves that mechanism's documentation: the canon doc
+that used to specify the behavior shrinks to org narrative plus a
+pointer, and the spec lives here (docs/, or the code and its tests).
+The canon speaks for the org; stele speaks for the mechanism.
+
 ## Scope boundaries (settled in #392 — do not relitigate)
 
 - **Not workflows.** Orchestration YAML stays in the canon: jobs,
