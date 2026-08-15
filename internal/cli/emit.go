@@ -1,0 +1,407 @@
+// The emit verb: argument surface for the two emission modes. `emit
+// chain` assembles, signs (via cosign — the capability boundary stays
+// above this tool) and appends source chain links; `emit vsa` runs
+// the full release verification and renders the build-track VSA
+// predicate the workflow then signs — fed by the verdict type, so a
+// predicate cannot exist unearned.
+
+package cli
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/monumental-archive/stele/internal/emit"
+	"github.com/monumental-archive/stele/internal/gitrepo"
+	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/policy"
+	"github.com/monumental-archive/stele/internal/verify"
+)
+
+// The two emission modes, the dispatch vocabulary.
+const (
+	emitChain = "chain"
+	emitVSA   = "vsa"
+)
+
+// ownerRW is the mode for files this process stages for itself.
+const ownerRW = 0o600
+
+// The emit-side effect seams, swapped only by tests — the same
+// pattern as the verify seams above.
+//
+//nolint:gochecknoglobals // test seams, written only by test setup
+var (
+	newSigner = func(workDir string) emit.Signer {
+		return cosignSigner{dir: workDir}
+	}
+
+	openEmitGit = func(dir, notesRef, remote, token string) (emit.Git, error) {
+		r, err := gitrepo.Open(dir, notesRef)
+		if err != nil {
+			return nil, err
+		}
+
+		return emitGit{Repo: r, remote: remote, token: token}, nil
+	}
+
+	emitNow = time.Now
+)
+
+// emitGit curries the network coordinates onto the repository so the
+// engine only ever says fetch and push.
+type emitGit struct {
+	*gitrepo.Repo
+
+	remote, token string
+}
+
+func (g emitGit) FetchNotes() error { return g.Repo.FetchNotes(g.remote, g.token) }
+func (g emitGit) PushNotes() error  { return g.Repo.PushNotes(g.remote, g.token) }
+
+// cosignSigner signs by exec'ing cosign sign-blob: the signature and
+// its certificate come from the ambient workflow identity, which is
+// exactly the point — this binary has no identity of its own.
+type cosignSigner struct {
+	dir string
+}
+
+func (c cosignSigner) Sign(payload []byte) ([]byte, error) {
+	payloadPath := filepath.Join(c.dir, "payload.json")
+	bundlePath := filepath.Join(c.dir, "bundle.json")
+
+	if err := os.WriteFile(payloadPath, payload, ownerRW); err != nil {
+		return nil, fmt.Errorf("staging the payload: %w", err)
+	}
+
+	//nolint:gosec,noctx // fixed executable, paths this process just built
+	cmd := exec.Command("cosign", "sign-blob", "--yes", "--bundle", bundlePath, payloadPath)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("cosign sign-blob: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	bundle, err := os.ReadFile(bundlePath) //nolint:gosec // G304: a path this process just built in its own temp dir
+	if err != nil {
+		return nil, fmt.Errorf("reading the signed bundle: %w", err)
+	}
+
+	return bundle, nil
+}
+
+// emitArgs is everything the two modes read, parsed in one place.
+type emitArgs struct {
+	policyPath string
+	rootPath   string
+	repo       string
+	mode       string
+
+	// chain
+	gitDir    string
+	ref       string
+	rev       string
+	claims    string
+	actor     string
+	actorID   string
+	remote    string
+	genesis   bool
+	policyURI string
+	canonPin  string
+
+	// vsa
+	tag       string
+	subjects  string
+	sboms     string
+	signerPin string
+	out       string
+
+	p           *policy.Policy
+	coords      verify.Coords
+	subjectList []verify.Subject
+	sbomList    []verify.Subject
+	bv          verify.BundleVerifier
+	claimsDoc   *emit.Claims
+}
+
+// emitCmd dispatches `stele emit <mode>`.
+func emitCmd(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain or vsa"); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	mode := args[0]
+	switch mode {
+	case emitChain, emitVSA:
+	default:
+		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa)\n", mode); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	ea, code := parseEmitArgs(mode, args[1:], stderr)
+	if code != exitOK {
+		return code
+	}
+
+	out := &latch{w: stdout}
+
+	err := runEmit(ea, out)
+	if out.err != nil {
+		return exitIO
+	}
+
+	if err != nil {
+		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+			return exitIO
+		}
+
+		return exitRefused
+	}
+
+	return exitOK
+}
+
+// parseEmitArgs parses flags and loads every file input — all
+// refusals land here, before anything signs or writes.
+//
+//nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
+func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int) {
+	ea := &emitArgs{mode: mode}
+
+	fs := flag.NewFlagSet("stele emit "+mode, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&ea.policyPath, "policy", "", "path to the committed verify policy (required)")
+	fs.StringVar(&ea.rootPath, "trusted-root", "", "path to the Sigstore trusted root JSON (required)")
+	fs.StringVar(&ea.repo, "repo", "", "owner/repo being attested (required)")
+	fs.StringVar(&ea.canonPin, "canon-digest", "",
+		"commit digest the policy tree is pinned at — the VSA's policy.digest (required)")
+	fs.StringVar(&ea.policyURI, "policy-uri", "",
+		"URI where a stranger reads the policy at that pin (required)")
+
+	switch mode {
+	case emitChain:
+		fs.StringVar(&ea.gitDir, "git-dir", "", "local clone with the branch and notes ref fetched (required)")
+		fs.StringVar(&ea.ref, "ref", "refs/heads/main", "fully qualified protected branch ref")
+		fs.StringVar(&ea.rev, "rev", "", "the pushed revision (required)")
+		fs.StringVar(&ea.claims, "claims", "", "path to the claims stage's payload JSON (required)")
+		fs.StringVar(&ea.actor, "actor", "", "login of the actor who triggered the run (required)")
+		fs.StringVar(&ea.actorID, "actor-id", "", "id of the actor who triggered the run (required)")
+		fs.StringVar(&ea.remote, "remote", "origin", "remote the notes ref is fetched from and pushed to")
+		fs.BoolVar(&ea.genesis, "genesis", false,
+			"found the chain: refused when any link already exists on the walked history")
+	case emitVSA:
+		fs.StringVar(&ea.tag, "tag", "", "release tag (required)")
+		fs.StringVar(&ea.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
+		fs.StringVar(&ea.sboms, "sboms", "", "sha256sum manifest of the release's SBOM assets (required)")
+		fs.StringVar(&ea.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
+		fs.StringVar(&ea.out, "out", "", "write the predicate here instead of stdout")
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return nil, exitUsage
+	}
+
+	if code := ea.load(stderr); code != exitOK {
+		return nil, code
+	}
+
+	return ea, exitOK
+}
+
+// load reads and validates the file-backed inputs.
+func (ea *emitArgs) load(stderr io.Writer) int {
+	fail := func(err error) int {
+		if _, werr := fmt.Fprintf(stderr, "stele emit %s: %v\n", ea.mode, err); werr != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	owner, repo, ok := strings.Cut(ea.repo, "/")
+	if !ok || owner == "" || repo == "" {
+		return fail(errors.New("--repo must be owner/repo"))
+	}
+
+	ea.coords = verify.Coords{Owner: owner, Repo: repo, Tag: ea.tag}
+
+	if ea.policyPath == "" {
+		return fail(errors.New("--policy is required"))
+	}
+
+	pf, err := os.Open(ea.policyPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	ea.p, err = policy.Load(pf)
+	if err != nil {
+		return fail(err)
+	}
+
+	if ea.rootPath == "" {
+		return fail(errors.New("--trusted-root is required"))
+	}
+
+	rootJSON, err := os.ReadFile(ea.rootPath)
+	if err != nil {
+		return fail(err)
+	}
+
+	ea.bv, err = newBundleVerifier(rootJSON)
+	if err != nil {
+		return fail(err)
+	}
+
+	if ea.mode == emitChain {
+		return ea.loadChain(fail)
+	}
+
+	return ea.loadVSA(fail)
+}
+
+// loadChain reads the chain mode's file inputs.
+func (ea *emitArgs) loadChain(fail func(error) int) int {
+	if ea.gitDir == "" {
+		return fail(errors.New("--git-dir is required"))
+	}
+
+	if ea.claims == "" {
+		return fail(errors.New("--claims is required"))
+	}
+
+	claimsJSON, err := os.ReadFile(ea.claims)
+	if err != nil {
+		return fail(err)
+	}
+
+	ea.claimsDoc, err = jsonx.DecodeBytes[emit.Claims](claimsJSON)
+	if err != nil {
+		return fail(fmt.Errorf("claims payload: %w", err))
+	}
+
+	return exitOK
+}
+
+// loadVSA reads the vsa mode's manifests.
+func (ea *emitArgs) loadVSA(fail func(error) int) int {
+	if ea.subjects == "" {
+		return fail(errors.New("--subjects is required"))
+	}
+
+	manifest, err := os.ReadFile(ea.subjects)
+	if err != nil {
+		return fail(err)
+	}
+
+	ea.subjectList, err = parseManifest(string(manifest))
+	if err != nil {
+		return fail(err)
+	}
+
+	if ea.sboms == "" {
+		return fail(errors.New("--sboms is required"))
+	}
+
+	manifest, err = os.ReadFile(ea.sboms)
+	if err != nil {
+		return fail(err)
+	}
+
+	ea.sbomList, err = parseManifest(string(manifest))
+	if err != nil {
+		return fail(err)
+	}
+
+	return exitOK
+}
+
+// runEmit runs the selected mode against real dependencies.
+func runEmit(ea *emitArgs, out *latch) error {
+	if ea.mode == emitChain {
+		return runEmitChain(ea, out)
+	}
+
+	return runEmitVSA(ea, out)
+}
+
+// runEmitChain assembles the engine's dependencies and emits.
+func runEmitChain(ea *emitArgs, out *latch) error {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+
+	g, err := openEmitGit(ea.gitDir, *ea.p.Source.NotesRef, ea.remote, token)
+	if err != nil {
+		return err
+	}
+
+	workDir, err := os.MkdirTemp("", "stele-emit-*")
+	if err != nil {
+		return fmt.Errorf("emit: staging directory: %w", err)
+	}
+	defer os.RemoveAll(workDir) //nolint:errcheck // best-effort cleanup of a temp dir
+
+	in := &emit.ChainInputs{
+		Owner:      ea.coords.Owner,
+		Repo:       ea.coords.Repo,
+		Ref:        ea.ref,
+		Rev:        ea.rev,
+		Genesis:    ea.genesis,
+		ActorLogin: ea.actor,
+		ActorID:    ea.actorID,
+		CanonRef:   ea.canonPin,
+		PolicyURI:  ea.policyURI,
+		Claims:     ea.claimsDoc,
+	}
+
+	return emit.Chain(ea.p, in, g, newSigner(workDir), ea.bv, emitNow, out.logf)
+}
+
+// runEmitVSA verifies the release in full and renders the verdict
+// predicate — written whole or not at all.
+func runEmitVSA(ea *emitArgs, out *latch) error {
+	pins := verify.Pins{Signer: ea.signerPin, Canon: ea.canonPin}
+
+	verdict, err := verify.Release(ea.p, ea.coords, ea.subjectList, ea.sbomList, pins, newStore(), ea.bv, out.logf)
+	if err != nil {
+		return err
+	}
+
+	when := emitNow().UTC().Truncate(time.Second).Format(time.RFC3339)
+
+	pred, err := verdict.VSAPredicate(ea.p, ea.coords, ea.policyURI, ea.canonPin, when)
+	if err != nil {
+		return err
+	}
+
+	if ea.out == "" {
+		out.logf("%s", pred)
+
+		return nil
+	}
+
+	if err := os.WriteFile(ea.out, append(pred, '\n'), ownerRW); err != nil {
+		return fmt.Errorf("emit: writing the predicate: %w", err)
+	}
+
+	out.logf("emit: vsa predicate for %s@%s written to %s", ea.coords.Slug(), ea.coords.Tag, ea.out)
+
+	return nil
+}

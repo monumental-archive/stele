@@ -38,14 +38,17 @@ type Statement struct {
 // ResourceDescriptor is the spec's full field set — all optional but
 // constrained: at least one of name, uri or digest must identify the
 // resource, and a statement subject additionally requires digest.
+// omitempty is encode-side only: this tool also EMITS statements, and
+// a descriptor's absent fields are absent, never null (decoding is
+// pointer-nil either way).
 type ResourceDescriptor struct {
-	Name             *string           `json:"name"`
-	URI              *string           `json:"uri"`
-	Digest           map[string]string `json:"digest"`
-	Content          *string           `json:"content"`
-	DownloadLocation *string           `json:"downloadLocation"`
-	MediaType        *string           `json:"mediaType"`
-	Annotations      jsonx.Raw         `json:"annotations"`
+	Name             *string           `json:"name,omitempty"`
+	URI              *string           `json:"uri,omitempty"`
+	Digest           map[string]string `json:"digest,omitempty"`
+	Content          *string           `json:"content,omitempty"`
+	DownloadLocation *string           `json:"downloadLocation,omitempty"`
+	MediaType        *string           `json:"mediaType,omitempty"`
+	Annotations      jsonx.Raw         `json:"annotations,omitempty"`
 }
 
 var (

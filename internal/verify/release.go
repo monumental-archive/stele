@@ -18,6 +18,7 @@ import (
 	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/provenance"
 	"github.com/monumental-archive/stele/internal/trust"
+	"github.com/monumental-archive/stele/internal/vsa"
 )
 
 // Ref names one piece of evidence a verdict rests on: where it was
@@ -49,6 +50,47 @@ func (v *ReleaseVerdict) InputAttestations() []Ref {
 	copy(out, v.opened)
 
 	return out
+}
+
+// VSAPredicate renders the build-track verification summary this
+// verdict earned — the emit verb's output, a method on the verdict
+// deliberately: the only way to hold a ReleaseVerdict is for Release
+// to have returned one, so a PASSED predicate cannot exist unearned
+// (#208). The verifier.id rendered here is exactly the identity the
+// consumer read (VSA) requires the signing certificate to carry, and
+// the policy is pinned by uri and commit digest as the spec asks.
+func (v *ReleaseVerdict) VSAPredicate(
+	p *policy.Policy, c Coords, policyURI, canonDigest, timeVerified string,
+) ([]byte, error) {
+	pred, err := vsa.New(
+		serverURL+"/"+*p.Trust.Verdict.VerifierWorkflow,
+		timeVerified,
+		expand(*p.Build.ResourceURI, c),
+		policyURI, canonDigest,
+		vsa.ResultPassed,
+		[]string{*p.Build.TargetLevel},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("verify: verdict predicate: %w", err)
+	}
+
+	atts := make([]intoto.ResourceDescriptor, 0, len(v.opened))
+
+	for i := range v.opened {
+		atts = append(atts, intoto.ResourceDescriptor{
+			URI:    &v.opened[i].URI,
+			Digest: map[string]string{intoto.AlgSHA256: v.opened[i].SHA256},
+		})
+	}
+
+	pred.InputAttestations = atts
+
+	out, err := jsonx.Marshal(pred)
+	if err != nil {
+		return nil, fmt.Errorf("verify: verdict predicate: %w", err)
+	}
+
+	return out, nil
 }
 
 // externalWorkflow is the GitHub Actions buildType's workflow

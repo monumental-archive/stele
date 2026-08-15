@@ -13,13 +13,12 @@
 package verify
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/trust"
 )
 
@@ -173,9 +172,8 @@ func identityRef(workflow string, c Coords, pin string) string {
 	return pin
 }
 
-// sha256Hex is the one digest rendering the engine compares.
+// sha256Hex is the one digest rendering the engine compares — the
+// chain format's, shared with the emit leg (.github#434 rule 1).
 func sha256Hex(b []byte) string {
-	d := sha256.Sum256(b)
-
-	return hex.EncodeToString(d[:])
+	return chain.SHA256Hex(b)
 }

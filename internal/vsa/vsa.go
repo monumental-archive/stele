@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/intoto"
 )
@@ -23,17 +24,26 @@ const (
 	ResultFailed = "FAILED"
 )
 
-// Predicate is the VSA predicate, decoded strictly.
+// SpecVersion is the SLSA version this tool's emitted verdicts claim
+// — pinned once, in the package that owns the predicate.
+const SpecVersion = "1.2"
+
+// Predicate is the VSA predicate — decoded strictly, and also the
+// shape both of the org's VSA kinds are EMITTED through (the one
+// assembler: New below). One type owning the field set is what makes
+// a field added for one kind structurally present in the other.
+// omitempty is encode-side only: optional absent fields are absent,
+// never null.
 type Predicate struct {
 	Verifier           *Verifier                   `json:"verifier"`
-	TimeVerified       *string                     `json:"timeVerified"`
+	TimeVerified       *string                     `json:"timeVerified,omitempty"`
 	ResourceURI        *string                     `json:"resourceUri"`
 	Policy             *intoto.ResourceDescriptor  `json:"policy"`
-	InputAttestations  []intoto.ResourceDescriptor `json:"inputAttestations"`
+	InputAttestations  []intoto.ResourceDescriptor `json:"inputAttestations,omitempty"`
 	VerificationResult *string                     `json:"verificationResult"`
 	VerifiedLevels     []string                    `json:"verifiedLevels"`
-	DependencyLevels   map[string]int              `json:"dependencyLevels"`
-	SlsaVersion        *string                     `json:"slsaVersion"`
+	DependencyLevels   map[string]int              `json:"dependencyLevels,omitempty"`
+	SlsaVersion        *string                     `json:"slsaVersion,omitempty"`
 }
 
 // Verifier identifies who computed the verdict. ID is required; in
@@ -41,8 +51,47 @@ type Predicate struct {
 // second root of trust), and the trust code asserts that equality.
 type Verifier struct {
 	ID      *string           `json:"id"`
-	Version map[string]string `json:"version"`
+	Version map[string]string `json:"version,omitempty"`
 }
+
+// New assembles a predicate this tool vouches for: verifier, time,
+// resource, a policy pinned by uri AND commit digest, the result and
+// levels, slsaVersion pinned to SpecVersion — validated before it is
+// returned, so an emitted predicate that would fail this package's
+// own consumer read is unrepresentable. Track-specific extras
+// (inputAttestations) are set by the caller on the result.
+func New(
+	verifierID, timeVerified, resourceURI, policyURI, policyGitCommit, result string, levels []string,
+) (*Predicate, error) {
+	if !gitCommitRE.MatchString(policyGitCommit) {
+		return nil, fmt.Errorf("vsa: policy digest %q is not a full commit digest — the spec's policy pin", policyGitCommit)
+	}
+
+	if _, err := time.Parse(time.RFC3339, timeVerified); err != nil {
+		return nil, fmt.Errorf("vsa: timeVerified: %w", err)
+	}
+
+	pin := intoto.ResourceDescriptor{URI: &policyURI, Digest: map[string]string{intoto.AlgGitCommit: policyGitCommit}}
+	p := &Predicate{
+		Verifier:           &Verifier{ID: &verifierID},
+		TimeVerified:       &timeVerified,
+		ResourceURI:        &resourceURI,
+		Policy:             &pin,
+		VerificationResult: &result,
+		VerifiedLevels:     levels,
+	}
+	ver := SpecVersion
+	p.SlsaVersion = &ver
+
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
+
+// gitCommitRE is the policy pin's shape — a full commit digest.
+var gitCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // slsaLevelRE is the spec's SlsaResult syntax for SLSA-prefixed
 // values; anything not SLSA_-prefixed is a custom value and legal.

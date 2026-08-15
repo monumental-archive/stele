@@ -9,6 +9,8 @@
 package chain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -16,6 +18,19 @@ import (
 	"github.com/monumental-archive/stele/internal/dsse"
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
+
+// SHA256Hex is THE digest rendering of this format: 64 lowercase hex
+// over exactly the bytes given. Every ledger noteSha256 and every
+// statement digest renders through this one function — the emit leg
+// and the verify walk both call it, because two copies of "the"
+// digest is how the bash legs drifted apart (.github#434: one copy
+// hashed the stored blob, the other a newline-stripped string, and no
+// test compared them).
+func SHA256Hex(b []byte) string {
+	d := sha256.Sum256(b)
+
+	return hex.EncodeToString(d[:])
+}
 
 // The two note versions readers accept. Version 1 carries `prev`,
 // one pointer holding two meanings (ledger order and git ancestry)
@@ -77,6 +92,12 @@ type Repaired struct {
 // why both are jsonx.Raw first and interpreted by Ledger below: the
 // stdlib's absent and null both decode a pointer to nil, and this
 // format makes that exact distinction load-bearing.
+// The omitempty tags are encode-side (the emit leg renders v2
+// predicates through this same type): prev is never present in a v2
+// document, and repaired is present exactly on healed links. Decoding
+// is pointer/nil-driven and unaffected. LedgerPrev deliberately has
+// NO omitempty — a v2 predicate carries the key even at genesis,
+// where its value is null.
 type Predicate struct {
 	Repository     *string   `json:"repository"`
 	Ref            *string   `json:"ref"`
@@ -87,9 +108,9 @@ type Predicate struct {
 	Controls       []Control `json:"controls"`
 	LedgerPrev     jsonx.Raw `json:"ledgerPrev"`
 	RevisionParent *string   `json:"revisionParent"`
-	Prev           jsonx.Raw `json:"prev"`
+	Prev           jsonx.Raw `json:"prev,omitempty"`
 	CanonRef       *string   `json:"canonRef"`
-	Repaired       *Repaired `json:"repaired"`
+	Repaired       *Repaired `json:"repaired,omitempty"`
 }
 
 var (

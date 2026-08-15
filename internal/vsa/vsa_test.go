@@ -158,3 +158,97 @@ func TestValidateMinimal(t *testing.T) {
 		t.Fatalf("Validate(minimal) = %v", err)
 	}
 }
+
+func TestNew(t *testing.T) {
+	t.Parallel()
+
+	const pin = "e1ad2dde9fd24fc521b4b37453dac052e655212b"
+
+	p, err := vsa.New(
+		"https://github.com/acme/canon/.github/workflows/verify-release.yml",
+		"2026-08-15T12:00:00Z",
+		"pkg:github/acme/widget@v1.0.0",
+		"https://github.com/acme/canon/tree/"+pin, pin,
+		vsa.ResultPassed,
+		[]string{"SLSA_BUILD_LEVEL_3"},
+	)
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	// The assembler's invariants: the pinned spec version, the policy
+	// carried as uri AND digest — round-tripped through the encoder
+	// and this package's own consumer read.
+	b, err := jsonx.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal = %v", err)
+	}
+
+	back, err := jsonx.DecodeBytes[vsa.Predicate](b)
+	if err != nil {
+		t.Fatalf("DecodeBytes = %v", err)
+	}
+
+	if err := back.Validate(); err != nil {
+		t.Fatalf("Validate(round-trip) = %v", err)
+	}
+
+	if back.SlsaVersion == nil || *back.SlsaVersion != vsa.SpecVersion {
+		t.Errorf("slsaVersion = %v, want %s pinned by the assembler", back.SlsaVersion, vsa.SpecVersion)
+	}
+
+	if back.Policy.Digest["gitCommit"] != pin {
+		t.Errorf("policy.digest.gitCommit = %q, want the pin", back.Policy.Digest["gitCommit"])
+	}
+}
+
+func TestNewRefusals(t *testing.T) {
+	t.Parallel()
+
+	const pin = "e1ad2dde9fd24fc521b4b37453dac052e655212b"
+
+	tests := []struct {
+		name                                  string
+		verifier, when, resource, uri, digest string
+		levels                                []string
+		want                                  string
+	}{
+		{
+			"policy digest is not a commit",
+			"https://v.example", "2026-08-15T12:00:00Z", "pkg:x", "https://p.example", "v1.2.3",
+			[]string{"SLSA_BUILD_LEVEL_3"},
+			"not a full commit digest",
+		},
+		{
+			"unparsable timeVerified",
+			"https://v.example", "yesterday", "pkg:x", "https://p.example", pin,
+			[]string{"SLSA_BUILD_LEVEL_3"},
+			"timeVerified",
+		},
+		{
+			"levels violating the one-per-track rule",
+			"https://v.example", "2026-08-15T12:00:00Z", "pkg:x", "https://p.example", pin,
+			[]string{"SLSA_BUILD_LEVEL_3", "SLSA_BUILD_LEVEL_2"},
+			"more than once",
+		},
+		{
+			"empty verifier",
+			"", "2026-08-15T12:00:00Z", "pkg:x", "https://p.example", pin,
+			[]string{"SLSA_BUILD_LEVEL_3"},
+			"verifier.id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := vsa.New(tt.verifier, tt.when, tt.resource, tt.uri, tt.digest, vsa.ResultPassed, tt.levels)
+			if err == nil {
+				t.Fatal("New assembled what it must refuse")
+			} else if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("New error = %q, want it to name %q", err, tt.want)
+			}
+		})
+	}
+}

@@ -10,8 +10,11 @@ import (
 	"runtime/debug"
 )
 
-// verbVerify names the one multi-mode verb.
-const verbVerify = "verify"
+// The two multi-mode verbs.
+const (
+	verbVerify = "verify"
+	verbEmit   = "emit"
+)
 
 // Exit codes: 0 success, 2 usage error, 3 output-stream failure.
 const (
@@ -48,6 +51,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case verbVerify:
 		return verifyCmd(args[1:], stdout, stderr)
+	case verbEmit:
+		return emitCmd(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr, "stele: unknown command %q (run `stele help`)\n", args[0]); err != nil {
 			return exitIO
@@ -72,9 +77,20 @@ usage:
     chain     the source chain: coverage tip→genesis and the ledger
     level     chain, then the honest computed source level
 
+  stele emit <mode>      produce and place signed evidence; modes:
+    chain     source chain links for the pushed revision and any
+              holes earlier lapses left, signed via cosign, appended
+              to the notes ledger with a compare-and-swap push
+    vsa       run release verification in full and render the
+              build-track VSA predicate the workflow signs
+
 verify flags: --policy --trusted-root --repo; release/vsa add
 --tag --subjects --signer-digest --canon-digest; chain/level add
---git-dir [--ref]. GITHUB_TOKEN/GH_TOKEN authenticates store reads.
+--git-dir [--ref]. emit adds --canon-digest --policy-uri; emit chain
+adds --git-dir --rev --claims --actor --actor-id [--ref --remote
+--genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
+[--out]. GITHUB_TOKEN/GH_TOKEN authenticates store reads and the
+notes push.
 `
 
 	if _, err := io.WriteString(w, text); err != nil {

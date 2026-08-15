@@ -6,7 +6,9 @@ import (
 
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/verify"
+	"github.com/monumental-archive/stele/internal/vsa"
 )
 
 // releaseWorld is one mutable, fully valid release: tests mutate a
@@ -528,4 +530,85 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 			t.Errorf("Release error = %v, want the missing-decision refusal", err)
 		}
 	})
+}
+
+// TestReleaseVSAPredicate proves the verdict's render: only a verdict
+// Release returned can produce a predicate, and what it produces is
+// exactly what the consumer read (verify.VSA) demands — the verifier
+// identity, the expanded resource, the pinned policy, the target
+// level, and the opened evidence.
+func TestReleaseVSAPredicate(t *testing.T) {
+	t.Parallel()
+
+	w := newReleaseWorld()
+
+	verdict, err := w.run(t)
+	if err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+
+	const policyURI = "https://github.com/acme/canon/blob/" + canonPin + "/slsa/verify-policy.json"
+
+	pred, err := verdict.VSAPredicate(loadPolicy(t), coords, policyURI, canonPin, "2026-08-15T12:00:00Z")
+	if err != nil {
+		t.Fatalf("VSAPredicate = %v", err)
+	}
+
+	got, err := jsonx.DecodeBytes[vsa.Predicate](pred)
+	if err != nil {
+		t.Fatalf("the rendered predicate does not decode: %v", err)
+	}
+
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate(rendered) = %v", err)
+	}
+
+	if *got.Verifier.ID != "https://github.com/"+verifierWF {
+		t.Errorf("verifier.id = %q, want the policy's verifier workflow", *got.Verifier.ID)
+	}
+
+	if *got.ResourceURI != "pkg:github/acme/widget@v1.2.3" {
+		t.Errorf("resourceUri = %q", *got.ResourceURI)
+	}
+
+	if *got.VerificationResult != vsa.ResultPassed {
+		t.Errorf("verificationResult = %q", *got.VerificationResult)
+	}
+
+	if len(got.VerifiedLevels) != 1 || got.VerifiedLevels[0] != "SLSA_BUILD_LEVEL_3" {
+		t.Errorf("verifiedLevels = %v, want exactly the target", got.VerifiedLevels)
+	}
+
+	if got.Policy.Digest["gitCommit"] != canonPin {
+		t.Errorf("policy.digest = %v, want the canon pin", got.Policy.Digest)
+	}
+
+	if len(got.InputAttestations) != 2 {
+		t.Errorf("inputAttestations = %d entries, want the 2 the verdict opened", len(got.InputAttestations))
+	}
+
+	if got.SlsaVersion == nil || *got.SlsaVersion != vsa.SpecVersion {
+		t.Errorf("slsaVersion = %v, want the assembler's pin", got.SlsaVersion)
+	}
+}
+
+func TestReleaseVSAPredicateRefusals(t *testing.T) {
+	t.Parallel()
+
+	w := newReleaseWorld()
+
+	verdict, err := w.run(t)
+	if err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+
+	const when = "2026-08-15T12:00:00Z"
+
+	if _, err := verdict.VSAPredicate(loadPolicy(t), coords, "https://p.example", "not-a-pin", when); err == nil {
+		t.Error("VSAPredicate accepted a policy digest that is not a commit")
+	}
+
+	if _, err := verdict.VSAPredicate(loadPolicy(t), coords, "", canonPin, "2026-08-15T12:00:00Z"); err == nil {
+		t.Error("VSAPredicate accepted an empty policy URI — a verdict naming no policy must never recur")
+	}
 }
