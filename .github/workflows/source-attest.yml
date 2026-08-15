@@ -1,0 +1,94 @@
+# The repo's source-signing identity, live: the org's source-track
+# emitter (#207).
+#
+# This file's path at @refs/heads/main IS the identity: a keyless
+# certificate names the workflow path plus ref, so this path is what
+# strangers pin — the root-of-trust contract in docs/source-assessment.md
+# of monumental-archive/.github. RENAMING OR MOVING THIS FILE IS A
+# BREAKING CHANGE to that contract. Content changes freely; the path
+# never does.
+#
+# Copied per repository, deliberately, like the scorecard stub: an
+# in-repo workflow's identity is stable forever, where a SHA-pinned
+# shared workflow would rotate the org's signing identity on every pin
+# bump and orphan chain verification of older links (the pick-two
+# trilemma, .github#120). The logic lives once, in the canon action the
+# single `uses:` pinned below (twice, same resolution) — composite
+# steps run inside this job, so the certificate still names this file.
+# Requires canon >= v1.11.1 (the release that ships the two-stage
+# action, #240); first run per repo is a genesis dispatch, see
+# docs/source-track.md.
+#
+# capability-boundary: the attest job holds `id-token: write` and runs
+# ZERO caller-supplied code — the attested repository is never checked
+# out and nothing from its tree is executed; the body is the canon's
+# reviewed action, which touches the repo only through git plumbing
+# (notes fetch/push) and the rules API. `contents: write` is why source
+# provenance does not route through the org signer: the chain append
+# needs the one grant sign.yml must never hold (docs/release.md).
+#
+# Two jobs, disjoint capabilities (#240): reading org-level tag-ruleset
+# details needs a token the runner is not given ambiently, and a secret
+# must never share a job with the signing identity. So the claims job
+# holds the environment-scoped read token and nothing else — no
+# id-token, no contents: write — and the attest job holds the identity
+# and zero secrets, consuming the claim set as data across the job
+# boundary. The read token can read rulesets; it cannot sign or push.
+# A compromised attest job has no secret to take.
+name: source-attest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      genesis:
+        description: Found the chain (refused if a link already exists)
+        required: false
+        default: "false"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false # a queued push must not cancel a chain append
+
+jobs:
+  claims:
+    name: source-attest / claims
+    runs-on: ubuntu-24.04
+    # The read token lives in this environment, not repo-wide: scoped to
+    # the environment, only jobs that declare it are ever issued the
+    # secret (the audit.yml baseline-drift pattern, zizmor
+    # secrets-outside-env). Activation creates the environment and the
+    # token — docs/source-track.md, activation checklist.
+    environment: source-attest
+    permissions: {} # reads only; the token is the capability
+    outputs:
+      claims: ${{ steps.claims.outputs.claims }}
+    steps:
+      - name: Read enforcement and derive the claims
+        id: claims
+        uses: monumental-archive/.github/.github/actions/source-attest@3803df9b88945d668bf263edd63ccbacbedbb0b7 # v1.26.0
+        env:
+          # Fine-grained read-only PAT that can see org-level ruleset
+          # details — the ambient GITHUB_TOKEN cannot (#240).
+          GH_TOKEN: ${{ secrets.SOURCE_RULES_TOKEN }}
+        with:
+          stage: claims
+
+  attest:
+    name: source-attest
+    needs: claims
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # append the signed link to refs/notes/commits
+      id-token: write # mint the Sigstore identity — see the boundary marker
+    steps:
+      - name: Emit provenance and VSA, append the chain link
+        uses: monumental-archive/.github/.github/actions/source-attest@3803df9b88945d668bf263edd63ccbacbedbb0b7 # v1.26.0
+        with:
+          stage: attest
+          claims: ${{ needs.claims.outputs.claims }}
+          genesis: ${{ github.event.inputs.genesis || 'false' }}

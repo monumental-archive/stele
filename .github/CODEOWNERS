@@ -1,0 +1,10 @@
+# Copied to .github/CODEOWNERS at migration. Documentation today, review
+# routing always, ENFORCEMENT when a second maintainer exists and the
+# "Require review from Code Owners" toggle flips (docs/best-practices.md,
+# the tier-2 wall). The team form survives account changes and matches the
+# crates.io ownership anchor; the team needs write access on the repo for
+# the reference to resolve — a transfer-checklist row (#83).
+* @monumental-archive/owners
+
+# Path-level ownership, for when specialised teams exist — for example:
+# /.github/workflows/ @monumental-archive/security-owners

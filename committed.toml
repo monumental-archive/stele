@@ -1,0 +1,43 @@
+# Conventional-commit enforcement (committed). Copy of the canonical
+# ../committed.toml — keep the two in step; add repo-specific
+# allowed_scopes as needed after copying.
+style = "conventional"
+# Conventional descriptions are lowercase by convention ("feat: the belt…").
+subject_capitalized = false
+# 50 is the classic git norm; conventional prefixes eat into it, and the
+# org's house style favours sentence-length subjects. 72 is the hard ceiling.
+subject_length = 72
+# Classic git imperative mood: "if applied, this commit will <subject>".
+# The default, restated here so nobody softens it quietly again.
+imperative_subject = true
+# committed's default list omits build, ci and revert, but the canonical
+# cliff.toml groups all three in the changelog and its no_increment_regex
+# names `ci` explicitly. Left unstated, a `ci:` commit is rejected by the
+# gate while the release machinery expects it. Keep these two lists in
+# step: every type cliff.toml parses must be allowed here.
+allowed_types = [
+  "feat",
+  "fix",
+  "perf",
+  "refactor",
+  "docs",
+  "test",
+  "build",
+  "ci",
+  "chore",
+  "style",
+  "revert",
+]
+
+# stele's scopes: the four verbs plus the layers around them.
+allowed_scopes = [
+  "derive",
+  "assert",
+  "emit",
+  "verify",
+  "policy",
+  "jsonx",
+  "cli",
+  "deps",
+  "canon",
+]

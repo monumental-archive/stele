@@ -1,0 +1,10 @@
+# Markdown canon. Everything is rumdl's default except the one rule that
+# does not survive contact with this org's documentation.
+
+[MD013]
+# Line length applies to prose, not to code. A verify command carrying a
+# pinned signer identity —
+#   --signer-workflow monumental-archive/signer/.github/workflows/sign.yml
+# — is 85 characters because the identity path is 85 characters, and
+# wrapping it would produce a command nobody can paste. Prose stays at 80.
+code_blocks = false

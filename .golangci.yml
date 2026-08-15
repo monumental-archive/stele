@@ -1,0 +1,155 @@
+# The Go lint canon (#392): golangci-lint v2, `default: all` with
+# per-rule written disables, copied from scaffold/.golangci.yml with
+# the module-path holes filled; `lint:go` fails the gate if Go
+# is tracked without this file, because golangci-lint's default
+# selection is five linters of ~105 — a green gate that checked almost
+# nothing (the ruff-defaults trap).
+#
+# The law this file lives under (#392): a disabled rule needs a reason
+# ABOUT THE RULE — "wrong for this domain" is legitimate and permanent;
+# "the tool cannot see this code" is a defect report against the
+# layout, and the fix is moving the code, never an exclusion. Every
+# disable below is the first kind. nolintlint enforces the same law at
+# line granularity: a `//nolint` without a named linter and a reason is
+# itself a finding.
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # ---- one winner per rule family (the trivy-licences rule) ----
+    # Five linters measure function complexity. gocognit (cognitive
+    # complexity) is the kept winner: it measures how hard code is to
+    # READ, where cyclomatic counting penalises flat switches that are
+    # easy to read — the belt keeps one.
+    - cyclop # complexity family; gocognit is the winner
+    - gocyclo # complexity family; gocognit is the winner
+    - funlen # length is complexity's weakest proxy; gocognit is the winner
+    - maintidx # composite of the same inputs; gocognit is the winner
+    - nestif # nesting depth is a gocognit input already
+    # typos (the belt) spell-checks every tracked file, code strings
+    # included; a second engine on the same question can only disagree.
+    - misspell # the belt's typos owns the spelling family
+    # nonamedreturns bans the construct nakedret measures; with it on,
+    # nakedret can never fire.
+    - nakedret # vacuous under nonamedreturns, which stays on
+    # ---- the rule is wrong for this org, permanently ----
+    # Per-file licence headers are refused by design (#214, the reuse
+    # verdict): REUSE.toml declares for the tree, and a hardcoded
+    # header both overrides it and travels wrongly when copied.
+    - goheader # per-file headers are refused by design (#214)
+    # Effective Go endorses short names scoped tightly (i, w, r); a
+    # length-by-scope rule fights the language's own convention.
+    - varnamelen # contradicts the language's naming convention
+    # `if err := f(); err != nil` IS the language's error idiom.
+    - noinlineerr # bans an idiom the language documents as canonical
+    # Zero-value initialisation is the language's mechanism, and the
+    # org's decode layer distinguishes absent from zero by OMISSION
+    # (pointer fields, internal/jsonx) — a rule demanding every field
+    # initialised fights both.
+    - exhaustruct # zero values are the mechanism; the decode layer needs omission
+    # err113's dynamic-error rule demands every message be a sentinel;
+    # in a CLI whose errors are user-facing diagnostics, dynamic
+    # messages are the product. Wrapping discipline stays enforced by
+    # errorlint and wrapcheck.
+    - err113 # dynamic diagnostics are the product; errorlint/wrapcheck keep the discipline
+    # The ruff T201 verdict's shape: forbidigo's default pattern bans
+    # fmt.Print*, and print IS a CLI's output mechanism.
+    - forbidigo # print is the CLI's output mechanism (the T201 verdict)
+    # t.Parallel is a per-test performance judgement, not a defect; the
+    # misuse half (tparallel) stays on.
+    - paralleltest # parallelism is a judgement, not a defect; tparallel stays
+    # JSON field names here are fixed by external specs (in-toto, SLSA,
+    # OpenVEX) — a case convention has no jurisdiction over them.
+    - tagliatelle # tag names are spec facts, not style choices
+    # prealloc's own README describes it as an optimisation pass to
+    # apply with judgement, not a defect detector.
+    - prealloc # its own docs scope it below a gate check
+    # ---- pure style with no defect story, fighting the formatter ----
+    # Blank-line choreography beyond what gofumpt emits; wsl's own docs
+    # call it highly opinionated.
+    - wsl_v5 # blank-line style beyond the formatter, no defect story
+    - nlreturn # same family as wsl_v5, same reason
+    # ---- deprecated, successor already governed above ----
+    - wsl # deprecated since v2.2.0; wsl_v5 is the successor and is disabled on its merits
+    - gomodguard # deprecated since v2.12.0; gomodguard_v2 is the successor and stays on
+  settings:
+    depguard:
+      rules:
+        # encoding/json silently turns an absent field into a zero
+        # value — hostile in a tool whose job is asserting facts are
+        # PRESENT, and invisible to every linter because it is a data
+        # property. The id-token move (#392): ban the primitive
+        # everywhere except one internal package that exposes a
+        # pointer-field decoder, and lint the boundary.
+        jsonx:
+          files:
+            - $all
+            - "!**/internal/jsonx/**"
+          deny:
+            - pkg: encoding/json$
+              desc: use internal/jsonx — absent and zero must be distinguishable
+        stdlib:
+          files:
+            - $all
+          deny:
+            - pkg: math/rand$
+              desc: use math/rand/v2
+    errcheck:
+      # Both off by default; both are unchecked errors.
+      check-type-assertions: true
+      check-blank: true
+    govet:
+      enable-all: true
+      disable:
+        # Struct fields are ordered for the reader; memory-alignment
+        # ordering is a micro-optimisation that fights that order.
+        - fieldalignment
+    staticcheck:
+      # The default profile excludes several ST style checks; all means all.
+      checks: ["all"]
+    gocritic:
+      enable-all: true
+    nolintlint:
+      # The disabled-rule law at line granularity: every //nolint names
+      # its linter and carries a reason, and an ineffective directive is
+      # itself a finding.
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: strict
+    # warn-unused keeps this section honest: an exclusion no finding
+    # needs is itself flagged, so speculative carve-outs cannot
+    # accumulate. There are deliberately no rules yet — the first one
+    # to earn its place will likely be dupl on _test.go (table tests
+    # duplicate scaffolding by design), added when it actually fires.
+    warn-unused: true
+    rules: []
+
+formatters:
+  enable:
+    # gofumpt is a strict superset of gofmt; extra-rules adds the
+    # stricter set (parameter grouping, no naked returns, call-site
+    # closing parens).
+    - gofumpt
+    # gci over goimports: deterministic import grouping (std, external,
+    # this module) where goimports only sorts within groups it finds.
+    # One winner per family; golines is out because lll REPORTS long
+    # lines for a human to restructure — machine-wrapped Go is not
+    # canonical output.
+    - gci
+  settings:
+    gofumpt:
+      extra-rules: true
+      module-path: github.com/monumental-archive/stele
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/monumental-archive/stele)
+
+issues:
+  # No silent caps (#392: a bounded report reads as "covered
+  # everything" when it did not).
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,19 @@
+# REUSE.toml (spec 3.3): machine-readable licensing for every file in
+# stele. The licence is Apache-2.0, chosen deliberately (#214 pattern):
+# stele is a public tool with external consumers — the verifier is the
+# product strangers run — and Apache-2.0 is the Go infrastructure
+# convention (sigstore, slsa-verifier, in-toto) with an explicit patent
+# grant; 0BSD stays canon/signer/lab-only. Aggregate precedence over
+# the whole tree: per-file SPDX headers are refused by design — a file
+# inherits this declaration, and a hardcoded header overrides it and
+# travels wrongly when the file is copied.
+version = 1
+SPDX-PackageName = "stele"
+SPDX-PackageSupplier = "Carl Allen <carl.allen313@gmail.com>"
+SPDX-PackageDownloadLocation = "https://github.com/monumental-archive/stele"
+
+[[annotations]]
+path = ["**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Carl Allen"
+SPDX-License-Identifier = "Apache-2.0"
