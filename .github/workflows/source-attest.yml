@@ -1,3 +1,4 @@
+---
 # The repo's source-signing identity, live: the org's source-track
 # emitter (#207).
 #
@@ -37,9 +38,10 @@
 # A compromised attest job has no secret to take.
 name: source-attest
 
-on:
+"on":
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       genesis:
@@ -92,3 +94,4 @@ jobs:
           stage: attest
           claims: ${{ needs.claims.outputs.claims }}
           genesis: ${{ github.event.inputs.genesis || 'false' }}
+...
