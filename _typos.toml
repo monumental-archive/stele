@@ -3,3 +3,12 @@
 # filename is fixed by the in-toto spec, so it appears verbatim in prose
 # (SECURITY-INSIGHTS.yml above all). `typos` reads it as "into".
 intoto = "intoto"
+
+[files]
+# go.sum is nothing but hashes.
+extend-exclude = ["go.sum"]
+
+[default]
+# Go module pseudo-versions (v0.0.0-<stamp>-<hex12>) land in go.mod:
+# the hex fragment is a commit hash, not a word.
+extend-ignore-re = ["\\b[0-9]{14}-[0-9a-f]{12}\\b"]
