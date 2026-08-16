@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/convcommit"
 	"github.com/monumental-archive/stele/internal/derive"
@@ -38,6 +39,46 @@ type deriveHistory interface {
 	Tags(ref string) ([]string, error)
 	Commits(from, to string, paths ...string) ([]string, error)
 	Message(rev string) (string, error)
+	CommitTime(rev string) (string, error)
+}
+
+// derived is one reading of a history: the base, the range, and the
+// decision they produce. Both modes take it from here rather than each
+// deriving its own, because notes describing a different release than
+// the one being cut is exactly what two independent readings drift into.
+type derived struct {
+	history  deriveHistory
+	base     derive.Base
+	decision derive.Decision
+	commits  []convcommit.Commit
+	ref      string
+}
+
+// date reads the release date from the ref being released.
+//
+// Never a wall clock: a renderer that reads the time renders a different
+// document every run, and the release date IS the date of what is
+// released.
+//
+// And normalised to UTC, which is not pedantry. Git records the
+// committer's own offset, so the calendar date inside that timestamp is
+// the date where the committer was sitting: a commit made at
+// 2026-08-16T03:30+05:00 is 2026-08-15T22:30Z, and reading its leading
+// characters dates the release a day later than the rest of the world
+// saw it. Measured against a published changelog, which is how it was
+// found. One instant, one date, wherever it was authored.
+func (d *derived) date() (string, error) {
+	stamp, err := d.history.CommitTime(d.ref)
+	if err != nil {
+		return "", err
+	}
+
+	at, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return "", fmt.Errorf("derive: %s reported no usable commit date (%q): %w", d.ref, stamp, err)
+	}
+
+	return at.UTC().Format(time.DateOnly), nil
 }
 
 // deriveArgs is everything `derive version` reads.
@@ -54,29 +95,32 @@ type deriveArgs struct {
 // deriveCmd dispatches `stele derive <mode>`.
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version or notes"); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
 	}
 
-	if args[0] != deriveVersion {
-		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version)\n", args[0]); err != nil {
+	mode := args[0]
+	switch mode {
+	case deriveVersion, deriveNotes:
+	default:
+		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version, notes)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
 	}
 
-	da, code := parseDeriveArgs(args[1:], stderr)
+	da, na, code := parseDeriveArgs(mode, args[1:], stderr)
 	if code != exitOK {
 		return code
 	}
 
 	out := &latch{w: stdout}
 
-	err := runDeriveVersion(da, out)
+	err := runDerive(mode, da, na, out)
 	if out.err != nil {
 		return exitIO
 	}
@@ -93,12 +137,10 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // parseDeriveArgs reads the flag surface.
-//
-//nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
-func parseDeriveArgs(args []string, stderr io.Writer) (*deriveArgs, int) {
-	da := &deriveArgs{}
+func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs, *notesArgs, int) {
+	da, na := &deriveArgs{}, &notesArgs{}
 
-	fs := flag.NewFlagSet("stele derive version", flag.ContinueOnError)
+	fs := flag.NewFlagSet("stele derive "+mode, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&da.gitDir, "git-dir", "", "local clone with full history and tags fetched (required)")
 	fs.StringVar(&da.ref, "ref", "HEAD", "revision the release would be cut from")
@@ -113,19 +155,46 @@ func parseDeriveArgs(args []string, stderr io.Writer) (*deriveArgs, int) {
 	fs.BoolVar(&da.zeroX, "zero-major-bumps-minor", true,
 		"below 1.0.0, raise the minor for a breaking change rather than declaring 1.0.0")
 
+	if mode == deriveNotes {
+		fs.StringVar(&na.groups, "groups", "feat=Added,fix=Fixed,perf=Changed,docs=Documentation",
+			"comma-separated type=Heading pairs; a type with no heading writes no entry")
+		fs.StringVar(&na.order, "group-order", "Breaking,Added,Changed,Fixed,Documentation",
+			"headings in the order they render; rendering never depends on map order")
+		fs.StringVar(&na.breaking, "breaking-group", "Breaking",
+			"heading breaking changes are lifted into; empty leaves them in their type's group")
+		fs.StringVar(&na.compareURL, "compare-url", "",
+			"URL prefix a <previous>...<version> range appends to; empty renders plain text")
+		fs.StringVar(&na.releaseURL, "release-url", "",
+			"URL prefix a lone tag appends to, used for a first release")
+		fs.StringVar(&na.pullURL, "pull-url", "", "URL prefix a pull request number appends to")
+		fs.StringVar(&na.date, "date", "",
+			"release date; defaults to the committer date of --ref, never a wall clock")
+		fs.StringVar(&na.changelog, "changelog", "",
+			"changelog to splice the section into, above its newest section; empty prints instead")
+	}
+
 	if err := fs.Parse(args); err != nil {
-		return da, exitUsage
+		return da, na, exitUsage
 	}
 
 	if da.gitDir == "" {
-		if _, err := fmt.Fprintln(stderr, "stele derive version: --git-dir is required"); err != nil {
-			return da, exitIO
+		if _, err := fmt.Fprintf(stderr, "stele derive %s: --git-dir is required\n", mode); err != nil {
+			return da, na, exitIO
 		}
 
-		return da, exitUsage
+		return da, na, exitUsage
 	}
 
-	return da, exitOK
+	return da, na, exitOK
+}
+
+// runDerive dispatches the mode onto the shared derivation.
+func runDerive(mode string, da *deriveArgs, na *notesArgs, out *latch) error {
+	if mode == deriveNotes {
+		return runDeriveNotes(da, na, out)
+	}
+
+	return runDeriveVersion(da, out)
 }
 
 // splitTypes reads a comma-separated type list, dropping the empty
@@ -142,22 +211,22 @@ func splitTypes(s string) []string {
 	return out
 }
 
-// runDeriveVersion is the whole derivation: find the namespace's latest
-// release, read the commits since it, and report what they call for.
-func runDeriveVersion(da *deriveArgs, out *latch) error {
+// deriveRelease is the whole derivation: find the namespace's latest
+// release, read the commits since it, and decide what they call for.
+func deriveRelease(da *deriveArgs, out *latch) (*derived, error) {
 	rules, err := derive.NewRules(splitTypes(da.minor), splitTypes(da.silent), da.zeroX)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	history, err := openDeriveGit(da.gitDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	tags, err := history.Tags(da.ref)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	base := derive.LatestTag(da.prefix, tags)
@@ -176,7 +245,7 @@ func runDeriveVersion(da *deriveArgs, out *latch) error {
 
 	commits, unconventional, err := readRange(history, from, da.ref, splitTypes(da.paths))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Counted and reported rather than silently dropped. A break stated
@@ -186,7 +255,35 @@ func runDeriveVersion(da *deriveArgs, out *latch) error {
 		out.logf("%d commit(s) in the range are not conventional and cast no vote", unconventional)
 	}
 
-	return report(rules, da.prefix, base, commits, out)
+	// A namespace with no release starts from 0.0.0, so a first feature
+	// lands on 0.1.0. Stated here rather than defaulted inside the
+	// engine: "never released" and "released 0.0.0" are different facts,
+	// and only the caller knows which one it is looking at.
+	start := base.Version
+	if start == nil {
+		start = derive.Unreleased()
+
+		out.logf("no release in the %q namespace; deriving the first one", da.prefix)
+	}
+
+	decision, err := rules.Decide(start, commits)
+	if err != nil {
+		return nil, err
+	}
+
+	out.logf("base %s, %d commit(s) in range", start, len(commits))
+
+	return &derived{history: history, base: base, decision: decision, commits: commits, ref: da.ref}, nil
+}
+
+// runDeriveVersion reports the decision.
+func runDeriveVersion(da *deriveArgs, out *latch) error {
+	d, err := deriveRelease(da, out)
+	if err != nil {
+		return err
+	}
+
+	return report(da.prefix, d, out)
 }
 
 // readRange lists the commits a release would cover and parses each
@@ -224,29 +321,13 @@ func readRange(history deriveHistory, from, to string, paths []string) ([]convco
 }
 
 // report renders the decision.
-func report(rules derive.Rules, prefix string, base derive.Base, commits []convcommit.Commit, out *latch) error {
-	// A namespace with no release starts from 0.0.0, so a first feature
-	// lands on 0.1.0. Stated here rather than defaulted inside the
-	// engine: "never released" and "released 0.0.0" are different facts,
-	// and only the caller knows which one it is looking at.
-	start := base.Version
-	if start == nil {
-		start = derive.Unreleased()
-
-		out.logf("no release in the %q namespace; deriving the first one", prefix)
-	}
-
-	decision, err := rules.Decide(start, commits)
-	if err != nil {
-		return err
-	}
-
-	out.logf("base %s, %d commit(s) in range", start, len(commits))
+func report(prefix string, d *derived, out *latch) error {
+	decision := d.decision
 
 	next, releases := decision.Next()
 	if !releases {
 		out.logf("release=false")
-		out.logf("nothing to release: no version-bumping commits since %s", start)
+		out.logf("nothing to release: no version-bumping commits since %s", decision.Base())
 
 		return nil
 	}
