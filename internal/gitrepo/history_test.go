@@ -98,7 +98,7 @@ func openHistory(t *testing.T, dir string) *gitrepo.Repo {
 func TestTags(t *testing.T) {
 	h := historyRepo(t)
 
-	got, err := openHistory(t, h.dir).Tags()
+	got, err := openHistory(t, h.dir).Tags("HEAD")
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestTagsWhenNothingIsReleased(t *testing.T) {
 	git("config", "user.email", "t@example.com")
 	git("commit", "-q", "--allow-empty", "-m", "feat: the first thing")
 
-	got, err := openHistory(t, dir).Tags()
+	got, err := openHistory(t, dir).Tags("HEAD")
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestShallowCloneIsRefused(t *testing.T) {
 	shallow := openHistory(t, shallowDir)
 
 	t.Run("Tags", func(t *testing.T) {
-		got, err := shallow.Tags()
+		got, err := shallow.Tags("HEAD")
 		if err == nil {
 			t.Fatalf("Tags() = %v on a shallow clone, want a refusal", got)
 		}
@@ -164,8 +164,8 @@ func TestShallowCloneIsRefused(t *testing.T) {
 			t.Errorf("Tags() error = %v, want an ShallowError", err)
 		}
 
-		if !strings.Contains(err.Error(), "fetch-depth") {
-			t.Errorf("Tags() error = %q, want it to name the remedy", err)
+		if !strings.Contains(err.Error(), "git fetch") {
+			t.Errorf("Tags() error = %q, want it to name the remedy in git terms", err)
 		}
 	})
 

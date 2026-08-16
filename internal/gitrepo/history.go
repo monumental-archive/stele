@@ -9,27 +9,33 @@ import (
 // commits landed since one, and what each of them said.
 //
 // Every one of them is a question about HISTORY, and history is the one
-// thing a clone can be missing while looking complete. `actions/checkout`
-// defaults to `fetch-depth: 1` and fetches no tags at all — so the
-// common CI checkout answers "no releases yet, and one commit ever" for
-// a repository with fifty tags. Nothing about that answer looks wrong.
-// A derivation that trusts it starts from the wrong base and mints a
-// version number that is already published, and published version
-// numbers are immutable.
+// thing a clone can be missing while looking complete. Truncated clones
+// are the CI default rather than the unlucky case — GitHub's checkout
+// action fetches depth 1 and no tags unless told otherwise, and other
+// forges have their own version of the same setting. Such a clone
+// answers "no releases yet, and one commit ever" for a repository with
+// fifty tags, and nothing about that answer looks wrong. A derivation
+// that trusts it starts from the wrong base and mints a version number
+// that is already published, and published version numbers are
+// immutable.
 //
 // So the shallow check is not a courtesy: it is the guard that makes
 // every other read in this file meaningful, and it fires before them
 // rather than beside them.
 
 // ShallowError is returned when the repository cannot answer questions
-// about its own history. The remedy belongs in the message because the
-// caller is nearly always a workflow author who has to change one line
-// of YAML.
+// about its own history.
+//
+// The remedy is stated in git's own terms, not any one CI system's. What
+// truncated the clone differs per forge — a depth setting, a mirror
+// option, a cache — and naming one of them here would tell every other
+// caller to change a setting they do not have. `git fetch` is the answer
+// everywhere.
 type ShallowError struct{ dir string }
 
 func (e *ShallowError) Error() string {
-	return fmt.Sprintf("gitrepo: %s is a shallow clone — it cannot be asked what has been released "+
-		"(checkout with fetch-depth: 0 and fetch-tags: true)", e.dir)
+	return fmt.Sprintf("gitrepo: %s is a shallow clone — it cannot be asked what has been released; "+
+		"fetch the full history and tags first (git fetch --unshallow --tags)", e.dir)
 }
 
 // requireFullHistory refuses a repository whose history is truncated.
@@ -46,22 +52,29 @@ func (r *Repo) requireFullHistory() error {
 	return nil
 }
 
-// Tags lists every tag name in the repository, unqualified — "v1.2.3",
-// never "refs/tags/v1.2.3". Selecting a namespace out of them belongs to
-// the caller that knows which component it is releasing.
+// Tags lists the tags REACHABLE FROM ref, unqualified — "v1.2.3", never
+// "refs/tags/v1.2.3". Selecting a namespace out of them belongs to the
+// caller that knows which component it is releasing.
 //
-// A repository with no tags returns an empty list and no error: a
+// Reachability is not a refinement, it is the question. A repository
+// maintaining 1.x after 2.0.0 shipped has v2.0.0 as its newest tag and
+// v1.4.2 as the newest one on the branch being released; measuring the
+// range from the newest tag ANYWHERE derives 2.0.1 from a 1.x branch and
+// publishes it. The tag must be an ancestor of what is being released,
+// or it describes a different line of history.
+//
+// A ref with no tags behind it returns an empty list and no error: a
 // project that has never released is a fact, not a failure. That is
 // exactly why the shallow guard runs first — without it, "no tags" would
 // also be what a truncated fetch says.
-func (r *Repo) Tags() ([]string, error) {
+func (r *Repo) Tags(ref string) ([]string, error) {
 	if err := r.requireFullHistory(); err != nil {
 		return nil, err
 	}
 
-	out, err := r.git("for-each-ref", "--format=%(refname:strip=2)", "refs/tags")
+	out, err := r.git("for-each-ref", "--merged="+ref, "--format=%(refname:strip=2)", "refs/tags")
 	if err != nil {
-		return nil, fmt.Errorf("gitrepo: listing tags: %w", err)
+		return nil, fmt.Errorf("gitrepo: listing tags reachable from %s: %w", ref, err)
 	}
 
 	var tags []string
@@ -97,11 +110,19 @@ func (r *Repo) Message(rev string) (string, error) {
 // whole history, which is the first release of a project that has never
 // tagged.
 //
+// paths, when given, narrow the range to commits that touched them. In a
+// repository releasing several components from one history this is not a
+// convenience, it is the other half of the question: a tag namespace
+// says WHICH component is being released, and the paths say which
+// commits changed it. Without them every component in the monorepo
+// derives the same version from the same commits, and a change to one
+// crate raises the version of six others that nobody touched.
+//
 // Merges are NOT filtered out. A merge commit's subject is rarely
 // conventional and will simply not parse, which the caller counts and
 // reports; dropping them here would instead hide a break declared in a
 // merge body, and hide it in the one place nobody would look.
-func (r *Repo) Commits(from, to string) ([]string, error) {
+func (r *Repo) Commits(from, to string, paths ...string) ([]string, error) {
 	if err := r.requireFullHistory(); err != nil {
 		return nil, err
 	}
@@ -111,7 +132,13 @@ func (r *Repo) Commits(from, to string) ([]string, error) {
 		span = from + ".." + to
 	}
 
-	out, err := r.git("rev-list", "--reverse", span)
+	args := []string{"rev-list", "--reverse", span}
+	if len(paths) > 0 {
+		args = append(args, "--")
+		args = append(args, paths...)
+	}
+
+	out, err := r.git(args...)
 	if err != nil {
 		return nil, fmt.Errorf("gitrepo: listing commits over %s: %w", span, err)
 	}

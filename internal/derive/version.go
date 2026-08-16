@@ -118,6 +118,16 @@ func LatestTag(prefix string, tags []string) Base {
 	return base
 }
 
+// Unreleased is the version a project that has never released measures
+// its first range from. A feature therefore lands on 0.1.0 and a fix on
+// 0.0.1, which is the rules deciding the first release rather than a
+// constant asserting it.
+//
+// It is a function and not a package variable because *semver.Version is
+// a pointer: a shared one could be mutated by any caller, and the first
+// release of every project would move together.
+func Unreleased() *semver.Version { return semver.New(0, 0, 0, "", "") }
+
 // Bump is the size of a version change. The values are ordered smallest
 // to largest so that deciding a range is max(), and that ordering is the
 // type's contract — not an implementation detail.
