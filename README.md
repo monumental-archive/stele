@@ -63,8 +63,12 @@ mise trust && mise install && mise run hooks:install
 mise run ci
 ```
 
-Zero external dependencies; `GOPROXY=off` — the build is a pure
-function of this tree and the pinned toolchain.
+Dependencies are pinned by `go.sum` — byte-identical modules or a
+failed build — and fetched through the checksummed proxy, the one
+network dependency in the gate. Everything else is a pure function of
+this tree and the pinned toolchain: `CGO_ENABLED=0`,
+`GOTOOLCHAIN=local`, `-trimpath`, and no committed `vendor/` by
+[deliberate decision](CLAUDE.md).
 
 ## Licence
 
