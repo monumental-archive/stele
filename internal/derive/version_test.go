@@ -445,3 +445,28 @@ func TestBumpOrderingIsTheContract(t *testing.T) {
 		}
 	}
 }
+
+// A project that has never released measures its first range from here,
+// so the rules decide the first version rather than a constant asserting
+// it. Fresh each call: a shared pointer could be mutated by any caller,
+// and every project's first release would move together.
+func TestUnreleased(t *testing.T) {
+	first := derive.Unreleased()
+	if first.String() != "0.0.0" {
+		t.Errorf("Unreleased() = %s, want 0.0.0", first)
+	}
+
+	if second := derive.Unreleased(); second == first {
+		t.Error("Unreleased() returned a shared pointer")
+	}
+
+	got, err := testRules(t, true).Decide(derive.Unreleased(), parseAll(t, "feat: the first thing"))
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	next, releases := got.Next()
+	if !releases || next.String() != "0.1.0" {
+		t.Errorf("first release = %v/%v, want 0.1.0", next, releases)
+	}
+}

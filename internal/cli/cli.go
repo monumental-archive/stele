@@ -10,11 +10,16 @@ import (
 	"runtime/debug"
 )
 
-// The two multi-mode verbs.
+// The multi-mode verbs.
 const (
 	verbVerify = "verify"
 	verbEmit   = "emit"
+	verbDerive = "derive"
 )
+
+// cmdVersion reports the binary's own build version — distinct from the
+// derive mode that happens to share the word.
+const cmdVersion = "version"
 
 // Exit codes: 0 success, 2 usage error, 3 output-stream failure.
 const (
@@ -43,7 +48,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		return exitOK
-	case "version":
+	case cmdVersion:
 		if err := version(stdout); err != nil {
 			return exitIO
 		}
@@ -53,6 +58,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return verifyCmd(args[1:], stdout, stderr)
 	case verbEmit:
 		return emitCmd(args[1:], stdout, stderr)
+	case verbDerive:
+		return deriveCmd(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr, "stele: unknown command %q (run `stele help`)\n", args[0]); err != nil {
 			return exitIO
@@ -77,12 +84,19 @@ usage:
     chain     the source chain: coverage tip→genesis and the ledger
     level     chain, then the honest computed source level
 
+  stele derive <mode>    turn facts into claims; modes:
+    version   the release this history's conventional commits call
+              for, measured within one tag namespace
+
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
               holes earlier lapses left, signed via cosign, appended
               to the notes ledger with a compare-and-swap push
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
+
+derive version flags: --git-dir [--ref --tag-prefix --minor-types
+--silent-types --zero-major-bumps-minor].
 
 verify flags: --policy --trusted-root --repo; release/vsa add
 --tag --subjects --signer-digest --canon-digest; chain/level add
