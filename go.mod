@@ -2,7 +2,10 @@ module github.com/monumental-archive/stele
 
 go 1.26.5
 
-require github.com/sigstore/sigstore-go v1.3.0
+require (
+	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/sigstore/sigstore-go v1.3.0
+)
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
