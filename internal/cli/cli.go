@@ -87,6 +87,8 @@ usage:
   stele derive <mode>    turn facts into claims; modes:
     version   the release this history's conventional commits call
               for, measured within one tag namespace
+    notes     that release's changelog section, in the Keep a
+              Changelog shape, printed or spliced into a file
 
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
@@ -95,8 +97,10 @@ usage:
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
 
-derive version flags: --git-dir [--ref --tag-prefix --minor-types
---silent-types --zero-major-bumps-minor].
+derive flags: --git-dir [--ref --tag-prefix --paths --minor-types
+--silent-types --zero-major-bumps-minor]; notes adds [--groups
+--group-order --breaking-group --compare-url --release-url --pull-url
+--date --changelog].
 
 verify flags: --policy --trusted-root --repo; release/vsa add
 --tag --subjects --signer-digest --canon-digest; chain/level add

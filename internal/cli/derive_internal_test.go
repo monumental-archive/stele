@@ -11,18 +11,28 @@ import (
 // to fail independently, because a guard that fires only when git is
 // unhappy is the least exercised code here.
 type stubHistory struct {
-	tags     []string
-	commits  []string
-	messages map[string]string
-	tagsErr  error
-	revsErr  error
-	msgErr   error
+	tags       []string
+	commits    []string
+	messages   map[string]string
+	tagsErr    error
+	revsErr    error
+	msgErr     error
+	timeErr    error
+	commitTime string
 }
 
 func (s *stubHistory) Tags(string) ([]string, error) { return s.tags, s.tagsErr }
 
 func (s *stubHistory) Commits(_, _ string, _ ...string) ([]string, error) {
 	return s.commits, s.revsErr
+}
+
+func (s *stubHistory) CommitTime(string) (string, error) {
+	if s.timeErr != nil {
+		return "", s.timeErr
+	}
+
+	return s.commitTime, nil
 }
 
 func (s *stubHistory) Message(rev string) (string, error) {
@@ -50,7 +60,7 @@ func TestDeriveCmdUsage(t *testing.T) {
 		want int
 	}{
 		{name: "no mode", args: nil, want: exitUsage},
-		{name: "unknown mode", args: []string{"changelog"}, want: exitUsage},
+		{name: "unknown mode", args: []string{"nonsense"}, want: exitUsage},
 		{name: "no git dir", args: []string{"version"}, want: exitUsage},
 		{name: "unknown flag", args: []string{"version", "--nope"}, want: exitUsage},
 	} {
