@@ -6,7 +6,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/google/go-containerregistry v0.21.9
 	github.com/sigstore/sigstore-go v1.3.0
-	golang.org/x/mod v0.38.0
+	golang.org/x/mod v0.39.0
 )
 
 require (
