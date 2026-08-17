@@ -1,0 +1,58 @@
+# Release phase 1. This stub is a versioned repo's entire release-PR
+# obligation: version decision, changelog, Release PR, and — on merge —
+# the App-minted v* tag and draft release, all via the shared workflow.
+# Phase 2 (this repository's own publish workflow, triggered by the tag)
+# builds, proves and signs. See docs/release.md in monumental-archive/.github.
+---
+name: release
+
+"on":
+  push:
+    branches:
+      - $default-branch
+  # Refresh the open Release PR when a publish completes: the PR is
+  # created before the previous release finishes publishing, so any
+  # derivation that reads "the published release" (the pgrx upgrade
+  # path) would otherwise start from a version about to be superseded
+  # (#358 seam 5). Harmless for repos with no such derivation — the
+  # refresh recomputes the same content.
+  release:
+    types:
+      - published
+  # Recovery path: re-run the tag step against a release commit whose first
+  # attempt failed. The shared workflow refuses anything else.
+  workflow_dispatch: {}
+
+permissions: {}
+
+# Never cancel a release mid-flight; queue instead — and the group is the
+# WORKFLOW, never the commit. The Release PR machinery works on two fixed
+# branches (release/next, release-staging/next), so per-commit keying
+# serialised nothing: two pushes to main in quick succession ran two
+# release jobs at once, the second recreated the staging ref under the
+# first, and the first died mid-script on a 403 (measured in release-lab,
+# 2026-08-13 — two merges four minutes apart). The canon's own
+# self-release.yml always keyed on the workflow; this template disagreed
+# with it unnoticed, because the canon does not consume this file.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # No `with:` at all. The App is identified by the org-wide variable
+    # TAG_MINT_APP_CLIENT_ID, read by the shared workflow itself, so a
+    # caller carries no App identity and never needs updating when it
+    # changes.
+    uses: monumental-archive/.github/.github/workflows/release.yml@53bec899598fd00acdef3575b2ca350f5d489550 # v1.33.1
+    permissions:
+      # Required, and easy to omit. A `uses:` job with no `permissions:`
+      # block inherits the WORKFLOW-level default — `permissions: {}` above
+      # — not some ambient grant. git-cliff reads the repository's commits
+      # through the GitHub API, so the shared workflow needs this; without
+      # it the run dies as startup_failure with no jobs and no log.
+      contents: read # git-cliff's API calls, and the checkout
+      id-token: write # gitsign's keyless signature on the release tag (#349 S4)
+    secrets:
+      app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
+...

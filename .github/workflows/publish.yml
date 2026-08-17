@@ -1,0 +1,55 @@
+# Release phase 2. This stub is a versioned repository's entire phase-2
+# obligation: build, prove, sign, attach and publish, all via the shared
+# orchestrator.
+#
+# THE FILENAME IS CANON. Both crates.io and npm pin the *caller's* entry
+# workflow filename, taken from the OIDC `workflow_ref` claim rather than
+# `job_workflow_ref`. stele publishes to neither registry today, but the
+# filename stays canonical: a repository that renames it and later adds a
+# registry class breaks trusted publishing with nothing local going red.
+---
+name: publish
+
+"on":
+  push:
+    tags:
+      - v*
+  # Resume path. ALWAYS dispatch with --ref <tag>: the shared guard refuses
+  # anything that is not a tag, because a branch ref would attest a moving
+  # pointer and Sigstore is append-only.
+  workflow_dispatch: {}
+
+permissions: {}
+
+# Never cancel a publish mid-flight; queue instead.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    uses: monumental-archive/.github/.github/workflows/publish.yml@53bec899598fd00acdef3575b2ca350f5d489550 # v1.33.1
+    with:
+      # The whole point of this repository's release: a verifier a
+      # stranger can run without a Go toolchain, and the artifact the
+      # canon's three `go run <module>@<sha>` call sites are waiting to
+      # become — pinned, attested, and verified fail-closed before
+      # invocation (stele#7).
+      classes: go-binary
+      go-smoke-test: scripts/go-binary-smoke.sh
+      # No mint-doi yet: the DOI wants a CITATION.cff rendered from
+      # REUSE.toml and the zenodo-token grant, and stele#7 defers both to
+      # after the first release proves the class. Adding it later is one
+      # input and one secret, not a re-plumb.
+    permissions:
+      # The union every nested job needs. A reusable workflow can only
+      # reduce what the caller grants, so a missing scope here kills the
+      # run as startup_failure with no jobs and no log.
+      contents: read # build and publish check out this repository
+      id-token: write # the signer's keyless identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+      packages: write # unused by go-binary; harmless, and one less edit later
+    secrets:
+      app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
+...
