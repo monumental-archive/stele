@@ -63,13 +63,6 @@ func decodeInto(raw jsonx.Raw, into any) error {
 		}
 
 		*t = *v
-	case *int:
-		v, err := jsonx.DecodeBytes[int](raw)
-		if err != nil {
-			return err
-		}
-
-		*t = *v
 	default:
 		return errors.New("unsupported snapshot decode target")
 	}
@@ -149,15 +142,15 @@ func (s Snapshot) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, erro
 }
 
 // FailedRuns implements Forge.
-func (s Snapshot) FailedRuns(owner, repo, branch string) (int, error) {
+func (s Snapshot) FailedRuns(owner, repo, branch string) ([]string, error) {
 	p := filepath.Join(seg(owner), seg(repo), "runs", seg(branch)+".json")
 	if _, err := os.Stat(filepath.Join(s.Dir, p)); errors.Is(err, fs.ErrNotExist) {
-		return 0, nil
+		return nil, nil
 	}
 
-	var out int
+	var out []string
 	if err := s.readJSON(p, &out); err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	return out, nil
@@ -283,14 +276,14 @@ func (c Capture) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 }
 
 // FailedRuns implements Forge.
-func (c Capture) FailedRuns(owner, repo, branch string) (int, error) {
+func (c Capture) FailedRuns(owner, repo, branch string) ([]string, error) {
 	out, err := c.Live.FailedRuns(owner, repo, branch)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if err := c.writeJSON(filepath.Join(seg(owner), seg(repo), "runs", seg(branch)+".json"), out); err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	return out, nil

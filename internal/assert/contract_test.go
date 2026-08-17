@@ -77,8 +77,22 @@ func TestWorkflowSource(t *testing.T) {
 			"entry workflow with a pin comment past the epoch",
 			workflowForge(
 				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
-					"    with:\n      classes: oci-image rust-crate\n", ""),
+					"    with:\n      classes: oci-image,rust-crate\n", ""),
 			true, "oci-image rust-crate", true,
+		},
+		{
+			"the class list is comma-separated, spaces and quotes are noise",
+			workflowForge(
+				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
+					"    with:\n      classes: \"oci-image, rust-crate ,, wasm-npm\"\n", ""),
+			true, "oci-image rust-crate wasm-npm", true,
+		},
+		{
+			"a single class needs no separator",
+			workflowForge(
+				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
+					"    with:\n      classes: oci-image\n", ""),
+			true, "oci-image", true,
 		},
 		{
 			"entry workflow pinned before the epoch",

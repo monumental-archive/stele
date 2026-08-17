@@ -62,9 +62,11 @@ type Forge interface {
 	// propagation ladder waits for one to appear. Transport failures
 	// are still retried, like every read here.
 	Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error)
-	// FailedRuns reports how many workflow runs on one branch (a tag
-	// name, for release runs) concluded in failure.
-	FailedRuns(owner, repo, branch string) (int, error)
+	// FailedRuns reports the names of the workflow runs on one branch
+	// (a tag name, for release runs) that concluded in failure. Names,
+	// not a count: whether a failure is the PUBLISHING one decides
+	// whether a release is burned, and a count cannot answer that.
+	FailedRuns(owner, repo, branch string) ([]string, error)
 }
 
 // maxBody bounds one response read.
@@ -264,38 +266,39 @@ func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 
 type runsResponse struct {
 	WorkflowRuns []struct {
+		Name       string `json:"name"`
 		Conclusion string `json:"conclusion"`
 	} `json:"workflow_runs"`
 }
 
 // FailedRuns implements Forge.
-func (c *Client) FailedRuns(owner, repo, branch string) (int, error) {
+func (c *Client) FailedRuns(owner, repo, branch string) ([]string, error) {
 	body, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/actions/runs?branch="+url.QueryEscape(branch)+
 			"&per_page=100",
 		"application/vnd.github+json")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if !ok {
-		return 0, nil
+		return nil, nil
 	}
 
 	decoded, err := jsonx.DecodeForeign[runsResponse](body)
 	if err != nil {
-		return 0, fmt.Errorf("gh: runs of %s/%s@%s: %w", owner, repo, branch, err)
+		return nil, fmt.Errorf("gh: runs of %s/%s@%s: %w", owner, repo, branch, err)
 	}
 
-	n := 0
+	var out []string
 
 	for _, r := range decoded.WorkflowRuns {
 		if r.Conclusion == "failure" {
-			n++
+			out = append(out, r.Name)
 		}
 	}
 
-	return n, nil
+	return out, nil
 }
 
 func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {

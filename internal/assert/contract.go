@@ -129,7 +129,7 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, nil
 	}
 
-	classes := strings.Fields(strings.Trim(strings.TrimSpace(string(m[1])), `"'`))
+	classes := splitClasses(string(m[1]))
 	if len(classes) == 0 {
 		return nil, false, nil
 	}
@@ -147,6 +147,24 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		StoreVSA: w.Policy.storeVSA(canonVersion),
 		Origin:   "publish workflow at " + tag,
 	}, true, nil
+}
+
+// splitClasses reads the workflow input's class list. The separator
+// is a COMMA (the canon writes `classes: rust-binary,oci-image,…`,
+// and the bash matched it as `case ",${classes// /}," in *",X,"*`);
+// splitting on whitespace instead takes the whole list as one class
+// name, which the first live shadow run against the org caught on 17
+// releases. Surrounding quotes and spaces are noise either way.
+func splitClasses(raw string) []string {
+	var out []string
+
+	for part := range strings.SplitSeq(strings.Trim(strings.TrimSpace(raw), `"'`), ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+
+	return out
 }
 
 // Sources tries each source in order; the first that speaks for the

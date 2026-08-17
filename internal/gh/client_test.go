@@ -83,7 +83,9 @@ func testServer(t *testing.T) *gh.Client {
 
 	mux.HandleFunc("/repos/acme/widget/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
 		writeBody(w, []byte(`{"workflow_runs": [
-		  {"conclusion": "failure"}, {"conclusion": "success"}, {"conclusion": "failure"}]}`))
+		  {"name": "publish", "conclusion": "failure"},
+		  {"name": "ci", "conclusion": "success"},
+		  {"name": "scorecard", "conclusion": "failure"}]}`))
 	})
 
 	mux.HandleFunc("/repos/acme/locked/releases", func(w http.ResponseWriter, _ *http.Request) {
@@ -136,8 +138,8 @@ func TestClientReads(t *testing.T) {
 	}
 
 	failed, err := c.FailedRuns("acme", "widget", "v1.0.0")
-	if err != nil || failed != 2 {
-		t.Fatalf("FailedRuns = %d, %v", failed, err)
+	if err != nil || len(failed) != 2 || failed[0] != "publish" {
+		t.Fatalf("FailedRuns = %v, %v — names, and only the failures", failed, err)
 	}
 }
 

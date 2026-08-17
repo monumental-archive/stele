@@ -79,7 +79,7 @@ type fakeForge struct {
 	assets     map[string][]string          // key repo@tag
 	assetBytes map[string]map[string]string // repo@tag → name → content
 	store      map[string][]string          // digest → bundle JSON lines
-	failedRuns map[string]int               // repo@tag
+	failedRuns map[string][]string          // repo@tag → failed workflow names
 	files      map[string]string            // repo:ref:path → content
 }
 
@@ -122,7 +122,7 @@ func (f *fakeForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
 	return out, nil
 }
 
-func (f *fakeForge) FailedRuns(_, repo, branch string) (int, error) {
+func (f *fakeForge) FailedRuns(_, repo, branch string) ([]string, error) {
 	return f.failedRuns[repo+"@"+branch], nil
 }
 
@@ -302,7 +302,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	// burned: derived, excused.
 	f := completeRelease()
 	f.store = nil
-	f.failedRuns = map[string]int{"widget@v1.0.0": 1}
+	f.failedRuns = map[string][]string{"widget@v1.0.0": {"publish"}}
 
 	if rep := runEvidence(t, f, nil); rep.Verdict() != report.VerdictPass {
 		t.Fatalf("verdict = %s, want PASS via the burned derivation\nfindings: %+v", rep.Verdict(), rep.Findings())
@@ -312,10 +312,45 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	// covers vsa findings alone.
 	f2 := completeRelease()
 	f2.assets["widget@v1.0.0"] = drop(f2.assets["widget@v1.0.0"], "app.spdx.json")
-	f2.failedRuns = map[string]int{"widget@v1.0.0": 1}
+	f2.failedRuns = map[string][]string{"widget@v1.0.0": {"publish"}}
 
 	if rep := runEvidence(t, f2, nil); rep.Verdict() != report.VerdictFail {
 		t.Fatalf("verdict = %s, want FAIL — burned must not excuse a missing SBOM", rep.Verdict())
+	}
+
+	// An UNRELATED failed workflow must not burn anything once the
+	// policy names the publishing workflows — otherwise one flaky run
+	// mutes a genuinely missing verdict.
+	f4 := completeRelease()
+	f4.store = nil
+	f4.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard"}}
+
+	pol := loadTestPolicy(t)
+	pol.Evidence.PublishWorkflows = []string{"publish", "self-publish"}
+	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Asset: "evidence-manifest.json"}}
+
+	rep4, err := assert.Evidence(pol, "acme", f4, src4, nil, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rep4.Verdict() != report.VerdictFail {
+		t.Fatalf("verdict = %s, want FAIL — a flaky unrelated workflow must not burn a release", rep4.Verdict())
+	}
+
+	// The named publishing workflow still burns.
+	f5 := completeRelease()
+	f5.store = nil
+	f5.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard", "publish"}}
+	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Asset: "evidence-manifest.json"}}
+
+	rep5, err := assert.Evidence(pol, "acme", f5, src5, nil, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rep5.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, want PASS — the named publish failure burns", rep5.Verdict())
 	}
 
 	// And a missing verdict on a CLEAN tag stays red.

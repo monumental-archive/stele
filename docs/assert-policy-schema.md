@@ -26,6 +26,7 @@ edit to this document first.
     "storeVsaFromCanon": "1.13.0",
     "debtFile": "security/attestation-debt.txt",
     "expectedRepos": 4,
+    "publishWorkflows": ["publish", "self-publish"],
     "classes": {
       "rust-crate": {
         "bundles": ["attestations-crates.intoto.jsonl"],
@@ -55,6 +56,11 @@ edit to this document first.
   a different count refuses to judge: an unseen repo is unchecked,
   not clean, and a surplus one means this declaration is stale.
 - `debtFile` — where the humans keep evidence debt (format below).
+- `publishWorkflows` — the workflows whose failure can burn a release.
+  Absent means ANY failed run on the tag counts, which is too broad:
+  one flaky unrelated workflow would excuse a genuinely missing
+  verdict, and the burned category must never become a mute button.
+  Declare them.
 
 ## The blastRadius section
 
@@ -127,8 +133,9 @@ carried.
 
 Burned releases (a verdict absent because the publish run died after
 the release sealed) are NOT written here — they are derived from run
-history by the walk itself and excuse only `vsa:` findings on the
-affected tag. The asymmetry is the point: what a human may assert
+history by the walk itself, excuse only `vsa:` findings on the
+affected tag, and (with `publishWorkflows` declared) only when the
+failure was a PUBLISHING run. The asymmetry is the point: what a human may assert
 and what only evidence may assert are different types.
 
 ## Verification depth
