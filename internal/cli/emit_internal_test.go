@@ -67,6 +67,10 @@ func (fakeEmitSigner) Check() error { return nil }
 func swapEmit(t *testing.T, g emit.Git, gitErr error) {
 	t.Helper()
 
+	// CI itself runs under a workflow ref; the guard under test must
+	// see the caller's scripted world, not the harness's own identity.
+	t.Setenv("GITHUB_WORKFLOW_REF", "")
+
 	origSigner, origGit, origNow := newSigner, openEmitGit, emitNow
 
 	newSigner = func(string) emit.Signer { return fakeEmitSigner{} }
