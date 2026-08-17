@@ -46,7 +46,15 @@ func parseGroups(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("derive notes: %q is not type=Heading", pair)
 		}
 
-		groups[strings.TrimSpace(typ)] = strings.TrimSpace(heading)
+		// Refused like every duplicate in this surface (NewRules,
+		// NewNotes): two headings for one type is a configuration defect,
+		// and letting the last one win would bury it.
+		typ = strings.TrimSpace(typ)
+		if _, dup := groups[typ]; dup {
+			return nil, fmt.Errorf("derive notes: commit type %q is mapped twice", typ)
+		}
+
+		groups[typ] = strings.TrimSpace(heading)
 	}
 
 	return groups, nil
@@ -111,7 +119,7 @@ func runDeriveNotes(da *deriveArgs, na *notesArgs, out *latch) error {
 		return nil
 	}
 
-	return splice(na.changelog, section, next.String(), out)
+	return splice(na.changelog, section, next.String(), derive.Tag(da.prefix, next), out)
 }
 
 // splice inserts the section above the newest one already in the file.
@@ -121,7 +129,7 @@ func runDeriveNotes(da *deriveArgs, na *notesArgs, out *latch) error {
 // so the newest section's position is the only one that does not depend
 // on parsing the preamble or understanding what it says. A file with no
 // sections yet gets the first one appended, preamble untouched.
-func splice(path, section, version string, out *latch) error {
+func splice(path, section, version, tag string, out *latch) error {
 	existing, err := os.ReadFile(path) //nolint:gosec // a path the operator named
 	if err != nil {
 		return fmt.Errorf("derive notes: reading %s: %w", path, err)
@@ -130,9 +138,14 @@ func splice(path, section, version string, out *latch) error {
 	// Refused, not overwritten and not appended twice. A changelog with
 	// two sections for one version cannot be read, and re-running a
 	// release step is normal — so this must be safe to repeat, not
-	// destructive on the second run.
+	// destructive on the second run. The version is matched as a
+	// DELIMITED token, never a substring: 1.2.3 sits inside 1.2.30 and
+	// inside 1.2.3-rc.1, and a substring match would refuse a release
+	// this file has never seen. The tag spelling is checked too, because
+	// an adopted changelog may head its sections "## [v1.2.3]" and the
+	// leading "v" is a version character that breaks the bare match.
 	for line := range strings.Lines(string(existing)) {
-		if strings.HasPrefix(line, sectionMarker) && strings.Contains(line, version) {
+		if strings.HasPrefix(line, sectionMarker) && mentionsVersion(line, version, tag) {
 			return fmt.Errorf("derive notes: %s already carries a section for %s", path, version)
 		}
 	}
@@ -141,8 +154,14 @@ func splice(path, section, version string, out *latch) error {
 
 	var b strings.Builder
 
-	b.WriteString(strings.TrimRight(at.before, "\n"))
-	b.WriteString("\n\n")
+	// A file with no preamble gets none invented for it: writing the
+	// separator unconditionally would start an adopted empty changelog
+	// with two blank lines, which is what first-line lint rules refuse.
+	if before := strings.TrimRight(at.before, "\n"); before != "" {
+		b.WriteString(before)
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString(strings.TrimRight(section, "\n"))
 	b.WriteString("\n")
 
@@ -167,6 +186,45 @@ type split struct {
 	before   string
 	sections string
 	found    bool
+}
+
+// mentionsVersion reports whether the line carries any needle as a
+// whole token — bounded on each side by a character that could not be
+// part of a version. SemVer's alphabet (§9, §10) is alphanumerics,
+// ".", "-" and "+"; anything else, or the line's edge, delimits.
+func mentionsVersion(line string, needles ...string) bool {
+	for _, needle := range needles {
+		for from := 0; ; {
+			at := strings.Index(line[from:], needle)
+			if at < 0 {
+				break
+			}
+
+			at += from
+
+			end := at + len(needle)
+			if (at == 0 || !isVersionChar(line[at-1])) &&
+				(end == len(line) || !isVersionChar(line[end])) {
+				return true
+			}
+
+			from = at + 1
+		}
+	}
+
+	return false
+}
+
+// isVersionChar reports whether b can appear inside a semantic version.
+func isVersionChar(b byte) bool {
+	switch {
+	case b >= '0' && b <= '9', b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z':
+		return true
+	case b == '.', b == '-', b == '+':
+		return true
+	default:
+		return false
+	}
 }
 
 // cutAtFirstSection splits a changelog at its newest section heading.

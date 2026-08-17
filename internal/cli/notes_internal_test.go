@@ -258,6 +258,66 @@ func TestNotesSpliceIntoAnEmptyChangelog(t *testing.T) {
 	}
 }
 
+// The duplicate guard matches the version as a delimited token, never a
+// substring: 1.1.0 sits inside 1.1.0-rc.1 and inside 11.1.0, and a
+// substring match would refuse a release the file has never seen.
+func TestNotesSpliceIsNotFooledBySuperstrings(t *testing.T) {
+	const decoys = "# Changelog\n\n" +
+		"## [1.1.0-rc.1](https://example.test/x) - 2026-01-02\n\n- a candidate\n\n" +
+		"## [11.1.0](https://example.test/y) - 2026-01-01\n\n- another component's count\n"
+
+	path := filepath.Join(t.TempDir(), "CHANGELOG.md")
+	if err := os.WriteFile(path, []byte(decoys), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runNotes(t, releaseHistory(), "--changelog", path)
+	if got.code != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s), want the decoys ignored", got.code, got.stderr)
+	}
+
+	if !strings.Contains(readFile(t, path), "## 1.1.0 - ") {
+		t.Error("the 1.1.0 section was not written")
+	}
+}
+
+// An adopted changelog may head its sections with the tag spelling
+// ("## [v1.1.0]"), where the leading "v" would hide the version from a
+// token match. The guard checks the tag spelling too.
+func TestNotesSpliceRefusesTheTagSpelling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CHANGELOG.md")
+	if err := os.WriteFile(path, []byte("# Changelog\n\n## [v1.1.0] - 2026-01-01\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runNotes(t, releaseHistory(), "--changelog", path)
+	if got.code != exitRefused {
+		t.Fatalf("deriveCmd = %d, want %d", got.code, exitRefused)
+	}
+
+	if !strings.Contains(got.stderr, "already carries a section for 1.1.0") {
+		t.Errorf("stderr = %q, want the tag-spelled section named", got.stderr)
+	}
+}
+
+// An empty changelog gets a section and nothing else: an invented
+// leading separator would start the file with blank lines, which is
+// what first-line lint rules refuse.
+func TestNotesSpliceIntoAnEmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CHANGELOG.md")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := runNotes(t, releaseHistory(), "--changelog", path); got.code != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got.code, got.stderr)
+	}
+
+	if content := readFile(t, path); !strings.HasPrefix(content, "## 1.1.0 - ") {
+		t.Errorf("content =\n%s\nwant the section on the first line", content)
+	}
+}
+
 func TestNotesSpliceMissingFile(t *testing.T) {
 	got := runNotes(t, releaseHistory(), "--changelog", filepath.Join(t.TempDir(), "absent.md"))
 	if got.code != exitRefused {
@@ -277,5 +337,45 @@ func TestParseGroups(t *testing.T) {
 
 	if len(groups) != 2 || groups["feat"] != "Added" || groups["fix"] != "Fixed" {
 		t.Errorf("parseGroups = %v", groups)
+	}
+}
+
+// Two headings for one type is a configuration defect, refused like
+// every duplicate on this surface — silently letting the last one win
+// would bury it.
+func TestParseGroupsRefusesADuplicateType(t *testing.T) {
+	if _, err := parseGroups("feat=Added,fix=Fixed,feat=Changed"); err == nil ||
+		!strings.Contains(err.Error(), "mapped twice") {
+		t.Errorf("parseGroups = %v, want a duplicate-type refusal", err)
+	}
+}
+
+func TestMentionsVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		line    string
+		needles []string
+		want    bool
+	}{
+		{name: "bracketed heading", line: "## [1.2.3](x) - d", needles: []string{"1.2.3"}, want: true},
+		{name: "plain heading", line: "## 1.2.3 - d", needles: []string{"1.2.3"}, want: true},
+		{name: "at the line's end", line: "## 1.2.3", needles: []string{"1.2.3"}, want: true},
+		{name: "inside a longer patch", line: "## [1.2.30](x) - d", needles: []string{"1.2.3"}, want: false},
+		{name: "inside a prerelease", line: "## [1.2.3-rc.1](x) - d", needles: []string{"1.2.3"}, want: false},
+		{name: "inside a longer major", line: "## [11.2.3](x) - d", needles: []string{"1.2.3"}, want: false},
+		{
+			name: "tag spelling via the second needle",
+			line: "## [v1.2.3] - d", needles: []string{"1.2.3", "v1.2.3"}, want: true,
+		},
+		{name: "absent entirely", line: "## [2.0.0](x) - d", needles: []string{"1.2.3"}, want: false},
+		// The substring fails its boundary check at one offset and must
+		// still be found at a later one.
+		{name: "a decoy before the real one", line: "## 11.2.3 then 1.2.3", needles: []string{"1.2.3"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mentionsVersion(tc.line, tc.needles...); got != tc.want {
+				t.Errorf("mentionsVersion(%q, %v) = %t, want %t", tc.line, tc.needles, got, tc.want)
+			}
+		})
 	}
 }
