@@ -95,7 +95,7 @@ type deriveArgs struct {
 // deriveCmd dispatches `stele derive <mode>`.
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version or notes"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version, notes or sbom"); err != nil {
 			return exitIO
 		}
 
@@ -104,13 +104,39 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes:
+	case deriveVersion, deriveNotes, deriveSBOM:
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version, notes)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version, notes, sbom)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
+	}
+
+	// sbom reads binaries, not a git history; it shares nothing with
+	// the version derivation but the verb.
+	if mode == deriveSBOM {
+		sa, code := parseSBOMArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		out := &latch{w: stdout}
+
+		err := runDeriveSBOM(sa, out)
+		if out.err != nil {
+			return exitIO
+		}
+
+		if err != nil {
+			if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+				return exitIO
+			}
+
+			return exitRefused
+		}
+
+		return exitOK
 	}
 
 	da, na, code := parseDeriveArgs(mode, args[1:], stderr)

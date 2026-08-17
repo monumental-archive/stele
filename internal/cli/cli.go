@@ -21,6 +21,9 @@ const (
 // derive mode that happens to share the word.
 const cmdVersion = "version"
 
+// develVersion is the toolchain's stamp for a build no tag names.
+const develVersion = "(devel)"
+
 // Exit codes: 0 success, 2 usage error, 3 output-stream failure.
 const (
 	exitOK    = 0
@@ -89,6 +92,9 @@ usage:
               for, measured within one tag namespace
     notes     that release's changelog section, in the Keep a
               Changelog shape, printed or spliced into a file
+    sbom      the release SBOM, read from the shipped binaries'
+              embedded module lists (SPDX 2.3, one union document
+              over every platform leg)
 
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
@@ -97,7 +103,8 @@ usage:
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
 
-derive flags: --git-dir [--ref --tag-prefix --paths --minor-types
+derive sbom flags: [--out --expect-version] <binary>...; the other
+derive modes take --git-dir [--ref --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
 --date --changelog].
@@ -122,7 +129,7 @@ notes push.
 // toolchain — read from the shipped bytes, never from a constant that
 // could drift from them.
 func version(w io.Writer) error {
-	ver := "(devel)"
+	ver := develVersion
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		ver = info.Main.Version
 	}
