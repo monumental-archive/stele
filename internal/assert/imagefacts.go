@@ -53,12 +53,12 @@ var (
 // evolving schema and registries extend it — but required fields are
 // pointers, so absent still refuses.
 type indexDoc struct {
-	MediaType   *string           `json:"mediaType"`
-	Annotations map[string]string `json:"annotations"`
-	Manifests   []manifestDoc     `json:"manifests"`
+	MediaType   *string            `json:"mediaType"`
+	Annotations map[string]string  `json:"annotations"`
+	Manifests   []childManifestDoc `json:"manifests"`
 }
 
-type manifestDoc struct {
+type childManifestDoc struct {
 	Digest   *string      `json:"digest"`
 	Platform *platformDoc `json:"platform"`
 }

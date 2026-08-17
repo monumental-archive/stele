@@ -6,7 +6,10 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -203,6 +206,105 @@ func TestAssertOutputFailures(t *testing.T) {
 	t.Run("dead stderr on a usage error", func(t *testing.T) {
 		if code := Run([]string{"assert"}, failWriterI{}, failWriterI{}); code != exitIO {
 			t.Fatalf("Run = %d, want %d", code, exitIO)
+		}
+	})
+}
+
+// evidenceSnapshot writes a replayable snapshot of one conforming
+// release, plus the policy and debt files — the whole evidence walk
+// end to end with no live API.
+func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot dir, policy path
+	t.Helper()
+
+	dir := t.TempDir()
+	digest := strings.Repeat("5", 64)
+	stmt := `{"_type": "https://in-toto.io/Statement/v1",` +
+		`"subject": [{"name": "app", "digest": {"sha256": "` + digest + `"}}],` +
+		`"predicateType": "https://slsa.dev/verification_summary/v1", "predicate": {}}`
+	bundle := `{"dsseEnvelope": {"payload": "` + base64.StdEncoding.EncodeToString([]byte(stmt)) + `"}}`
+
+	files := map[string]string{
+		"snap/acme/repos.json":       `["widget"]`,
+		"snap/acme/widget/tags.json": `["v1.0.0"]`,
+		"snap/acme/widget/releases/v1.0.0/assets.json": `["evidence-manifest.json", "app.spdx.json", ` +
+			`"checksums.txt", "attestations-image.intoto.jsonl"]`,
+		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": 1, ` +
+			`"classes": ["oci-image"], "storeVsa": true}`,
+		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
+		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
+		"policy.json": `{"schema": 1, "evidence": {"sbomSuffix": ".spdx.json", ` +
+			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
+			`"manifestAsset": "evidence-manifest.json", "debtFile": "no-such-debt.txt", ` +
+			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
+	}
+
+	for path, content := range files {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return filepath.Join(dir, "snap"), filepath.Join(dir, "policy.json")
+}
+
+// TestAssertEvidenceSnapshotEndToEnd replays a captured snapshot
+// through the whole verb: PASS as text and as a document.
+func TestAssertEvidenceSnapshotEndToEnd(t *testing.T) {
+	snap, policy := evidenceSnapshot(t)
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap, "--json",
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+	if doc.Verdict == nil || *doc.Verdict != "PASS" {
+		t.Fatalf("verdict = %v, want PASS", doc.Verdict)
+	}
+}
+
+func TestAssertEvidenceUsageRefusals(t *testing.T) {
+	snap, policy := evidenceSnapshot(t)
+
+	rows := [][]string{
+		{"assert", "evidence", "--policy", policy},
+		{"assert", "evidence", "--org", "acme"},
+		{"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap, "--capture", snap},
+		{"assert", "evidence", "--org", "acme", "--policy", "/no/such/policy.json"},
+	}
+
+	for _, args := range rows {
+		t.Run(strings.Join(args[2:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			if code := Run(args, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("Run = %d, want %d; stderr: %s", code, exitUsage, stderr.String())
+			}
+		})
+	}
+
+	t.Run("a malformed debt file refuses", func(t *testing.T) {
+		debt := filepath.Join(t.TempDir(), "debt.txt")
+		if err := os.WriteFile(debt, []byte("not a debt line\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap, "--debt", debt,
+		}, &stdout, &stderr)
+		if code != exitUsage {
+			t.Fatalf("Run = %d, want %d", code, exitUsage)
 		}
 	})
 }
