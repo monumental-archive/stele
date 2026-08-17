@@ -14,3 +14,7 @@ repository-code: https://github.com/monumental-archive/stele
 license: Apache-2.0
 version: 0.2.1
 date-released: 2026-08-17
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21977176
+    description: The concept DOI of the software.
