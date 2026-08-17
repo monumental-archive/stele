@@ -13,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/oci"
+	"github.com/monumental-archive/stele/internal/osv"
 )
 
 const (
@@ -305,6 +307,140 @@ func TestAssertEvidenceUsageRefusals(t *testing.T) {
 		}, &stdout, &stderr)
 		if code != exitUsage {
 			t.Fatalf("Run = %d, want %d", code, exitUsage)
+		}
+	})
+}
+
+// blastSnapshot writes a replayable snapshot of one release carrying
+// an attested SBOM, plus the blast-radius policy and a VEX directory
+// deciding the one scripted finding. Returns the snapshot dir, policy path and vex dir.
+//
+//nolint:gocritic // unnamedResult: three homogeneous paths, named in the comment
+func blastSnapshot(t *testing.T) (string, string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	sbom := `{"spdxVersion": "SPDX-2.3"}`
+	digest := chain.SHA256Hex([]byte(sbom))
+
+	files := map[string]string{
+		"snap/acme/repos.json":                                  `["widget"]`,
+		"snap/acme/widget/tags.json":                            `["v1.0.0"]`,
+		"snap/acme/widget/releases/v1.0.0/assets.json":          `["app.spdx.json"]`,
+		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,
+		"snap/acme/widget/attestations/" + digest + ".json":     `[{"bundle": 1}]`,
+		"policy.json": `{"schema": 1, "evidence": {"sbomSuffix": ".spdx.json", ` +
+			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
+			`"manifestAsset": "evidence-manifest.json", "debtFile": "no-such-debt.txt", ` +
+			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
+			`"blastRadius": {"osEcosystems": ["debian"], ` +
+			`"canary": {"repo": "widget", "tag": "v1.0.0", "advisory": "RUSTSEC-2021-0127"}}}`,
+		"vex/decided.openvex.json": `{"statements": [{"vulnerability": {"name": "RUSTSEC-2021-0127"}, ` +
+			`"products": [{"@id": "pkg:cargo/serde_cbor@0.11.2"}]}]}`,
+	}
+
+	for path, content := range files {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return filepath.Join(dir, "snap"), filepath.Join(dir, "policy.json"), filepath.Join(dir, "vex")
+}
+
+// cliScanner scripts the scanner seam for CLI tests.
+type cliScanner struct{ out string }
+
+func (s cliScanner) Scan([]byte) ([]byte, error) { return []byte(s.out), nil }
+
+func swapScanner(t *testing.T, s osv.Scanner) {
+	t.Helper()
+
+	orig := newScanner
+	newScanner = func() osv.Scanner { return s }
+
+	t.Cleanup(func() { newScanner = orig })
+}
+
+func TestAssertBlastRadiusEndToEnd(t *testing.T) {
+	snap, policy, vex := blastSnapshot(t)
+	swapScanner(t, cliScanner{out: `{"results": [{"packages": [{
+	  "package": {"name": "serde_cbor", "version": "0.11.2", "ecosystem": "crates.io"},
+	  "vulnerabilities": [{"id": "RUSTSEC-2021-0127", "affected": []}]}]}]}`})
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"assert", "blast-radius", "--org", "acme", "--policy", policy, "--vex", vex,
+		"--snapshot", snap, "--json",
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+	if doc.Verdict == nil || *doc.Verdict != "PASS" {
+		t.Fatalf("verdict = %v, want PASS", doc.Verdict)
+	}
+}
+
+func TestAssertBlastRadiusUsageRefusals(t *testing.T) {
+	snap, policy, vex := blastSnapshot(t)
+
+	rows := [][]string{
+		{"assert", "blast-radius", "--policy", policy, "--vex", vex},
+		{"assert", "blast-radius", "--org", "acme", "--vex", vex},
+		{"assert", "blast-radius", "--org", "acme", "--policy", policy},
+		{
+			"assert", "blast-radius", "--org", "acme", "--policy", policy, "--vex", vex,
+			"--snapshot", snap, "--capture", snap,
+		},
+	}
+
+	for _, args := range rows {
+		t.Run(strings.Join(args[2:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			if code := Run(args, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("Run = %d, want %d", code, exitUsage)
+			}
+		})
+	}
+
+	t.Run("a malformed vex document refuses", func(t *testing.T) {
+		bad := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bad, "x.openvex.json"), []byte("not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "blast-radius", "--org", "acme", "--policy", policy, "--vex", bad, "--snapshot", snap,
+		}, &stdout, &stderr)
+		if code != exitUsage {
+			t.Fatalf("Run = %d, want %d", code, exitUsage)
+		}
+	})
+
+	t.Run("an absent vex directory decides nothing and gates", func(t *testing.T) {
+		swapScanner(t, cliScanner{out: `{"results": [{"packages": [{
+		  "package": {"name": "serde_cbor", "version": "0.11.2", "ecosystem": "crates.io"},
+		  "vulnerabilities": [{"id": "RUSTSEC-2021-0127", "affected": []}]}]}]}`})
+
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "blast-radius", "--org", "acme", "--policy", policy,
+			"--vex", filepath.Join(t.TempDir(), "no-such-dir"), "--snapshot", snap,
+		}, &stdout, &stderr)
+		if code != exitRefused {
+			t.Fatalf("Run = %d, want %d — nothing decided must gate", code, exitRefused)
 		}
 	})
 }

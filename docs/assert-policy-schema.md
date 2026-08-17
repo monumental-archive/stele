@@ -56,6 +56,36 @@ edit to this document first.
   not clean, and a surplus one means this declaration is stale.
 - `debtFile` — where the humans keep evidence debt (format below).
 
+## The blastRadius section
+
+Optional; required to run `stele assert blast-radius`:
+
+```json
+{
+  "blastRadius": {
+    "osEcosystems": ["debian", "alpine", "ubuntu", "rocky", "redhat", "rpm"],
+    "canary": { "repo": "release-lab", "tag": "v0.17.0", "advisory": "RUSTSEC-2021-0127" }
+  }
+}
+```
+
+- `osEcosystems` — ecosystem substrings classed as OS base layers.
+  An unfixed finding there is the rebuild cadence's input — reported
+  as a derived exception, never red; a finding WITH a shipped fix
+  means the image lags a fix and gates like everything else.
+  Ecosystem findings (the org's own code surface) always gate.
+- `canary` — the pinned release that must yield its known advisory,
+  or the scanner cannot see and the walk refuses to judge.
+
+The VEX join is the exact `(advisory, package, version)` triple —
+never the advisory alone, so a release that bumps a decided package's
+version matches no decision and surfaces for a fresh judgment. Each
+matched decision appears in the report as a declared exception whose
+origin is the reviewed statement file; a decision matching no current
+finding surfaces as stale — a retirement candidate, never an
+archaeology project. An empty or absent VEX directory decides
+NOTHING, never everything.
+
 ## The release evidence manifest
 
 The declared contract, going forward: a release asset (named by the
