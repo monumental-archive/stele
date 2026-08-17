@@ -89,7 +89,13 @@ type Base struct {
 // Tags outside the namespace are not skipped and not reported — they
 // belong to another component and were never candidates. Only a tag that
 // claims the namespace and then fails to parse is worth a reader's
-// attention.
+// attention. Claiming takes more than a shared prefix: one namespace's
+// name is routinely another's leading substring ("v" leads "vault-v"),
+// and a component's tags must not be reported as the workspace's debris
+// on every clean run — noise like that teaches a reader to ignore the
+// one warning the real debris case depends on. A tag claims a namespace
+// when the prefix is followed by a digit, which is where every version
+// begins.
 //
 // An empty namespace yields a nil Version rather than a zero one: "this
 // project has never released" and "this project released 0.0.0" are
@@ -99,7 +105,8 @@ func LatestTag(prefix string, tags []string) Base {
 	var base Base
 
 	for _, tag := range tags {
-		if !strings.HasPrefix(tag, prefix) {
+		rest, found := strings.CutPrefix(tag, prefix)
+		if !found || rest == "" || rest[0] < '0' || rest[0] > '9' {
 			continue
 		}
 

@@ -161,6 +161,14 @@ func TestLatestTag(t *testing.T) {
 			prefix: "v", tags: []string{"v0.9-pre-import", "v1.0.0"},
 			wantVersion: "1.0.0", wantSkipped: []string{"v0.9-pre-import"},
 		},
+		// One namespace's name is another's leading substring: "vault-v"
+		// begins with "v". A sibling's tags are outside the namespace,
+		// not debris inside it, and must not be named on a clean run.
+		{
+			name:   "a sibling namespace sharing the prefix is not debris",
+			prefix: "v", tags: []string{"vault-v1.2.3", "vlatest", "v1.0.0"},
+			wantVersion: "1.0.0",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := derive.LatestTag(tc.prefix, tc.tags)
