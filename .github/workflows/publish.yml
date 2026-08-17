@@ -37,10 +37,12 @@ jobs:
       # invocation (stele#7).
       classes: go-binary
       go-smoke-test: scripts/go-binary-smoke.sh
-      # No mint-doi yet: the DOI wants a CITATION.cff rendered from
-      # REUSE.toml and the zenodo-token grant, and stele#7 defers both to
-      # after the first release proves the class. Adding it later is one
-      # input and one secret, not a re-plumb.
+      # A verifier strangers are asked to trust should be citable by the
+      # people who audit it. Licence and creators come from the derived
+      # CITATION.cff; the pipeline stamps version and date-released. The
+      # mint job runs LAST — after proof, after publish — so a DOI only
+      # ever cites a release that actually published.
+      mint-doi: true
     permissions:
       # The union every nested job needs. A reusable workflow can only
       # reduce what the caller grants, so a missing scope here kills the
@@ -49,7 +51,14 @@ jobs:
       id-token: write # the signer's keyless identity
       attestations: write # the signer persists the provenance
       artifact-metadata: write # the signer creates the storage record
-      packages: write # unused by go-binary; harmless, and one less edit later
+      # Granted though go-binary never pushes an image: GitHub validates
+      # the CALLED workflow's grants at startup, before any `if:` skips a
+      # class, so a caller granting less than the whole orchestrator
+      # demands dies as startup_failure with no jobs and no log (measured
+      # on the canon's own first self-publish). Not optional — do not
+      # "tidy" it away.
+      packages: write # oci-image class jobs declare it; unused here
     secrets:
       app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
+      zenodo-token: ${{ secrets.ZENODO_TOKEN }}
 ...

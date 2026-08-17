@@ -1,0 +1,16 @@
+# Derived file (#316): fix:citation renders licence, authors and
+# repository-code from REUSE.toml; the release pipeline stamps
+# version and date-released; title and the concept-DOI identifier
+# are the two human fields, preserved on regeneration.
+# lint:citation reddens hand drift. Edit REUSE.toml, not this.
+cff-version: 1.2.0
+message: If you use this software, please cite it using these metadata.
+title: stele
+type: software
+authors:
+  - family-names: Allen
+    given-names: Carl
+repository-code: https://github.com/monumental-archive/stele
+license: Apache-2.0
+version: 0.0.0
+date-released: 2026-08-17
