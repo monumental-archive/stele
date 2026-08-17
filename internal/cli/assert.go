@@ -12,12 +12,15 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/report"
 )
@@ -28,12 +31,26 @@ import (
 const exitBlind = 4
 
 // The assert targets.
-const targetImageFacts = "image-facts"
+const (
+	targetImageFacts = "image-facts"
+	targetEvidence   = "evidence"
+)
 
-// newOCIReader is the registry seam, swapped only by tests.
+// The effect seams, swapped only by tests.
 //
-//nolint:gochecknoglobals // test seam, written only by test setup
-var newOCIReader = func() oci.Reader { return oci.Client{} }
+//nolint:gochecknoglobals // test seams, written only by test setup
+var (
+	newOCIReader = func() oci.Reader { return oci.Client{} }
+
+	newForge = func() gh.Forge {
+		token := os.Getenv("GITHUB_TOKEN")
+		if token == "" {
+			token = os.Getenv("GH_TOKEN")
+		}
+
+		return gh.New(token)
+	}
+)
 
 // assertCmd dispatches `stele assert <target>`.
 func assertCmd(args []string, stdout, stderr io.Writer) int {
@@ -45,15 +62,144 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	if args[0] != targetImageFacts {
-		if _, err := fmt.Fprintf(stderr, "stele assert: unknown target %q (image-facts)\n", args[0]); err != nil {
+	switch args[0] {
+	case targetImageFacts:
+		return assertImageFacts(args[1:], stdout, stderr)
+	case targetEvidence:
+		return assertEvidence(args[1:], stdout, stderr)
+	default:
+		if _, err := fmt.Fprintf(stderr, "stele assert: unknown target %q (image-facts, evidence)\n", args[0]); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+}
+
+// assertEvidence runs the evidence-completeness walk: policy loaded,
+// the forge chosen (live, snapshot replay, or capture-through), the
+// contract sources stacked manifest-first, the debt file parsed into
+// declared exceptions.
+func assertEvidence(args []string, stdout, stderr io.Writer) int {
+	var (
+		jsonOut                   bool
+		org, policyPath, debtPath string
+		snapshotDir, captureDir   string
+	)
+
+	flags := flag.NewFlagSet("stele assert evidence", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&org, "org", "", "organisation whose releases are walked (required)")
+	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	flags.StringVar(&debtPath, "debt", "", "path to the committed evidence-debt file (defaults to the policy's debtFile)")
+	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
+	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	usageFail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele assert evidence: %s\n", msg); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
 	}
 
-	return assertImageFacts(args[1:], stdout, stderr)
+	switch {
+	case org == "":
+		return usageFail("--org is required")
+	case policyPath == "":
+		return usageFail("--policy is required")
+	case snapshotDir != "" && captureDir != "":
+		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
+	}
+
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return usageFail(err.Error())
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	if debtPath == "" {
+		debtPath = *pol.Evidence.DebtFile
+	}
+
+	debt, code := loadDebt(debtPath, stderr)
+	if code != exitOK {
+		return code
+	}
+
+	forge := newForge()
+	if snapshotDir != "" {
+		forge = gh.Snapshot{Dir: snapshotDir}
+	} else if captureDir != "" {
+		forge = gh.Capture{Live: forge, Dir: captureDir}
+	}
+
+	src := assert.Sources{
+		assert.ManifestSource{Forge: forge, Asset: *pol.Evidence.ManifestAsset},
+		assert.WorkflowSource{Forge: forge, Policy: pol.Evidence},
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	rep, err := assert.Evidence(pol, org, forge, src, debt, out.logf)
+	if out.err != nil {
+		return exitIO
+	}
+
+	if err != nil {
+		rep = report.Seal("assert "+targetEvidence, org,
+			report.PopulationFromListing(0, "walk incomplete"),
+			[]report.Finding{{Subject: org, Assertion: targetEvidence, Detail: err.Error()}},
+			nil, report.NoCanary())
+
+		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+			return exitIO
+		}
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// loadDebt parses the committed debt file. An absent file is no debt
+// — the walk owes nothing to a file nobody wrote; a malformed one is
+// a usage refusal, because a reviewed file that parses as nothing
+// would excuse nothing silently.
+//
+//nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
+func loadDebt(path string, stderr io.Writer) ([]report.Exception, int) {
+	content, err := os.ReadFile(path) //nolint:gosec // the debt path is operator-supplied by design
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, exitOK
+	}
+
+	if err == nil {
+		parsed, perr := assert.ParseDebt(content, path)
+		if perr == nil {
+			return parsed, exitOK
+		}
+
+		err = perr
+	}
+
+	if _, werr := fmt.Fprintf(stderr, "stele assert evidence: %v\n", err); werr != nil {
+		return nil, exitIO
+	}
+
+	return nil, exitUsage
 }
 
 // assertImageFacts runs the image-facts target: env contract read and
@@ -62,12 +208,12 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 func assertImageFacts(args []string, stdout, stderr io.Writer) int {
 	var jsonOut bool
 
-	fs := flag.NewFlagSet("stele assert image-facts", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.BoolVar(&jsonOut, "json", false,
+	flags := flag.NewFlagSet("stele assert image-facts", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
-	if err := fs.Parse(args); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
 
