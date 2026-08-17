@@ -10,6 +10,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.4.0](https://github.com/monumental-archive/stele/compare/v0.3.0...v0.4.0) - 2026-08-17
+
+### Added
+
+- seal verdicts into the shared report model behind --json ([#62](https://github.com/monumental-archive/stele/pull/62))
+- stand up the verb with image-facts as its first target ([#63](https://github.com/monumental-archive/stele/pull/63))
+- evidence walk, blast radius and the emit preflight ([#66](https://github.com/monumental-archive/stele/pull/66))
+
+### Fixed
+
+- retry transport, split classes, narrow the burn ([#70](https://github.com/monumental-archive/stele/pull/70))
+
 ## [0.3.0](https://github.com/monumental-archive/stele/compare/v0.2.2...v0.3.0) - 2026-08-17
 
 ### Added
