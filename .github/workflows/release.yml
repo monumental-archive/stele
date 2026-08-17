@@ -9,7 +9,7 @@ name: release
 "on":
   push:
     branches:
-      - $default-branch
+      - main
   # Refresh the open Release PR when a publish completes: the PR is
   # created before the previous release finishes publishing, so any
   # derivation that reads "the published release" (the pgrx upgrade
