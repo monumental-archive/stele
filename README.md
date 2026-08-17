@@ -9,7 +9,8 @@
 <!-- pending (human step): OpenSSF Best Practices — answer the form from docs/best-practices.md, then set 'bestpractices <BP_ID>' in .badge-states and re-run fix:badges -->
 <!-- pending (human step): REUSE — register at https://api.reuse.software/register (no account: name, email, project URL, confirmation link), then set 'reuse registered' in .badge-states and re-run fix:badges -->
 [![coverage](https://codecov.io/gh/monumental-archive/stele/branch/main/graph/badge.svg)](https://codecov.io/gh/monumental-archive/stele)
-[![fair-software](https://img.shields.io/badge/fair--software.eu-%E2%97%8F%20%E2%97%8F%20%E2%97%8B%20%E2%97%8B%20%E2%97%8B-orange)](https://fair-software.eu)
+<!-- pending (first mint): DOI — the concept DOI lands in CITATION.cff after the first release mints it; re-run fix:badges -->
+[![fair-software](https://img.shields.io/badge/fair--software.eu-%E2%97%8F%20%E2%97%8F%20%E2%97%8B%20%E2%97%8F%20%E2%97%8B-orange)](https://fair-software.eu)
 <!-- badges:end -->
 
 A **universal SLSA evidence engine and verifier**. Standard formats in
