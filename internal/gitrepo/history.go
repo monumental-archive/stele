@@ -122,6 +122,13 @@ func (r *Repo) Message(rev string) (string, error) {
 // conventional and will simply not parse, which the caller counts and
 // reports; dropping them here would instead hide a break declared in a
 // merge body, and hide it in the one place nobody would look.
+//
+// That guarantee needs stating twice because a pathspec quietly breaks
+// it: rev-list's default history simplification drops TREESAME commits,
+// and a merge is TREESAME to the parent it took the path's content from
+// — so plain `rev-list <span> -- <paths>` loses every merge, and with
+// them the one place a break hides. --full-history is what turns the
+// simplification off, and it is passed exactly when a pathspec is.
 func (r *Repo) Commits(from, to string, paths ...string) ([]string, error) {
 	if err := r.requireFullHistory(); err != nil {
 		return nil, err
@@ -134,7 +141,7 @@ func (r *Repo) Commits(from, to string, paths ...string) ([]string, error) {
 
 	args := []string{"rev-list", "--reverse", span}
 	if len(paths) > 0 {
-		args = append(args, "--")
+		args = append(args, "--full-history", "--")
 		args = append(args, paths...)
 	}
 

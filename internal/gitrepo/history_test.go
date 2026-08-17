@@ -254,3 +254,52 @@ func TestCommits(t *testing.T) {
 		}
 	})
 }
+
+// A pathspec must not cost the range its merge commits: rev-list's
+// default history simplification drops a merge as TREESAME to the
+// parent it took the path's content from, and a BREAKING CHANGE in the
+// merge body would vanish with it — silently, in exactly the monorepo
+// mode paths exist for.
+func TestCommitsWithPathsKeepMerges(t *testing.T) {
+	dir := t.TempDir()
+	git := gitIn(t, dir)
+
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "chore: begin")
+	git("checkout", "-q", "-b", "side")
+
+	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "pkg", "f"), []byte("f"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	git("add", "pkg/f")
+	git("commit", "-q", "-m", "feat: touch pkg")
+	touched := git("rev-parse", "HEAD")
+
+	git("checkout", "-q", "main")
+	git("merge", "-q", "--no-ff", "side", "-m",
+		"merge side\n\nBREAKING CHANGE: the merge body declares a break")
+	merge := git("rev-parse", "HEAD")
+
+	r := openHistory(t, dir)
+
+	got, err := r.Commits("", "HEAD", "pkg")
+	if err != nil {
+		t.Fatalf("Commits: %v", err)
+	}
+
+	want := []string{touched, merge}
+	if len(got) != len(want) {
+		t.Fatalf("Commits(paths=pkg) = %v, want %v", got, want)
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Commits(paths=pkg)[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
