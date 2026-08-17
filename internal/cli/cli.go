@@ -15,6 +15,7 @@ const (
 	verbVerify = "verify"
 	verbEmit   = "emit"
 	verbDerive = "derive"
+	verbAssert = "assert"
 )
 
 // cmdVersion reports the binary's own build version — distinct from the
@@ -63,6 +64,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return emitCmd(args[1:], stdout, stderr)
 	case verbDerive:
 		return deriveCmd(args[1:], stdout, stderr)
+	case verbAssert:
+		return assertCmd(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr, "stele: unknown command %q (run `stele help`)\n", args[0]); err != nil {
 			return exitIO
@@ -95,6 +98,12 @@ usage:
     sbom      the release SBOM, read from the shipped binaries'
               embedded module lists (SPDX 2.3, one union document
               over every platform leg)
+
+  stele assert <target>  compare published evidence to a declaration;
+                         exit 0 pass, 1 fail, 4 could-not-judge:
+    image-facts  a published image's index annotations and every
+                 per-arch config's labels equal the resolved facts
+                 map (env contract: IMAGE, DIGEST, FACTS)
 
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
