@@ -186,6 +186,32 @@ func TestDeriveLowercasesPurls(t *testing.T) {
 	}
 }
 
+// One module may ship several commands, and every command ships for
+// every platform — so two binaries on one platform is a legitimate
+// release, and the attribution still counts platforms, not binaries.
+func TestDeriveAcceptsMultipleCommandsPerPlatform(t *testing.T) {
+	t.Parallel()
+
+	first := leg("linux", "amd64", dep("shared.example/mod", "v1.0.0"))
+	first.Path = "example.com/tool/cmd/one"
+	second := leg("linux", "amd64", dep("shared.example/mod", "v1.0.0"))
+	second.Path = "example.com/tool/cmd/two"
+
+	doc, err := sbom.Derive([]sbom.Binary{
+		{Name: "one", Info: first},
+		{Name: "two", Info: second},
+	}, "t")
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	// One platform, both commands linking the module: linked-everywhere,
+	// so no subset attribution — and no duplicated platform inflating it.
+	if got := doc.Packages[1].SourceInfo; got != "" {
+		t.Fatalf("sourceInfo = %q, want empty", got)
+	}
+}
+
 func TestDeriveRecordsReplacements(t *testing.T) {
 	t.Parallel()
 
@@ -321,14 +347,14 @@ func TestDeriveRefusals(t *testing.T) {
 			want: "no GOOS/GOARCH",
 		},
 		{
-			name: "duplicate platform",
+			name: "same command twice on one platform",
 			bins: func() []sbom.Binary {
 				return []sbom.Binary{
 					{Name: "a", Info: leg("linux", "amd64")},
 					{Name: "b", Info: leg("linux", "amd64")},
 				}
 			},
-			want: "one leg per platform",
+			want: "one binary per command per platform",
 		},
 		{
 			name: "directory replace",

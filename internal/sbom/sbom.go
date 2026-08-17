@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -235,9 +236,16 @@ func vcsFacts(b Binary) (*stamp, error) {
 // at two versions is refused, not merged: with one go.mod the module
 // graph resolves each path to exactly one version for every platform,
 // so a conflict means the legs saw different lockfiles.
+//
+// A release may legitimately carry several binaries per platform — one
+// module can hold several main packages, and every one of them ships
+// for every leg. What may NOT recur is the same command on the same
+// platform: that is the same file handed in twice, or two builds of
+// one thing, and either way one of them is not in the release.
 func unionDeps(bins []Binary) (*inventory, error) {
-	inv := &inventory{mods: make(map[string]*module), platforms: make([]string, 0, len(bins))}
+	inv := &inventory{mods: make(map[string]*module)}
 	seen := make(map[string]string)
+	platforms := make(map[string]bool)
 
 	for _, b := range bins {
 		platform, err := platformOf(b)
@@ -245,20 +253,25 @@ func unionDeps(bins []Binary) (*inventory, error) {
 			return nil, err
 		}
 
-		if prior, dup := seen[platform]; dup {
-			return nil, fmt.Errorf("sbom: %s and %s are both %s builds — one leg per platform",
-				prior, b.Name, platform)
+		key := platform + " " + b.Info.Path
+		if prior, dup := seen[key]; dup {
+			return nil, fmt.Errorf("sbom: %s and %s are both %s builds of %s — one binary per command per platform",
+				prior, b.Name, platform, b.Info.Path)
 		}
 
-		seen[platform] = b.Name
+		seen[key] = b.Name
 
-		inv.platforms = append(inv.platforms, platform)
+		platforms[platform] = true
 
 		for _, dep := range b.Info.Deps {
 			if err := collect(inv.mods, b, dep, platform); err != nil {
 				return nil, err
 			}
 		}
+	}
+
+	for p := range platforms {
+		inv.platforms = append(inv.platforms, p)
 	}
 
 	sort.Strings(inv.platforms)
@@ -306,7 +319,11 @@ func collect(mods map[string]*module, b Binary, dep *debug.Module, platform stri
 			b.Name, path, version, existing.version)
 	}
 
-	existing.platforms = append(existing.platforms, platform)
+	// Two commands on one platform both linking the module is still one
+	// platform in the attribution.
+	if !slices.Contains(existing.platforms, platform) {
+		existing.platforms = append(existing.platforms, platform)
+	}
 
 	return nil
 }
