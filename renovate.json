@@ -1,5 +1,5 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>monumental-archive/.github#v1.33.1"],
+  "extends": ["github>monumental-archive/.github#v1.33.2"],
   "postUpdateOptions": ["gomodTidy"]
 }
