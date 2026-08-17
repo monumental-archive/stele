@@ -39,8 +39,10 @@ imports pull platform-conditional modules. The release SBOM is the
 - A module linked into only some legs is recorded with
   `sourceInfo: "linked into: <platforms>"`, so the union never
   silently over-claims per-artifact.
-- One leg per platform: the same GOOS/GOARCH twice is two builds of
-  the same thing, not two legs.
+- Several binaries per platform are legitimate — one module can hold
+  several main packages, and each ships for every leg. What is refused
+  is the same command twice on one platform: the same file handed in
+  twice, or two builds of one thing.
 
 ## Refusals (all fail-closed)
 
