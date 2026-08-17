@@ -15,6 +15,7 @@ import (
 
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -362,3 +363,127 @@ func TestVerifyOutputFailures(t *testing.T) {
 type failWriterI struct{}
 
 func (failWriterI) Write([]byte) (int, error) { return 0, errors.New("sink closed") }
+
+// jsonReportDoc mirrors the --json wire shape the tests read back.
+type jsonReportDoc struct {
+	Target     *string `json:"target"`
+	Subject    *string `json:"subject"`
+	Verdict    *string `json:"verdict"`
+	Population *struct {
+		Size   *int    `json:"size"`
+		Source *string `json:"source"`
+	} `json:"population"`
+	Facts []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"facts"`
+	Findings []struct {
+		Assertion string `json:"assertion"`
+		Detail    string `json:"detail"`
+	} `json:"findings"`
+}
+
+func decodeReport(t *testing.T, stdout *bytes.Buffer) *jsonReportDoc {
+	t.Helper()
+
+	doc, err := jsonx.DecodeForeign[jsonReportDoc](stdout.Bytes())
+	if err != nil {
+		t.Fatalf("stdout is not one JSON report: %v\nstdout: %s", err, stdout.String())
+	}
+
+	return doc
+}
+
+// TestVerifyVSAJSONPasses pins the --json contract on success: exit 0,
+// stdout carries exactly one PASS document with the population and the
+// levels fact, and the progress lines moved to stderr.
+func TestVerifyVSAJSONPasses(t *testing.T) {
+	swap(t, scriptedBV{payload: []byte(vsaStatement)}, scriptedStore{})
+
+	px := files(t)
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "vsa", "--json",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
+		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+	}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run = %d, stderr: %s", code, stderr.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+
+	switch {
+	case doc.Verdict == nil || *doc.Verdict != "PASS":
+		t.Fatalf("verdict = %v, want PASS", doc.Verdict)
+	case doc.Subject == nil || *doc.Subject != "acme/widget@v1.2.3":
+		t.Fatalf("subject = %v", doc.Subject)
+	case doc.Population == nil || doc.Population.Size == nil || *doc.Population.Size != 1:
+		t.Fatalf("population = %+v", doc.Population)
+	case len(doc.Facts) != 1 || doc.Facts[0].Name != "verifiedLevels" ||
+		doc.Facts[0].Value != "SLSA_BUILD_LEVEL_3":
+		t.Fatalf("facts = %+v", doc.Facts)
+	}
+
+	if !strings.Contains(stderr.String(), "verdict verified") {
+		t.Errorf("stderr = %q, want the progress line moved there", stderr.String())
+	}
+}
+
+// TestVerifyJSONRefusal pins the --json contract on refusal: the exit
+// code stays 1, and stdout still carries one document — a FAIL whose
+// finding is the engine's message, over the declared population.
+func TestVerifyJSONRefusal(t *testing.T) {
+	swap(t, scriptedBV{payload: []byte(vsaStatement)}, scriptedStore{err: errors.New("store torn")})
+
+	px := files(t)
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "vsa", "--json",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
+		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+	}, &stdout, &stderr)
+
+	if code != exitRefused {
+		t.Fatalf("Run = %d, want %d; stderr: %s", code, exitRefused, stderr.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+
+	switch {
+	case doc.Verdict == nil || *doc.Verdict != "FAIL":
+		t.Fatalf("verdict = %v, want FAIL", doc.Verdict)
+	case len(doc.Findings) != 1 || doc.Findings[0].Assertion != "vsa":
+		t.Fatalf("findings = %+v", doc.Findings)
+	case !strings.Contains(doc.Findings[0].Detail, "store torn"):
+		t.Fatalf("finding detail = %q, want the engine's message", doc.Findings[0].Detail)
+	}
+}
+
+// TestVerifyJSONDeadStdout pins the stream contract under --json: a
+// report that cannot be written is exit 3, never a silent success.
+func TestVerifyJSONDeadStdout(t *testing.T) {
+	swap(t, scriptedBV{payload: []byte(vsaStatement)}, scriptedStore{})
+
+	px := files(t)
+
+	var stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "vsa", "--json",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
+		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+	}, failWriterI{}, &stderr)
+
+	if code != exitIO {
+		t.Fatalf("Run = %d, want %d", code, exitIO)
+	}
+}

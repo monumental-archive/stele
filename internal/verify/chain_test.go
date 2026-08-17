@@ -111,7 +111,7 @@ func (cw chainWorld) vsaStmt(rev string, levels []any) map[string]any {
 		"subject":       []any{map[string]any{"digest": map[string]any{"gitCommit": rev}}},
 		"predicateType": "https://slsa.dev/verification_summary/v1",
 		"predicate": map[string]any{
-			"verifier":           map[string]any{"id": "https://github.com/acme/widget/.github/workflows/source-attest.yml"},
+			"verifier":           map[string]any{"id": linkSAN},
 			"resourceUri":        "git+https://github.com/acme/widget",
 			"policy":             map[string]any{"uri": "https://github.com/acme/canon/tree/v1.0.0"},
 			"verificationResult": "PASSED",
@@ -357,6 +357,25 @@ func TestChainRefusals(t *testing.T) {
 				return h
 			},
 			"not the VSA type",
+		},
+		{
+			"summary claims a foreign verifier identity",
+			func(t *testing.T) fakeHistory {
+				t.Helper()
+				h := defaultChain(t)
+				w := chainWorld{t: t}
+				bad := w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})
+				dig(bad, "predicate")["verifier"] = map[string]any{
+					"id": "https://github.com/mallory/widget/.github/workflows/source-attest.yml@refs/heads/main",
+				}
+				h.notes[revC2] = w.note(2,
+					w.linkStmt(revC2, "ledgerPrev", map[string]any{
+						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
+					}, []string{"ORG_SOURCE_GATED"}, false), bad)
+
+				return h
+			},
+			"not the link signing identity",
 		},
 		{
 			"summary names another resource",

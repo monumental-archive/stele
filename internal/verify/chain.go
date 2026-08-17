@@ -303,6 +303,15 @@ func (w *walker) judgeLinkVSA(rev string, stmt *intoto.Statement) ([]string, err
 		return nil, fmt.Errorf("verify: link at %s: %w", rev, err)
 	}
 
+	// The VSA spec's step 4, the release leg's #264 rule applied to
+	// links: verifier.id must BE the identity that signed this half.
+	// The emitter guarantees the tautology; without this the consumer
+	// would let a future emitter drift unnoticed (#19 item 2).
+	if *pred.Verifier.ID != w.id.SAN {
+		return nil, fmt.Errorf("verify: link at %s: verifier.id %q is not the link signing identity %q",
+			rev, *pred.Verifier.ID, w.id.SAN)
+	}
+
 	if want := expand(*w.p.Source.ResourceURI, w.c); *pred.ResourceURI != want {
 		return nil, fmt.Errorf("verify: link at %s: vsa names resource %q, expected %q", rev, *pred.ResourceURI, want)
 	}

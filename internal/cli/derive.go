@@ -309,7 +309,7 @@ func runDeriveVersion(da *deriveArgs, out *latch) error {
 		return err
 	}
 
-	return report(da.prefix, d, out)
+	return reportVersion(da.prefix, d, out)
 }
 
 // readRange lists the commits a release would cover and parses each
@@ -346,8 +346,8 @@ func readRange(history deriveHistory, from, to string, paths []string) ([]convco
 	return commits, unconventional, nil
 }
 
-// report renders the decision.
-func report(prefix string, d *derived, out *latch) error {
+// reportVersion renders the decision.
+func reportVersion(prefix string, d *derived, out *latch) error {
 	decision := d.decision
 
 	next, releases := decision.Next()
