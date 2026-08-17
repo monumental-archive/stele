@@ -104,6 +104,14 @@ usage:
     image-facts  a published image's index annotations and every
                  per-arch config's labels equal the resolved facts
                  map (env contract: IMAGE, DIGEST, FACTS)
+    evidence     nothing ships unattested: every release's declared
+                 evidence contract is met and every covered subject
+                 carries a store-resident verdict (--org --policy
+                 [--debt --snapshot|--capture])
+    blast-radius every SBOM scanned, every advisory finding joined
+                 against the committed VEX decisions by exact
+                 (advisory, package, version) triple (--org --policy
+                 --vex [--snapshot|--capture])
 
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any

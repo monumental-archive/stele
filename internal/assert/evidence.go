@@ -1,0 +1,403 @@
+// The evidence walk: nothing ships unattested. For every non-draft
+// release of every repository in the population, the classes the
+// release DECLARED (its contract) resolve through the policy into
+// required assets, and — where the contract says verdicts are
+// store-resident — every subject the attached bundles cover must
+// carry a VSA in the attestation store: a verdict over exactly what
+// the evidence covers, with no second derivation of the subject set.
+//
+// The three report-not-fail categories are typed, not interchangeable
+// (the report package's exception law): legacy releases (no contract
+// at the tag) owe nothing and are recorded as a fact; debt is a
+// human-declared exception parsed from a committed file; burned is
+// DERIVED here from run history and only ever excuses vsa findings —
+// a verdict missing from a release that published cleanly stays red.
+
+package assert
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/monumental-archive/stele/internal/dsse"
+	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/vsa"
+)
+
+var hex64OnlyRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// Evidence walks one org's releases and seals the completeness
+// verdict. debt carries the committed file's declared exceptions;
+// burned exceptions are derived inside the walk.
+func Evidence(
+	pol *Policy, org string, forge gh.Forge, src ContractSource, debt []report.Exception, log Logf,
+) (*report.Report, error) {
+	e := pol.Evidence
+
+	repos, err := forge.Repos(org)
+	if err != nil {
+		return nil, fmt.Errorf("assert: listing %s: %w", org, err)
+	}
+
+	// The declared-population guard, before anything else: a token
+	// that sees a partial org makes the walk run short and pass —
+	// a clean check indistinguishable from no check.
+	if e.ExpectedRepos != nil && len(repos) != *e.ExpectedRepos {
+		return nil, fmt.Errorf(
+			"assert: the listing sees %d repos, the declared population is %d — an unseen repo is unchecked, not clean",
+			len(repos), *e.ExpectedRepos)
+	}
+
+	w := &evidenceWalk{pol: e, org: org, forge: forge, src: src, log: log}
+
+	for _, repo := range repos {
+		if err := w.repo(repo); err != nil {
+			return nil, err
+		}
+	}
+
+	exceptions := make([]report.Exception, 0, len(debt)+len(w.burned))
+	exceptions = append(exceptions, debt...)
+	exceptions = append(exceptions, w.burned...)
+
+	facts := []report.Fact{{Name: "releasesChecked", Value: strconv.Itoa(w.checked)}}
+	if len(w.legacy) > 0 {
+		facts = append(facts, report.Fact{Name: "legacyReleases", Value: strings.Join(w.legacy, " ")})
+	}
+
+	pop := report.PopulationFromListing(w.checked, "releases with a declared evidence contract")
+
+	return report.Seal("assert evidence", org, pop, w.findings, exceptions, report.NoCanary(), facts...), nil
+}
+
+type evidenceWalk struct {
+	pol      *EvidencePolicy
+	org      string
+	forge    gh.Forge
+	src      ContractSource
+	log      Logf
+	checked  int
+	legacy   []string
+	findings []report.Finding
+	burned   []report.Exception
+}
+
+func (w *evidenceWalk) repo(repo string) error {
+	tags, err := w.forge.ReleaseTags(w.org, repo)
+	if err != nil {
+		return fmt.Errorf("assert: releases of %s/%s: %w", w.org, repo, err)
+	}
+
+	for _, tag := range tags {
+		if err := w.release(repo, tag); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (w *evidenceWalk) release(repo, tag string) error {
+	subject := repo + "@" + tag
+
+	contract, ok, err := w.src.Contract(w.org, repo, tag)
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		// No source speaks for this release: it predates the
+		// machinery, and the obligation starts when the machinery
+		// does. Recorded, never failed — and never excusable by hand:
+		// this category is derived from the tag's own tree.
+		w.legacy = append(w.legacy, subject)
+
+		return nil
+	}
+
+	assets, err := w.forge.ReleaseAssets(w.org, repo, tag)
+	if err != nil {
+		return fmt.Errorf("assert: assets of %s/%s@%s: %w", w.org, repo, tag, err)
+	}
+
+	w.checked++
+	w.log("assert: evidence: %s (%s)", subject, contract.Origin)
+
+	have := map[string]bool{}
+	for _, a := range assets {
+		have[a] = true
+	}
+
+	bundles := w.requiredAssets(subject, contract, assets, have)
+
+	if contract.StoreVSA {
+		if err := w.storeVerdicts(repo, tag, bundles); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// requiredAssets judges the asset obligations and returns the bundle
+// assets that are PRESENT — the subject-set derivation reads exactly
+// the evidence the release ships.
+func (w *evidenceWalk) requiredAssets(
+	subject string, contract *Contract, assets []string, have map[string]bool,
+) []string {
+	if !anySuffix(assets, *w.pol.SBOMSuffix) {
+		w.finding(subject, "sbom", "no asset carries the SBOM suffix "+*w.pol.SBOMSuffix)
+	}
+
+	if !have[*w.pol.Checksums] {
+		w.finding(subject, *w.pol.Checksums, "the checksum manifest is absent")
+	}
+
+	var required []string
+
+	for _, class := range contract.Classes {
+		cp, ok := w.pol.Classes[class]
+		if !ok {
+			w.finding(subject, "class:"+class, "the contract names a class the policy does not define")
+
+			continue
+		}
+
+		required = append(required, cp.Bundles...)
+
+		if !contract.StoreVSA {
+			required = append(required, cp.LegacyVSABundles...)
+		}
+
+		for _, prefix := range cp.AssetPrefixes {
+			if !anyPrefix(assets, prefix) {
+				w.finding(subject, prefix, "no asset carries the required prefix")
+			}
+		}
+	}
+
+	// One bundle covering the whole release truthfully takes the
+	// umbrella name — the single-bundle case.
+	umbrella := len(required) == 1 && have[*w.pol.UmbrellaBundle]
+
+	var present []string
+
+	for _, b := range required {
+		switch {
+		case have[b]:
+			present = append(present, b)
+		case umbrella:
+			present = append(present, *w.pol.UmbrellaBundle)
+		default:
+			w.finding(subject, b, "the class bundle is absent")
+		}
+	}
+
+	return present
+}
+
+// bundleLine is one line of a bundle asset — a Sigstore bundle whose
+// DSSE envelope carries the statement (foreign envelope, judged
+// leniently; the statement inside is judged downstream).
+type bundleLine struct {
+	DSSEEnvelope *struct {
+		Payload *string `json:"payload"`
+	} `json:"dsseEnvelope"`
+}
+
+// stmtSubjects is the minimal statement read the subject derivation
+// needs.
+type stmtSubjects struct {
+	Subject []struct {
+		Digest map[string]string `json:"digest"`
+	} `json:"subject"`
+	PredicateType *string `json:"predicateType"`
+}
+
+// storeVerdicts asserts a store-resident VSA over every subject the
+// present bundles cover.
+func (w *evidenceWalk) storeVerdicts(repo, tag string, bundles []string) error {
+	subject := repo + "@" + tag
+	seen := map[string]bool{}
+
+	for _, asset := range bundles {
+		raw, err := w.forge.Asset(w.org, repo, tag, asset)
+		if err != nil {
+			w.finding(subject, asset+":unreadable", err.Error())
+
+			continue
+		}
+
+		digests, err := subjectDigests(raw)
+		if err != nil {
+			w.finding(subject, asset+":unreadable", err.Error())
+
+			continue
+		}
+
+		for _, d := range digests {
+			if seen[d] {
+				continue
+			}
+
+			seen[d] = true
+
+			ok, err := w.storeHasVSA(repo, d)
+			if err != nil {
+				return err
+			}
+
+			if !ok {
+				w.finding(subject, "vsa:"+d[:12], "no verification summary in the attestation store for sha256:"+d)
+			}
+		}
+	}
+
+	if len(w.vsaFindings(subject)) == 0 {
+		return nil
+	}
+
+	// The burned derivation (#378): only where the tag's own run
+	// history shows a failure, and only for vsa findings — narrow and
+	// derived, never assertable by hand.
+	failed, err := w.forge.FailedRuns(w.org, repo, tag)
+	if err != nil {
+		return fmt.Errorf("assert: run history of %s/%s@%s: %w", w.org, repo, tag, err)
+	}
+
+	if failed == 0 {
+		return nil
+	}
+
+	for _, f := range w.vsaFindings(subject) {
+		w.burned = append(w.burned, report.Derived(subject, f,
+			fmt.Sprintf("burned release: %d failed run(s) on %s (#378)", failed, tag)))
+	}
+
+	return nil
+}
+
+func (w *evidenceWalk) vsaFindings(subject string) []string {
+	var out []string
+
+	for _, f := range w.findings {
+		if f.Subject == subject && strings.HasPrefix(f.Assertion, "vsa:") {
+			out = append(out, f.Assertion)
+		}
+	}
+
+	return out
+}
+
+// storeHasVSA peeks the stored bundles for one digest for a VSA
+// predicate type. Presence depth: the cryptographic judgment is the
+// full-depth leg (#4), which reuses the verify engine.
+func (w *evidenceWalk) storeHasVSA(repo, digest string) (bool, error) {
+	stored, err := w.forge.Attestations(w.org, repo, digest)
+	if err != nil {
+		return false, fmt.Errorf("assert: store for sha256:%s: %w", digest, err)
+	}
+
+	for _, raw := range stored {
+		line, err := jsonx.DecodeForeign[bundleLine](raw)
+		if err != nil || line.DSSEEnvelope == nil || line.DSSEEnvelope.Payload == nil {
+			continue
+		}
+
+		stmt, err := decodeStatement(*line.DSSEEnvelope.Payload)
+		if err != nil {
+			continue
+		}
+
+		if stmt.PredicateType != nil && *stmt.PredicateType == vsa.PredicateType {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// subjectDigests reads every sha256 subject digest out of one bundle
+// asset (JSONL: one Sigstore bundle per line).
+func subjectDigests(raw []byte) ([]string, error) {
+	var out []string
+
+	lines := 0
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		lines++
+
+		decoded, err := jsonx.DecodeForeign[bundleLine]([]byte(line))
+		if err != nil {
+			return nil, fmt.Errorf("bundle line %d: %w", lines, err)
+		}
+
+		if decoded.DSSEEnvelope == nil || decoded.DSSEEnvelope.Payload == nil {
+			return nil, fmt.Errorf("bundle line %d carries no DSSE payload", lines)
+		}
+
+		stmt, err := decodeStatement(*decoded.DSSEEnvelope.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("bundle line %d: %w", lines, err)
+		}
+
+		for _, s := range stmt.Subject {
+			if d, ok := s.Digest["sha256"]; ok && hex64OnlyRE.MatchString(d) {
+				out = append(out, d)
+			}
+		}
+	}
+
+	if lines == 0 {
+		return nil, errors.New("the bundle asset is empty")
+	}
+
+	return out, nil
+}
+
+func decodeStatement(payloadB64 string) (*stmtSubjects, error) {
+	stmtBytes, err := dsse.DecodeBase64(payloadB64)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, err := jsonx.DecodeForeign[stmtSubjects](stmtBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return stmt, nil
+}
+
+func (w *evidenceWalk) finding(subject, assertion, detail string) {
+	w.findings = append(w.findings, report.Finding{Subject: subject, Assertion: assertion, Detail: detail})
+}
+
+func anySuffix(items []string, suffix string) bool {
+	for _, s := range items {
+		if strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func anyPrefix(items []string, prefix string) bool {
+	for _, s := range items {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+
+	return false
+}

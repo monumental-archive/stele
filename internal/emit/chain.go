@@ -38,6 +38,14 @@ type ChainInputs struct {
 	Ref         string // the protected branch's fully qualified ref
 	Rev         string // the pushed revision
 	Genesis     bool
+	// WorkflowRef is the runtime's own workflow identity
+	// (GITHUB_WORKFLOW_REF). When present it must BE the reserved
+	// identity the policy names — the guard that keeps an emitter
+	// invoked from an unreserved path from minting links nobody can
+	// verify against the published contract. Empty means the runtime
+	// offered no claim (a local run); the caller decides whether that
+	// is acceptable, and the cutover makes it required in CI.
+	WorkflowRef string
 	ActorLogin  string
 	ActorID     string
 	CanonRef    string // the commit the canon policy tree is pinned at
@@ -76,6 +84,10 @@ func Chain(
 	e := &chainRun{
 		p: p, pb: pb, in: in, g: g, s: s, bv: bv, now: now, log: log,
 		id: trust.Identity{SAN: expand(*p.Source.Identity, in.Owner, in.Repo), Issuer: *p.Issuer},
+	}
+
+	if err := e.preflight(); err != nil {
+		return err
 	}
 
 	for attempt := 1; attempt <= pushAttempts; attempt++ {
@@ -162,6 +174,42 @@ type chainRun struct {
 	now func() time.Time
 	log Logf
 	id  trust.Identity
+}
+
+// preflight proves the run can finish before anything irreversible
+// happens (#236, the preflight.sh contract folded into the engine):
+// signing mints certificates into an append-only log, so every
+// environment assumption the later steps make is asserted first,
+// each with its own named refusal. The identity guard rides here
+// too: an emitter running under an unreserved workflow path would
+// mint links nobody can verify against the published contract.
+func (e *chainRun) preflight() error {
+	if e.in.WorkflowRef != "" {
+		if got := serverURL + "/" + e.in.WorkflowRef; got != e.id.SAN {
+			return fmt.Errorf(
+				"emit: invoked from %q — the emitter runs only under the reserved identity %q", got, e.id.SAN)
+		}
+	} else {
+		e.log("emit: preflight: the runtime offered no workflow identity — the reserved-path guard did not run")
+	}
+
+	if err := e.s.Check(); err != nil {
+		return fmt.Errorf("emit: preflight: %w", err)
+	}
+
+	if err := e.g.CommitterIdent(); err != nil {
+		return fmt.Errorf("emit: preflight: %w", err)
+	}
+
+	// At genesis there is no ledger to prove a fast-forward against;
+	// every later emission proves the push before signing.
+	if !e.in.Genesis {
+		if err := e.g.DryRunPushNotes(e.in.Rev); err != nil {
+			return fmt.Errorf("emit: preflight: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // once discovers what needs a link against the CURRENT local ledger
