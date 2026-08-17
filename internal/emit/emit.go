@@ -27,20 +27,35 @@ import (
 	"github.com/monumental-archive/stele/internal/trust"
 )
 
-// Git is the repository surface the chain leg reads and writes: the
-// verify walk's read half plus note writes and the notes-ref network
-// pair. The implementation (gitrepo) carries remote and credentials;
-// the engine only ever says fetch and push.
+// Git is the repository surface the chain leg reads and writes,
+// composed of its read half and its ledger half. The implementation
+// (gitrepo) carries remote and credentials; the engine only ever
+// says fetch and push.
 type Git interface {
+	GitReader
+	GitLedger
+}
+
+// GitReader is the history read half — the verify walk's surface.
+type GitReader interface {
 	Tip(ref string) (string, error)
 	Parent(rev string) (string, error)
 	Parents(rev string) ([]string, error)
 	Note(rev string) ([]byte, error)
 	CommitTime(rev string) (string, error)
 	IsAncestor(rev, ref string) (bool, error)
+}
+
+// GitLedger is the write-and-prove half: note writes, the notes-ref
+// network pair, and the two preflight proofs — CommitterIdent proves
+// the storage identity is usable, DryRunPushNotes proves the push
+// can land before signing mints anything irreversible (#236).
+type GitLedger interface {
 	AddNote(rev string, note []byte) error
 	FetchNotes() error
 	PushNotes() error
+	CommitterIdent() error
+	DryRunPushNotes(rev string) error
 }
 
 // Signer signs one payload and returns the Sigstore bundle JSON. The
@@ -48,6 +63,9 @@ type Git interface {
 // identity; the engine never holds key material or a certificate.
 type Signer interface {
 	Sign(payload []byte) ([]byte, error)
+	// Check proves the signing tool is present and executable before
+	// the run makes any irreversible mark.
+	Check() error
 }
 
 // BlobVerifier is the self-check boundary: every bundle this engine

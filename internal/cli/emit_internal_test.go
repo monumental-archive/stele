@@ -26,7 +26,11 @@ type fakeEmitGit struct {
 	notes map[string][]byte
 }
 
-func (g *fakeEmitGit) Tip(string) (string, error)        { return emitRev, nil }
+func (g *fakeEmitGit) Tip(string) (string, error) { return emitRev, nil }
+
+func (g *fakeEmitGit) CommitterIdent() error { return nil }
+
+func (g *fakeEmitGit) DryRunPushNotes(string) error      { return nil }
 func (g *fakeEmitGit) Parent(string) (string, error)     { return "", nil }
 func (g *fakeEmitGit) Parents(string) ([]string, error)  { return nil, nil }
 func (g *fakeEmitGit) CommitTime(string) (string, error) { return "2026-08-01T00:00:00Z", nil }
@@ -56,6 +60,8 @@ type fakeEmitSigner struct{}
 func (fakeEmitSigner) Sign([]byte) ([]byte, error) {
 	return []byte(`{"scripted": "bundle"}`), nil
 }
+
+func (fakeEmitSigner) Check() error { return nil }
 
 // swapEmit installs the emit seams for one test.
 func swapEmit(t *testing.T, g emit.Git, gitErr error) {
@@ -435,5 +441,49 @@ func TestEmitVSAManifestRefusals(t *testing.T) {
 				t.Fatalf("Run = %d, stderr %q — want %q", code, stderr.String(), tt.want)
 			}
 		})
+	}
+}
+
+// TestCosignCheckRefusesWithoutBinary pins the preflight's tooling
+// probe: no cosign on PATH is a named refusal, deterministically.
+func TestCosignCheckRefusesWithoutBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	if err := (cosignSigner{}).Check(); err == nil {
+		t.Fatal("Check passed with no cosign on PATH")
+	}
+}
+
+// TestEmitGitPreflightAdapters drives the two preflight adapters over
+// a real repository: the committer probe answers, and a repo with no
+// notes ref refuses the push proof.
+func TestEmitGitPreflightAdapters(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "seed"},
+	} {
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // test fixture
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	g, err := openEmitGit(dir, "refs/notes/commits", "origin", "")
+	if err != nil {
+		t.Fatalf("openEmitGit = %v", err)
+	}
+
+	if err := g.CommitterIdent(); err == nil {
+		// A hermetic repo may lack identity; either answer exercises
+		// the adapter — the assertion is on the push proof below.
+		t.Log("committer identity present")
+	}
+
+	if err := g.DryRunPushNotes("0000000000000000000000000000000000000000"); err == nil {
+		t.Fatal("a repository with no notes ref proved a push")
 	}
 }

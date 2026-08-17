@@ -204,6 +204,49 @@ func (r *Repo) AddNote(rev string, note []byte) error {
 	return nil
 }
 
+// CommitterIdent proves a usable committer identity exists in the
+// repository's local config — the storage contract chain links are
+// committed under. Named refusal, not a bare exit 128 downstream.
+func (r *Repo) CommitterIdent() error {
+	if _, err := r.git("var", "GIT_COMMITTER_IDENT"); err != nil {
+		return fmt.Errorf("gitrepo: no usable committer identity in the repository config: %w", err)
+	}
+
+	return nil
+}
+
+// DryRunPushNotes proves the notes push CAN land before anything
+// irreversible happens (the #236 contract): a dry-run of an unchanged
+// ref is "Everything up-to-date" and proves nothing, so a throwaway
+// note is added first (exercising the committer identity on the exact
+// code path AddNote uses), the advanced ref is dry-run pushed
+// (exercising auth and fast-forward server-side), and the ref is
+// restored. --dry-run never updates the remote.
+func (r *Repo) DryRunPushNotes(remote, token, rev string) error {
+	orig, err := r.git("rev-parse", r.notesRef)
+	if err != nil {
+		return fmt.Errorf("gitrepo: %s is absent — nothing to prove a push against: %w", r.notesRef, err)
+	}
+
+	if _, err := r.gitIn([]byte("stele preflight — never pushed"),
+		"notes", "--ref", r.notesRef, "add", "-f", "-F", "-", rev); err != nil {
+		return fmt.Errorf("gitrepo: could not annotate %s for the push proof: %w", rev, err)
+	}
+
+	_, pushErr := r.gitAuth(token, "push", "-q", "--dry-run", remote, r.notesRef+":"+r.notesRef)
+
+	if _, rerr := r.git("update-ref", r.notesRef, strings.TrimSpace(string(orig))); rerr != nil {
+		return fmt.Errorf("gitrepo: restoring %s after the push proof: %w", r.notesRef, rerr)
+	}
+
+	if pushErr != nil {
+		return fmt.Errorf("gitrepo: notes push dry-run rejected — the token cannot write %s or the ref moved: %w",
+			r.notesRef, pushErr)
+	}
+
+	return nil
+}
+
 // FetchNotes force-updates the local notes ref from the remote — the
 // refetch half of the append's compare-and-swap loop.
 func (r *Repo) FetchNotes(remote, token string) error {

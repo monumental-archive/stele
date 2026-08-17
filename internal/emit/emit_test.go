@@ -216,6 +216,10 @@ func (g *fakeGit) AddNote(rev string, note []byte) error {
 	return nil
 }
 
+func (g *fakeGit) CommitterIdent() error { return nil }
+
+func (g *fakeGit) DryRunPushNotes(string) error { return nil }
+
 func (g *fakeGit) FetchNotes() error {
 	g.notes = cloneNotes(g.remote)
 
@@ -256,6 +260,8 @@ type fakeSigner struct {
 	t   *testing.T
 	san string
 }
+
+func (s fakeSigner) Check() error { return nil }
 
 func (s fakeSigner) Sign(payload []byte) ([]byte, error) {
 	return mustJSON(s.t, fakeBundle{SAN: s.san, Issuer: issuer, Digests: []string{chain.SHA256Hex(payload)}}), nil
@@ -1050,9 +1056,15 @@ func (g *failGit) FetchNotes() error {
 func (g *failGit) fail(op string) bool { return g.failOn == op }
 
 // failSigner refuses to sign.
+//
+//nolint:unused // interface completeness
+type checkOK struct{}
+
 type failSigner struct{}
 
 func (failSigner) Sign([]byte) ([]byte, error) { return nil, fakeError("no identity") }
+
+func (failSigner) Check() error { return nil }
 
 func TestChainDegradedStates(t *testing.T) {
 	t.Parallel()
@@ -1197,4 +1209,103 @@ func tamperTailStatement(t *testing.T, g *fakeGit, rev string, stmt []byte) {
 	note := append(mustJSON(t, link), '\n')
 	g.notes[rev] = note
 	g.remote[rev] = bytes.Clone(note)
+}
+
+// Preflight fakes: each fails exactly one proof.
+
+type badIdentGit struct{ *fakeGit }
+
+func (badIdentGit) CommitterIdent() error { return fakeError("no committer identity") }
+
+type badPushGit struct{ *fakeGit }
+
+func (badPushGit) DryRunPushNotes(string) error { return fakeError("push proof rejected") }
+
+type badCheckSigner struct{ fakeSigner }
+
+func (badCheckSigner) Check() error { return fakeError("cosign is not usable") }
+
+// TestChainPreflight pins the fold of preflight.sh into the engine:
+// every proof refuses by name BEFORE anything signs, the identity
+// guard holds the reserved path, and genesis skips only the push
+// proof (there is no ledger to prove against yet).
+func TestChainPreflight(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a foreign workflow identity refuses", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.found(t)
+		w.in.Rev = rev2
+		w.in.WorkflowRef = "mallory/widget/.github/workflows/source-attest.yml@refs/heads/main"
+
+		err := w.emit(t)
+		if err == nil || !strings.Contains(err.Error(), "reserved identity") {
+			t.Fatalf("err = %v, want the identity refusal", err)
+		}
+	})
+
+	t.Run("the reserved workflow identity passes the guard", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.found(t)
+		w.in.Rev = rev2
+		w.in.WorkflowRef = "acme/widget/.github/workflows/source-attest.yml@refs/heads/main"
+
+		if err := w.emit(t); err != nil {
+			t.Fatalf("emit under the reserved identity: %v", err)
+		}
+	})
+
+	t.Run("an unusable signer refuses before signing", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.found(t)
+		w.in.Rev = rev2
+
+		err := emit.Chain(w.p, &w.in, w.g, badCheckSigner{w.s}, fakeBV{}, fixedNow, discardLog)
+		if err == nil || !strings.Contains(err.Error(), "cosign is not usable") {
+			t.Fatalf("err = %v, want the signer refusal", err)
+		}
+	})
+
+	t.Run("a missing committer identity refuses", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.found(t)
+		w.in.Rev = rev2
+
+		err := emit.Chain(w.p, &w.in, badIdentGit{w.g}, w.s, fakeBV{}, fixedNow, discardLog)
+		if err == nil || !strings.Contains(err.Error(), "committer identity") {
+			t.Fatalf("err = %v, want the identity refusal", err)
+		}
+	})
+
+	t.Run("a rejected push proof refuses before signing", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.found(t)
+		w.in.Rev = rev2
+
+		err := emit.Chain(w.p, &w.in, badPushGit{w.g}, w.s, fakeBV{}, fixedNow, discardLog)
+		if err == nil || !strings.Contains(err.Error(), "push proof rejected") {
+			t.Fatalf("err = %v, want the push-proof refusal", err)
+		}
+	})
+
+	t.Run("genesis skips only the push proof", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.in.Genesis = true
+
+		if err := emit.Chain(w.p, &w.in, badPushGit{w.g}, w.s, fakeBV{}, fixedNow, discardLog); err != nil {
+			t.Fatalf("genesis with a failing push proof: %v — there is no ledger to prove against yet", err)
+		}
+	})
 }
