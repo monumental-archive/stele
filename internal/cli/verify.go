@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/ghstore"
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/policy"
+	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -145,6 +147,7 @@ type verifyArgs struct {
 	gitDir      string
 	ref         string
 	mode        string
+	jsonOut     bool
 	p           *policy.Policy
 	coords      verify.Coords
 	subjectList []verify.Subject
@@ -178,11 +181,22 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
+	// With --json, stdout carries exactly one report document, so
+	// progress moves to stderr — a consumer parses the stream whole.
 	out := &latch{w: stdout}
+	if va.jsonOut {
+		out = &latch{w: stderr}
+	}
 
-	err := runVerify(va, out)
+	outcome, err := runVerify(va, out)
 	if out.err != nil {
 		return exitIO
+	}
+
+	if va.jsonOut {
+		if encErr := sealVerifyReport(va, outcome, err).Encode(stdout); encErr != nil {
+			return exitIO
+		}
 	}
 
 	if err != nil {
@@ -194,6 +208,47 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return exitOK
+}
+
+// verifyOutcome carries what a completed mode proved, for the report:
+// the population it covered and the facts worth reporting beside the
+// verdict. Built only by the mode runners from verdict accessors —
+// never from unverified inputs.
+type verifyOutcome struct {
+	pop   report.Population
+	facts []report.Fact
+}
+
+// sealVerifyReport turns a mode's outcome (or refusal) into the one
+// sealed report --json emits. A refusal is a FAIL over the declared
+// population with the engine's message as the finding; a refusal
+// before any population existed (an empty subject manifest) seals as
+// CANNOT_JUDGE by the population rule, which is the honest reading.
+func sealVerifyReport(va *verifyArgs, outcome *verifyOutcome, err error) *report.Report {
+	subject := va.coords.Slug()
+	if va.tag != "" {
+		subject += "@" + va.tag
+	}
+
+	target := "verify " + va.mode
+
+	if err == nil {
+		return report.Seal(target, subject, outcome.pop, nil, nil, report.NoCanary(), outcome.facts...)
+	}
+
+	findings := []report.Finding{{Subject: subject, Assertion: va.mode, Detail: err.Error()}}
+
+	return report.Seal(target, subject, declaredPop(va), findings, nil, report.NoCanary())
+}
+
+// declaredPop reports what a refused run HAD under test: the subject
+// manifest for the release modes, the one branch ref for the walks.
+func declaredPop(va *verifyArgs) report.Population {
+	if va.mode == modeRelease || va.mode == modeVSA {
+		return report.PopulationFromEvidence(len(va.subjectList), "release subjects")
+	}
+
+	return report.PopulationFromEvidence(1, "branch ref under walk")
 }
 
 // parseVerifyArgs parses flags, loads and validates every file input
@@ -210,6 +265,8 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 	fs.StringVar(&va.policyPath, "policy", "", "path to the committed verify policy (required)")
 	fs.StringVar(&va.rootPath, "trusted-root", "", "path to the Sigstore trusted root JSON (required)")
 	fs.StringVar(&va.repo, "repo", "", "owner/repo under verification (required)")
+	fs.BoolVar(&va.jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
 	switch mode {
 	case modeRelease, modeVSA:
@@ -347,19 +404,32 @@ func parseManifest(text string) ([]verify.Subject, error) {
 	return subjects, nil
 }
 
-// runVerify runs the selected mode against real dependencies.
-func runVerify(va *verifyArgs, out *latch) error {
+// runVerify runs the selected mode against real dependencies and
+// reports what it proved.
+func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 	pins := verify.Pins{Signer: va.signerPin, Canon: va.canonPin}
 
 	switch va.mode {
 	case modeRelease:
-		_, err := verify.Release(va.p, va.coords, va.subjectList, va.sbomList, pins, newStore(), va.bv, out.logf)
+		verdict, err := verify.Release(va.p, va.coords, va.subjectList, va.sbomList, pins, newStore(), va.bv, out.logf)
+		if err != nil {
+			return nil, err
+		}
 
-		return err
+		return &verifyOutcome{
+			pop:   report.PopulationFromEvidence(len(va.subjectList), "release subjects"),
+			facts: []report.Fact{{Name: "sourceRevision", Value: verdict.SourceRevision()}},
+		}, nil
 	case modeVSA:
-		_, err := verify.VSA(va.p, va.coords, va.subjectList, pins, newStore(), va.bv, out.logf)
+		verdict, err := verify.VSA(va.p, va.coords, va.subjectList, pins, newStore(), va.bv, out.logf)
+		if err != nil {
+			return nil, err
+		}
 
-		return err
+		return &verifyOutcome{
+			pop:   report.PopulationFromEvidence(len(va.subjectList), "release subjects"),
+			facts: []report.Fact{{Name: "verifiedLevels", Value: strings.Join(verdict.Levels(), " ")}},
+		}, nil
 	default: // chain, level — the mode switch upstream admits no other value
 		return runWalk(va, out)
 	}
@@ -367,19 +437,24 @@ func runVerify(va *verifyArgs, out *latch) error {
 
 // runWalk runs the chain walk, and for level also reports the honest
 // computed source level for the walked branch.
-func runWalk(va *verifyArgs, out *latch) error {
+func runWalk(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 	h, err := openHistory(va.gitDir, *va.p.Source.NotesRef)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	verdict, err := verify.Chain(va.p, va.coords, va.ref, h, va.bv, out.logf)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	outcome := &verifyOutcome{
+		pop:   report.PopulationFromEvidence(1, "branch ref under walk"),
+		facts: []report.Fact{{Name: "links", Value: strconv.Itoa(verdict.Links())}},
 	}
 
 	if va.mode != modeLevel {
-		return nil
+		return outcome, nil
 	}
 
 	// The policy names branches, not refs; the walked ref's final
@@ -389,10 +464,12 @@ func runWalk(va *verifyArgs, out *latch) error {
 
 	level, err := verdict.SourceLevel(va.p, branch)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	out.logf("verify: level %s %s: SOURCE %s", va.coords.Slug(), branch, level)
 
-	return nil
+	outcome.facts = append(outcome.facts, report.Fact{Name: "sourceLevel", Value: level})
+
+	return outcome, nil
 }
