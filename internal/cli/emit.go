@@ -64,13 +64,28 @@ type emitGit struct {
 }
 
 func (g emitGit) FetchNotes() error { return g.Repo.FetchNotes(g.remote, g.token) }
-func (g emitGit) PushNotes() error  { return g.Repo.PushNotes(g.remote, g.token) }
+
+func (g emitGit) DryRunPushNotes(rev string) error {
+	return g.Repo.DryRunPushNotes(g.remote, g.token, rev)
+}
+func (g emitGit) PushNotes() error { return g.Repo.PushNotes(g.remote, g.token) }
 
 // cosignSigner signs by exec'ing cosign sign-blob: the signature and
 // its certificate come from the ambient workflow identity, which is
 // exactly the point — this binary has no identity of its own.
 type cosignSigner struct {
 	dir string
+}
+
+// Check proves cosign is present and executable — the preflight's
+// tooling half, refused by name instead of dying mid-append.
+func (c cosignSigner) Check() error {
+	//nolint:noctx // local probe, no cancellation surface
+	if out, err := exec.Command("cosign", "version").CombinedOutput(); err != nil {
+		return fmt.Errorf("cosign is not usable on PATH: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
 }
 
 func (c cosignSigner) Sign(payload []byte) ([]byte, error) {
@@ -359,16 +374,17 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 	defer os.RemoveAll(workDir) //nolint:errcheck // best-effort cleanup of a temp dir
 
 	in := &emit.ChainInputs{
-		Owner:      ea.coords.Owner,
-		Repo:       ea.coords.Repo,
-		Ref:        ea.ref,
-		Rev:        ea.rev,
-		Genesis:    ea.genesis,
-		ActorLogin: ea.actor,
-		ActorID:    ea.actorID,
-		CanonRef:   ea.canonPin,
-		PolicyURI:  ea.policyURI,
-		Claims:     ea.claimsDoc,
+		Owner:       ea.coords.Owner,
+		Repo:        ea.coords.Repo,
+		Ref:         ea.ref,
+		Rev:         ea.rev,
+		Genesis:     ea.genesis,
+		WorkflowRef: os.Getenv("GITHUB_WORKFLOW_REF"),
+		ActorLogin:  ea.actor,
+		ActorID:     ea.actorID,
+		CanonRef:    ea.canonPin,
+		PolicyURI:   ea.policyURI,
+		Claims:      ea.claimsDoc,
 	}
 
 	return emit.Chain(ea.p, in, g, newSigner(workDir), ea.bv, emitNow, out.logf)

@@ -427,3 +427,73 @@ func gitCmd(t *testing.T, dir string) func(args ...string) string {
 		return strings.TrimSpace(out.String())
 	}
 }
+
+// TestPreflightProofs pins the two engine preflight primitives: the
+// committer identity probe, and the push proof — which must actually
+// prove something (a throwaway note advances the ref so the dry-run
+// exercises auth and fast-forward), never move the remote, and
+// restore the local ref exactly.
+func TestPreflightProofs(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+	remoteDir := t.TempDir()
+	remote := gitCmd(t, remoteDir)
+	remote("init", "-q", "--bare")
+
+	local := gitCmd(t, fx.dir)
+	local("remote", "add", "origin", remoteDir)
+	local("push", "-q", "origin", "main")
+
+	r, err := gitrepo.Open(fx.dir, notesRef)
+	if err != nil {
+		t.Fatalf("Open = %v", err)
+	}
+
+	if cerr := r.CommitterIdent(); cerr != nil {
+		t.Fatalf("CommitterIdent = %v", cerr)
+	}
+
+	if aerr := r.AddNote(fx.root, []byte(`{"seed":"note"}`)); aerr != nil {
+		t.Fatalf("AddNote = %v", aerr)
+	}
+
+	if perr := r.PushNotes("origin", ""); perr != nil {
+		t.Fatalf("PushNotes = %v", perr)
+	}
+
+	before := local("rev-parse", notesRef)
+
+	if derr := r.DryRunPushNotes("origin", "", fx.tip); derr != nil {
+		t.Fatalf("DryRunPushNotes = %v", derr)
+	}
+
+	if after := local("rev-parse", notesRef); after != before {
+		t.Fatalf("the push proof left the local ref moved: %s → %s", before, after)
+	}
+
+	remoteRef := remote("rev-parse", notesRef)
+	if remoteRef != before {
+		t.Fatalf("the push proof moved the REMOTE: %s, want %s", remoteRef, before)
+	}
+
+	// A remote that moved underneath the run rejects the proof — the
+	// same compare-and-swap posture as the real push.
+	otherDir := t.TempDir()
+	other := gitCmd(t, otherDir)
+	other("clone", "-q", "-b", "main", remoteDir, ".")
+	other("fetch", "-q", "origin", "+"+notesRef+":"+notesRef)
+	other("notes", "add", "-f", "-m", `{"other":"note"}`, "HEAD~1")
+	other("push", "-q", "origin", notesRef+":"+notesRef)
+
+	if derr := r.DryRunPushNotes("origin", "", fx.tip); derr == nil {
+		t.Fatal("the push proof fast-forwarded over a moved remote")
+	}
+
+	// With no notes ref at all there is nothing to prove against.
+	if bare, oerr := gitrepo.Open(t.TempDir(), notesRef); oerr == nil {
+		if perr := bare.DryRunPushNotes("origin", "", fx.tip); perr == nil {
+			t.Fatal("a repository with no notes ref proved a push")
+		}
+	}
+}
