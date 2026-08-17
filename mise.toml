@@ -8,7 +8,7 @@ lockfile = true
 [tools]
 # The toolchain, exact-pinned; GOTOOLCHAIN=local below makes go.mod's
 # `go` directive and this pin agree loudly instead of auto-downloading.
-go = "1.26.5"
+go = "1.26.6"
 # govulncheck is a build input (audit:go-vulns asserts it with this
 # remedy): no upstream binaries and no aqua package, so the go: backend
 # builds it from a pinned source version with the toolchain above —
