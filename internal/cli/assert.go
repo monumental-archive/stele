@@ -18,11 +18,14 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/oci"
+	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/vexjoin"
 )
 
 // exitBlind is CANNOT_JUDGE's own exit code: the run could not see
@@ -32,8 +35,9 @@ const exitBlind = 4
 
 // The assert targets.
 const (
-	targetImageFacts = "image-facts"
-	targetEvidence   = "evidence"
+	targetImageFacts  = "image-facts"
+	targetEvidence    = "evidence"
+	targetBlastRadius = "blast-radius"
 )
 
 // The effect seams, swapped only by tests.
@@ -41,6 +45,8 @@ const (
 //nolint:gochecknoglobals // test seams, written only by test setup
 var (
 	newOCIReader = func() oci.Reader { return oci.Client{} }
+
+	newScanner = func() osv.Scanner { return osv.Runner{} }
 
 	newForge = func() gh.Forge {
 		token := os.Getenv("GITHUB_TOKEN")
@@ -67,8 +73,11 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertImageFacts(args[1:], stdout, stderr)
 	case targetEvidence:
 		return assertEvidence(args[1:], stdout, stderr)
+	case targetBlastRadius:
+		return assertBlastRadius(args[1:], stdout, stderr)
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele assert: unknown target %q (image-facts, evidence)\n", args[0]); err != nil {
+		if _, err := fmt.Fprintf(stderr,
+			"stele assert: unknown target %q (image-facts, evidence, blast-radius)\n", args[0]); err != nil {
 			return exitIO
 		}
 
@@ -300,4 +309,137 @@ func findingLine(f *report.Finding) string {
 	}
 
 	return f.Detail
+}
+
+// assertBlastRadius runs the SBOM scan walk: policy and VEX decisions
+// loaded, the forge and scanner seams resolved, the verdict sealed.
+func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
+	var (
+		jsonOut                 bool
+		org, policyPath, vexDir string
+		snapshotDir, captureDir string
+	)
+
+	flags := flag.NewFlagSet("stele assert blast-radius", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&org, "org", "", "organisation whose SBOMs are scanned (required)")
+	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	flags.StringVar(&vexDir, "vex", "", "directory of committed *.openvex.json decisions (required)")
+	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
+	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	usageFail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele assert blast-radius: %s\n", msg); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	switch {
+	case org == "":
+		return usageFail("--org is required")
+	case policyPath == "":
+		return usageFail("--policy is required")
+	case vexDir == "":
+		return usageFail("--vex is required")
+	case snapshotDir != "" && captureDir != "":
+		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
+	}
+
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return usageFail(err.Error())
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	decisions, code := loadVEX(vexDir, stderr)
+	if code != exitOK {
+		return code
+	}
+
+	forge := newForge()
+	if snapshotDir != "" {
+		forge = gh.Snapshot{Dir: snapshotDir}
+	} else if captureDir != "" {
+		forge = gh.Capture{Live: forge, Dir: captureDir}
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	rep, err := assert.BlastRadius(pol, org, forge, newScanner(), decisions, out.logf)
+	if out.err != nil {
+		return exitIO
+	}
+
+	if err != nil {
+		rep = report.Seal("assert "+targetBlastRadius, org,
+			report.PopulationFromListing(0, "walk incomplete"),
+			[]report.Finding{{Subject: org, Assertion: targetBlastRadius, Detail: err.Error()}},
+			nil, report.NoCanary())
+
+		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+			return exitIO
+		}
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// loadVEX parses every committed OpenVEX document in the directory.
+// An empty or absent directory decides NOTHING (the vexjoin law); a
+// malformed statement refuses, because a reviewed decision that
+// parses as nothing decides nothing silently.
+//
+//nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
+func loadVEX(dir string, stderr io.Writer) (*vexjoin.Decisions, int) {
+	decisions := &vexjoin.Decisions{}
+
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return decisions, exitOK
+	}
+
+	fail := func(err error) (*vexjoin.Decisions, int) {
+		if _, werr := fmt.Fprintf(stderr, "stele assert blast-radius: %v\n", err); werr != nil {
+			return nil, exitIO
+		}
+
+		return nil, exitUsage
+	}
+
+	if err != nil {
+		return fail(err)
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".openvex.json") {
+			continue
+		}
+
+		doc, rerr := os.ReadFile(dir + "/" + e.Name()) //nolint:gosec // the vex dir is operator-supplied by design
+		if rerr != nil {
+			return fail(rerr)
+		}
+
+		if perr := vexjoin.Parse(decisions, doc, e.Name()); perr != nil {
+			return fail(perr)
+		}
+	}
+
+	return decisions, exitOK
 }

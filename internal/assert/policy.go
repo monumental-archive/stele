@@ -19,8 +19,9 @@ import (
 
 // Policy is the committed assert policy. Constructor: LoadPolicy.
 type Policy struct {
-	Schema   *int            `json:"schema"`
-	Evidence *EvidencePolicy `json:"evidence"`
+	Schema      *int               `json:"schema"`
+	Evidence    *EvidencePolicy    `json:"evidence"`
+	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
 }
 
 // EvidencePolicy parameterises the evidence walk.
@@ -115,6 +116,12 @@ func (p *Policy) validate() error {
 
 	if e.ExpectedRepos != nil && *e.ExpectedRepos <= 0 {
 		return errors.New("evidence.expectedRepos must be positive when set")
+	}
+
+	if p.BlastRadius != nil {
+		if err := p.BlastRadius.validate(); err != nil {
+			return err
+		}
 	}
 
 	return nil
