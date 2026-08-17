@@ -6,6 +6,13 @@
 // a degraded read must be typed — a 404, a 403 and an empty listing
 // are three different facts, and an engine that cannot tell them
 // apart manufactures the impression of coverage.
+//
+// The same distinction decides what is retried: a 404 or a 403 is a
+// FACT about the subject and is returned at once, while a 5xx or a
+// 429 is the host or the transport failing and says nothing about
+// the subject, so it is retried on a bounded ladder. Retrying an
+// answer away would turn a real absence into a timeout and hide a
+// narrowed credential behind noise.
 package gh
 
 import (
@@ -24,6 +31,17 @@ import (
 // from absent: an unreadable population is unchecked, never clean.
 var ErrForbidden = errors.New("gh: the credential cannot read this")
 
+// errTransient marks a status that says nothing about the subject —
+// the host or the transport failed. Retried, never surfaced.
+var errTransient = errors.New("gh: transient")
+
+// The transient retry ladder: bounded, so a walk against a genuinely
+// broken host still ends and reports CANNOT_JUDGE rather than hanging.
+const (
+	transientAttempts = 4
+	transientBackoff  = 3 * time.Second
+)
+
 // Forge is the read surface the evidence walk judges through.
 type Forge interface {
 	// Repos lists the org's repositories, archived and forks excluded.
@@ -39,12 +57,16 @@ type Forge interface {
 	// error.
 	FileAt(owner, repo, path, ref string) (content []byte, ok bool, err error)
 	// Attestations returns the raw attestation bundles stored for one
-	// digest — the audit posture: no retry ladder, and an empty store
-	// is an answer.
+	// digest — the audit posture: an empty store is an ANSWER (this
+	// walk judges history, not a just-published artifact), so no
+	// propagation ladder waits for one to appear. Transport failures
+	// are still retried, like every read here.
 	Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error)
-	// FailedRuns reports how many workflow runs on one branch (a tag
-	// name, for release runs) concluded in failure.
-	FailedRuns(owner, repo, branch string) (int, error)
+	// FailedRuns reports the names of the workflow runs on one branch
+	// (a tag name, for release runs) that concluded in failure. Names,
+	// not a count: whether a failure is the PUBLISHING one decides
+	// whether a release is burned, and a count cannot answer that.
+	FailedRuns(owner, repo, branch string) ([]string, error)
 }
 
 // maxBody bounds one response read.
@@ -60,6 +82,8 @@ type Client struct {
 	Download string
 	Token    string
 	HTTP     *http.Client
+	// Sleep is the retry clock; nil means time.Sleep.
+	Sleep func(time.Duration)
 }
 
 // New builds a live client against the public GitHub API.
@@ -156,37 +180,25 @@ func (c *Client) ReleaseAssets(owner, repo, tag string) ([]string, error) {
 }
 
 // Asset implements Forge, downloading through the public release URL
-// — the address a stranger pulls.
+// — the address a stranger pulls — under the same transient ladder as
+// the API reads.
 func (c *Client) Asset(owner, repo, tag, name string) ([]byte, error) {
-	u := fmt.Sprintf("%s/%s/%s/releases/download/%s/%s", c.Download,
-		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(tag), url.PathEscape(name))
+	var lastErr error
 
-	//nolint:noctx // the CLI has no cancellation surface; the client carries the timeout
-	req, err := http.NewRequest(http.MethodGet, u, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("gh: build request: %w", err)
+	for attempt := 1; attempt <= transientAttempts; attempt++ {
+		if attempt > 1 {
+			c.sleep(time.Duration(attempt-1) * transientBackoff)
+		}
+
+		body, err := c.asset(owner, repo, tag, name)
+		if !errors.Is(err, errTransient) {
+			return body, err
+		}
+
+		lastErr = err
 	}
 
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("gh: asset %s: %w", u, err)
-	}
-	defer resp.Body.Close() //nolint:errcheck // a read-only body close has nothing to report
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		return nil, fmt.Errorf("gh: asset %s: read: %w", u, err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gh: asset %s: HTTP %d", u, resp.StatusCode)
-	}
-
-	return body, nil
+	return nil, fmt.Errorf("gh: asset %s@%s/%s: after %d attempts: %w", repo, tag, name, transientAttempts, lastErr)
 }
 
 type contentsResponse struct {
@@ -254,44 +266,121 @@ func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 
 type runsResponse struct {
 	WorkflowRuns []struct {
+		Name       string `json:"name"`
 		Conclusion string `json:"conclusion"`
 	} `json:"workflow_runs"`
 }
 
 // FailedRuns implements Forge.
-func (c *Client) FailedRuns(owner, repo, branch string) (int, error) {
+func (c *Client) FailedRuns(owner, repo, branch string) ([]string, error) {
 	body, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/actions/runs?branch="+url.QueryEscape(branch)+
 			"&per_page=100",
 		"application/vnd.github+json")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if !ok {
-		return 0, nil
+		return nil, nil
 	}
 
 	decoded, err := jsonx.DecodeForeign[runsResponse](body)
 	if err != nil {
-		return 0, fmt.Errorf("gh: runs of %s/%s@%s: %w", owner, repo, branch, err)
+		return nil, fmt.Errorf("gh: runs of %s/%s@%s: %w", owner, repo, branch, err)
 	}
 
-	n := 0
+	var out []string
 
 	for _, r := range decoded.WorkflowRuns {
 		if r.Conclusion == "failure" {
-			n++
+			out = append(out, r.Name)
 		}
 	}
 
-	return n, nil
+	return out, nil
 }
 
-// get performs one API read. 404 returns (nil, false, nil); 403/401
-// return ErrForbidden — the two absences the engine must never
-// conflate.
+func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
+	u := fmt.Sprintf("%s/%s/%s/releases/download/%s/%s", c.Download,
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(tag), url.PathEscape(name))
+
+	//nolint:noctx // the CLI has no cancellation surface; the client carries the timeout
+	req, err := http.NewRequest(http.MethodGet, u, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("gh: build request: %w", err)
+	}
+
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gh: asset %s: %w", u, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a read-only body close has nothing to report
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return nil, fmt.Errorf("gh: asset %s: read: %w", u, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errTransient)
+		}
+
+		return nil, fmt.Errorf("gh: asset %s: HTTP %d", u, resp.StatusCode)
+	}
+
+	return body, nil
+}
+
+// get reads one API path, retrying only what is not an answer.
+// A 5xx or a 429 is the transport or the host failing, never a fact
+// about the subject, so it is retried on a growing backoff; a 404 and
+// a 403 ARE facts (absent, unreadable) and are returned immediately —
+// retrying an answer away is how a walk turns a real absence into a
+// timeout, and how it hides a narrowed credential behind noise.
+// Measured against the 2026-08-17 GitHub outage, where the first live
+// walk died on a single 504 mid-population.
 func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocritic // unnamedResult: body, found, error
+	var lastErr error
+
+	for attempt := 1; attempt <= transientAttempts; attempt++ {
+		if attempt > 1 {
+			c.sleep(time.Duration(attempt-1) * transientBackoff)
+		}
+
+		body, ok, err := c.once(path, accept)
+		if !errors.Is(err, errTransient) {
+			return body, ok, err
+		}
+
+		lastErr = err
+	}
+
+	return nil, false, fmt.Errorf("gh: %s: after %d attempts: %w", path, transientAttempts, lastErr)
+}
+
+// sleep is the injectable clock — retry tests need no wall time.
+func (c *Client) sleep(d time.Duration) {
+	if c.Sleep != nil {
+		c.Sleep(d)
+
+		return
+	}
+
+	time.Sleep(d)
+}
+
+// once performs one API read. 404 returns (nil, false, nil); 403/401
+// return ErrForbidden — the two absences the engine must never
+// conflate; 5xx and 429 wrap errTransient for the retry above.
+//
+//nolint:gocritic // unnamedResult: body, found, error
+func (c *Client) once(path, accept string) ([]byte, bool, error) {
 	//nolint:noctx // the CLI has no cancellation surface; the client carries the timeout
 	req, err := http.NewRequest(http.MethodGet, c.Base+path, http.NoBody)
 	if err != nil {
@@ -323,8 +412,14 @@ func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocri
 		return nil, false, nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
+	case http.StatusTooManyRequests:
+		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)
 	default:
 		// The status alone: the body is server-controlled prose.
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)
+		}
+
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d", path, resp.StatusCode)
 	}
 }

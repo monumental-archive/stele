@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -263,23 +264,45 @@ func (w *evidenceWalk) storeVerdicts(repo, tag string, bundles []string) error {
 	}
 
 	// The burned derivation (#378): only where the tag's own run
-	// history shows a failure, and only for vsa findings — narrow and
-	// derived, never assertable by hand.
+	// history shows a PUBLISHING failure, and only for vsa findings —
+	// narrow and derived, never assertable by hand. Which workflows
+	// publish is policy data: without it any failed run would excuse,
+	// so one flaky unrelated workflow on a tag would mute a genuinely
+	// missing verdict.
 	failed, err := w.forge.FailedRuns(w.org, repo, tag)
 	if err != nil {
 		return fmt.Errorf("assert: run history of %s/%s@%s: %w", w.org, repo, tag, err)
 	}
 
-	if failed == 0 {
+	culprit, ok := w.burnedBy(failed)
+	if !ok {
 		return nil
 	}
 
 	for _, f := range w.vsaFindings(subject) {
 		w.burned = append(w.burned, report.Derived(subject, f,
-			fmt.Sprintf("burned release: %d failed run(s) on %s (#378)", failed, tag)))
+			fmt.Sprintf("burned release: the %s run failed on %s (#378)", culprit, tag)))
 	}
 
 	return nil
+}
+
+// burnedBy reports which failed run burns the release, if any. With
+// publishWorkflows declared only those names burn; without it any
+// failure does, which is the bash's broader stance and is why the
+// policy field exists.
+func (w *evidenceWalk) burnedBy(failed []string) (string, bool) {
+	for _, name := range failed {
+		if len(w.pol.PublishWorkflows) == 0 {
+			return name, true
+		}
+
+		if slices.Contains(w.pol.PublishWorkflows, name) {
+			return name, true
+		}
+	}
+
+	return "", false
 }
 
 func (w *evidenceWalk) vsaFindings(subject string) []string {

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/gh"
 )
@@ -82,7 +83,9 @@ func testServer(t *testing.T) *gh.Client {
 
 	mux.HandleFunc("/repos/acme/widget/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
 		writeBody(w, []byte(`{"workflow_runs": [
-		  {"conclusion": "failure"}, {"conclusion": "success"}, {"conclusion": "failure"}]}`))
+		  {"name": "publish", "conclusion": "failure"},
+		  {"name": "ci", "conclusion": "success"},
+		  {"name": "scorecard", "conclusion": "failure"}]}`))
 	})
 
 	mux.HandleFunc("/repos/acme/locked/releases", func(w http.ResponseWriter, _ *http.Request) {
@@ -135,8 +138,8 @@ func TestClientReads(t *testing.T) {
 	}
 
 	failed, err := c.FailedRuns("acme", "widget", "v1.0.0")
-	if err != nil || failed != 2 {
-		t.Fatalf("FailedRuns = %d, %v", failed, err)
+	if err != nil || len(failed) != 2 || failed[0] != "publish" {
+		t.Fatalf("FailedRuns = %v, %v — names, and only the failures", failed, err)
 	}
 }
 
@@ -187,4 +190,161 @@ func TestClientTypedRefusals(t *testing.T) {
 
 func isForbidden(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "cannot read this")
+}
+
+// flakyServer answers with `fails` transient statuses before serving
+// the real body, counting attempts. Returns the client and a pointer to the attempt count.
+//
+//nolint:gocritic // unnamedResult: client, attempt counter
+func flakyServer(t *testing.T, status, fails int) (*gh.Client, *int) {
+	t.Helper()
+
+	seen := 0
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/orgs/acme/repos", func(w http.ResponseWriter, r *http.Request) {
+		seen++
+		if seen <= fails {
+			w.WriteHeader(status)
+
+			return
+		}
+
+		if r.URL.Query().Get("page") != "1" {
+			writeBody(w, []byte(`[]`))
+
+			return
+		}
+
+		writeBody(w, []byte(`[{"name": "widget", "archived": false, "fork": false}]`))
+	})
+
+	mux.HandleFunc("/acme/widget/releases/download/v1.0.0/app.bin", func(w http.ResponseWriter, _ *http.Request) {
+		seen++
+		if seen <= fails {
+			w.WriteHeader(status)
+
+			return
+		}
+
+		writeBody(w, []byte("asset bytes"))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := gh.New("test-token")
+	c.Base = srv.URL
+	c.Download = srv.URL
+	c.Sleep = func(time.Duration) {} // no wall time in tests
+
+	return c, &seen
+}
+
+// TestTransientRetry pins the ladder: a status that says nothing
+// about the subject (5xx, 429) is retried; the walk survives the
+// kind of outage that killed the first live run.
+func TestTransientRetry(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusTooManyRequests,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+
+			c, seen := flakyServer(t, status, 2)
+
+			repos, err := c.Repos("acme")
+			if err != nil || len(repos) != 1 {
+				t.Fatalf("Repos = %v, %v — a transient status must not end the walk", repos, err)
+			}
+
+			// Two transient attempts, the answering page, then the
+			// empty page that ends pagination.
+			if *seen != 4 {
+				t.Fatalf("attempts = %d, want 4 (two transient, one answer, one empty page)", *seen)
+			}
+		})
+	}
+}
+
+// TestTransientExhausted pins the bound: a host that never recovers
+// ends the walk with a named error rather than hanging forever.
+func TestTransientExhausted(t *testing.T) {
+	t.Parallel()
+
+	c, seen := flakyServer(t, http.StatusServiceUnavailable, 99)
+
+	if _, err := c.Repos("acme"); err == nil || !strings.Contains(err.Error(), "after 4 attempts") {
+		t.Fatalf("err = %v, want the bounded refusal", err)
+	}
+
+	if *seen != 4 {
+		t.Fatalf("attempts = %d, want the 4-attempt bound", *seen)
+	}
+}
+
+// TestAnswersAreNotRetried pins the other half of the rule: a 404 and
+// a 403 are FACTS about the subject and must be returned at once —
+// retrying an answer away turns a real absence into a timeout and
+// hides a narrowed credential behind noise.
+func TestAnswersAreNotRetried(t *testing.T) {
+	t.Parallel()
+
+	seen := 0
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/repos/acme/widget/contents/gone.yml", func(w http.ResponseWriter, _ *http.Request) {
+		seen++
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	mux.HandleFunc("/repos/acme/locked/releases", func(w http.ResponseWriter, _ *http.Request) {
+		seen++
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := gh.New("")
+	c.Base = srv.URL
+	c.Sleep = func(time.Duration) {}
+
+	if _, ok, err := c.FileAt("acme", "widget", "gone.yml", "v1"); ok || err != nil {
+		t.Fatalf("404: ok=%v err=%v, want the recorded absence", ok, err)
+	}
+
+	if seen != 1 {
+		t.Fatalf("404 took %d attempts — an answer must not be retried", seen)
+	}
+
+	seen = 0
+
+	if _, err := c.ReleaseTags("acme", "locked"); !isForbidden(err) {
+		t.Fatalf("403 err = %v, want ErrForbidden", err)
+	}
+
+	if seen != 1 {
+		t.Fatalf("403 took %d attempts — an answer must not be retried", seen)
+	}
+}
+
+// TestAssetTransientRetry pins the same ladder on the download host,
+// where the outage's 429s actually landed.
+func TestAssetTransientRetry(t *testing.T) {
+	t.Parallel()
+
+	c, seen := flakyServer(t, http.StatusTooManyRequests, 1)
+
+	body, err := c.Asset("acme", "widget", "v1.0.0", "app.bin")
+	if err != nil || string(body) != "asset bytes" {
+		t.Fatalf("Asset = %q, %v", body, err)
+	}
+
+	if *seen != 2 {
+		t.Fatalf("attempts = %d, want 2", *seen)
+	}
 }

@@ -51,7 +51,7 @@ func (scriptedForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
 	return nil, nil
 }
 
-func (scriptedForge) FailedRuns(_, _, _ string) (int, error) { return 3, nil }
+func (scriptedForge) FailedRuns(_, _, _ string) ([]string, error) { return []string{"publish"}, nil }
 
 func TestCaptureThenReplay(t *testing.T) {
 	t.Parallel()
@@ -114,8 +114,8 @@ func TestCaptureThenReplay(t *testing.T) {
 	}
 
 	failed, err := snap.FailedRuns("acme", "widget", "v1.0.0")
-	if err != nil || failed != 3 {
-		t.Fatalf("FailedRuns = %d, %v", failed, err)
+	if err != nil || len(failed) != 1 || failed[0] != "publish" {
+		t.Fatalf("FailedRuns = %v, %v", failed, err)
 	}
 }
 

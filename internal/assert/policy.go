@@ -49,6 +49,13 @@ type EvidencePolicy struct {
 	// ExpectedRepos, when set, is the declared org population — a
 	// listing that sees a different count cannot judge.
 	ExpectedRepos *int `json:"expectedRepos,omitempty"`
+	// PublishWorkflows names the workflows whose failure can burn a
+	// release (#378). Absent means ANY failed run on the tag counts —
+	// the bash's semantics, and too broad: an unrelated flaky workflow
+	// would then excuse a genuinely missing verdict, which is the mute
+	// button the burned category must never become. Naming them is a
+	// narrowing, so it is data, not code.
+	PublishWorkflows []string `json:"publishWorkflows,omitempty"`
 }
 
 // ClassPolicy is one evidence class's asset obligations.
