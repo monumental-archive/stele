@@ -6,7 +6,7 @@
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "storeVsaFromCanon": "1.13.0",
+    "storeVsaFromVersion": "1.13.0",
     "debtFile": "security/attestation-debt.txt",
     "expectedRepos": 4,
     "publishWorkflows": ["publish", "self-publish"],

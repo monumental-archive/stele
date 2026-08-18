@@ -159,9 +159,9 @@ stele self-releases N-1 (version N built and attested by version
 N-1, the .github#227 shape) through the canon's `go-binary` class,
 live since v0.1.0. Its own versions and notes come from
 `stele derive version` / `derive notes` — the tool eats first. The
-org-wide git-cliff replacement (the three `git cliff` lines in the
-canon's release scripts becoming `stele derive` calls, cliff.toml
-retired) rides the canon cutover PR.
+org-wide replacement landed with the canon cutover (.github#505/#507):
+every repository's version and changelog now come from these modes,
+and git-cliff has left the belt.
 
 ## Testing
 
