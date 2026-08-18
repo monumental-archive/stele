@@ -46,6 +46,16 @@ const (
 	settingModified = "vcs.modified"
 )
 
+// The SPDX literals both renderers share. Spec, not policy: these are
+// what the format calls the document element, the not-asserted value,
+// the version this writes and its data licence.
+const (
+	documentID     = "SPDXRef-DOCUMENT"
+	noAssertion    = "NOASSERTION"
+	spdxVersion    = "SPDX-2.3"
+	spdxDataLicHse = "CC0-1.0"
+)
+
 // ErrNoBinaries reports a derivation asked to describe nothing.
 var ErrNoBinaries = errors.New("sbom: no binaries given")
 
@@ -342,9 +352,9 @@ func render(f *facts, tool string, inv *inventory) *Document {
 	name := f.mainPath + "@" + f.mainVersion
 
 	doc := &Document{
-		SPDXVersion:       "SPDX-2.3",
-		DataLicense:       "CC0-1.0",
-		SPDXID:            "SPDXRef-DOCUMENT",
+		SPDXVersion:       spdxVersion,
+		DataLicense:       spdxDataLicHse,
+		SPDXID:            documentID,
 		Name:              name,
 		DocumentNamespace: "https://spdx.org/spdxdocs/" + strings.ReplaceAll(name, "/", "-") + "-" + f.revision,
 		CreationInfo:      CreationInfo{Created: f.created, Creators: []string{"Tool: " + tool}},
@@ -354,14 +364,14 @@ func render(f *facts, tool string, inv *inventory) *Document {
 		SPDXID:           "SPDXRef-Package-0",
 		Name:             f.mainPath,
 		VersionInfo:      f.mainVersion,
-		DownloadLocation: "NOASSERTION",
+		DownloadLocation: noAssertion,
 		PrimaryPurpose:   "APPLICATION",
 		ExternalRefs:     []ExternalRef{purlRef(f.mainPath, f.mainVersion)},
 	}
 
 	doc.Packages = append(doc.Packages, root)
 	doc.Relationships = append(doc.Relationships, Relationship{
-		SPDXElementID:      "SPDXRef-DOCUMENT",
+		SPDXElementID:      documentID,
 		RelatedSPDXElement: root.SPDXID,
 		RelationshipType:   "DESCRIBES",
 	})
@@ -371,7 +381,7 @@ func render(f *facts, tool string, inv *inventory) *Document {
 			SPDXID:           fmt.Sprintf("SPDXRef-Package-%d", i+1),
 			Name:             m.path,
 			VersionInfo:      m.version,
-			DownloadLocation: "NOASSERTION",
+			DownloadLocation: noAssertion,
 			PrimaryPurpose:   "LIBRARY",
 			SourceInfo:       linkedInto(m.platforms, inv.platforms),
 			ExternalRefs:     []ExternalRef{purlRef(m.path, m.version)},
