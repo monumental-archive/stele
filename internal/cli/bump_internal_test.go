@@ -6,6 +6,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -259,4 +260,92 @@ func TestBumpRefusesADetectError(t *testing.T) {
 	if r.code != exitRefused || !strings.Contains(r.stderr, "parsing") {
 		t.Fatalf("bump = %d, stderr: %s", r.code, r.stderr)
 	}
+}
+
+// TestBumpRefusesABrokenDerivation: the mirrors are written by the code
+// that derived the number, so a derivation that failed writes nothing —
+// the version never reaches a mirror without a derivation behind it.
+func TestBumpRefusesABrokenDerivation(t *testing.T) {
+	hist := bumpHistory()
+	hist.tagsErr = errors.New("git said no")
+
+	r := runBump(t, bumpTree(t, "0.9.0"), hist)
+	if r.code != exitRefused || !strings.Contains(r.stderr, "git said no") {
+		t.Fatalf("bump = %d, stderr: %s", r.code, r.stderr)
+	}
+}
+
+// TestBumpRefusesAnUndatableRelease: the citation date is the release's
+// own commit date, never a wall clock, so a history that cannot supply
+// one has no date to write.
+func TestBumpRefusesAnUndatableRelease(t *testing.T) {
+	dir := write2(t, map[string]string{
+		"Cargo.toml":   "[package]\nname = \"demo\"\nversion = \"0.9.0\"\n",
+		"CITATION.cff": "cff-version: 1.2.0\ntitle: demo\nversion: 0.9.0\ndate-released: 2026-01-01\n",
+	})
+
+	hist := bumpHistory()
+	hist.timeErr = errors.New("no committer date")
+
+	r := runBump(t, dir, hist)
+	if r.code != exitRefused || !strings.Contains(r.stderr, "no committer date") {
+		t.Fatalf("bump = %d, stderr: %s", r.code, r.stderr)
+	}
+}
+
+// TestBumpCarriesTheRewriteRefusal: the mirror set's read-back guard is
+// the last thing between a derivation and the filesystem, and its
+// refusal must reach the caller rather than a partial rewrite.
+func TestBumpCarriesTheRewriteRefusal(t *testing.T) {
+	dir := write2(t, map[string]string{
+		"Cargo.toml":   "[package]\nname = \"demo\"\nversion = \"0.9.0\"\n",
+		"CITATION.cff": "cff-version: 1.2.0\ntitle: demo\nversion: 0.9.0\ndate-released: 2026-01-01\n",
+	})
+
+	// A date that would not sit in the slot measured for it: the
+	// rewrite refuses at the read-back and nothing is written.
+	r := runBump(t, dir, bumpHistory(), "--date", "2026-01-01 # comment")
+	if r.code != exitRefused || !strings.Contains(r.stderr, "reads back") {
+		t.Fatalf("bump = %d, stderr: %s", r.code, r.stderr)
+	}
+
+	cargo, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")) //nolint:gosec // a path this test just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(cargo), `version = "0.9.0"`) {
+		t.Fatalf("a mirror moved despite the refusal:\n%s", cargo)
+	}
+}
+
+// TestBumpCheckBeforeAnyReleaseRefusesDisagreement: with no released
+// version the only checkable fact is that the mirrors agree with each
+// other, so mirrors that do not must fail there — the agreement-only
+// outcome is not a pass for everything.
+func TestBumpCheckBeforeAnyReleaseRefusesDisagreement(t *testing.T) {
+	dir := write2(t, map[string]string{
+		"Cargo.toml":   "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+		"CITATION.cff": "cff-version: 1.2.0\ntitle: demo\nversion: 0.2.0\ndate-released: 2026-01-01\n",
+	})
+
+	r := runBump(t, dir, &stubHistory{commitTime: "2026-08-18T10:00:00Z"}, "--check")
+	if r.code != exitRefused {
+		t.Fatalf("bump --check = %d, want the disagreement refusal (stderr: %s)", r.code, r.stderr)
+	}
+}
+
+// write2 lays out a multi-file tree for the rows above.
+func write2(t *testing.T, files map[string]string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+
+	return dir
 }
