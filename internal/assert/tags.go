@@ -47,8 +47,11 @@ type linkNote struct {
 }
 
 // Tags walks the population's release tags and seals the verdict.
+// runFacts are the caller's facts about the run itself — the trust
+// material it held, which the walk cannot know.
 func Tags(
 	pol *Policy, pop Population, forge gh.Forge, tags gh.TagReader, tv TagVerifier, log Logf,
+	runFacts ...report.Fact,
 ) (*report.Report, error) {
 	tp := pol.Tags
 	if tp == nil {
@@ -71,7 +74,8 @@ func Tags(
 		}
 	}
 
-	facts := []report.Fact{{Name: "tagsChecked", Value: strconv.Itoa(w.checked)}}
+	facts := append(append([]report.Fact{}, runFacts...),
+		report.Fact{Name: "tagsChecked", Value: strconv.Itoa(w.checked)})
 	if len(w.legacy) > 0 {
 		facts = append(facts, report.Fact{Name: "legacyTags", Value: strings.Join(w.legacy, " ")})
 	}

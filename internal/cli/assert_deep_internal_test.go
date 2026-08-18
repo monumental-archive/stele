@@ -53,7 +53,7 @@ func TestLoadFullDepth(t *testing.T) {
 	t.Run("an unreadable verify policy refuses", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := loadFullDepth("/no/such/verify-policy.json", "/no/such/root.json", &storeForge{}); err == nil {
+		if _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}); err == nil {
 			t.Fatal("loadFullDepth accepted a missing verify policy")
 		}
 	})
@@ -66,7 +66,7 @@ func TestLoadFullDepth(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if _, err := loadFullDepth(p, "/no/such/root.json", &storeForge{}); err == nil {
+		if _, err := loadFullDepth(p, nil, &storeForge{}); err == nil {
 			t.Fatal("loadFullDepth accepted a policy with no trust section")
 		}
 	})
@@ -83,27 +83,18 @@ func TestLoadFullDepthHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := filepath.Join(dir, "root.json")
-	if err := os.WriteFile(root, []byte(`{"any": "bytes"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	orig := newBundleVerifier
 	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{}, nil }
 
 	t.Cleanup(func() { newBundleVerifier = orig })
 
-	full, err := loadFullDepth(vp, root, &storeForge{})
+	full, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{})
 	if err != nil {
 		t.Fatalf("loadFullDepth = %v", err)
 	}
 
 	if full.MachineryOwner != "acme" || full.MachineryRepo != "canon" {
 		t.Fatalf("roots = %s/%s, want the verifier workflow's own repository", full.MachineryOwner, full.MachineryRepo)
-	}
-
-	if _, err := loadFullDepth(vp, filepath.Join(dir, "absent"), &storeForge{}); err == nil {
-		t.Fatal("loadFullDepth accepted a missing trusted root")
 	}
 }
 

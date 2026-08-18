@@ -202,7 +202,8 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		jsonOut                   bool
 		org, policyPath, debtPath string
 		repo                      string
-		rootPath, pinPath         string
+		root                      rootFlags
+		pinPath                   string
 		depth, verifyPolicyPath   string
 		snapshotDir, captureDir   string
 	)
@@ -214,8 +215,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		"owner/name whose releases are walked — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&debtPath, "debt", "", "path to the committed evidence-debt file (defaults to the policy's debtFile)")
-	flags.StringVar(&rootPath, "trusted-root", "",
-		"path to the Sigstore trusted root JSON (required when the policy declares continuous or baseImages)")
+	root.register(flags)
 	flags.StringVar(&pinPath, "base-pins", "",
 		"path to the committed base-image pin file (defaults to the policy's baseImages.pinFile)")
 	flags.StringVar(&depth, "depth", depthPresence,
@@ -260,8 +260,6 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		return usageFail(fmt.Sprintf("--depth %q is not a depth (presence, full)", depth))
 	case depth == depthFull && verifyPolicyPath == "":
 		return usageFail("--verify-policy is required with --depth full: it names the trust identities")
-	case depth == depthFull && rootPath == "":
-		return usageFail("--trusted-root is required with --depth full")
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
@@ -296,7 +294,19 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		assert.WorkflowSource{Forge: forge, Policy: pol.Evidence},
 	}
 
-	attestor, pinFile, serr := loadStoreInputs(pol, forge, rootPath, pinPath)
+	// One run, one root of trust: both halves that verify are handed
+	// the same document, resolved once. Re-resolving per half could
+	// hand two halves of one verdict two different trust anchors.
+	var rootJSON []byte
+
+	if depth == depthFull || storeHalvesDeclared(pol) {
+		var rerr error
+		if rootJSON, rerr = root.resolve(); rerr != nil {
+			return usageFail(rerr.Error())
+		}
+	}
+
+	attestor, pinFile, serr := loadStoreInputs(pol, forge, rootJSON, pinPath)
 	if serr != nil {
 		return usageFail(serr.Error())
 	}
@@ -307,7 +317,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	var full *assert.FullDepth
 
 	if depth == depthFull {
-		fd, derr := loadFullDepth(verifyPolicyPath, rootPath, forge)
+		fd, derr := loadFullDepth(verifyPolicyPath, rootJSON, forge)
 		if derr != nil {
 			return usageFail(derr.Error())
 		}
@@ -322,7 +332,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 
 	pop := assert.Population{Org: org, Repo: repo}
 
-	rep, err := assert.Evidence(pol, pop, forge, src, attestor, debt, pinFile, full, out.logf)
+	rep, err := assert.Evidence(pol, pop, forge, src, attestor, debt, pinFile, full, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
@@ -617,7 +627,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 	var (
 		jsonOut                 bool
 		org, repo, policyPath   string
-		rootPath                string
+		root                    rootFlags
 		snapshotDir, captureDir string
 	)
 
@@ -627,8 +637,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&repo, "repo", "",
 		"owner/name whose tags are audited — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
-	flags.StringVar(&rootPath, "trusted-root", "",
-		"path to the Sigstore trusted root JSON (required when any epoch is not pending)")
+	root.register(flags)
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
 	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
 	flags.BoolVar(&jsonOut, "json", false,
@@ -674,7 +683,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		return usageFail("the policy declares no tags section")
 	}
 
-	tv, code := loadTagVerifier(pol, rootPath, stderr)
+	tv, code := loadTagVerifier(pol, &root, stderr)
 	if code != exitOK {
 		return code
 	}
@@ -698,7 +707,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.Tags(pol, pop, forge, tags, tv, out.logf)
+	rep, err := assert.Tags(pol, pop, forge, tags, tv, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
@@ -722,7 +731,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 // then is the trusted root required.
 //
 //nolint:gocritic,ireturn // exit-code result; the walk's own seam type is the point
-func loadTagVerifier(pol *assert.Policy, rootPath string, stderr io.Writer) (assert.TagVerifier, int) {
+func loadTagVerifier(pol *assert.Policy, root *rootFlags, stderr io.Writer) (assert.TagVerifier, int) {
 	signing := false
 
 	for _, epoch := range pol.Tags.Epochs {
@@ -745,11 +754,7 @@ func loadTagVerifier(pol *assert.Policy, rootPath string, stderr io.Writer) (ass
 		return nil, exitUsage
 	}
 
-	if rootPath == "" {
-		return fail("--trusted-root is required: the policy declares signing epochs")
-	}
-
-	rootJSON, err := os.ReadFile(rootPath) //nolint:gosec // the root path is operator-supplied by design
+	rootJSON, err := root.resolve()
 	if err != nil {
 		return fail(err.Error())
 	}

@@ -43,7 +43,10 @@ var newDeepVerifier = func(vp *policy.Policy, forge gh.Forge, bv verify.BundleVe
 
 // loadFullDepth reads the trust authority and builds the full-depth
 // options — every failure here is a usage refusal at the call site.
-func loadFullDepth(verifyPolicyPath, rootPath string, forge gh.Forge) (*assert.FullDepth, error) {
+// The trusted-root document arrives already resolved: the caller
+// resolves once for the whole run, so the deep half and the store
+// halves cannot end up holding different trust material.
+func loadFullDepth(verifyPolicyPath string, rootJSON []byte, forge gh.Forge) (*assert.FullDepth, error) {
 	vf, err := os.Open(verifyPolicyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the refusal names the path already
@@ -56,11 +59,6 @@ func loadFullDepth(verifyPolicyPath, rootPath string, forge gh.Forge) (*assert.F
 		return nil, perr
 	}
 
-	rootJSON, rerr := os.ReadFile(rootPath) //nolint:gosec // the root path is operator-supplied by design
-	if rerr != nil {
-		return nil, rerr //nolint:wrapcheck // the refusal names the path already
-	}
-
 	bv, berr := newBundleVerifier(rootJSON)
 	if berr != nil {
 		return nil, berr
@@ -69,31 +67,27 @@ func loadFullDepth(verifyPolicyPath, rootPath string, forge gh.Forge) (*assert.F
 	return newDeepVerifier(vp, forge, bv)
 }
 
+// storeHalvesDeclared reports whether this policy gives the walk a
+// cryptographic half at all. One predicate, read by the caller that
+// resolves the trusted root and by the builder that consumes it, so
+// the two cannot disagree about whether this run owes a root.
+func storeHalvesDeclared(pol *assert.Policy) bool {
+	return pol.Evidence.Continuous != nil || pol.Evidence.BaseImages != nil
+}
+
 // loadStoreInputs builds what the store halves need: the attestor
-// over the trust boundary, and the committed pin file. The store
-// halves verify cryptographically, so a policy that declares them
-// without a root is a usage refusal, never a silent skip — nobody
-// else checks those artifacts. A declared pin file absent from the
-// checkout refuses the same way: the far likelier cause is the wrong
-// working directory, and proceeding would judge nothing while
-// looking green.
+// over the trust boundary, and the committed pin file. A declared pin
+// file absent from the checkout is a usage refusal: the far likelier
+// cause is the wrong working directory, and proceeding would judge
+// nothing while looking green.
 //
 //nolint:ireturn // the walk's own parameter type — the seam is the point
 func loadStoreInputs(
-	pol *assert.Policy, forge gh.Forge, rootPath, pinPath string,
+	pol *assert.Policy, forge gh.Forge, rootJSON []byte, pinPath string,
 ) (assert.Attestor, []byte, error) {
 	var attestor assert.Attestor
 
-	if pol.Evidence.Continuous != nil || pol.Evidence.BaseImages != nil {
-		if rootPath == "" {
-			return nil, nil, errors.New("--trusted-root is required: the policy declares continuous or baseImages")
-		}
-
-		rootJSON, rerr := os.ReadFile(rootPath) //nolint:gosec // the root path is operator-supplied by design
-		if rerr != nil {
-			return nil, nil, rerr //nolint:wrapcheck // the refusal names the path already
-		}
-
+	if storeHalvesDeclared(pol) {
 		bv, berr := newBundleVerifier(rootJSON)
 		if berr != nil {
 			return nil, nil, berr

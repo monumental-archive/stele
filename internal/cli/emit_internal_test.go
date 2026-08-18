@@ -231,9 +231,12 @@ func TestEmitUsageRefusals(t *testing.T) {
 			"--policy is required",
 		},
 		{
-			"trusted root missing",
-			[]string{"emit", "chain", "--repo", "acme/widget", "--policy", px.policy},
-			"--trusted-root is required",
+			"two roots named at once",
+			[]string{
+				"emit", "chain", "--repo", "acme/widget", "--policy", px.policy,
+				"--trusted-root", px.root, "--tuf-root", "/a.json", "--tuf-mirror", "https://tuf.acme.example",
+			},
+			"one root, named once",
 		},
 		{
 			"git dir missing",
