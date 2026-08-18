@@ -163,7 +163,7 @@ verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain/level add
 --git-dir [--ref]. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
---genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
+--clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]. GITHUB_TOKEN/GH_TOKEN authenticates store reads and the
 notes push.
 `
