@@ -49,6 +49,11 @@ number and forgets another, and now an identifier names two shapes.
 One number cannot drift from itself. It moves when ANY live-read
 document's key set changes, and every document moves with it.
 
+"One number" is also one definition: the constant lives beside the
+gate that enforces it (`jsonx.Epoch`), and every document package
+references it rather than carrying a copy — share the definition,
+never share the derivation.
+
 The boundary it guards is **shipped documents meeting shipped
 tools**, not pull requests meeting each other: the number names the
 key set of a *released* stele, so every key-set change landing

@@ -24,9 +24,10 @@ import (
 // there are no dual readers: per-document numbers would buy no
 // tolerance a reader can use, and would drift the moment a human
 // bumped one and forgot another, which is what stele#107 found.
+// The number is defined once, at the version gate (jsonx.Epoch).
 // Identifiers written into history keep their own numbers — see
 // docs/versioning.md.
-const Schema = 3
+const Schema = jsonx.Epoch
 
 // Policy is the decoded document. Field semantics live in
 // docs/policy-schema.md; this type carries exactly that shape.

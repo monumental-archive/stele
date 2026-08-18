@@ -247,9 +247,10 @@ func (r *Report) Findings() []Finding {
 // best-efforting it (stele#107: a format with a consumer beyond its
 // author needs a version identifier BEFORE the consumer arrives, not
 // after it breaks). It is the SAME number the policy documents carry
-// — one epoch across every live-read stele document, so the class of
-// drift #107 found cannot recur. See docs/versioning.md.
-const Schema = 3
+// — one epoch across every live-read stele document, defined once at
+// the version gate (jsonx.Epoch), so the class of drift #107 found
+// cannot recur. See docs/versioning.md.
+const Schema = jsonx.Epoch
 
 // The encode shapes — exported fields for the jsonx boundary, built
 // only from a sealed report. Decoding a document back into a Report

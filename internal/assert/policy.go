@@ -22,11 +22,12 @@ import (
 // PolicySchema is the document epoch this implementation reads — any
 // other is refused, never best-efforted. It is the SAME number the
 // verify policy and the report carry: one epoch across every
-// live-read stele document (docs/versioning.md), so a bump can never
-// land on one document and miss another, which is the drift
-// stele#107 found. The pre-#84 vocabulary (`storeVsaFromCanon` and
-// kin) is refused here as a version, not as a field typo.
-const PolicySchema = 3
+// live-read stele document (docs/versioning.md), defined once at the
+// version gate (jsonx.Epoch), so a bump can never land on one
+// document and miss another, which is the drift stele#107 found. The
+// pre-#84 vocabulary (`storeVsaFromCanon` and kin) is refused here
+// as a version, not as a field typo.
+const PolicySchema = jsonx.Epoch
 
 // Policy is the committed assert policy. Constructor: LoadPolicy.
 type Policy struct {
