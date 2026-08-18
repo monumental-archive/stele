@@ -12,8 +12,13 @@ never a hardcoded name. Four verbs, which are the command surface:
 
 - **derive** — versions from conventional commits, SBOM assembly, VEX
   from triage decisions, OCI image facts
-- **assert** — image facts, evidence-bundle completeness, repo-settings
-  drift against a committed baseline
+- **assert** — image facts, evidence-bundle completeness (releases,
+  continuous digests, base approvals), advisory blast radius.
+  Repo-settings drift was in the original charter and is DROPPED by
+  written decision: rulesets enforce; a setting that matters to
+  evidence surfaces as a consequence in the evidence walk, and a
+  baseline nobody enforces is a second source of truth. The OpenSSF
+  questionnaire auto-fill is the same won't-do.
 - **emit** — source-chain links, VSA predicates, evidence-bundle
   layout: the JSON that gets signed
 - **verify** — every attestation against a pinned signer identity, the
@@ -44,13 +49,25 @@ over whole, and only then does the next open. State and next step:
    defective spans were deleted and re-emitted through this emitter
    (31 links on .github, 15 here); all four org chains verify at
    `SLSA_SOURCE_LEVEL_3`.
-3. **release wiring, then assert, then derive — open as #25.**
-   Release first (#7): the `go-binary` class, then N-1 self-release,
-   which retires the `go run @<sha>` pins the canon carries today.
-   Then assert, then derive — derive takes `claims.sh` and with it
-   `dryrun.sh`. #25 also carries the emit cutover's named residue:
-   the identity guard, `preflight.sh` and the clone prep are still
-   logic outside the binary, two of them unchecked checks.
+3. **release wiring — DONE** (#7): the `go-binary` class shipped and
+   stele self-releases N-1 (v0.1.0 onward); the belt installs the
+   released, attested binary and the `go run @<sha>` pins are
+   retired. **derive version + notes — DONE** (#31, pulled forward as
+   release wiring's input; sequencing note on #25).
+4. **assert — DONE, authoritative** (#39 built it as #62/#63/#66,
+   #69 landed the cutover): `audit:attestations`,
+   `audit:blast-radius` and the image-facts pull-back checks each run
+   one `stele assert` line against canon `slsa/assert-policy.json`;
+   the task-body bash and `assert-image-facts.sh` are deleted. Every
+   target was shadow-proven live before its handover, and the
+   population rule answered a real degraded forge on day one (the
+   2026-08-17 outage's 200-with-`[]` → CANNOT_JUDGE, stele#69). The
+   emit residue moved into the engine: preflight and the
+   reserved-identity guard, which refuses an absent workflow ref
+   (#74).
+5. **derive, the remainder — open as #40, the last leg**: claims,
+   VEX, OCI facts (SBOM landed with #46). With it goes the clone
+   prep, the last logic in the source-attest action.
 
 Each handover also moves that mechanism's documentation: the canon doc
 that used to specify the behavior shrinks to org narrative plus a
