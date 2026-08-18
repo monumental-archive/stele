@@ -104,7 +104,10 @@ type passDeep struct{}
 func (passDeep) Release(verify.Coords, []verify.Subject, []verify.Subject, verify.Pins, bool) error {
 	return nil
 }
-func (passDeep) VSA(verify.Coords, []verify.Subject, verify.Pins, bool) error { return nil }
+
+func (passDeep) VSA(verify.Coords, []verify.Subject, verify.Pins, *verify.EnrichmentDemand) error {
+	return nil
+}
 
 // TestAssertEvidenceFullDepth drives the whole CLI at --depth full
 // over a snapshot, with the engine seam scripted to pass — the flag
@@ -188,11 +191,11 @@ func TestEngineVerifierFailsClosed(t *testing.T) {
 		t.Fatal("Release verified an empty subject list")
 	}
 
-	if verr := ev.VSA(c, nil, pins, true); verr == nil {
+	if verr := ev.VSA(c, nil, pins, &verify.EnrichmentDemand{}); verr == nil {
 		t.Fatal("VSA verified an empty subject list")
 	}
 
-	if verr := ev.VSA(c, nil, pins, false); verr == nil {
+	if verr := ev.VSA(c, nil, pins, nil); verr == nil {
 		t.Fatal("verdict-only VSA verified an empty subject list")
 	}
 

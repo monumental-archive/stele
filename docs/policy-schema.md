@@ -319,10 +319,15 @@ historical releases owe a claim is the corpus walk's question, and it
 is answered where the corpus is — `evidence.enrichmentFromVersion` in
 the assert policy, derived through the same `owedFrom` the store-VSA
 and decision epochs use, and carried to the engine on the evidence
-contract. The engine takes it as two entry points rather than a flag,
-the shape `Release`/`ReleaseProvenance` already established:
-`verify.VSA` proves the obligation, `verify.VSAVerdictOnly` leaves it
-unasked. Withholding is whole — a pre-epoch release carrying a
+contract. The engine takes it as one nilable demand rather than a
+flag or a second entry point: `verify.VSA` receives an
+`EnrichmentDemand` that is nil when the obligation is not owed at
+all, empty when only the universal names are owed (a stranger, or a
+class declaring nothing extra), and non-empty when the release's
+declared classes owe more — three states a boolean cannot carry, and
+a shape in which "not owed" and "owed nothing extra" cannot be
+confused (the absent-vs-zero discipline the decode types already
+keep). Withholding is whole — a pre-epoch release carrying a
 malformed claim is not quietly held to a standard the walk decided it
 does not owe.
 
@@ -346,11 +351,20 @@ by someone who trusts none of this.
 
 **Not keyed by class here.** "Which dependencies for which evidence
 class" needs a class, and `verify vsa` has none — a stranger cannot
-supply one. That half of the obligation is declared where the class
-declaration already lives: the release's own evidence manifest, read
-by `assert`, joined against `assert-policy.json`'s `classes` map. One
-judge function serves both, extended at one call site — a refinement,
-never two truths.
+supply one, so the CLI passes the empty demand and gets the whole
+universal obligation. That half of the obligation is declared where
+the class declaration already lives: the release's own evidence
+manifest, read by `assert`, joined against `assert-policy.json`'s
+`classes.<name>.enrichment` lists into the demand's extra names. The
+extras extend only what is REQUIRED, never what is allowed: every
+class name must already live inside this policy's `required` ∪
+`permitted`, or class expectations and the closed set would be two
+truths about one vocabulary. Neither policy file can see the other,
+so the rule is enforced at the one place that holds both — `verify.
+VSA` refuses the RUN before judging any subject, distinct in text
+from any unmet obligation, because a drift between two policy
+documents is never a finding pinned on a release that did nothing
+wrong.
 
 ### `source.identity`
 
