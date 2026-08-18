@@ -10,6 +10,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.5.0](https://github.com/monumental-archive/stele/compare/v0.4.0...v0.5.0) - 2026-08-18
+
+### Added
+
+- verify continuous digests and base approvals ([#73](https://github.com/monumental-archive/stele/pull/73))
+
+### Fixed
+
+- update module golang.org/x/mod to v0.39.0 ([#71](https://github.com/monumental-archive/stele/pull/71))
+
 ## [0.4.0](https://github.com/monumental-archive/stele/compare/v0.3.0...v0.4.0) - 2026-08-17
 
 ### Added
