@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -19,7 +20,11 @@ import (
 
 // Policy is the committed assert policy. Constructor: LoadPolicy.
 type Policy struct {
-	Schema      *int               `json:"schema"`
+	Schema *int `json:"schema"`
+	// Issuer is the OIDC issuer every store-resident attestation this
+	// walk verifies must carry — the same value the verify policy
+	// names, repeated here so this file stands alone.
+	Issuer      *string            `json:"issuer,omitempty"`
 	Evidence    *EvidencePolicy    `json:"evidence"`
 	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
 }
@@ -49,6 +54,15 @@ type EvidencePolicy struct {
 	// ExpectedRepos, when set, is the declared org population — a
 	// listing that sees a different count cannot judge.
 	ExpectedRepos *int `json:"expectedRepos,omitempty"`
+	// Continuous, when set, adds the continuous-digest half: repos
+	// whose stub calls the org's continuous workflow publish rolling
+	// digests whose evidence lives ONLY in the attestation store.
+	Continuous *ContinuousPolicy `json:"continuous,omitempty"`
+	// BaseImages, when set, adds the base-approval half: every pinned
+	// base digest carries its approval attestation, so a dependency
+	// roll that outran the approval run surfaces here rather than at
+	// the next release.
+	BaseImages *BaseImagesPolicy `json:"baseImages,omitempty"`
 	// PublishWorkflows names the workflows whose failure can burn a
 	// release (#378). Absent means ANY failed run on the tag counts —
 	// the bash's semantics, and too broad: an unrelated flaky workflow
@@ -56,6 +70,72 @@ type EvidencePolicy struct {
 	// button the burned category must never become. Naming them is a
 	// narrowing, so it is data, not code.
 	PublishWorkflows []string `json:"publishWorkflows,omitempty"`
+}
+
+// ContinuousPolicy parameterises the continuous-digest half. Every
+// field is an org convention: which stub marks a publishing repo,
+// where its images live, and which workflow's identity signs them.
+type ContinuousPolicy struct {
+	// StubPath is the caller stub whose presence marks a repo as
+	// publishing continuous digests.
+	StubPath *string `json:"stubPath"`
+	// StubUses is the substring the stub must call for the repo to
+	// count — the org's own reusable workflow.
+	StubUses *string `json:"stubUses"`
+	// Registry and Tag address the rolling image.
+	Registry *string `json:"registry"`
+	Tag      *string `json:"tag"`
+	// SignerWorkflow is the signer's workflow PATH (owner/repo/path);
+	// the certificate identity is that path at the pin, because the
+	// signer is reached through a commit-pinned uses: and the pin is
+	// the certificate's ref. SignerPinPattern finds the pins the
+	// producing repo's own workflows declare, so the expected
+	// identity is DERIVED from the consuming tree, never a literal.
+	SignerWorkflow   *string `json:"signerWorkflow"`
+	SignerPinPattern *string `json:"signerPinPattern"`
+}
+
+// BaseImagesPolicy parameterises the base-approval half.
+type BaseImagesPolicy struct {
+	// PinFile is the committed file carrying pinned base references;
+	// absent from the checkout means this org pins no base images.
+	PinFile *string `json:"pinFile"`
+	// AttestorRepo holds the approval attestations; AttestorIdentity
+	// is the certificate identity they must verify under.
+	AttestorRepo     *string `json:"attestorRepo"`
+	AttestorIdentity *string `json:"attestorIdentity"`
+	// PredicateType is the approval predicate the attestation carries.
+	PredicateType *string `json:"predicateType"`
+}
+
+func (c *ContinuousPolicy) validate() error {
+	for name, f := range map[string]*string{
+		"stubPath": c.StubPath, "stubUses": c.StubUses, "registry": c.Registry,
+		"tag": c.Tag, "signerWorkflow": c.SignerWorkflow, "signerPinPattern": c.SignerPinPattern,
+	} {
+		if f == nil || *f == "" {
+			return fmt.Errorf("evidence.continuous.%s is absent or empty", name)
+		}
+	}
+
+	if _, err := regexp.Compile(*c.SignerPinPattern); err != nil {
+		return fmt.Errorf("evidence.continuous.signerPinPattern: %w", err)
+	}
+
+	return nil
+}
+
+func (b *BaseImagesPolicy) validate() error {
+	for name, f := range map[string]*string{
+		"pinFile": b.PinFile, "attestorRepo": b.AttestorRepo,
+		"attestorIdentity": b.AttestorIdentity, "predicateType": b.PredicateType,
+	} {
+		if f == nil || *f == "" {
+			return fmt.Errorf("evidence.baseImages.%s is absent or empty", name)
+		}
+	}
+
+	return nil
 }
 
 // ClassPolicy is one evidence class's asset obligations.
@@ -123,6 +203,22 @@ func (p *Policy) validate() error {
 
 	if e.ExpectedRepos != nil && *e.ExpectedRepos <= 0 {
 		return errors.New("evidence.expectedRepos must be positive when set")
+	}
+
+	if (e.Continuous != nil || e.BaseImages != nil) && (p.Issuer == nil || *p.Issuer == "") {
+		return errors.New("issuer is required when evidence.continuous or evidence.baseImages is declared")
+	}
+
+	if e.Continuous != nil {
+		if err := e.Continuous.validate(); err != nil {
+			return err
+		}
+	}
+
+	if e.BaseImages != nil {
+		if err := e.BaseImages.validate(); err != nil {
+			return err
+		}
 	}
 
 	if p.BlastRadius != nil {

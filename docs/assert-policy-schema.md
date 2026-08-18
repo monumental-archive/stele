@@ -62,6 +62,62 @@ edit to this document first.
   verdict, and the burned category must never become a mute button.
   Declare them.
 
+## The store-resident halves
+
+Two optional sections cover artifacts that have no release to hang
+evidence off, so the attestation store is the only durable record —
+and for both, presence is not enough: the bundle must VERIFY under a
+pinned identity, which is why declaring either requires a top-level
+`issuer` and a `--trusted-root` at the CLI. A policy that declares
+them without a root is a usage refusal, never a silent skip: the
+whole point is that nobody else checks these artifacts.
+
+```json
+{
+  "issuer": "https://token.actions.githubusercontent.com",
+  "evidence": {
+    "continuous": {
+      "stubPath": ".github/workflows/continuous.yml",
+      "stubUses": "monumental-archive/.github/",
+      "registry": "ghcr.io",
+      "tag": "latest",
+      "signerWorkflow": "monumental-archive/signer/.github/workflows/sign.yml",
+      "signerPinPattern": "monumental-archive/signer/.github/workflows/sign\\.yml@([0-9a-f]{40})"
+    },
+    "baseImages": {
+      "pinFile": "docker/pgrx-base-images.toml",
+      "attestorRepo": ".github",
+      "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
+      "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+    }
+  }
+}
+```
+
+**continuous** — a repo whose `stubPath` calls `stubUses` publishes
+rolling digests. The image under `tag` must carry an attestation
+verifying under `signerWorkflow`'s identity at a pin the repo's own
+workflows declare (`signerPinPattern`, capture group 1). Identity and
+pin travel together as one candidate: a workflow reached through a
+commit-pinned `uses:` carries that commit as its certificate SAN ref
+AND as the signer digest, so checking one without the other checks
+half the binding. The pin is DERIVED from the consuming tree, never a
+policy literal, because mid-bump a repo can carry one candidate per
+branch state and the artifact must verify under one of them. Three
+things fail closed, each its own finding: a stub that publishes but
+has no image under the tag, a tree
+declaring no pin at all (the identity cannot be derived, so the image
+cannot be vouched for), and an attestation that refuses.
+
+**baseImages** — every digest-pinned base reference in `pinFile` must
+carry a `predicateType` attestation verifying under
+`attestorIdentity`. A pin file present but pinning nothing is a
+finding, not a clean answer: the walk was told to check something. A
+declared pin file absent from the checkout is a usage refusal, like
+the missing trusted root — the likelier cause is the wrong working
+directory, and proceeding would judge nothing while looking green. An
+org that pins no base images says so by omitting this section.
+
 ## The blastRadius section
 
 Optional; required to run `stele assert blast-radius`:

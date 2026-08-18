@@ -36,7 +36,8 @@ var hex64OnlyRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // verdict. debt carries the committed file's declared exceptions;
 // burned exceptions are derived inside the walk.
 func Evidence(
-	pol *Policy, org string, forge gh.Forge, src ContractSource, debt []report.Exception, log Logf,
+	pol *Policy, org string, forge gh.Forge, src ContractSource, att Attestor,
+	debt []report.Exception, pinFile []byte, log Logf,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
@@ -54,13 +55,19 @@ func Evidence(
 			len(repos), *e.ExpectedRepos)
 	}
 
-	w := &evidenceWalk{pol: e, org: org, forge: forge, src: src, log: log}
+	w := &evidenceWalk{pol: e, org: org, forge: forge, src: src, attestor: att, log: log}
 
 	for _, repo := range repos {
 		if err := w.repo(repo); err != nil {
 			return nil, err
 		}
+
+		if err := w.continuous(repo); err != nil {
+			return nil, err
+		}
 	}
+
+	w.baseImages(pinFile)
 
 	exceptions := make([]report.Exception, 0, len(debt)+len(w.burned))
 	exceptions = append(exceptions, debt...)
@@ -71,7 +78,7 @@ func Evidence(
 		facts = append(facts, report.Fact{Name: "legacyReleases", Value: strings.Join(w.legacy, " ")})
 	}
 
-	pop := report.PopulationFromListing(w.checked, "releases with a declared evidence contract")
+	pop := report.PopulationFromListing(w.checked, "subjects with a declared evidence contract")
 
 	return report.Seal("assert evidence", org, pop, w.findings, exceptions, report.NoCanary(), facts...), nil
 }
@@ -81,6 +88,7 @@ type evidenceWalk struct {
 	org      string
 	forge    gh.Forge
 	src      ContractSource
+	attestor Attestor
 	log      Logf
 	checked  int
 	legacy   []string

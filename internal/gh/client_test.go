@@ -92,6 +92,30 @@ func testServer(t *testing.T) *gh.Client {
 		w.WriteHeader(http.StatusForbidden)
 	})
 
+	mux.HandleFunc("/orgs/acme/packages/container/widget/versions", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") != "1" {
+			writeBody(w, []byte(`[]`))
+
+			return
+		}
+
+		// A tag-named version and a stale digest come first: only the
+		// digest carrying the rolling tag counts.
+		writeBody(w, []byte(`[
+		  {"name": "latest", "metadata": {"container": {"tags": ["latest"]}}},
+		  {"name": "sha256:`+strings.Repeat("b", 64)+`", "metadata": {"container": {"tags": ["v1"]}}},
+		  {"name": "sha256:`+testHex+`", "metadata": {"container": {"tags": ["latest", "v2"]}}}]`))
+	})
+
+	mux.HandleFunc("/repos/acme/widget/contents/.github/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`[{"name": "ci.yml", "type": "file"}, {"name": "nested", "type": "dir"}]`))
+	})
+
+	mux.HandleFunc("/repos/acme/widget/contents/.github/workflows/ci.yml",
+		func(w http.ResponseWriter, _ *http.Request) {
+			writeBody(w, []byte("jobs: {}\n"))
+		})
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -346,5 +370,35 @@ func TestAssetTransientRetry(t *testing.T) {
 
 	if *seen != 2 {
 		t.Fatalf("attempts = %d, want 2", *seen)
+	}
+}
+
+// TestPackageAndWorkflowReads pins the two reads the store halves
+// need: only a DIGEST version carrying the rolling tag counts (a
+// tag-named version is not a digest), and workflow listing skips
+// directories.
+func TestPackageAndWorkflowReads(t *testing.T) {
+	t.Parallel()
+
+	c := testServer(t)
+
+	digest, err := c.PackageVersionDigest("acme", "widget", "latest")
+	if err != nil || digest != "sha256:"+testHex {
+		t.Fatalf("PackageVersionDigest = %q, %v — want the digest carrying the tag", digest, err)
+	}
+
+	absent, err := c.PackageVersionDigest("acme", "widget", "no-such-tag")
+	if err != nil || absent != "" {
+		t.Fatalf("absent tag = %q, %v — a rolling tag pointing at nothing is an answer", absent, err)
+	}
+
+	contents, err := c.WorkflowContents("acme", "widget")
+	if err != nil || len(contents) != 1 || string(contents[0]) != "jobs: {}\n" {
+		t.Fatalf("WorkflowContents = %q, %v — directories must be skipped", contents, err)
+	}
+
+	none, err := c.WorkflowContents("acme", "ghost")
+	if err != nil || none != nil {
+		t.Fatalf("missing workflows dir = %v, %v — absence is an answer", none, err)
 	}
 }
