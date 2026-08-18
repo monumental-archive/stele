@@ -178,7 +178,15 @@ func (n *Notes) group(commits []convcommit.Commit) map[string][]entry {
 	for i := range commits {
 		commit := &commits[i]
 
-		headline := n.opts.Groups[commit.Type()]
+		// A scoped key wins over the bare type, so `chore(deps)` can
+		// carry a heading while bare `chore` stays out of the notes —
+		// the release-commit/dependency-bump split every changelog
+		// convention wants and type-only grouping cannot express.
+		headline, scoped := n.opts.Groups[commit.Type()+"("+commit.Scope()+")"]
+		if !scoped {
+			headline = n.opts.Groups[commit.Type()]
+		}
+
 		if commit.IsBreaking() && n.opts.BreakingGroup != "" {
 			headline = n.opts.BreakingGroup
 		}
