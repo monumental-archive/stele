@@ -17,24 +17,24 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 1`, `"schema": 2`, 1), "schema"},
-		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 1`, `"schema": 1, "extra": true`, 1), "unknown"},
+		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 2`, `"schema": 3`, 1), "schema"},
+		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 2`, `"schema": 2, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",
-			`{"schema": 1, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt", "classes": {}}}`,
 			"classes is empty",
 		},
 		{
 			"a class requiring nothing",
-			`{"schema": 1, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 			  "classes": {"idle": {"bundles": []}}}}`,
 			"requires nothing",
 		},
 		{
 			"missing required string",
-			`{"schema": 1, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
 			  "classes": {"a": {"bundles": ["b"]}}}}`,
 			"debtFile",
@@ -56,11 +56,16 @@ func TestLoadPolicyRefusals(t *testing.T) {
 				`"storeVsaFromVersion": "1.13.0", "decisionFromVersion": "not-a-version"`, 1),
 			"decisionFromVersion",
 		},
+		// The gate fires FIRST (stele#107): a pre-#84 policy declares
+		// schema 1 and carries the old vocabulary; it must refuse as a
+		// VERSION mismatch, never incidentally as an unknown field.
 		{
-			"a pre-rename policy refuses as unknown field",
-			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
-				`"storeVsaFromCanon": "1.13.0"`, 1),
-			"storeVsaFromCanon",
+			"a pre-rename policy refuses as a version error",
+			strings.NewReplacer(
+				`"schema": 2`, `"schema": 1`,
+				`"storeVsaFromVersion": "1.13.0"`, `"storeVsaFromCanon": "1.13.0"`,
+			).Replace(testPolicyJSON),
+			"not the implemented schema",
 		},
 	}
 
@@ -100,7 +105,7 @@ func TestParseDebt(t *testing.T) {
 func TestTagsPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	const base = `{"schema": 1, "issuer": "https://token.example.com",
+	const base = `{"schema": 2, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 	    "classes": {"a": {"bundles": ["b"]}}},

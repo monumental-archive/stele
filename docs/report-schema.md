@@ -41,6 +41,7 @@ never null.
 
 ```json
 {
+  "schema": 1,
   "target": "verify vsa",
   "subject": "acme/widget@v1.2.3",
   "verdict": "PASS | FAIL | CANNOT_JUDGE",
@@ -68,6 +69,12 @@ never null.
 }
 ```
 
+- `schema` — the document's version identifier, stamped on every
+  encode. Refusal boundary: a consumer reading a schema it does not
+  implement refuses; it never best-efforts a newer one. When it moves
+  is governed by [docs/versioning.md](versioning.md) — added at
+  stele#107, before the second consumer arrived, because a format
+  acquires the ability to break someone at exactly that moment.
 - `target` — the judging mode that produced the document.
 - `subject` — what was judged, as the mode names it.
 - `population.expected` — present only for `declared` populations.

@@ -37,7 +37,7 @@ const (
 )
 
 const policyJSON = `{
-  "schema": 1,
+  "schema": 2,
   "issuer": "` + issuer + `",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},

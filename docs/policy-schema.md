@@ -29,7 +29,7 @@ states one value (the signer workflow).
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
 
   "issuer": "https://token.actions.githubusercontent.com",
 
@@ -122,7 +122,13 @@ wildcard, not a role.
 ### `schema`
 
 Refusal boundary. A verifier reading a policy version it does not
-implement refuses; it never best-efforts a newer schema.
+implement refuses; it never best-efforts a newer schema — and it
+refuses with a **version error from the gate**, which runs before
+strict decoding, never incidentally with an unknown-field error
+(stele#107). When the number moves is governed by
+[docs/versioning.md](versioning.md). Current: 2. Schema 1 is the
+pre-#84 vocabulary — #84's renames were a key-set change, which
+moves the identifier; the bump was applied retroactively at #107.
 
 ### `issuer`
 

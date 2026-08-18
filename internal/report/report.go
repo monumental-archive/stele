@@ -242,11 +242,20 @@ func (r *Report) Findings() []Finding {
 	return out
 }
 
+// Schema is the report document's schema version — stamped on every
+// encoded report so a consumer can refuse a version it does not
+// implement instead of best-efforting it (stele#107: a format with a
+// consumer beyond its author needs a version identifier BEFORE the
+// consumer arrives, not after it breaks). The rule for when it moves
+// is docs/versioning.md.
+const Schema = 1
+
 // The encode shapes — exported fields for the jsonx boundary, built
 // only from a sealed report. Decoding a document back into a Report
 // deliberately does not exist yet: a consumer re-seals from parts, so
 // a tampered verdict field could never be believed.
 type reportDoc struct {
+	Schema     int            `json:"schema"`
 	Target     string         `json:"target"`
 	Subject    string         `json:"subject,omitempty"`
 	Verdict    Verdict        `json:"verdict"`
@@ -295,6 +304,7 @@ func (r *Report) Encode(w io.Writer) error {
 	}
 
 	doc := reportDoc{
+		Schema:  Schema,
 		Target:  r.target,
 		Subject: r.subject,
 		Verdict: r.verdict,

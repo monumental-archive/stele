@@ -17,7 +17,7 @@ import (
 )
 
 const testPolicyJSON = `{
-  "schema": 1,
+  "schema": 2,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

@@ -16,7 +16,7 @@ import (
 )
 
 const storePolicyJSON = `{
-  "schema": 1,
+  "schema": 2,
   "issuer": "https://token.actions.githubusercontent.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",

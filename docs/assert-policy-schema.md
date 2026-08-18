@@ -13,11 +13,17 @@ Three formats are defined here: the policy file, the release
 evidence manifest, and the debt file. A change to any is a reviewed
 edit to this document first.
 
+`schema` is the refusal boundary: current 2 (schema 1 is the pre-#84
+vocabulary; the rename was a key-set change, which moves the
+identifier — [docs/versioning.md](versioning.md)). The gate fires
+before strict decoding, so another schema refuses as a version
+mismatch, never as an unknown-field error.
+
 ## The policy file
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -58,9 +64,11 @@ edit to this document first.
   caller's publish workflow. A repository carrying its own machinery
   has no pin comment, so its machinery version is its own tag. The
   pre-#79 names `storeVsaFromCanon`/`decisionFromCanon` are not
-  understood at all: strict decoding refuses them as unknown fields,
-  naming them. One field, one name — no alias, no pointer, no shim
-  (pre-v1, correctness wins every tie).
+  understood at all: a pre-rename policy is schema 1 and the version
+  gate refuses it as a version mismatch before strict decoding runs
+  (stele#107; the rule is [docs/versioning.md](versioning.md)). One
+  field, one name — no alias, no pointer, no shim (pre-v1,
+  correctness wins every tie).
 - `decisionFromVersion` — the machinery version (inclusive) from
   which a release owes a VERIFIABLE release decision; the full-depth
   leg runs pre-epoch releases through the provenance half alone
@@ -68,6 +76,18 @@ edit to this document first.
   `storeVsaFromVersion`: absent means always, an unparsable pin
   fails strict. Measured for the first conforming org at 1.23.1 —
   the boundary release below which no decision verifies, exactly.
+- `enrichmentFromVersion` — the machinery version (inclusive) from
+  which a release owes a build-enrichment claim (stele#109). Same
+  semantics as its two siblings — the three share one definition in
+  code, so a fourth epoch cannot drift from the first three. The
+  epoch lives here and not in the verify policy by design: verify
+  judges the single release it is pointed at and stays epoch-free;
+  whether HISTORY owes an obligation is the corpus walk's question,
+  and the corpus walk is assert's — which already derives the
+  machinery version this field is compared against. Absent means
+  always; declare it before the canon declares `build.enrichment`,
+  or the Monday walk turns red on every release that predates the
+  mechanism.
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
   entry as an evidence DOCUMENT rather than an artifact (the org's
   per-release VEX documents, for one). Documents are excluded from

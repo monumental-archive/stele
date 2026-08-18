@@ -19,6 +19,13 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
+// PolicySchema is the one schema version this implementation reads —
+// any other is refused, never best-efforted. Schema 1 is the pre-#84
+// vocabulary (`storeVsaFromCanon` and kin); #84's renames were a
+// key-set change, which moves the identifier (docs/versioning.md),
+// so the current vocabulary is 2.
+const PolicySchema = 2
+
 // Policy is the committed assert policy. Constructor: LoadPolicy.
 type Policy struct {
 	Schema *int `json:"schema"`
@@ -135,6 +142,15 @@ type EvidencePolicy struct {
 	// epoch semantics as StoreVSAFromVersion. Absent means always. An
 	// unparsable pin fails toward the stricter obligation.
 	DecisionFromVersion *string `json:"decisionFromVersion,omitempty"`
+	// EnrichmentFromVersion is the machinery version (inclusive) from
+	// which a release owes a build-enrichment claim (stele#109) — the
+	// same epoch semantics again, defined once in owedFrom. The epoch
+	// lives HERE, not in the verify policy: verify judges the single
+	// release it is pointed at and stays epoch-free; whether history
+	// owes the obligation is the corpus walk's question, and the
+	// corpus walk is assert's — which already derives the machinery
+	// version this field is compared against.
+	EnrichmentFromVersion *string `json:"enrichmentFromVersion,omitempty"`
 	// EvidenceSuffixes are additional asset-name suffixes that mark a
 	// checksum entry as an evidence document rather than an artifact
 	// (the org's per-release VEX documents, for one) — excluded from
@@ -227,9 +243,12 @@ type ClassPolicy struct {
 	AssetPrefixes []string `json:"assetPrefixes,omitempty"`
 }
 
-// LoadPolicy reads and validates the committed assert policy.
+// LoadPolicy reads and validates the committed assert policy. The
+// schema gate fires inside DecodeVersioned, BEFORE strict decoding —
+// so a policy from another schema refuses with a version error,
+// never incidentally with an unknown-field error (stele#107).
 func LoadPolicy(r io.Reader) (*Policy, error) {
-	p, err := jsonx.Decode[Policy](r)
+	p, err := jsonx.DecodeVersioned[Policy](r, PolicySchema)
 	if err != nil {
 		return nil, fmt.Errorf("assert: policy: %w", err)
 	}
@@ -242,10 +261,6 @@ func LoadPolicy(r io.Reader) (*Policy, error) {
 }
 
 func (p *Policy) validate() error {
-	if p.Schema == nil || *p.Schema != 1 {
-		return errors.New("schema must be 1")
-	}
-
 	e := p.Evidence
 	if e == nil {
 		return errors.New("evidence is absent")
@@ -336,43 +351,50 @@ func (e *EvidencePolicy) validateEpochs() error {
 		}
 	}
 
+	if e.EnrichmentFromVersion != nil {
+		if _, err := semver.NewVersion(*e.EnrichmentFromVersion); err != nil {
+			return fmt.Errorf("evidence.enrichmentFromVersion: %w", err)
+		}
+	}
+
 	return nil
 }
 
-// storeVSA reports whether a release under the given machinery
-// version keeps its verdicts in the attestation store. No epoch
-// configured means store-resident always.
-func (e *EvidencePolicy) storeVSA(machineryVersion string) bool {
-	if e.StoreVSAFromVersion == nil {
+// owedFrom is the ONE epoch semantics every from-version field gets —
+// the definition is shared so a fourth epoch cannot drift from the
+// first three (stele#109). No epoch configured means the obligation
+// always held; an unparsable machinery pin cannot prove the pre-epoch
+// exemption, so it fails toward the stricter obligation.
+func owedFrom(fromVersion *string, machineryVersion string) bool {
+	if fromVersion == nil {
 		return true
 	}
 
-	epoch := semver.MustParse(*e.StoreVSAFromVersion)
+	epoch := semver.MustParse(*fromVersion)
 
 	v, err := semver.NewVersion(machineryVersion)
 	if err != nil {
-		// An unparsable pin cannot prove the pre-epoch exemption;
-		// fail toward the stricter obligation.
 		return true
 	}
 
 	return !v.LessThan(epoch)
 }
 
+// storeVSA reports whether a release under the given machinery
+// version keeps its verdicts in the attestation store.
+func (e *EvidencePolicy) storeVSA(machineryVersion string) bool {
+	return owedFrom(e.StoreVSAFromVersion, machineryVersion)
+}
+
 // decision reports whether a release under the given machinery
-// version owes a verifiable release decision. Same epoch semantics as
-// storeVSA: no epoch means always, an unparsable pin fails strict.
+// version owes a verifiable release decision.
 func (e *EvidencePolicy) decision(machineryVersion string) bool {
-	if e.DecisionFromVersion == nil {
-		return true
-	}
+	return owedFrom(e.DecisionFromVersion, machineryVersion)
+}
 
-	epoch := semver.MustParse(*e.DecisionFromVersion)
-
-	v, err := semver.NewVersion(machineryVersion)
-	if err != nil {
-		return true
-	}
-
-	return !v.LessThan(epoch)
+// enrichment reports whether a release under the given machinery
+// version owes a build-enrichment claim (stele#109). The consuming
+// leg lands with #86; the epoch and its semantics are settled here.
+func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
+	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
 }

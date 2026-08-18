@@ -200,6 +200,7 @@ func TestSealStaleExceptions(t *testing.T) {
 // encodedDoc mirrors the wire shape for test-side decoding — the
 // package deliberately exports no decoder, so the test owns one.
 type encodedDoc struct {
+	Schema     *int             `json:"schema"`
 	Target     *string          `json:"target"`
 	Subject    *string          `json:"subject"`
 	Verdict    *string          `json:"verdict"`
@@ -270,6 +271,8 @@ func TestEncodeShape(t *testing.T) {
 	doc := decodeDoc(t, buf.Bytes())
 
 	switch {
+	case doc.Schema == nil || *doc.Schema != report.Schema:
+		t.Fatalf("schema = %v, want %d — every encoded report declares its version (stele#107)", doc.Schema, report.Schema)
 	case doc.Verdict == nil || *doc.Verdict != string(report.VerdictCannotJudge):
 		t.Fatalf("verdict = %v, want CANNOT_JUDGE", doc.Verdict)
 	case doc.Target == nil || *doc.Target != "verify vsa":
