@@ -306,3 +306,66 @@ func TestVerifyTagUntrustedCA(t *testing.T) {
 		t.Fatalf("error = %v, want the window refusal", verr)
 	}
 }
+
+// TestVerifyTagTaggerLineShapes: the tagger line is git's own format
+// and supplies the observation time the certificate window is held
+// against, so every shape that cannot yield one refuses. A default time
+// here would hold a certificate against the wrong window — which is the
+// whole reason the time comes from the SIGNED payload.
+func TestVerifyTagTaggerLineShapes(t *testing.T) {
+	t.Parallel()
+
+	w := newTagWorld(t)
+
+	tests := []struct {
+		name    string
+		payload []byte
+		want    string
+	}{
+		{
+			name: "a tagger line with no timestamp at all",
+			payload: []byte("object 1111111111111111111111111111111111111111\ntype commit\ntag v1\n" +
+				"tagger release-mint[bot]\n\nmsg\n"),
+			want: "no tagger line",
+		},
+		{
+			name: "a tagger timestamp that is not a number",
+			payload: []byte("object 1111111111111111111111111111111111111111\ntype commit\ntag v1\n" +
+				"tagger release-mint[bot] <mint@example.com> whenever +0000\n\nmsg\n"),
+			want: "tagger timestamp",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sig := signCMS(t, tc.payload, w.leaf, w.leafKey)
+
+			if _, err := w.verifier.VerifyTag(tc.payload, sig, tagID()); err == nil ||
+				!strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestVerifyTagWithoutACertificateAuthority: a trusted root naming no
+// Fulcio CA vouches for nothing, and the refusal must say so rather
+// than fall through the empty loop as "chains to no authority" — the
+// two are different faults, one in the root and one in the signature.
+func TestVerifyTagWithoutACertificateAuthority(t *testing.T) {
+	t.Parallel()
+
+	w := newTagWorld(t)
+
+	empty, err := trust.NewVerifier(&material{})
+	if err != nil {
+		t.Fatalf("NewVerifier = %v", err)
+	}
+
+	if _, err := empty.VerifyTag(w.payload, w.sigPEM, tagID()); err == nil ||
+		!strings.Contains(err.Error(), "names no certificate authority") {
+		t.Fatalf("error = %v, want the empty-root refusal", err)
+	}
+}
