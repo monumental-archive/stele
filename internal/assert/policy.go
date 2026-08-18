@@ -19,6 +19,13 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
+// PolicySchema is the one schema version this implementation reads —
+// any other is refused, never best-efforted. Schema 1 is the pre-#84
+// vocabulary (`storeVsaFromCanon` and kin); #84's renames were a
+// key-set change, which moves the identifier (docs/versioning.md),
+// so the current vocabulary is 2.
+const PolicySchema = 2
+
 // Policy is the committed assert policy. Constructor: LoadPolicy.
 type Policy struct {
 	Schema *int `json:"schema"`
@@ -227,9 +234,12 @@ type ClassPolicy struct {
 	AssetPrefixes []string `json:"assetPrefixes,omitempty"`
 }
 
-// LoadPolicy reads and validates the committed assert policy.
+// LoadPolicy reads and validates the committed assert policy. The
+// schema gate fires inside DecodeVersioned, BEFORE strict decoding —
+// so a policy from another schema refuses with a version error,
+// never incidentally with an unknown-field error (stele#107).
 func LoadPolicy(r io.Reader) (*Policy, error) {
-	p, err := jsonx.Decode[Policy](r)
+	p, err := jsonx.DecodeVersioned[Policy](r, PolicySchema)
 	if err != nil {
 		return nil, fmt.Errorf("assert: policy: %w", err)
 	}
@@ -242,10 +252,6 @@ func LoadPolicy(r io.Reader) (*Policy, error) {
 }
 
 func (p *Policy) validate() error {
-	if p.Schema == nil || *p.Schema != 1 {
-		return errors.New("schema must be 1")
-	}
-
 	e := p.Evidence
 	if e == nil {
 		return errors.New("evidence is absent")

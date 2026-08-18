@@ -80,6 +80,41 @@ func DecodeForeign[T any](b []byte) (*T, error) {
 	return value, nil
 }
 
+// DecodeVersioned decodes one schema-versioned document under the
+// Decode contract, with the version gate structurally first: the
+// declared `schema` field is peeked tolerantly before the strict
+// decode, so an absent or unimplemented schema refuses with a VERSION
+// error even when the rest of the document is unreadable to this
+// implementation. The order is the point (stele#107): a version gate
+// that runs after strict decoding never fires — the unknown-field
+// refusal wins the race and a version skew reports as a field typo.
+// The rule for when `want` moves is docs/versioning.md.
+func DecodeVersioned[T any](r io.Reader, want int) (*T, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("jsonx: read: %w", err)
+	}
+
+	var peek struct {
+		Schema *int `json:"schema"`
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&peek); err != nil {
+		return nil, fmt.Errorf("jsonx: decode: %w", err)
+	}
+
+	switch {
+	case peek.Schema == nil:
+		return nil, errors.New("jsonx: schema is absent")
+	case *peek.Schema != want:
+		return nil, fmt.Errorf(
+			"jsonx: schema %d is not the implemented schema %d — refusing, never best-efforting", *peek.Schema, want)
+	}
+
+	return DecodeBytes[T](b)
+}
+
 // Marshal renders v as one JSON value in memory — the encode-side
 // counterpart of DecodeBytes, for building the Raw sub-documents and
 // statement bytes the emit leg signs. No trailing newline: the bytes

@@ -45,7 +45,7 @@ One chain link is one git note on the attested revision in
 
 | Field | Rule |
 | --- | --- |
-| `version` | Must be present and must be `3`. There is no other readable version: earlier formats were retired whole with their ledgers, which were re-emitted at each format bump (the .github#434 healing precedent). A reader that finds another version refuses; it never falls back. |
+| `version` | Must be present and must be `3`. There is no other readable version: earlier formats were retired whole with their ledgers, which were re-emitted at each format bump (the .github#434 healing precedent). A reader that finds another version refuses; it never falls back. When this number moves is governed by [docs/versioning.md](versioning.md). |
 | `provenance`, `vsa` | Both must be present. A link is provenance AND summary, never one alone. |
 | `*.payloadType` | Must be `application/vnd.in-toto+json` — the in-toto statement media type, and the DSSE payload type the signature authenticates (below). |
 | `*.statement` | The statement's exact JSON bytes, base64 (standard, padded) — base64 so the signed bytes survive any JSON re-encoding of the note. Must be present, non-empty, and decodable. |

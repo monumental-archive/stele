@@ -187,3 +187,81 @@ func TestMarshalRefusesUnrenderable(t *testing.T) {
 		t.Fatalf("Marshal(chan) returned %q alongside its error — a refusal carries no bytes", got)
 	}
 }
+
+// versioned is a schema-carrying shape under the DecodeVersioned
+// contract.
+type versioned struct {
+	Schema *int    `json:"schema"`
+	Name   *string `json:"name"`
+}
+
+// failReader errors on every read — the io guard branch.
+type failReader struct{}
+
+func (failReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
+
+func TestDecodeVersioned(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{name: "matching schema decodes", input: `{"schema": 2, "name": "x"}`},
+		{name: "absent schema refused", input: `{"name": "x"}`, wantErr: "schema is absent"},
+		{
+			name:  "newer schema refused with a version error",
+			input: `{"schema": 3, "name": "x"}`, wantErr: "not the implemented schema",
+		},
+		// The reason this function exists (stele#107): on a document
+		// from a DIFFERENT schema whose fields this implementation does
+		// not know, the version gate must win over the unknown-field
+		// refusal — the reader is told the document is another version,
+		// not that a field is a typo.
+		{
+			name:  "old schema with unknown fields is a version error",
+			input: `{"schema": 1, "storeVsaFromCanon": true}`, wantErr: "not the implemented schema",
+		},
+		{
+			name:  "matching schema with unknown field is field skew",
+			input: `{"schema": 2, "surprise": true}`, wantErr: "unknown field",
+		},
+		{name: "malformed input rejected", input: `{"schema":`, wantErr: "decode"},
+		{name: "trailing data rejected", input: `{"schema": 2}{"schema": 2}`, wantErr: "trailing data"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := jsonx.DecodeVersioned[versioned](strings.NewReader(tt.input), 2)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("DecodeVersioned(%q) error = %v, want %q", tt.input, err, tt.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("DecodeVersioned(%q) failed: %v", tt.input, err)
+			}
+
+			if got.Schema == nil || *got.Schema != 2 {
+				t.Fatalf("DecodeVersioned(%q).Schema = %v, want 2", tt.input, got.Schema)
+			}
+		})
+	}
+}
+
+// TestDecodeVersionedReadFailure is the io guard branch: a reader
+// that cannot be read surfaces as an error, never as an absent
+// schema.
+func TestDecodeVersionedReadFailure(t *testing.T) {
+	t.Parallel()
+
+	if _, err := jsonx.DecodeVersioned[versioned](failReader{}, 2); err == nil || !strings.Contains(err.Error(), "read") {
+		t.Fatalf("DecodeVersioned(failReader) error = %v, want a read error", err)
+	}
+}

@@ -41,7 +41,7 @@ var (
 )
 
 const policyJSON = `{
-  "schema": 1,
+  "schema": 2,
   "issuer": "` + issuer + `",
   "trust": {
     "provenance": {"signerWorkflow": "` + signerWF + `"},

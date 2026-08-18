@@ -18,9 +18,11 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
-// Schema is the one schema version this implementation reads. A newer
-// policy is refused, never best-efforted.
-const Schema = 1
+// Schema is the one schema version this implementation reads — any
+// other is refused, never best-efforted. Schema 1 is the pre-#84
+// vocabulary; #84's renames were a key-set change, which moves the
+// identifier (docs/versioning.md), so the current vocabulary is 2.
+const Schema = 2
 
 // Policy is the decoded document. Field semantics live in
 // docs/policy-schema.md; this type carries exactly that shape.
@@ -145,8 +147,11 @@ func knownPlaceholder(ph string) bool {
 
 // Load decodes and validates one policy document. Everything it
 // refuses is refused here, before any verification consumes a field.
+// The schema gate fires inside DecodeVersioned, BEFORE strict
+// decoding — so a policy from another schema refuses with a version
+// error, never incidentally with an unknown-field error (stele#107).
 func Load(r io.Reader) (*Policy, error) {
-	p, err := jsonx.Decode[Policy](r)
+	p, err := jsonx.DecodeVersioned[Policy](r, Schema)
 	if err != nil {
 		return nil, fmt.Errorf("policy: %w", err)
 	}
@@ -168,13 +173,6 @@ func Load(r io.Reader) (*Policy, error) {
 // it, validated strictly. The verbs refuse at USE when the section
 // they need is undeclared.
 func (p *Policy) validate() error {
-	switch {
-	case p.Schema == nil:
-		return errors.New("schema is absent")
-	case *p.Schema != Schema:
-		return fmt.Errorf("schema %d is not the implemented schema %d", *p.Schema, Schema)
-	}
-
 	if p.Issuer == nil || !strings.HasPrefix(*p.Issuer, "https://") {
 		return errors.New("issuer must be present and https")
 	}

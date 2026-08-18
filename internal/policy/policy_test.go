@@ -11,7 +11,7 @@ import (
 // this document with exactly one fact broken, so a failing row names
 // its guard and nothing else.
 const valid = `{
-  "schema": 1,
+  "schema": 2,
   "issuer": "https://token.example.com",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},
@@ -125,7 +125,7 @@ func TestLoadMinimal(t *testing.T) {
 	t.Parallel()
 
 	const minimal = `{
-	  "schema": 1,
+	  "schema": 2,
 	  "issuer": "https://token.example.com",
 	  "trust": {
 	    "provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/release.yml"}
@@ -179,9 +179,19 @@ func TestLoadRefusals(t *testing.T) {
 		want string
 	}{
 		{"not json at all", valid, "not json", "decode"},
-		{"unknown field", `"schema": 1`, `"schema": 1, "surprise": true`, wantUnknownField},
-		{"schema absent", `"schema": 1,`, ``, "schema is absent"},
-		{"schema newer", `"schema": 1`, `"schema": 2`, "not the implemented schema"},
+		{"unknown field", `"schema": 2`, `"schema": 2, "surprise": true`, wantUnknownField},
+		{"schema absent", `"schema": 2,`, ``, "schema is absent"},
+		{"schema newer", `"schema": 2`, `"schema": 3`, "not the implemented schema"},
+		// The gate fires FIRST (stele#107): a schema-1 document
+		// carrying the pre-#84 vocabulary this decoder no longer knows
+		// must refuse as a VERSION mismatch, never incidentally as an
+		// unknown field — that is the whole reason the gate exists.
+		{
+			"old schema with old vocabulary is a version error",
+			`"schema": 2`,
+			`"schema": 1, "storeVsaFromCanon": true`,
+			"not the implemented schema",
+		},
 		{"issuer absent", `"issuer": "https://token.example.com",`, ``, "issuer"},
 		{"issuer not https", `"issuer": "https://token.example.com"`, `"issuer": "http://token.example.com"`, "issuer"},
 		{

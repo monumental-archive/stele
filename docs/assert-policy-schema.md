@@ -13,11 +13,17 @@ Three formats are defined here: the policy file, the release
 evidence manifest, and the debt file. A change to any is a reviewed
 edit to this document first.
 
+`schema` is the refusal boundary: current 2 (schema 1 is the pre-#84
+vocabulary; the rename was a key-set change, which moves the
+identifier — [docs/versioning.md](versioning.md)). The gate fires
+before strict decoding, so another schema refuses as a version
+mismatch, never as an unknown-field error.
+
 ## The policy file
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -58,9 +64,11 @@ edit to this document first.
   caller's publish workflow. A repository carrying its own machinery
   has no pin comment, so its machinery version is its own tag. The
   pre-#79 names `storeVsaFromCanon`/`decisionFromCanon` are not
-  understood at all: strict decoding refuses them as unknown fields,
-  naming them. One field, one name — no alias, no pointer, no shim
-  (pre-v1, correctness wins every tie).
+  understood at all: a pre-rename policy is schema 1 and the version
+  gate refuses it as a version mismatch before strict decoding runs
+  (stele#107; the rule is [docs/versioning.md](versioning.md)). One
+  field, one name — no alias, no pointer, no shim (pre-v1,
+  correctness wins every tie).
 - `decisionFromVersion` — the machinery version (inclusive) from
   which a release owes a VERIFIABLE release decision; the full-depth
   leg runs pre-epoch releases through the provenance half alone
