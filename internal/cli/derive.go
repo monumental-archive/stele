@@ -183,7 +183,8 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 
 	if mode == deriveNotes {
 		fs.StringVar(&na.groups, "groups", "feat=Added,fix=Fixed,perf=Changed,docs=Documentation",
-			"comma-separated type=Heading pairs; a type with no heading writes no entry")
+			"comma-separated type=Heading pairs, scoped keys like chore(deps)=Deps win over the bare type;"+
+				" a type with no heading writes no entry")
 		fs.StringVar(&na.order, "group-order", "Breaking,Added,Changed,Fixed,Documentation",
 			"headings in the order they render; rendering never depends on map order")
 		fs.StringVar(&na.breaking, "breaking-group", "Breaking",

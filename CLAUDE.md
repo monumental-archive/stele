@@ -153,17 +153,15 @@ The canon speaks for the org; stele speaks for the mechanism.
   0BSD stays canon-only). REUSE.toml declares; per-file headers are
   refused by design.
 
-## Release (not yet wired — deliberate)
+## Release
 
-There is no `cliff.toml` and no release/publish stub yet: the
-`go-binary` release class does not exist in the canon, and wiring
-release machinery before it can release anything would claim what
-cannot be verified. Bootstrap sequence when it lands: `go run` from
-the pinned toolchain needs no release class at all; the class arrives
-with the first shippable subcommand; steady state is N-1 self-release
-(version N built and attested by version N-1, the .github#227 shape).
-CITATION.cff arrives with `mint-doi: true`, rendered by
-`fix:citation`, never hand-filled.
+stele self-releases N-1 (version N built and attested by version
+N-1, the .github#227 shape) through the canon's `go-binary` class,
+live since v0.1.0. Its own versions and notes come from
+`stele derive version` / `derive notes` — the tool eats first. The
+org-wide git-cliff replacement (the three `git cliff` lines in the
+canon's release scripts becoming `stele derive` calls, cliff.toml
+retired) rides the canon cutover PR.
 
 ## Testing
 
