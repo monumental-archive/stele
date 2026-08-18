@@ -32,9 +32,11 @@ type DeepVerifier interface {
 	// half alone (pre-decision-epoch history verifies what it can).
 	Release(c verify.Coords, subjects, sboms []verify.Subject, pins verify.Pins, decision bool) error
 	// VSA proves the store-resident verdict over every subject;
-	// enrichment=false leaves a declared enrichment obligation
-	// unasked (pre-enrichment-epoch history proves what it can).
-	VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins, enrichment bool) error
+	// a nil demand leaves a declared enrichment obligation unasked
+	// (pre-enrichment-epoch history proves what it can), and a
+	// non-nil one carries the class-keyed names this release owes on
+	// top of the universal set.
+	VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins, demand *verify.EnrichmentDemand) error
 }
 
 // uses40RE finds the machinery pin on a caller's publish workflow:
@@ -106,7 +108,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		return nil
 	}
 
-	if verr := w.full.Verifier.VSA(c, subjects, pins, contract.Enrichment); verr != nil {
+	if verr := w.full.Verifier.VSA(c, subjects, pins, w.pol.EnrichmentDemand(contract)); verr != nil {
 		w.finding(subject, "vsa:deep", verr.Error())
 	}
 

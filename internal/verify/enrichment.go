@@ -25,13 +25,64 @@ import (
 	"github.com/monumental-archive/stele/internal/policy"
 )
 
+// EnrichmentDemand is what one release owes its enrichment claim.
+// nil means the obligation is not owed at all (pre-epoch history),
+// so "not owed" and "owed nothing extra" cannot be confused — the
+// absent-vs-zero discipline the decode types already keep, applied
+// to the seam itself.
+type EnrichmentDemand struct {
+	// AlsoRequired are names the release's declared evidence classes
+	// owe on top of the verify policy's universal required set. They
+	// must live inside that policy's required ∪ permitted — one
+	// vocabulary, no second truth (docs/policy-schema.md).
+	AlsoRequired []string
+}
+
+// validateDemand refuses an incoherent demand before any subject is
+// judged: extras against an undeclared obligation, or extras outside
+// the closed set, mean the class declarations and the verify policy
+// have become two truths about one vocabulary. That is a defect in
+// the POLICIES, not a fact about the release — so it is a refusal of
+// the run, distinct in text from any unmet obligation, and it fires
+// at the one place that holds both documents.
+func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
+	if demand == nil || len(demand.AlsoRequired) == 0 {
+		return nil
+	}
+
+	if e == nil {
+		return fmt.Errorf(
+			"verify: the demand requires enrichment names %v but the policy declares no build.enrichment — "+
+				"a class demands what no obligation covers", demand.AlsoRequired)
+	}
+
+	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
+	for _, n := range e.Required {
+		allowed[n] = true
+	}
+
+	for _, n := range e.Permitted {
+		allowed[n] = true
+	}
+
+	for _, n := range demand.AlsoRequired {
+		if !allowed[n] {
+			return fmt.Errorf(
+				"verify: the demand requires enrichment name %q, which the policy neither requires nor permits — "+
+					"class expectations and the closed set have diverged", n)
+		}
+	}
+
+	return nil
+}
+
 // judgeEnrichment proves one subject's enrichment claim. Exactly one
 // claim per subject: none means the declared obligation is unmet,
 // and two are two answers rather than more evidence — the same rule
 // the decision-bearing SBOM selection already takes.
 func judgeEnrichment(
 	p *policy.Policy, c Coords, s Subject, found []StoredBundle, root verdictRoot, resource string,
-	bv BundleVerifier,
+	extras []string, bv BundleVerifier,
 ) (*enrichment.Predicate, error) {
 	switch len(found) {
 	case 1:
@@ -73,7 +124,7 @@ func judgeEnrichment(
 			s.Name, *pred.SourceRevision.URI, srcRepo)
 	}
 
-	if err := judgeNames(p.Build.Enrichment, pred, s); err != nil {
+	if err := judgeNames(p.Build.Enrichment, extras, pred, s); err != nil {
 		return nil, err
 	}
 
@@ -113,10 +164,12 @@ func enrichmentPredicate(s Subject, payload []byte, predicateType string) (*enri
 // a signed false dependency is worse than an omitted one — and every
 // required name must appear, or the obligation is unmet.
 //
-// The per-class half of this obligation (stele#86: names a specific
-// evidence class owes, declared where the class declaration already
-// lives) extends the required set here, at this one place.
-func judgeNames(e *policy.Enrichment, pred *enrichment.Predicate, s Subject) error {
+// extras are the per-class half of the obligation (stele#122): names
+// this release's declared evidence classes owe on top of the
+// universal set. validateDemand already proved them a subset of the
+// closed set, so they extend only what is required, never what is
+// allowed.
+func judgeNames(e *policy.Enrichment, extras []string, pred *enrichment.Predicate, s Subject) error {
 	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
 	for _, n := range e.Required {
 		allowed[n] = true
@@ -141,6 +194,14 @@ func judgeNames(e *policy.Enrichment, pred *enrichment.Predicate, s Subject) err
 	for _, n := range e.Required {
 		if !claimed[n] {
 			return fmt.Errorf("verify: %s: enrichment claims no %q, which the policy requires", s.Name, n)
+		}
+	}
+
+	for _, n := range extras {
+		if !claimed[n] {
+			return fmt.Errorf(
+				"verify: %s: enrichment claims no %q, which the release's declared evidence classes require",
+				s.Name, n)
 		}
 	}
 

@@ -41,7 +41,8 @@ version mismatch, never as an unknown-field error.
       "oci-image": { "bundles": ["attestations-image.intoto.jsonl"] },
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
-        "assetPrefixes": ["attestations-extimg-pg"]
+        "assetPrefixes": ["attestations-extimg-pg"],
+        "enrichment": ["pgrx-base-images", "pgrx-base"]
       }
     }
   }
@@ -53,6 +54,21 @@ version mismatch, never as an unknown-field error.
   the store-VSA epoch; `assetPrefixes` are non-bundle assets required
   by prefix. An empty class is a validation error: it would assert
   nothing.
+- `classes.<name>.enrichment` — dependency names a release declaring
+  this class owes its build-enrichment claim ON TOP of the verify
+  policy's universal `required` set (stele#122): a `pgrx-extension`
+  release must claim its base images, a `go-binary` release owes
+  nothing extra, and subject shape cannot decide this — only the
+  declaration from the class that ran the matrix can. The full-depth
+  walk unions the declared classes' lists into the demand it hands
+  the engine, sorted and deduplicated, so the demand is independent
+  of declaration order. Every name must already live inside the
+  verify policy's `required` ∪ `permitted` — one vocabulary, no
+  second truth. This file cannot see that one, so the load only
+  refuses empty and duplicated names; the subset rule is enforced by
+  the engine, which refuses the RUN (never the release) when the two
+  documents have drifted
+  ([policy-schema.md](policy-schema.md#buildenrichment-optional)).
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
 - `storeVsaFromVersion` — the machinery version (inclusive) from

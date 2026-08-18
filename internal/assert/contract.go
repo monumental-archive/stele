@@ -22,6 +22,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 // Contract is what one release owes.
@@ -41,6 +42,29 @@ type Contract struct {
 	Enrichment bool
 	// Origin names where the contract was read from, for the report.
 	Origin string
+}
+
+// EnrichmentDemand derives what this release owes its enrichment
+// claim from its declared classes — the ONE derivation (stele#122),
+// written where the two things it joins already live. nil when the
+// contract says the obligation is not owed (pre-epoch history). The
+// union is sorted and deduplicated: what a release owes is a set,
+// and a set has one spelling, so the demand is independent of class
+// declaration order.
+func (e *EvidencePolicy) EnrichmentDemand(c *Contract) *verify.EnrichmentDemand {
+	if !c.Enrichment {
+		return nil
+	}
+
+	var names []string
+
+	for _, class := range c.Classes {
+		names = append(names, e.Classes[class].Enrichment...)
+	}
+
+	slices.Sort(names)
+
+	return &verify.EnrichmentDemand{AlsoRequired: slices.Compact(names)}
 }
 
 // ContractSource resolves one release's contract. ok=false means the

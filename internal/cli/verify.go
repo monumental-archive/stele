@@ -434,7 +434,11 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 			facts: []report.Fact{{Name: "sourceRevision", Value: verdict.SourceRevision()}},
 		}, nil
 	case modeVSA:
-		verdict, err := verify.VSA(va.p, va.coords, va.subjectList, pins, newStore(va.noRetry), va.bv, out.logf)
+		// The empty demand, never nil: a stranger has no evidence
+		// classes, and gets the whole universal obligation.
+		verdict, err := verify.VSA(
+			va.p, va.coords, va.subjectList, pins, newStore(va.noRetry), va.bv, out.logf,
+			&verify.EnrichmentDemand{})
 		if err != nil {
 			return nil, err
 		}

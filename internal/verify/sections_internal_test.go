@@ -52,7 +52,7 @@ func TestEngineRefusesUndeclaredSections(t *testing.T) {
 		t.Errorf("ReleaseProvenance without build = %v, want the section refusal", err)
 	}
 
-	if _, err := VSA(p, c, subjects, pins, nil, nil, silent); err == nil ||
+	if _, err := VSA(p, c, subjects, pins, nil, nil, silent, nil); err == nil ||
 		!strings.Contains(err.Error(), "no trust.verdict") {
 		t.Errorf("VSA without verdict = %v, want the section refusal", err)
 	}

@@ -386,7 +386,7 @@ func TestVSAInputRefusals(t *testing.T) {
 		p.Build = nil
 
 		if _, err := verify.VSA(p, coords, []verify.Subject{{Name: "a", SHA256: strings.Repeat("a", 64)}},
-			pins, fakeStore{}, fakeBV{}, discardLog); err == nil ||
+			pins, fakeStore{}, fakeBV{}, discardLog, &verify.EnrichmentDemand{}); err == nil ||
 			!strings.Contains(err.Error(), "no build section") {
 			t.Fatalf("VSA = %v, want the missing-build refusal", err)
 		}
@@ -396,7 +396,7 @@ func TestVSAInputRefusals(t *testing.T) {
 		t.Parallel()
 
 		if _, err := verify.VSA(loadPolicy(t), coords, nil, pins,
-			fakeStore{}, fakeBV{}, discardLog); err == nil {
+			fakeStore{}, fakeBV{}, discardLog, &verify.EnrichmentDemand{}); err == nil {
 			t.Fatal("VSA verified an empty subject list")
 		}
 	})
@@ -498,7 +498,8 @@ func TestVSADegradedStore(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := verify.VSA(loadPolicy(t), coords, subjects, pins, tc.store, fakeBV{}, discardLog)
+			_, err := verify.VSA(loadPolicy(t), coords, subjects, pins, tc.store, fakeBV{}, discardLog,
+				&verify.EnrichmentDemand{})
 			if err == nil {
 				t.Fatalf("VSA accepted a degraded store, want %q", tc.want)
 			}

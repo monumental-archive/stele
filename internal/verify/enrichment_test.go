@@ -124,15 +124,23 @@ func (w *enrichWorld) deps() []any { return asList(w.pred()["resolvedDependencie
 func (w *enrichWorld) run(t *testing.T) (*verify.VSAVerdict, error) {
 	t.Helper()
 
-	return verify.VSA(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog)
+	return verify.VSA(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog, &verify.EnrichmentDemand{})
+}
+
+// runDemand judges the world under a caller-shaped demand — the
+// class-keyed extras seam (stele#122).
+func (w *enrichWorld) runDemand(t *testing.T, d *verify.EnrichmentDemand) (*verify.VSAVerdict, error) {
+	t.Helper()
+
+	return verify.VSA(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog, d)
 }
 
 // runVerdictOnly is the corpus entry point: the same world judged by
-// the verdict half alone.
+// the verdict half alone, via the nil demand.
 func (w *enrichWorld) runVerdictOnly(t *testing.T) (*verify.VSAVerdict, error) {
 	t.Helper()
 
-	return verify.VSAVerdictOnly(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog)
+	return verify.VSA(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog, nil)
 }
 
 func (w *enrichWorld) store(t *testing.T) fakeStore {
@@ -467,6 +475,70 @@ func TestVSAVerdictOnly(t *testing.T) {
 
 		if _, err := w.run(t); err == nil {
 			t.Fatal("VSA accepted an enrichment resolving nothing")
+		}
+	})
+}
+
+// TestClassDemand is the class-keyed half (stele#122): names a
+// release's declared evidence classes owe on top of the universal
+// set, and the two-truths refusals that keep the class declarations
+// and the verify policy one vocabulary.
+func TestClassDemand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a claimed extra passes", func(t *testing.T) {
+		t.Parallel()
+
+		w := newEnrichWorld(t)
+		w.pred()["resolvedDependencies"] = append(w.deps(), map[string]any{
+			"name":   "base-images",
+			"uri":    "https://github.com/acme/canon/blob/abc/base-images.json",
+			"digest": map[string]any{"sha256": digestHex([]byte("the pins"))},
+		})
+
+		if _, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}}); err != nil {
+			t.Fatalf("VSA = %v — the class-required name is claimed", err)
+		}
+	})
+
+	t.Run("an unclaimed extra is an unmet obligation", func(t *testing.T) {
+		t.Parallel()
+
+		// The stele#122 defect family: a pgrx release that silently
+		// stops claiming its base images must fail, even though the
+		// universal set is satisfied and the name is permitted.
+		w := newEnrichWorld(t)
+
+		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}})
+		if err == nil || !strings.Contains(err.Error(), "declared evidence classes require") {
+			t.Fatalf("VSA = %v, want the class-required refusal", err)
+		}
+	})
+
+	t.Run("an extra outside the closed set refuses the run", func(t *testing.T) {
+		t.Parallel()
+
+		// A policy defect, not a release finding: it fires before
+		// any subject is judged, so even a store with no claim at
+		// all sees this refusal and not an unmet-obligation one.
+		w := newEnrichWorld(t)
+		w.copies = 0
+
+		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"pgrx-base"}})
+		if err == nil || !strings.Contains(err.Error(), "class expectations and the closed set have diverged") {
+			t.Fatalf("VSA = %v, want the two-truths refusal", err)
+		}
+	})
+
+	t.Run("extras against an undeclared obligation refuse the run", func(t *testing.T) {
+		t.Parallel()
+
+		w := newEnrichWorld(t)
+		w.policy = loadPolicy(t) // no build.enrichment declared
+
+		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}})
+		if err == nil || !strings.Contains(err.Error(), "no build.enrichment") {
+			t.Fatalf("VSA = %v, want the undeclared-obligation refusal", err)
 		}
 	})
 }

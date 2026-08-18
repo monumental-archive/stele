@@ -49,44 +49,24 @@ func (v *VSAVerdict) SourceRevision() string { return v.sourceRevision }
 // under the verdict identity with that subject's digest, name the
 // expected resource, report PASSED, and claim the target level.
 //
-// Where the policy declares an enrichment obligation, each subject's
-// enrichment claim is proven in the same pass and under the same
-// identity — deliberately not a separate mode, because a mode a
-// caller can decline is an obligation a caller can decline, which is
-// the decorative-enrichment failure the leg exists to end. It costs
-// no extra fetch: the store returns verdict and enrichment together.
+// Where the policy declares an enrichment obligation and the demand
+// says it is owed, each subject's enrichment claim is proven in the
+// same pass and under the same identity — deliberately not a
+// separate mode, because a mode a caller can decline is an
+// obligation a caller can decline, which is the decorative-enrichment
+// failure the leg exists to end. It costs no extra fetch: the store
+// returns verdict and enrichment together.
+//
+// demand carries what this release owes its enrichment claim (three
+// states, documented on EnrichmentDemand). WHICH releases owe the
+// obligation is the corpus walk's question, answered from the
+// machinery version it already derives — the epoch deliberately does
+// not enter the verify policy: `verify vsa` judges the one release
+// it is pointed at, so a stranger passes the empty demand and gets
+// the whole universal obligation.
 func VSA(
 	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
-	store Store, bv BundleVerifier, log Logf,
-) (*VSAVerdict, error) {
-	return vsaPass(p, c, subjects, pins, store, bv, log, true)
-}
-
-// VSAVerdictOnly verifies the published verdict alone, leaving any
-// declared enrichment obligation unasked. It exists for corpus
-// re-verification over releases that predate the enrichment
-// mechanism — grandfathered history proves what it CAN prove, and
-// WHICH releases owe a claim is the walk's question, answered from
-// the machinery version it already derives (the evidence contract's
-// Enrichment), never guessed here.
-//
-// The epoch deliberately does not enter the verify policy: `verify
-// vsa` judges the one release it is pointed at, so a stranger
-// verifying today's release gets the whole obligation. The corpus
-// question belongs to the walk that holds the corpus.
-func VSAVerdictOnly(
-	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
-	store Store, bv BundleVerifier, log Logf,
-) (*VSAVerdict, error) {
-	return vsaPass(p, c, subjects, pins, store, bv, log, false)
-}
-
-// vsaPass is the one implementation both entry points share: they
-// differ only in whether a declared enrichment obligation is asked
-// for, never in how the verdict itself is judged.
-func vsaPass(
-	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
-	store Store, bv BundleVerifier, log Logf, enrichmentOwed bool,
+	store Store, bv BundleVerifier, log Logf, demand *EnrichmentDemand,
 ) (*VSAVerdict, error) {
 	switch {
 	case p.Trust.Verdict == nil:
@@ -96,6 +76,13 @@ func vsaPass(
 	}
 
 	if err := validateInputs(c, subjects, pins); err != nil {
+		return nil, err
+	}
+
+	// An incoherent demand is a defect in the POLICIES, refused
+	// before any subject is judged — never a finding pinned on a
+	// release that did nothing wrong.
+	if err := validateDemand(p.Build.Enrichment, demand); err != nil {
 		return nil, err
 	}
 
@@ -110,7 +97,7 @@ func vsaPass(
 	revisions := map[string]bool{}
 
 	for _, s := range subjects {
-		got, pred, err := vsaForSubject(p, c, s, root, resource, store, bv, enrichmentOwed)
+		got, pred, err := vsaForSubject(p, c, s, root, resource, store, bv, demand)
 		if err != nil {
 			return nil, err
 		}
@@ -212,7 +199,7 @@ type verdictRoot struct {
 // provenance pass already takes over the same bundles.
 func vsaForSubject(
 	p *policy.Policy, c Coords, s Subject, root verdictRoot, resource string,
-	store Store, bv BundleVerifier, enrichmentOwed bool,
+	store Store, bv BundleVerifier, demand *EnrichmentDemand,
 ) ([]string, *enrichment.Predicate, error) {
 	bundles, err := store.Bundles(c.Slug(), s.SHA256)
 	if err != nil {
@@ -222,7 +209,7 @@ func vsaForSubject(
 	// Selection only, from peeked bytes: nothing read here informs a
 	// verdict — the judged bytes come from the verified payload.
 	enrichType := ""
-	if enrichmentOwed && p.Build.Enrichment != nil {
+	if demand != nil && p.Build.Enrichment != nil {
 		enrichType = *p.Build.Enrichment.PredicateType
 	}
 
@@ -259,7 +246,7 @@ func vsaForSubject(
 		return levels, nil, nil
 	}
 
-	pred, err := judgeEnrichment(p, c, s, enriched, root, resource, bv)
+	pred, err := judgeEnrichment(p, c, s, enriched, root, resource, demand.AlsoRequired, bv)
 	if err != nil {
 		return nil, nil, err
 	}

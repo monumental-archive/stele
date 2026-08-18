@@ -3,6 +3,7 @@
 package assert_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,6 +56,18 @@ func TestLoadPolicyRefusals(t *testing.T) {
 			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
 				`"storeVsaFromVersion": "1.13.0", "decisionFromVersion": "not-a-version"`, 1),
 			"decisionFromVersion",
+		},
+		{
+			"an empty enrichment name",
+			strings.Replace(testPolicyJSON, `"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}`,
+				`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": [""]}`, 1),
+			"empty dependency name",
+		},
+		{
+			"a duplicated enrichment name",
+			strings.Replace(testPolicyJSON, `"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}`,
+				`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": ["base-images", "base-images"]}`, 1),
+			"names \"base-images\" twice",
 		},
 		// The gate fires FIRST (stele#107): a pre-#84 policy declares
 		// schema 1 and carries the old vocabulary; it must refuse as a
@@ -153,4 +166,60 @@ func TestTagsPolicyRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEnrichmentDemand pins the one derivation of what a release owes
+// its enrichment claim (stele#122): nil when the obligation is not
+// owed, the empty demand when its classes declare nothing extra, and
+// a sorted, deduplicated union otherwise — independent of class
+// declaration order, because what a release owes is a set.
+func TestEnrichmentDemand(t *testing.T) {
+	t.Parallel()
+
+	enriched := strings.Replace(testPolicyJSON,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},`,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": ["base-images"]},`, 1)
+	enriched = strings.Replace(enriched,
+		`"assetPrefixes": ["attestations-extimg-pg"]`,
+		`"assetPrefixes": ["attestations-extimg-pg"], "enrichment": ["pgrx-base", "base-images"]`, 1)
+
+	p, err := assert.LoadPolicy(strings.NewReader(enriched))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	t.Run("not owed is nil, never the empty demand", func(t *testing.T) {
+		t.Parallel()
+
+		if d := p.Evidence.EnrichmentDemand(&assert.Contract{
+			Classes: []string{"pgrx-extension"}, Enrichment: false,
+		}); d != nil {
+			t.Fatalf("demand = %+v, want nil for pre-epoch history", d)
+		}
+	})
+
+	t.Run("owed with no class extras is the empty demand", func(t *testing.T) {
+		t.Parallel()
+
+		d := p.Evidence.EnrichmentDemand(&assert.Contract{Classes: []string{"rust-crate"}, Enrichment: true})
+		if d == nil || len(d.AlsoRequired) != 0 {
+			t.Fatalf("demand = %+v, want the empty demand", d)
+		}
+	})
+
+	t.Run("the union is sorted, deduplicated and order-independent", func(t *testing.T) {
+		t.Parallel()
+
+		want := []string{"base-images", "pgrx-base"}
+
+		for _, classes := range [][]string{
+			{"oci-image", "pgrx-extension"},
+			{"pgrx-extension", "oci-image"},
+		} {
+			d := p.Evidence.EnrichmentDemand(&assert.Contract{Classes: classes, Enrichment: true})
+			if d == nil || !slices.Equal(d.AlsoRequired, want) {
+				t.Fatalf("demand for %v = %+v, want %v", classes, d, want)
+			}
+		}
+	})
 }

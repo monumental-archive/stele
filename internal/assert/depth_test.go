@@ -7,6 +7,7 @@ package assert_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ type fakeDeep struct {
 	releasePins        []verify.Pins
 	decisions          []bool
 	vsaPins            []verify.Pins
-	enrichments        []bool
+	demands            []*verify.EnrichmentDemand
 	subjects           int
 }
 
@@ -40,9 +41,9 @@ func (d *fakeDeep) Release(_ verify.Coords, subjects, _ []verify.Subject, pins v
 	return d.releaseErr
 }
 
-func (d *fakeDeep) VSA(_ verify.Coords, _ []verify.Subject, pins verify.Pins, enrichment bool) error {
+func (d *fakeDeep) VSA(_ verify.Coords, _ []verify.Subject, pins verify.Pins, demand *verify.EnrichmentDemand) error {
 	d.vsaPins = append(d.vsaPins, pins)
-	d.enrichments = append(d.enrichments, enrichment)
+	d.demands = append(d.demands, demand)
 
 	return d.vsaErr
 }
@@ -327,9 +328,9 @@ func TestDepthFullBounds(t *testing.T) {
 			t.Fatalf("decisions = %v — a v1.20.0 pin predates the 1.23.1 epoch", deep.decisions)
 		}
 
-		if len(deep.enrichments) != 1 || deep.enrichments[0] {
-			t.Fatalf("enrichments = %v — a v1.20.0 pin predates the 1.30.0 enrichment epoch, "+
-				"so the claim must not be demanded of it", deep.enrichments)
+		if len(deep.demands) != 1 || deep.demands[0] != nil {
+			t.Fatalf("demands = %v — a v1.20.0 pin predates the 1.30.0 enrichment epoch, "+
+				"so the claim must not be demanded of it", deep.demands)
 		}
 	})
 
@@ -360,6 +361,49 @@ func TestDepthFullBounds(t *testing.T) {
 
 // TestDepthSelfAttesting covers the #82 topology on the full-depth
 // leg: templated signer identity, verdict obligation undeclared.
+// TestDepthClassDemand pins the wire (stele#122): class enrichment
+// names reach the engine as the demand.
+func TestDepthClassDemand(t *testing.T) {
+	t.Parallel()
+
+	// The class-keyed half (stele#122): the walk's demand carries
+	// what the release's declared classes owe, derived from the
+	// policy — never a boolean, never re-derived at the engine.
+	polJSON := strings.Replace(testPolicyJSON,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}`,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": ["base-images"]}`, 1)
+
+	pol, err := assert.LoadPolicy(strings.NewReader(polJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := deepForge()
+	deep := &fakeDeep{}
+	full, ferr := assert.NewFullDepth(deep,
+		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
+
+	rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+		func(string, ...any) {})
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	if len(deep.demands) != 1 || deep.demands[0] == nil ||
+		!slices.Equal(deep.demands[0].AlsoRequired, []string{"base-images"}) {
+		t.Fatalf("demands = %+v, want the oci-image class's base-images", deep.demands)
+	}
+}
+
 func TestDepthSelfAttesting(t *testing.T) {
 	t.Parallel()
 

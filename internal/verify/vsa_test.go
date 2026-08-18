@@ -62,7 +62,7 @@ func (w *vsaWorld) run(t *testing.T) (*verify.VSAVerdict, error) {
 		w.appSHA: {{URI: "https://store.example/vsa", Bundle: bundle}},
 	}}
 
-	return verify.VSA(loadPolicy(t), coords, w.subjects, pins, w.store, fakeBV{}, discardLog)
+	return verify.VSA(loadPolicy(t), coords, w.subjects, pins, w.store, fakeBV{}, discardLog, &verify.EnrichmentDemand{})
 }
 
 func TestVSA(t *testing.T) {
@@ -105,7 +105,8 @@ func TestVSALegacyRoot(t *testing.T) {
 		w.appSHA: {{URI: "u", Bundle: bundle}},
 	}}
 
-	if _, err := verify.VSA(loadPolicy(t), legacy, w.subjects, pins, store, fakeBV{}, discardLog); err != nil {
+	if _, err := verify.VSA(loadPolicy(t), legacy, w.subjects, pins, store, fakeBV{}, discardLog,
+		&verify.EnrichmentDemand{}); err != nil {
 		t.Errorf("VSA under the enumerated legacy root = %v, want acceptance", err)
 	}
 
@@ -119,7 +120,8 @@ func TestVSALegacyRoot(t *testing.T) {
 	}).bytes(t)
 	store.bundles[w.appSHA] = []verify.StoredBundle{{URI: "u", Bundle: bundle}}
 
-	if _, err := verify.VSA(loadPolicy(t), other, w.subjects, pins, store, fakeBV{}, discardLog); err == nil {
+	if _, err := verify.VSA(loadPolicy(t), other, w.subjects, pins, store, fakeBV{}, discardLog,
+		&verify.EnrichmentDemand{}); err == nil {
 		t.Error("VSA accepted a legacy-signed verdict for a release the policy does not enumerate")
 	}
 }

@@ -244,6 +244,46 @@ type ClassPolicy struct {
 	LegacyVSABundles []string `json:"legacyVsaBundles,omitempty"`
 	// AssetPrefixes are non-bundle assets required by prefix match.
 	AssetPrefixes []string `json:"assetPrefixes,omitempty"`
+	// Enrichment names the dependency claims a release declaring this
+	// class owes ON TOP of the verify policy's universal required set
+	// (stele#122). Names must live inside that policy's required ∪
+	// permitted — one vocabulary, no second truth; the verify engine
+	// refuses a demand that steps outside it, because this file
+	// cannot see the other document.
+	Enrichment []string `json:"enrichment,omitempty"`
+}
+
+// validateClasses holds the per-class guards: a class must require
+// something, and its enrichment names — what a release declaring it
+// owes its build-enrichment claim, on top of the verify policy's
+// universal set — form a set, so empty and repeated names refuse.
+func validateClasses(classes map[string]ClassPolicy) error {
+	if len(classes) == 0 {
+		return errors.New("evidence.classes is empty — a walk with no classes asserts nothing")
+	}
+
+	for name, c := range classes {
+		if len(c.Bundles) == 0 && len(c.AssetPrefixes) == 0 {
+			return fmt.Errorf("evidence.classes.%s requires nothing — an empty class asserts nothing", name)
+		}
+
+		seen := map[string]bool{}
+
+		for _, n := range c.Enrichment {
+			switch {
+			case n == "":
+				return fmt.Errorf("evidence.classes.%s.enrichment names an empty dependency name", name)
+			case seen[n]:
+				return fmt.Errorf(
+					"evidence.classes.%s.enrichment names %q twice — what a class owes is a set, and a name is in it once",
+					name, n)
+			}
+
+			seen[n] = true
+		}
+	}
+
+	return nil
 }
 
 // LoadPolicy reads and validates the committed assert policy. The
@@ -281,14 +321,8 @@ func (p *Policy) validate() error {
 		}
 	}
 
-	if len(e.Classes) == 0 {
-		return errors.New("evidence.classes is empty — a walk with no classes asserts nothing")
-	}
-
-	for name, c := range e.Classes {
-		if len(c.Bundles) == 0 && len(c.AssetPrefixes) == 0 {
-			return fmt.Errorf("evidence.classes.%s requires nothing — an empty class asserts nothing", name)
-		}
+	if err := validateClasses(e.Classes); err != nil {
+		return err
 	}
 
 	if err := e.validateEpochs(); err != nil {
