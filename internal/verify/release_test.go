@@ -170,6 +170,28 @@ func TestRelease(t *testing.T) {
 	}
 }
 
+// TestReleaseWithoutDecisionPolicy pins the optional obligation: a
+// policy declaring no trust.decision gets the provenance half whole
+// from Release itself — nothing invented beyond what the policy asks.
+func TestReleaseWithoutDecisionPolicy(t *testing.T) {
+	t.Parallel()
+
+	w := newReleaseWorld()
+	w.build(t)
+
+	p := loadPolicy(t)
+	p.Trust.Decision = nil
+
+	verdict, err := verify.Release(p, coords, w.subjects, nil, pins, w.store, fakeBV{}, discardLog)
+	if err != nil {
+		t.Fatalf("Release without a decision policy = %v", err)
+	}
+
+	if got := verdict.InputAttestations(); len(got) != 1 {
+		t.Errorf("InputAttestations = %d entries, want the provenance bundle alone", len(got))
+	}
+}
+
 // TestReleaseProvenance pins the provenance-only entry (stele#4's
 // pre-decision-epoch path): the same pass, the same evidence list,
 // no decision demanded — and no decision opened.

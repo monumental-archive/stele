@@ -93,6 +93,30 @@ func TestLoadValid(t *testing.T) {
 	}
 }
 
+// TestLoadWithoutDecision pins the optional section: a release
+// decision is an obligation an org declares, never a precondition of
+// using the verifier — a fresh adopter or a single repository omits
+// the section and the policy loads; a partial declaration still
+// refuses field by field (the row above).
+func TestLoadWithoutDecision(t *testing.T) {
+	t.Parallel()
+
+	trimmed := strings.Replace(valid, `"decision": {
+      "signerWorkflow": "acme/canon/.github/workflows/publish.yml",
+      "predicateType": "https://acme.example/attestations/release-decision/v1",
+      "requiredConclusion": "OPEN"
+    }`, `"decision": null`, 1)
+
+	p, err := policy.Load(strings.NewReader(trimmed))
+	if err != nil {
+		t.Fatalf("Load without trust.decision = %v — the section must be optional", err)
+	}
+
+	if p.Trust.Decision != nil {
+		t.Fatal("an absent section decoded as present")
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -145,14 +169,12 @@ func TestLoadRefusals(t *testing.T) {
 			"trust.verdict is absent",
 		},
 		{
-			"decision null",
-			`"decision": {
-      "signerWorkflow": "acme/canon/.github/workflows/publish.yml",
-      "predicateType": "https://acme.example/attestations/release-decision/v1",
-      "requiredConclusion": "OPEN"
-    }`,
-			`"decision": null`,
-			"trust.decision is absent",
+			"decision declared but its signer broken",
+			`"signerWorkflow": "acme/canon/.github/workflows/publish.yml",
+      "predicateType"`,
+			`"signerWorkflow": "not-a-workflow",
+      "predicateType"`,
+			"trust.decision.signerWorkflow",
 		},
 		{
 			"build null",

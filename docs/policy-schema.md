@@ -153,7 +153,7 @@ verifier's behalf, and the claim never moved. The verifier therefore
 switches only the signing identity and its pin on a legacy match;
 the claimed verifier URI is constant across both epochs.
 
-### `trust.decision`
+### `trust.decision` (optional)
 
 The release-decision gate: a release's SBOM must carry a decision
 attestation, signed by this workflow, whose predicate names
@@ -162,6 +162,14 @@ predicate type is an org URI, so it lives here, not in code. The
 selection rule (the decision-bearing SBOM is found by verifying
 candidates, never by filename; two winners is a refusal) is
 verifier logic, not policy — it stays in code.
+
+**The whole section is optional**: a release decision is an
+obligation an org declares, not a precondition of using the
+verifier. A fresh adopter — or a single repository — with no such
+mechanism omits the section and `verify release` proves the
+provenance half whole, nothing invented beyond it. Declared means
+every field of it, validated strictly; there is no partial
+declaration.
 
 ### `build.buildTypes`
 
