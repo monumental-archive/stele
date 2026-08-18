@@ -10,6 +10,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.6.0](https://github.com/monumental-archive/stele/compare/v0.5.0...v0.6.0) - 2026-08-18
+
+### Added
+
+- refuse an absent workflow identity at preflight ([#74](https://github.com/monumental-archive/stele/pull/74))
+
 ## [0.5.0](https://github.com/monumental-archive/stele/compare/v0.4.0...v0.5.0) - 2026-08-18
 
 ### Added
