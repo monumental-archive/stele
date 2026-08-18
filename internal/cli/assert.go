@@ -22,9 +22,12 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/trust"
+	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 )
 
@@ -47,6 +50,10 @@ var (
 	newOCIReader = func() oci.Reader { return oci.Client{} }
 
 	newScanner = func() osv.Scanner { return osv.Runner{} }
+
+	newAttestor = func(forge gh.Forge, bv verify.BundleVerifier, issuer string) assert.Attestor {
+		return storeAttestor{forge: forge, bv: bv, issuer: issuer}
+	}
 
 	newForge = func() gh.Forge {
 		token := os.Getenv("GITHUB_TOKEN")
@@ -85,6 +92,97 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// storeAttestor proves store-resident attestations through the same
+// trust boundary the verify verb uses — the single-binary payoff: the
+// walk asserting "this verifies" and the verifier deciding what
+// verifying MEANS are one implementation.
+type storeAttestor struct {
+	forge  gh.Forge
+	bv     verify.BundleVerifier
+	issuer string
+}
+
+// Verify implements assert.Attestor. A bundle counts only if it
+// verifies under the identity AND was signed from an expected pin
+// (when pins are given) AND carries the required predicate type.
+func (a storeAttestor) Verify(
+	owner, repo, subjectDigest string, candidates []assert.Candidate, predicateType string,
+) error {
+	hex := strings.TrimPrefix(subjectDigest, "sha256:")
+
+	bundles, err := a.forge.Attestations(owner, repo, hex)
+	if err != nil {
+		return fmt.Errorf("store read: %w", err)
+	}
+
+	if len(bundles) == 0 {
+		return errNoAttestation
+	}
+
+	var last error
+
+	for _, raw := range bundles {
+		for _, c := range candidates {
+			id := trust.Identity{SAN: c.Identity, Issuer: a.issuer}
+
+			verified, verr := a.bv.Attestation(raw, id, hex)
+			if verr != nil {
+				last = verr
+
+				continue
+			}
+
+			if perr := predicateMatches(verified.Payload, predicateType); perr != nil {
+				last = perr
+
+				continue
+			}
+
+			// The commit-level binding, independent of how the SAN
+			// spells the ref: the signing tree must BE the pinned one.
+			if c.SignerPin != "" && verified.Extensions.BuildSignerDigest != c.SignerPin {
+				last = fmt.Errorf("signed at %q, not the declared pin %q",
+					verified.Extensions.BuildSignerDigest, c.SignerPin)
+
+				continue
+			}
+
+			return nil
+		}
+	}
+
+	if last == nil {
+		last = errNoAttestation
+	}
+
+	return last
+}
+
+// errNoAttestation names an empty store, so a caller can tell it from
+// a bundle that was present and refused.
+var errNoAttestation = errors.New("the store holds no attestation for this subject")
+
+// predicateMatches checks a verified payload's predicate type when
+// one is required. Empty means any predicate is acceptable.
+func predicateMatches(payload []byte, predicateType string) error {
+	if predicateType == "" {
+		return nil
+	}
+
+	stmt, err := jsonx.DecodeForeign[struct {
+		PredicateType *string `json:"predicateType"`
+	}](payload)
+	if err != nil {
+		return fmt.Errorf("verified payload is not a statement: %w", err)
+	}
+
+	if stmt.PredicateType == nil || *stmt.PredicateType != predicateType {
+		return fmt.Errorf("predicate type is not %s", predicateType)
+	}
+
+	return nil
+}
+
 // assertEvidence runs the evidence-completeness walk: policy loaded,
 // the forge chosen (live, snapshot replay, or capture-through), the
 // contract sources stacked manifest-first, the debt file parsed into
@@ -93,6 +191,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	var (
 		jsonOut                   bool
 		org, policyPath, debtPath string
+		rootPath, pinPath         string
 		snapshotDir, captureDir   string
 	)
 
@@ -101,6 +200,10 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&org, "org", "", "organisation whose releases are walked (required)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&debtPath, "debt", "", "path to the committed evidence-debt file (defaults to the policy's debtFile)")
+	flags.StringVar(&rootPath, "trusted-root", "",
+		"path to the Sigstore trusted root JSON (required when the policy declares continuous or baseImages)")
+	flags.StringVar(&pinPath, "base-pins", "",
+		"path to the committed base-image pin file (defaults to the policy's baseImages.pinFile)")
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
 	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
 	flags.BoolVar(&jsonOut, "json", false,
@@ -159,12 +262,56 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		assert.WorkflowSource{Forge: forge, Policy: pol.Evidence},
 	}
 
+	// The store halves verify cryptographically, so they need the
+	// trust boundary. A policy that declares them without a root is a
+	// usage refusal, never a silent skip: the whole point of those
+	// halves is that nobody else is checking those artifacts.
+	var attestor assert.Attestor
+
+	needsRoot := pol.Evidence.Continuous != nil || pol.Evidence.BaseImages != nil
+	if needsRoot {
+		if rootPath == "" {
+			return usageFail("--trusted-root is required: the policy declares continuous or baseImages")
+		}
+
+		rootJSON, rerr := os.ReadFile(rootPath) //nolint:gosec // the root path is operator-supplied by design
+		if rerr != nil {
+			return usageFail(rerr.Error())
+		}
+
+		bv, berr := newBundleVerifier(rootJSON)
+		if berr != nil {
+			return usageFail(berr.Error())
+		}
+
+		attestor = newAttestor(forge, bv, *pol.Issuer)
+	}
+
+	var pinFile []byte
+
+	if pol.Evidence.BaseImages != nil {
+		if pinPath == "" {
+			pinPath = *pol.Evidence.BaseImages.PinFile
+		}
+
+		content, perr := os.ReadFile(pinPath) //nolint:gosec // the pin path is operator-supplied by design
+		switch {
+		case errors.Is(perr, fs.ErrNotExist):
+			// No pin file in this checkout: this org pins no base
+			// images here, which is an answer.
+		case perr != nil:
+			return usageFail(perr.Error())
+		default:
+			pinFile = content
+		}
+	}
+
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.Evidence(pol, org, forge, src, debt, out.logf)
+	rep, err := assert.Evidence(pol, org, forge, src, attestor, debt, pinFile, out.logf)
 	if out.err != nil {
 		return exitIO
 	}

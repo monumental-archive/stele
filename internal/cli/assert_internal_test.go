@@ -13,9 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
+	"github.com/monumental-archive/stele/internal/trust"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 const (
@@ -441,6 +445,247 @@ func TestAssertBlastRadiusUsageRefusals(t *testing.T) {
 		}, &stdout, &stderr)
 		if code != exitRefused {
 			t.Fatalf("Run = %d, want %d — nothing decided must gate", code, exitRefused)
+		}
+	})
+}
+
+// storeForge serves scripted attestation bundles for the attestor.
+type storeForge struct {
+	scriptedOCI
+
+	bundles []jsonx.Raw
+	err     error
+}
+
+func (s *storeForge) Attestations(_, _, _ string) ([]jsonx.Raw, error) { return s.bundles, s.err }
+func (s *storeForge) Repos(string) ([]string, error)                   { return nil, nil }
+func (s *storeForge) ReleaseTags(_, _ string) ([]string, error)        { return nil, nil }
+func (s *storeForge) ReleaseAssets(_, _, _ string) ([]string, error)   { return nil, nil }
+func (s *storeForge) Asset(_, _, _, _ string) ([]byte, error)          { return nil, nil }
+
+//nolint:gocritic // unnamedResult: the Forge interface documents the results
+func (s *storeForge) FileAt(_, _, _, _ string) ([]byte, bool, error)      { return nil, false, nil }
+func (s *storeForge) PackageVersionDigest(_, _, _ string) (string, error) { return "", nil }
+func (s *storeForge) WorkflowContents(_, _ string) ([][]byte, error)      { return nil, nil }
+func (s *storeForge) FailedRuns(_, _, _ string) ([]string, error)         { return nil, nil }
+
+// attestorBV scripts the cryptographic boundary.
+type attestorBV struct {
+	err     error
+	payload string
+	pin     string
+}
+
+func (b attestorBV) Attestation([]byte, trust.Identity, string) (*trust.Verified, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+
+	v := &trust.Verified{Payload: []byte(b.payload)}
+	v.Extensions.BuildSignerDigest = b.pin
+
+	return v, nil
+}
+
+func (b attestorBV) Blob([]byte, trust.Identity, string) (*trust.Verified, error) {
+	return nil, errUnusedSeam
+}
+
+var errUnusedSeam = errors.New("this seam is not exercised by the attestor tests")
+
+func (b attestorBV) Peek([]byte) ([]byte, error) { return nil, errUnusedSeam }
+
+const okStatement = `{"predicateType": "https://acme.example/approval/v1"}`
+
+// TestStoreAttestor pins the rule that decides whether a stored
+// attestation counts: it must verify, carry the required predicate,
+// and (when pins are given) be signed from one of them.
+func TestStoreAttestor(t *testing.T) {
+	t.Parallel()
+
+	one := []jsonx.Raw{jsonx.Raw(`{"bundle": 1}`)}
+	pin := strings.Repeat("a", 40)
+
+	tests := []struct {
+		name      string
+		forge     storeForge
+		bv        attestorBV
+		pins      []string
+		predicate string
+		wantErr   string
+	}{
+		{
+			"a verifying bundle with no pin required passes",
+			storeForge{bundles: one},
+			attestorBV{payload: okStatement},
+			nil, "", "",
+		},
+		{
+			"a verifying bundle signed at an expected pin passes",
+			storeForge{bundles: one},
+			attestorBV{payload: okStatement, pin: pin},
+			[]string{pin},
+			"", "",
+		},
+		{
+			"a bundle signed at an unexpected pin refuses",
+			storeForge{bundles: one},
+			attestorBV{payload: okStatement, pin: "b"},
+			[]string{pin},
+			"", "not the declared pin",
+		},
+		{
+			"a bundle carrying the wrong predicate refuses",
+			storeForge{bundles: one},
+			attestorBV{payload: okStatement},
+			nil,
+			"https://acme.example/other/v1", "predicate type is not",
+		},
+		{
+			"a bundle carrying the required predicate passes",
+			storeForge{bundles: one},
+			attestorBV{payload: okStatement},
+			nil,
+			"https://acme.example/approval/v1", "",
+		},
+		{
+			"an empty store refuses by name",
+			storeForge{},
+			attestorBV{payload: okStatement},
+			nil, "", "holds no attestation",
+		},
+		{
+			"a refused signature surfaces",
+			storeForge{bundles: one},
+			attestorBV{err: errors.New("cert not trusted")},
+			nil, "", "cert not trusted",
+		},
+		{
+			"a store read failure surfaces as such",
+			storeForge{err: errors.New("store torn")},
+			attestorBV{payload: okStatement},
+			nil, "", "store torn",
+		},
+		{
+			"a verified payload that is not a statement refuses",
+			storeForge{bundles: one},
+			attestorBV{payload: "not json"},
+			nil,
+			"https://acme.example/approval/v1", "not a statement",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := storeAttestor{forge: &tt.forge, bv: tt.bv, issuer: "https://issuer.example"}
+
+			candidates := []assert.Candidate{{
+				Identity: "https://github.com/acme/signer/.github/workflows/sign.yml@refs/heads/main",
+			}}
+			if len(tt.pins) > 0 {
+				candidates = nil
+				for _, p := range tt.pins {
+					candidates = append(candidates, assert.Candidate{
+						Identity: "https://github.com/acme/signer/.github/workflows/sign.yml@" + p, SignerPin: p,
+					})
+				}
+			}
+
+			err := a.Verify("acme", "widget", "sha256:"+strings.Repeat("c", 64), candidates, tt.predicate)
+
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("Verify = %v, want nil", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("Verify = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// storeSnapshot writes a snapshot plus a policy declaring the store
+// halves, so the CLI's trusted-root and pin-file guards are reachable.
+//
+//nolint:gocritic // unnamedResult: snapshot dir, policy path
+func storeSnapshot(t *testing.T) (string, string) {
+	t.Helper()
+
+	snap, _ := evidenceSnapshot(t)
+	dir := filepath.Dir(snap)
+	policy := filepath.Join(dir, "store-policy.json")
+
+	content := `{"schema": 1, "issuer": "https://token.actions.githubusercontent.com",
+	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+	    "debtFile": "no-such-debt.txt",
+	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
+	    "baseImages": {"pinFile": "no-such-pins.toml", "attestorRepo": ".github",
+	      "attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main",
+	      "predicateType": "https://acme.example/approval/v1"}}}`
+
+	if err := os.WriteFile(policy, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return snap, policy
+}
+
+// TestAssertEvidenceStoreGuards pins the CLI contract for the store
+// halves: declaring them without a trusted root is a usage refusal
+// (never a silent skip), and an absent pin file is an answer.
+func TestAssertEvidenceStoreGuards(t *testing.T) {
+	snap, policy := storeSnapshot(t)
+
+	t.Run("no trusted root refuses by name", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
+		}, &stdout, &stderr)
+		if code != exitUsage {
+			t.Fatalf("Run = %d, want %d", code, exitUsage)
+		}
+
+		if !strings.Contains(stderr.String(), "trusted-root") {
+			t.Fatalf("stderr = %q, want the named refusal", stderr.String())
+		}
+	})
+
+	t.Run("an unreadable trusted root refuses", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
+			"--trusted-root", "/no/such/root.json",
+		}, &stdout, &stderr)
+		if code != exitUsage {
+			t.Fatalf("Run = %d, want %d", code, exitUsage)
+		}
+	})
+
+	t.Run("a root plus an absent pin file walks clean", func(t *testing.T) {
+		swapOCI(t, cleanOCI())
+
+		root := filepath.Join(t.TempDir(), "root.json")
+		if err := os.WriteFile(root, []byte(`{"any": "bytes — the seam swallows them"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		orig := newBundleVerifier
+		newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{payload: okStatement}, nil }
+
+		t.Cleanup(func() { newBundleVerifier = orig })
+
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
+			"--trusted-root", root, "--json",
+		}, &stdout, &stderr)
+		if code != exitOK {
+			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 		}
 	})
 }

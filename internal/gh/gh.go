@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -62,6 +63,15 @@ type Forge interface {
 	// propagation ladder waits for one to appear. Transport failures
 	// are still retried, like every read here.
 	Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error)
+	// PackageVersionDigest returns the container digest carrying the
+	// given tag for one org package, or "" when the package has no
+	// such version — a rolling tag that points at nothing is an
+	// answer, not an error.
+	PackageVersionDigest(org, pkg, tag string) (string, error)
+	// WorkflowContents returns every workflow file's bytes at the
+	// repository's default branch — the tree the expected signer pins
+	// are DERIVED from, never a literal.
+	WorkflowContents(owner, repo string) ([][]byte, error)
 	// FailedRuns reports the names of the workflow runs on one branch
 	// (a tag name, for release runs) that concluded in failure. Names,
 	// not a count: whether a failure is the PUBLISHING one decides
@@ -259,6 +269,83 @@ func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 	out := make([]jsonx.Raw, 0, len(decoded.Attestations))
 	for _, a := range decoded.Attestations {
 		out = append(out, a.Bundle)
+	}
+
+	return out, nil
+}
+
+type packageVersion struct {
+	Name     string `json:"name"`
+	Metadata struct {
+		Container struct {
+			Tags []string `json:"tags"`
+		} `json:"container"`
+	} `json:"metadata"`
+}
+
+// PackageVersionDigest implements Forge.
+func (c *Client) PackageVersionDigest(org, pkg, tag string) (string, error) {
+	pages, err := c.paged("/orgs/" + url.PathEscape(org) + "/packages/container/" + url.PathEscape(pkg) + "/versions")
+	if err != nil {
+		return "", err
+	}
+
+	for _, page := range pages {
+		versions, derr := jsonx.DecodeForeign[[]packageVersion](page)
+		if derr != nil {
+			return "", fmt.Errorf("gh: package versions of %s/%s: %w", org, pkg, derr)
+		}
+
+		for _, v := range *versions {
+			for _, t := range v.Metadata.Container.Tags {
+				if t == tag && digestRE.MatchString(v.Name) {
+					return v.Name, nil
+				}
+			}
+		}
+	}
+
+	return "", nil
+}
+
+// digestRE is the shape a container version name must have to be a
+// digest — a tag-named version is not one.
+var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+type dirEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// WorkflowContents implements Forge.
+func (c *Client) WorkflowContents(owner, repo string) ([][]byte, error) {
+	body, ok, err := c.get(
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/.github/workflows",
+		"application/vnd.github+json")
+	if err != nil || !ok {
+		return nil, err
+	}
+
+	entries, err := jsonx.DecodeForeign[[]dirEntry](body)
+	if err != nil {
+		return nil, fmt.Errorf("gh: workflows of %s/%s: %w", owner, repo, err)
+	}
+
+	var out [][]byte
+
+	for _, e := range *entries {
+		if e.Type != "file" {
+			continue
+		}
+
+		content, found, ferr := c.FileAt(owner, repo, ".github/workflows/"+e.Name, "HEAD")
+		if ferr != nil {
+			return nil, ferr
+		}
+
+		if found {
+			out = append(out, content)
+		}
 	}
 
 	return out, nil

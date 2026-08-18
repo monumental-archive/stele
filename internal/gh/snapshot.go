@@ -56,6 +56,13 @@ func decodeInto(raw jsonx.Raw, into any) error {
 		}
 
 		*t = *v
+	case *string:
+		v, err := jsonx.DecodeBytes[string](raw)
+		if err != nil {
+			return err
+		}
+
+		*t = *v
 	case *[]jsonx.Raw:
 		v, err := jsonx.DecodeBytes[[]jsonx.Raw](raw)
 		if err != nil {
@@ -136,6 +143,48 @@ func (s Snapshot) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, erro
 	var out []jsonx.Raw
 	if err := s.readJSON(p, &out); err != nil {
 		return nil, err
+	}
+
+	return out, nil
+}
+
+// PackageVersionDigest implements Forge.
+func (s Snapshot) PackageVersionDigest(org, pkg, tag string) (string, error) {
+	p := filepath.Join(seg(org), "packages", seg(pkg), seg(tag)+".json")
+	if _, err := os.Stat(filepath.Join(s.Dir, p)); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+
+	var out string
+	if err := s.readJSON(p, &out); err != nil {
+		return "", err
+	}
+
+	return out, nil
+}
+
+// WorkflowContents implements Forge.
+func (s Snapshot) WorkflowContents(owner, repo string) ([][]byte, error) {
+	dir := filepath.Join(s.Dir, seg(owner), seg(repo), "workflows")
+
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("gh: snapshot workflows of %s/%s: %w", owner, repo, err)
+	}
+
+	var out [][]byte
+
+	for _, e := range entries {
+		b, rerr := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // the snapshot dir is operator-supplied
+		if rerr != nil {
+			return nil, fmt.Errorf("gh: snapshot workflow %s: %w", e.Name(), rerr)
+		}
+
+		out = append(out, b)
 	}
 
 	return out, nil
@@ -270,6 +319,37 @@ func (c Capture) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 
 	if err := c.writeJSON(filepath.Join(seg(owner), seg(repo), "attestations", sha256Hex+".json"), out); err != nil {
 		return nil, err
+	}
+
+	return out, nil
+}
+
+// PackageVersionDigest implements Forge.
+func (c Capture) PackageVersionDigest(org, pkg, tag string) (string, error) {
+	out, err := c.Live.PackageVersionDigest(org, pkg, tag)
+	if err != nil || out == "" {
+		return out, err
+	}
+
+	if werr := c.writeJSON(filepath.Join(seg(org), "packages", seg(pkg), seg(tag)+".json"), out); werr != nil {
+		return "", werr
+	}
+
+	return out, nil
+}
+
+// WorkflowContents implements Forge.
+func (c Capture) WorkflowContents(owner, repo string) ([][]byte, error) {
+	out, err := c.Live.WorkflowContents(owner, repo)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, b := range out {
+		name := fmt.Sprintf("%03d.yml", i)
+		if werr := c.writeFile(filepath.Join(seg(owner), seg(repo), "workflows", name), b); werr != nil {
+			return nil, werr
+		}
 	}
 
 	return out, nil

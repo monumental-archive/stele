@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/gh"
@@ -51,6 +52,14 @@ func (scriptedForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
 	return nil, nil
 }
 
+func (scriptedForge) PackageVersionDigest(_, _, _ string) (string, error) {
+	return "sha256:" + strings.Repeat("a", 64), nil
+}
+
+func (scriptedForge) WorkflowContents(_, _ string) ([][]byte, error) {
+	return [][]byte{[]byte("jobs: {}\n")}, nil
+}
+
 func (scriptedForge) FailedRuns(_, _, _ string) ([]string, error) { return []string{"publish"}, nil }
 
 func TestCaptureThenReplay(t *testing.T) {
@@ -73,6 +82,8 @@ func TestCaptureThenReplay(t *testing.T) {
 		func() error { _, err := rec.Attestations("acme", "widget", "aa"); return err },
 		func() error { _, err := rec.Attestations("acme", "widget", "bb"); return err },
 		func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err },
+		func() error { _, err := rec.PackageVersionDigest("acme", "widget", "latest"); return err },
+		func() error { _, err := rec.WorkflowContents("acme", "widget"); return err },
 	} {
 		if err := call(); err != nil {
 			t.Fatal(err)
@@ -111,6 +122,24 @@ func TestCaptureThenReplay(t *testing.T) {
 
 	if empty, aerr := snap.Attestations("acme", "widget", "bb"); aerr != nil || len(empty) != 0 {
 		t.Fatalf("Attestations bb = %v, %v, want the recorded empty store", empty, aerr)
+	}
+
+	digest, err := snap.PackageVersionDigest("acme", "widget", "latest")
+	if err != nil || digest != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("PackageVersionDigest = %q, %v", digest, err)
+	}
+
+	if absent, aerr := snap.PackageVersionDigest("acme", "widget", "no-such"); aerr != nil || absent != "" {
+		t.Fatalf("uncaptured tag = %q, %v — a recorded absence", absent, aerr)
+	}
+
+	wf, err := snap.WorkflowContents("acme", "widget")
+	if err != nil || len(wf) != 1 {
+		t.Fatalf("WorkflowContents = %v, %v", wf, err)
+	}
+
+	if none, werr := snap.WorkflowContents("acme", "ghost"); werr != nil || none != nil {
+		t.Fatalf("uncaptured workflows = %v, %v — a recorded absence", none, werr)
 	}
 
 	failed, err := snap.FailedRuns("acme", "widget", "v1.0.0")
@@ -202,6 +231,14 @@ func TestCaptureUnwritableDir(t *testing.T) {
 
 	if _, err := rec.Attestations("acme", "widget", "aa"); err == nil {
 		t.Fatal("Attestations capture did not refuse")
+	}
+
+	if _, err := rec.PackageVersionDigest("acme", "widget", "latest"); err == nil {
+		t.Fatal("PackageVersionDigest capture did not refuse")
+	}
+
+	if _, err := rec.WorkflowContents("acme", "widget"); err == nil {
+		t.Fatal("WorkflowContents capture did not refuse")
 	}
 
 	if _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); err == nil {

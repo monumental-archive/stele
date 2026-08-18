@@ -81,6 +81,8 @@ type fakeForge struct {
 	store      map[string][]string          // digest → bundle JSON lines
 	failedRuns map[string][]string          // repo@tag → failed workflow names
 	files      map[string]string            // repo:ref:path → content
+	pkgDigest  map[string]string            // repo → digest under the rolling tag
+	workflows  map[string][][]byte          // repo → workflow file contents
 }
 
 func (f *fakeForge) Repos(string) ([]string, error) {
@@ -122,6 +124,14 @@ func (f *fakeForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
 	return out, nil
 }
 
+func (f *fakeForge) PackageVersionDigest(_, pkg, _ string) (string, error) {
+	return f.pkgDigest[pkg], nil
+}
+
+func (f *fakeForge) WorkflowContents(_, repo string) ([][]byte, error) {
+	return f.workflows[repo], nil
+}
+
 func (f *fakeForge) FailedRuns(_, repo, branch string) ([]string, error) {
 	return f.failedRuns[repo+"@"+branch], nil
 }
@@ -153,6 +163,21 @@ func completeRelease() *fakeForge {
 	}
 }
 
+// fakeAttestor scripts the store verification seam: verifies unless
+// the digest is listed as refusing.
+type fakeAttestor struct {
+	refuse     map[string]error
+	seen       []string
+	candidates []assert.Candidate
+}
+
+func (a *fakeAttestor) Verify(_, _, digest string, candidates []assert.Candidate, _ string) error {
+	a.seen = append(a.seen, digest)
+	a.candidates = append(a.candidates, candidates...)
+
+	return a.refuse[digest]
+}
+
 func runEvidence(t *testing.T, f *fakeForge, debt []report.Exception) *report.Report {
 	t.Helper()
 
@@ -162,7 +187,7 @@ func runEvidence(t *testing.T, f *fakeForge, debt []report.Exception) *report.Re
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
-	rep, err := assert.Evidence(pol, "acme", f, src, debt, func(string, ...any) {})
+	rep, err := assert.Evidence(pol, "acme", f, src, &fakeAttestor{}, debt, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -329,7 +354,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	pol.Evidence.PublishWorkflows = []string{"publish", "self-publish"}
 	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Asset: "evidence-manifest.json"}}
 
-	rep4, err := assert.Evidence(pol, "acme", f4, src4, nil, func(string, ...any) {})
+	rep4, err := assert.Evidence(pol, "acme", f4, src4, &fakeAttestor{}, nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +369,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	f5.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard", "publish"}}
 	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Asset: "evidence-manifest.json"}}
 
-	rep5, err := assert.Evidence(pol, "acme", f5, src5, nil, func(string, ...any) {})
+	rep5, err := assert.Evidence(pol, "acme", f5, src5, &fakeAttestor{}, nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,14 +455,14 @@ func TestEvidenceRefusals(t *testing.T) {
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
 
-	_, err := assert.Evidence(pol, "acme", f, src, nil, func(string, ...any) {})
+	_, err := assert.Evidence(pol, "acme", f, src, &fakeAttestor{}, nil, nil, func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "declared population") {
 		t.Fatalf("error = %v, want the population guard", err)
 	}
 
 	broken := &fakeForge{reposErr: errors.New("listing torn")}
 
-	_, err = assert.Evidence(loadTestPolicy(t), "acme", broken, src, nil, func(string, ...any) {})
+	_, err = assert.Evidence(loadTestPolicy(t), "acme", broken, src, &fakeAttestor{}, nil, nil, func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "listing torn") {
 		t.Fatalf("error = %v, want the listing failure", err)
 	}
