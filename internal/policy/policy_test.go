@@ -442,3 +442,135 @@ func TestLoadTrailingData(t *testing.T) {
 		t.Fatal("Load accepted trailing data")
 	}
 }
+
+// The enrichment obligation: absent means it does not exist, declared
+// means every field of it — plus the one cross-section rule, because
+// an obligation proved under an identity nobody declared could never
+// be proved at all.
+func TestEnrichmentSection(t *testing.T) {
+	t.Parallel()
+
+	// declare splices one enrichment object into the valid document's
+	// build section — one source of policy truth, mutated per row.
+	declare := func(section string) string {
+		return strings.Replace(valid, `"denySelfHostedRunners": true`,
+			`"denySelfHostedRunners": true,
+    "enrichment": `+section, 1)
+	}
+
+	// verdictSection is the block a row removes to prove the
+	// cross-section rule: the enrichment verifies under the verdict
+	// identity, so declaring one without the other is unprovable.
+	const verdictSection = `"verdict": {
+      "verifierWorkflow": "acme/canon/.github/workflows/verify-release.yml",
+      "legacyVerdicts": [
+        {"repository": "acme/lab", "tag": "v0.1.0", "signerWorkflow": "acme/signer/.github/workflows/sign.yml"}
+      ]
+    },
+    `
+
+	const good = `{
+      "predicateType": "https://acme.example/attestations/build-enrichment/v1",
+      "required": ["toolbelt-lock"],
+      "permitted": ["Cargo.lock"]
+    }`
+
+	tests := []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{
+			name: "a whole declaration loads",
+			doc:  declare(good),
+		},
+		{
+			name: "permitted may be absent: the required names are then the whole set",
+			doc: declare(`{
+      "predicateType": "https://acme.example/attestations/build-enrichment/v1",
+      "required": ["toolbelt-lock"]
+    }`),
+		},
+		{
+			name: "an obligation with no identity to prove it under",
+			doc:  strings.Replace(declare(good), verdictSection, "", 1),
+			want: "could never be proven",
+		},
+		{
+			name: "a predicate type that is not a URI",
+			doc: declare(`{
+      "predicateType": "build-enrichment/v1",
+      "required": ["toolbelt-lock"]
+    }`),
+			want: "predicateType must be present and an https URI",
+		},
+		{
+			name: "an obligation requiring nothing",
+			doc: declare(`{
+      "predicateType": "https://acme.example/attestations/build-enrichment/v1",
+      "required": []
+    }`),
+			want: "an obligation requiring nothing is not an obligation",
+		},
+		{
+			name: "an empty dependency name",
+			doc: declare(`{
+      "predicateType": "https://acme.example/attestations/build-enrichment/v1",
+      "required": ["toolbelt-lock", ""]
+    }`),
+			want: "empty dependency name",
+		},
+		{
+			name: "a name that is both required and permitted",
+			doc: declare(`{
+      "predicateType": "https://acme.example/attestations/build-enrichment/v1",
+      "required": ["toolbelt-lock"],
+      "permitted": ["toolbelt-lock"]
+    }`),
+			want: "one closed set",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, err := policy.Load(strings.NewReader(tc.doc))
+
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Load = %v, want the declaration accepted", err)
+				}
+
+				if p.Build.Enrichment == nil || len(p.Build.Enrichment.Required) == 0 {
+					t.Fatalf("build.enrichment = %+v, want the declaration decoded", p.Build.Enrichment)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("Load accepted %s", tc.name)
+			}
+
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load error = %v, want it to name %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// An absent section is no obligation at all — the declared-obligation
+// principle, which a minimal adopter depends on.
+func TestEnrichmentAbsent(t *testing.T) {
+	t.Parallel()
+
+	p, err := policy.Load(strings.NewReader(valid))
+	if err != nil {
+		t.Fatalf("Load = %v", err)
+	}
+
+	if p.Build.Enrichment != nil {
+		t.Errorf("build.enrichment = %+v, want nil when undeclared", p.Build.Enrichment)
+	}
+}

@@ -77,7 +77,7 @@ func (s *Statement) Validate() error {
 			return fmt.Errorf("intoto: subject[%d] has no digest — subjects are matched by digest alone", i)
 		}
 
-		if err := validateDigest(sub.Digest); err != nil {
+		if err := ValidateDigest(sub.Digest); err != nil {
 			return fmt.Errorf("intoto: subject[%d]: %w", i, err)
 		}
 	}
@@ -89,11 +89,16 @@ func (s *Statement) Validate() error {
 	return nil
 }
 
-// validateDigest checks every algorithm/value pair: known algorithms
+// ValidateDigest checks every algorithm/value pair: known algorithms
 // must carry their exact shape, unknown ones at least a value. A
 // digest set is all-or-nothing — one malformed entry poisons the
 // match semantics of the whole set.
-func validateDigest(d map[string]string) error {
+//
+// Exported because every ResourceDescriptor in the org's evidence is
+// judged by this one rule: a statement's subjects, and the resource
+// descriptors inside predicates. Two digest rules would be two
+// answers to "is this digest well formed".
+func ValidateDigest(d map[string]string) error {
 	for alg, val := range d {
 		switch alg {
 		case AlgSHA256:

@@ -92,9 +92,22 @@ never null.
 | mode | population | facts |
 | --- | --- | --- |
 | `release` | release subjects (manifest size) | `sourceRevision` |
-| `vsa` | release subjects (manifest size) | `verifiedLevels` |
+| `vsa` | release subjects (manifest size) | `verifiedLevels`, `sourceRevision` |
 | `chain` | the one branch ref under walk | `links` |
 | `level` | the one branch ref under walk | `links`, `sourceLevel` |
+
+Every mode also carries `trustedRoot` and `trustedRootSha256` — the
+origin of the trust material this run held and the sha256 of the
+document it resolved to (`docs/trusted-root.md`). They travel on
+refusals too: a verification document that does not name its trust
+material has not said what it proved, and a verb that resolves a root
+over the network on an absent flag must say so out loud. `assert`'s
+reports carry the same two whenever the walk had a cryptographic
+half.
+
+`vsa`'s `sourceRevision` is present only where the policy declares
+`build.enrichment`: the commit the release was built from is a claim
+the enrichment carries and a bare verdict does not.
 
 A refusal seals as `FAIL` over the declared population with the
 engine's message as the finding; a refusal before any population

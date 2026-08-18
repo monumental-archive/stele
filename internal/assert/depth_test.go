@@ -28,6 +28,7 @@ type fakeDeep struct {
 	releasePins        []verify.Pins
 	decisions          []bool
 	vsaPins            []verify.Pins
+	enrichments        []bool
 	subjects           int
 }
 
@@ -39,8 +40,9 @@ func (d *fakeDeep) Release(_ verify.Coords, subjects, _ []verify.Subject, pins v
 	return d.releaseErr
 }
 
-func (d *fakeDeep) VSA(_ verify.Coords, _ []verify.Subject, pins verify.Pins) error {
+func (d *fakeDeep) VSA(_ verify.Coords, _ []verify.Subject, pins verify.Pins, enrichment bool) error {
 	d.vsaPins = append(d.vsaPins, pins)
+	d.enrichments = append(d.enrichments, enrichment)
 
 	return d.vsaErr
 }
@@ -281,12 +283,15 @@ func TestDepthFullBounds(t *testing.T) {
 		t.Parallel()
 
 		// The workflow adapter carries the canon version; a pin older
-		// than decisionFromVersion must reach the engine with the
-		// decision obligation OFF — grandfathered history verifies
-		// what it can prove, decided by policy data, never a try-each.
+		// than an epoch must reach the engine with that obligation
+		// OFF — grandfathered history verifies what it can prove,
+		// decided by policy data, never a try-each. Both declared
+		// epochs are exercised here because they travel the same
+		// contract to two different engine entry points.
 		polJSON := strings.Replace(testPolicyJSON,
 			`"storeVsaFromVersion": "1.13.0",`,
-			`"storeVsaFromVersion": "1.13.0", "decisionFromVersion": "1.23.1",`, 1)
+			`"storeVsaFromVersion": "1.13.0", "decisionFromVersion": "1.23.1", `+
+				`"enrichmentFromVersion": "1.30.0",`, 1)
 
 		pol, err := assert.LoadPolicy(strings.NewReader(polJSON))
 		if err != nil {
@@ -320,6 +325,11 @@ func TestDepthFullBounds(t *testing.T) {
 
 		if len(deep.decisions) != 1 || deep.decisions[0] {
 			t.Fatalf("decisions = %v — a v1.20.0 pin predates the 1.23.1 epoch", deep.decisions)
+		}
+
+		if len(deep.enrichments) != 1 || deep.enrichments[0] {
+			t.Fatalf("enrichments = %v — a v1.20.0 pin predates the 1.30.0 enrichment epoch, "+
+				"so the claim must not be demanded of it", deep.enrichments)
 		}
 	})
 
