@@ -1,11 +1,14 @@
 // The evidence contract: which classes a release owes. The general
 // mechanism is DECLARED data — a release carries its own manifest,
-// attested and immutable at the tag. The workflow adapter below is
-// the quarantined org-convention fallback for history: releases
+// attested and immutable at the tag, and that is the whole story for
+// any adopter starting now. The workflow adapter below is the
+// quarantined fallback for the FIRST consumer's history: releases
 // published before the manifest existed declared their classes only
 // in the caller's publish workflow at the tag, so that read survives
 // as one ContractSource with a sunset, never as the shape of the
-// tool.
+// tool. An adopter without that convention never meets it — a
+// release neither source speaks for is legacy, owed nothing, named
+// in the report.
 
 package assert
 
@@ -14,6 +17,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/Masterminds/semver/v3"
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -30,6 +35,10 @@ type Contract struct {
 	// decision — false only for releases whose machinery version predates
 	// the decision epoch (grandfathered history).
 	Decision bool
+	// Enrichment reports whether the release owes a build-enrichment
+	// claim — same epoch semantics as Decision (stele#109). Carried on
+	// the contract for the deep walk's verify leg (#86) to consume.
+	Enrichment bool
 	// Origin names where the contract was read from, for the report.
 	Origin string
 }
@@ -45,15 +54,21 @@ type ContractSource interface {
 // manifestDoc is the release evidence manifest — stele's own format,
 // decoded strictly (docs/assert-policy-schema.md).
 type manifestDoc struct {
-	Schema   *int     `json:"schema"`
-	Classes  []string `json:"classes"`
-	StoreVSA *bool    `json:"storeVsa"`
+	Schema           *int     `json:"schema"`
+	Classes          []string `json:"classes"`
+	StoreVSA         *bool    `json:"storeVsa"`
+	MachineryVersion *string  `json:"machineryVersion"`
 }
 
 // ManifestSource reads the release's own evidence manifest asset.
+// The policy supplies the obligation epochs: the manifest declares
+// facts (classes, layout, the machinery version that published it),
+// never obligations — those are always derived, through the same
+// epoch semantics the workflow adapter uses (stele#109).
 type ManifestSource struct {
-	Forge gh.Forge
-	Asset string
+	Forge  gh.Forge
+	Policy *EvidencePolicy
+	Asset  string
 }
 
 // Contract implements ContractSource.
@@ -79,15 +94,31 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, fmt.Errorf("assert: manifest of %s/%s@%s: %w", owner, repo, tag, err)
 	}
 
-	if doc.Schema == nil || *doc.Schema != 1 || len(doc.Classes) == 0 || doc.StoreVSA == nil {
+	if doc.Schema == nil || *doc.Schema != 1 || len(doc.Classes) == 0 || doc.StoreVSA == nil ||
+		doc.MachineryVersion == nil {
 		return nil, false, fmt.Errorf(
-			"assert: manifest of %s/%s@%s: schema, classes and storeVsa are all required", owner, repo, tag)
+			"assert: manifest of %s/%s@%s: schema, classes, storeVsa and machineryVersion are all required",
+			owner, repo, tag)
 	}
 
-	// Manifest-era releases postdate every machinery epoch by
-	// construction: the manifest itself arrived after decisions did.
+	if _, err := semver.NewVersion(*doc.MachineryVersion); err != nil {
+		return nil, false, fmt.Errorf(
+			"assert: manifest of %s/%s@%s: machineryVersion: %w", owner, repo, tag, err)
+	}
+
+	// The declared machinery version is the attested spelling of the
+	// fact the workflow adapter regexes out of a pin comment, and the
+	// obligations are DERIVED from it through the shared epochs —
+	// never asserted here. "Manifest-era releases postdate every
+	// epoch" was true of every epoch already in the past and false
+	// for any epoch still in the future, which is exactly the class
+	// of defect the epochs exist to remove (stele#109).
 	return &Contract{
-		Classes: doc.Classes, StoreVSA: *doc.StoreVSA, Decision: true, Origin: "manifest " + m.Asset,
+		Classes:    doc.Classes,
+		StoreVSA:   *doc.StoreVSA,
+		Decision:   m.Policy.decision(*doc.MachineryVersion),
+		Enrichment: m.Policy.enrichment(*doc.MachineryVersion),
+		Origin:     "manifest " + m.Asset,
 	}, true, nil
 }
 
@@ -151,10 +182,11 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	}
 
 	return &Contract{
-		Classes:  classes,
-		StoreVSA: w.Policy.storeVSA(machineryVersion),
-		Decision: w.Policy.decision(machineryVersion),
-		Origin:   "publish workflow at " + tag,
+		Classes:    classes,
+		StoreVSA:   w.Policy.storeVSA(machineryVersion),
+		Decision:   w.Policy.decision(machineryVersion),
+		Enrichment: w.Policy.enrichment(machineryVersion),
+		Origin:     "publish workflow at " + tag,
 	}, true, nil
 }
 

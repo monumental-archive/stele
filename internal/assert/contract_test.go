@@ -16,8 +16,10 @@ import (
 func TestManifestSource(t *testing.T) {
 	t.Parallel()
 
+	pol := loadTestPolicy(t)
+
 	f := completeRelease()
-	src := assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}
+	src := assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}
 
 	c, ok, err := src.Contract("acme", "widget", "v1.0.0")
 	if err != nil || !ok {
@@ -32,19 +34,108 @@ func TestManifestSource(t *testing.T) {
 	f2 := completeRelease()
 	f2.assets["widget@v1.0.0"] = drop(f2.assets["widget@v1.0.0"], "evidence-manifest.json")
 
-	if _, ok, err := (assert.ManifestSource{Forge: f2, Asset: "evidence-manifest.json"}).
+	if _, ok, err := (assert.ManifestSource{Forge: f2, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
 		Contract("acme", "widget", "v1.0.0"); ok || err != nil {
 		t.Fatalf("absent manifest: ok=%v err=%v, want false/nil", ok, err)
 	}
 
-	// A malformed manifest is an error, never a silent fall-through:
-	// the release DECLARED a contract and the declaration is broken.
-	f3 := completeRelease()
-	f3.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 1}`
+	// A broken declaration is an error, never a silent fall-through —
+	// each required field's absence is its own guard row, and the
+	// machineryVersion rows are the stele#109 point: without it the
+	// obligations cannot be derived, and deriving is the only mode.
+	for name, doc := range map[string]string{
+		"empty manifest":           `{"schema": 1}`,
+		"missing machineryVersion": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true}`,
+		"unparsable machineryVersion": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "not-a-version"}`,
+		"wrong schema": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0"}`,
+	} {
+		f3 := completeRelease()
+		f3.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = doc
 
-	if _, _, err := (assert.ManifestSource{Forge: f3, Asset: "evidence-manifest.json"}).
-		Contract("acme", "widget", "v1.0.0"); err == nil {
-		t.Fatal("a malformed manifest did not refuse")
+		if _, _, err := (assert.ManifestSource{Forge: f3, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
+			Contract("acme", "widget", "v1.0.0"); err == nil {
+			t.Fatalf("%s did not refuse", name)
+		}
+	}
+}
+
+// TestManifestSourceEpochs pins that the manifest path DERIVES every
+// obligation from the declared machinery version through the shared
+// epoch semantics — never asserts one. The retired hardcode
+// ("manifest-era releases postdate every machinery epoch by
+// construction") was true of past epochs and false for any epoch
+// still in the future, which is stele#109's finding.
+func TestManifestSourceEpochs(t *testing.T) {
+	t.Parallel()
+
+	past, future := "1.0.0", "2.0.0"
+
+	tests := []struct {
+		name           string
+		decisionFrom   *string
+		enrichmentFrom *string
+		machinery      string
+		wantDecision   bool
+		wantEnrichment bool
+	}{
+		{"no epochs declared: every obligation always held", nil, nil, "0.0.1", true, true},
+		{"pre-epoch manifest release is exempt", &future, &future, "1.5.0", false, false},
+		{"the epoch itself owes (inclusive)", &past, &past, "1.0.0", true, true},
+		{"a future epoch exempts current manifests", &past, &future, "1.5.0", true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pol := loadTestPolicy(t)
+			pol.Evidence.DecisionFromVersion = tt.decisionFrom
+			pol.Evidence.EnrichmentFromVersion = tt.enrichmentFrom
+
+			f := completeRelease()
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 1, ` +
+				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `"}`
+
+			c, ok, err := (assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
+				Contract("acme", "widget", "v1.0.0")
+			if err != nil || !ok {
+				t.Fatalf("Contract: ok=%v err=%v", ok, err)
+			}
+
+			if c.Decision != tt.wantDecision || c.Enrichment != tt.wantEnrichment {
+				t.Fatalf("decision=%v enrichment=%v, want %v/%v",
+					c.Decision, c.Enrichment, tt.wantDecision, tt.wantEnrichment)
+			}
+		})
+	}
+}
+
+// TestWorkflowSourceEnrichmentEpoch pins the workflow path's leg of
+// the same derivation: the pin-comment machinery version answers the
+// enrichment epoch exactly as it answers the decision one.
+func TestWorkflowSourceEnrichmentEpoch(t *testing.T) {
+	t.Parallel()
+
+	epoch := "2.0.0"
+	pol := loadTestPolicy(t)
+	pol.Evidence.EnrichmentFromVersion = &epoch
+
+	src := assert.WorkflowSource{
+		Forge: workflowForge(
+			"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
+				"    with:\n      classes: rust-crate\n", ""),
+		Policy: pol.Evidence,
+	}
+
+	c, ok, err := src.Contract("acme", "widget", "v1.0.0")
+	if err != nil || !ok {
+		t.Fatalf("Contract: ok=%v err=%v", ok, err)
+	}
+
+	if c.Enrichment {
+		t.Fatal("a v1.14.0 pin predates the 2.0.0 enrichment epoch — enrichment must be false")
 	}
 }
 
@@ -184,7 +275,7 @@ func TestSourcesOrder(t *testing.T) {
 
 	pol := loadTestPolicy(t)
 	src := assert.Sources{
-		assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"},
+		assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 

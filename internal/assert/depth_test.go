@@ -84,7 +84,7 @@ func runDeepWalk(t *testing.T, f *fakeForge, deep *fakeDeep) *report.Report {
 	}
 
 	pol := loadTestPolicy(t)
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
 		func(string, ...any) {})
@@ -370,7 +370,7 @@ func TestDepthSelfAttesting(t *testing.T) {
 		}
 
 		pol := loadTestPolicy(t)
-		src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+		src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
 			func(string, ...any) {})
@@ -407,7 +407,7 @@ func TestDepthSelfAttesting(t *testing.T) {
 		}
 
 		pol := loadTestPolicy(t)
-		src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+		src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
 			func(string, ...any) {})

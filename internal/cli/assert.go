@@ -292,7 +292,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	}
 
 	src := assert.Sources{
-		assert.ManifestSource{Forge: forge, Asset: *pol.Evidence.ManifestAsset},
+		assert.ManifestSource{Forge: forge, Policy: pol.Evidence, Asset: *pol.Evidence.ManifestAsset},
 		assert.WorkflowSource{Forge: forge, Policy: pol.Evidence},
 	}
 

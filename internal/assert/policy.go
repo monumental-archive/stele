@@ -396,8 +396,9 @@ func (e *EvidencePolicy) decision(machineryVersion string) bool {
 }
 
 // enrichment reports whether a release under the given machinery
-// version owes a build-enrichment claim (stele#109). The consuming
-// leg lands with #86; the epoch and its semantics are settled here.
+// version owes a build-enrichment claim (stele#109). Both contract
+// sources answer it onto Contract.Enrichment; the verify leg that
+// consumes the answer lands with #86.
 func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
 	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
 }

@@ -69,7 +69,8 @@ func manifestAsset(classes []string, storeVSA bool) string {
 		sv = "true"
 	}
 
-	return `{"schema": 1, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": ` + sv + `}`
+	return `{"schema": 1, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": ` + sv +
+		`, "machineryVersion": "9.9.9"}`
 }
 
 // fakeForge scripts the whole forge for one org.
@@ -234,7 +235,7 @@ func runEvidence(t *testing.T, f *fakeForge, debt []report.Exception) *report.Re
 
 	pol := loadTestPolicy(t)
 	src := assert.Sources{
-		assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"},
+		assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
@@ -404,7 +405,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 
 	pol := loadTestPolicy(t)
 	pol.Evidence.PublishWorkflows = []string{"publish", "self-publish"}
-	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Asset: "evidence-manifest.json"}}
+	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	rep4, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f4, src4, &fakeAttestor{}, nil, nil, nil,
 		func(string, ...any) {})
@@ -420,7 +421,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	f5 := completeRelease()
 	f5.store = nil
 	f5.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard", "publish"}}
-	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Asset: "evidence-manifest.json"}}
+	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	rep5, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f5, src5, &fakeAttestor{}, nil, nil, nil,
 		func(string, ...any) {})
@@ -509,7 +510,7 @@ func TestEvidenceSingleRepoPopulation(t *testing.T) {
 
 	pol := loadTestPolicy(t)
 	src := assert.Sources{
-		assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"},
+		assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
@@ -532,7 +533,7 @@ func TestEvidenceSingleRepoRefusals(t *testing.T) {
 
 	pol := loadTestPolicy(t)
 	f := completeRelease()
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 	silent := func(string, ...any) {}
 
 	expected := 1
@@ -563,7 +564,7 @@ func TestEvidenceRefusals(t *testing.T) {
 
 	f := completeRelease() // one repo, expectation says two
 
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, nil,
 		func(string, ...any) {})
