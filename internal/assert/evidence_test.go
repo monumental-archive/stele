@@ -85,6 +85,18 @@ type fakeForge struct {
 	files      map[string]string            // repo:ref:path → content
 	pkgDigest  map[string]string            // repo → digest under the rolling tag
 	workflows  map[string][][]byte          // repo → workflow file contents
+	// torn fails one named read. The 2026-08-17 forge outage entered
+	// the engine as exactly this, and a walk that swallowed it would
+	// report clean over releases nobody looked at.
+	torn map[string]error
+	// fileAtErr fails ONE file read, keyed repo:ref:path — the pin
+	// derivation reads several in sequence, and which one tears
+	// decides which refusal a caller sees.
+	fileAtErr map[string]error
+	// assetErr fails ONE asset download, keyed repo@tag/name: a
+	// contract manifest and a bundle asset are separate reads, and
+	// only one of them being unreadable is a different verdict.
+	assetErr map[string]error
 }
 
 func (f *fakeForge) Repos(string) ([]string, error) {
@@ -92,16 +104,26 @@ func (f *fakeForge) Repos(string) ([]string, error) {
 		return nil, f.reposErr
 	}
 
-	return f.repos, nil
+	return f.repos, f.tear("Repos")
 }
 
-func (f *fakeForge) ReleaseTags(_, repo string) ([]string, error) { return f.tags[repo], nil }
+func (f *fakeForge) ReleaseTags(_, repo string) ([]string, error) {
+	return f.tags[repo], f.tear("ReleaseTags")
+}
 
 func (f *fakeForge) ReleaseAssets(_, repo, tag string) ([]string, error) {
-	return f.assets[repo+"@"+tag], nil
+	return f.assets[repo+"@"+tag], f.tear("ReleaseAssets")
 }
 
 func (f *fakeForge) Asset(_, repo, tag, name string) ([]byte, error) {
+	if err := f.tear("Asset"); err != nil {
+		return nil, err
+	}
+
+	if err := f.assetErr[repo+"@"+tag+"/"+name]; err != nil {
+		return nil, err
+	}
+
 	content, ok := f.assetBytes[repo+"@"+tag][name]
 	if !ok {
 		return nil, errors.New("no such asset")
@@ -111,6 +133,10 @@ func (f *fakeForge) Asset(_, repo, tag, name string) ([]byte, error) {
 }
 
 func (f *fakeForge) TagCommit(_, _, tag string) (string, error) {
+	if err := f.tear("TagCommit"); err != nil {
+		return "", err
+	}
+
 	if f.tagCommits == nil {
 		return "", errors.New("no tag commit scripted for " + tag)
 	}
@@ -120,12 +146,24 @@ func (f *fakeForge) TagCommit(_, _, tag string) (string, error) {
 
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (f *fakeForge) FileAt(_, repo, path, ref string) ([]byte, bool, error) {
+	if err := f.tear("FileAt"); err != nil {
+		return nil, false, err
+	}
+
+	if err := f.fileAtErr[repo+":"+ref+":"+path]; err != nil {
+		return nil, false, err
+	}
+
 	content, ok := f.files[repo+":"+ref+":"+path]
 
 	return []byte(content), ok, nil
 }
 
 func (f *fakeForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
+	if err := f.tear("Attestations"); err != nil {
+		return nil, err
+	}
+
 	var out []jsonx.Raw
 	for _, b := range f.store[digest] {
 		out = append(out, jsonx.Raw(b))
@@ -135,16 +173,19 @@ func (f *fakeForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
 }
 
 func (f *fakeForge) PackageVersionDigest(_, pkg, _ string) (string, error) {
-	return f.pkgDigest[pkg], nil
+	return f.pkgDigest[pkg], f.tear("PackageVersionDigest")
 }
 
 func (f *fakeForge) WorkflowContents(_, repo string) ([][]byte, error) {
-	return f.workflows[repo], nil
+	return f.workflows[repo], f.tear("WorkflowContents")
 }
 
 func (f *fakeForge) FailedRuns(_, repo, branch string) ([]string, error) {
-	return f.failedRuns[repo+"@"+branch], nil
+	return f.failedRuns[repo+"@"+branch], f.tear("FailedRuns")
 }
+
+// tear reports the scripted failure for one named read, if any.
+func (f *fakeForge) tear(read string) error { return f.torn[read] }
 
 const vsaType = "https://slsa.dev/verification_summary/v1"
 
