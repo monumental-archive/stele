@@ -10,6 +10,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.11.0](https://github.com/monumental-archive/stele/compare/v0.10.0...v0.11.0) - 2026-08-18
+
+### Added
+
+- derive manifest obligations from machinery version ([#114](https://github.com/monumental-archive/stele/pull/114))
+
+### Changed
+
+- one schema epoch across live-read documents ([#112](https://github.com/monumental-archive/stele/pull/112))
+
 ## [0.10.0](https://github.com/monumental-archive/stele/compare/v0.9.0...v0.10.0) - 2026-08-18
 
 ### Added
