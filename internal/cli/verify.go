@@ -439,9 +439,19 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 			return nil, err
 		}
 
+		facts := []report.Fact{{Name: "verifiedLevels", Value: strings.Join(verdict.Levels(), " ")}}
+
+		// The commit the release was built from, as the verified
+		// enrichment claims it — present only where the policy
+		// declares that obligation, because a verdict alone does not
+		// carry it.
+		if rev := verdict.SourceRevision(); rev != "" {
+			facts = append(facts, report.Fact{Name: "sourceRevision", Value: rev})
+		}
+
 		return &verifyOutcome{
 			pop:   report.PopulationFromEvidence(len(va.subjectList), "release subjects"),
-			facts: []report.Fact{{Name: "verifiedLevels", Value: strings.Join(verdict.Levels(), " ")}},
+			facts: facts,
 		}, nil
 	default: // chain, level — the mode switch upstream admits no other value
 		return runWalk(va, out)

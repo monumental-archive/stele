@@ -59,7 +59,12 @@ states one value (the signer workflow).
     "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
     "sourceRepository": "https://github.com/{owner}/{repo}",
     "targetLevel": "SLSA_BUILD_LEVEL_3",
-    "denySelfHostedRunners": true
+    "denySelfHostedRunners": true,
+    "enrichment": {
+      "predicateType": "https://monumental-archive.github.io/attestations/build-enrichment/v2",
+      "required": ["toolbelt-lock"],
+      "permitted": ["pgrx-base-images", "pgrx-base", "Cargo.lock", "package-lock.json", "mise.toml"]
+    }
   },
 
   "source": {
@@ -99,14 +104,23 @@ states one value (the signer workflow).
 intrinsic.** The minimal valid policy is `schema` + `issuer` +
 `trust.provenance` — everything an adopter needs on day one, with
 the provenance identity possibly templated to the repository itself.
-`trust.verdict`, `trust.decision`, `build` and `source` are sections
-an org declares when it builds the mechanism: absent means the
-obligation does not exist; declared means every field of it,
-validated strictly. The verbs refuse at USE when the section they
-need is undeclared (`verify release` needs `build`; `verify vsa`
-needs `build` and `trust.verdict`; the chain walk and emitter need
-`source`), so a missing section is a named refusal, never a load
-failure and never a silent skip.
+`trust.verdict`, `trust.decision`, `build`, `build.enrichment` and
+`source` are sections an org declares when it builds the mechanism:
+absent means the obligation does not exist; declared means every
+field of it, validated strictly. The verbs refuse at USE when the
+section they need is undeclared (`verify release` needs `build`;
+`verify vsa` needs `build` and `trust.verdict`; the chain walk and
+emitter need `source`), so a missing section is a named refusal,
+never a load failure and never a silent skip.
+
+**The one load-time exception, and why it is not one.**
+`build.enrichment` declared while `trust.verdict` is absent refuses
+at LOAD. The rule above is about ABSENT sections; this is a DECLARED
+obligation whose proof needs an identity nobody declared — the
+enrichment verifies under the verdict identity, so the obligation
+could never be met by any evidence whatsoever. That is a malformed
+policy, not a missing one, and the honest place to say so is where
+the document is read.
 
 Workflow identity fields (`signerWorkflow`, `verifierWorkflow`)
 accept `{owner}` and `{repo}` — and only those two — so "each
@@ -256,6 +270,88 @@ The org runs verification with self-hosted runners refused. A named
 knob because it is a real policy choice in the Sigstore/GitHub
 verification model, and a universal tool cannot hardcode it.
 
+### `build.enrichment` (optional)
+
+The build-enrichment obligation: which resolved dependencies a signed
+enrichment claim must carry, and which it may. The org signs a
+build-enrichment predicate beside every verdict — the toolbelt
+lock every tool version and checksum derives from, base-image digests
+for the majors a build actually instantiated, the released
+repository's lockfiles at the attested source revision — computed
+entirely in the verification control plane, because SLSA makes
+`resolvedDependencies` completeness a SHOULD and requires L3
+provenance fields to be control-plane generated. Until stele#86
+nothing consumer-side read it, and a signed claim nobody reads is
+decoration with a signature on it.
+
+- `predicateType` — an org URI, so it lives here, like
+  `trust.decision.predicateType` and
+  `source.provenancePredicateType`. The predicate's SHAPE is code
+  (`internal/enrichment`), typed to its documentation, and shared with
+  the emitter: a policy cannot make an undocumented predicate
+  verifiable, and two definitions of one predicate would be two
+  answers. The shape this implementation reads is the neutral one
+  (`policy` as a resource descriptor, `sourceRevision.uri`), which is
+  a key-set change from what the org signed before it — so the URI's
+  version segment moves with it, per
+  [versioning.md](versioning.md#predicate-type-uris). Pre-bump
+  attestations stay signed under the old URI as the accurate name of
+  the old shape, and are simply not found: which releases owe a claim
+  at all is the epoch's question, not this field's.
+- `required` — names that must appear. Empty is refused at load: an
+  obligation requiring nothing would let a claim resolving nothing
+  pass, which is the decoration this section ends.
+- `permitted` — names that may appear. May be absent, meaning the
+  required names are the whole set.
+
+`required` ∪ `permitted` is a **closed set**, the same stance
+`build.buildTypes[].externalParameterKeys` takes: a claim naming
+anything outside it is refused, because a signed FALSE dependency is
+worse than an omitted one — the org has the finding history to prove
+it (a boolean once emitted the entire pinned base-image set for every
+declaring class, `FROM scratch` images included). A name appearing in
+both lists refuses at load: it is one set, and a name is in it once.
+
+**From when.** The verify policy carries no epoch, deliberately:
+`verify vsa` judges the one release it is pointed at, so a stranger
+verifying today's release is owed the whole obligation. WHICH
+historical releases owe a claim is the corpus walk's question, and it
+is answered where the corpus is — `evidence.enrichmentFromVersion` in
+the assert policy, derived through the same `owedFrom` the store-VSA
+and decision epochs use, and carried to the engine on the evidence
+contract. The engine takes it as two entry points rather than a flag,
+the shape `Release`/`ReleaseProvenance` already established:
+`verify.VSA` proves the obligation, `verify.VSAVerdictOnly` leaves it
+unasked. Withholding is whole — a pre-epoch release carrying a
+malformed claim is not quietly held to a standard the walk decided it
+does not owe.
+
+**Where it is proven.** Inside `verify vsa`, not a mode of its own. A
+mode a caller can decline is an obligation a caller can decline. It
+costs no extra fetch — the attestation store returns the verdict and
+the enrichment together, over the same subjects, under the same
+identity — and it gives `verify vsa` a source revision a bare verdict
+never carries, folded across subjects so disagreement refuses rather
+than surviving.
+
+**What it proves, and what it does not.** The leg proves the claim is
+BOUND and COMPLETE: signed under the verdict identity at the
+machinery pin, over the same subject, naming the declared resource
+and source repository, carrying exactly the declared names with
+well-formed digests. It never re-derives what those digests cover —
+that needs the policy tree at the claimed pin, and a check that
+re-runs the writer's derivation is the writer inverted, passing its
+own exam. The `uri` on every entry is what makes the values checkable
+by someone who trusts none of this.
+
+**Not keyed by class here.** "Which dependencies for which evidence
+class" needs a class, and `verify vsa` has none — a stranger cannot
+supply one. That half of the obligation is declared where the class
+declaration already lives: the release's own evidence manifest, read
+by `assert`, joined against `assert-policy.json`'s `classes` map. One
+judge function serves both, extended at one call site — a refinement,
+never two truths.
+
 ### `source.identity`
 
 The per-repo reserved workflow SAN — the frozen root-of-trust
@@ -315,12 +411,24 @@ code).
   templates) — that is `assert`'s domain (image facts, bundle
   completeness), not the read-only verifier's. Added to the schema
   when `assert` ports, as its own section.
-- **Enrichment predicate contents** (toolbelt lock, base-image
-  majors, lockfile names) — `emit`'s write-side concern.
+- **Enrichment predicate CONTENTS** (which lock file, which
+  base-image majors, how each digest is computed) — still `emit`'s
+  write-side concern. `build.enrichment` declares only the
+  EXPECTATIONS a reader holds the claim to: which names are owed and
+  which are allowed. The distinction is the derivation boundary — a
+  verifier that knew how to compute the contents would be the writer
+  inverted (stele#86).
 - **Population enumeration** (which repos the org audit walks, the
   opt-out file) — orchestration, not verification: `stele verify`
   verifies what it is pointed at; the walk over the org stays in
   the caller until `assert` decides otherwise.
+- **Per-name digest discipline in `build.enrichment`** — whether a
+  given claimed dependency owes a digest. A digestless entry is legal
+  in the shape (identified by `uri` alone), which is how an image
+  named by a separately-digested mapping file travels. Making that a
+  policy field was considered and left out: it is one bit per name in
+  service of a distinction no org has yet needed to draw, and the
+  shape already refuses an entry with neither name nor address.
 - **`slsaVersion`** — pinned `"1.2"` in code: it names the spec the
   implementation conforms to, and a policy cannot change what the
   code implements.

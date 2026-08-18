@@ -31,8 +31,10 @@ type DeepVerifier interface {
 	// Release proves the release; decision=false runs the provenance
 	// half alone (pre-decision-epoch history verifies what it can).
 	Release(c verify.Coords, subjects, sboms []verify.Subject, pins verify.Pins, decision bool) error
-	// VSA proves the store-resident verdict over every subject.
-	VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins) error
+	// VSA proves the store-resident verdict over every subject;
+	// enrichment=false leaves a declared enrichment obligation
+	// unasked (pre-enrichment-epoch history proves what it can).
+	VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins, enrichment bool) error
 }
 
 // uses40RE finds the machinery pin on a caller's publish workflow:
@@ -104,7 +106,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		return nil
 	}
 
-	if verr := w.full.Verifier.VSA(c, subjects, pins); verr != nil {
+	if verr := w.full.Verifier.VSA(c, subjects, pins, contract.Enrichment); verr != nil {
 		w.finding(subject, "vsa:deep", verr.Error())
 	}
 

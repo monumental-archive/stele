@@ -83,6 +83,20 @@ type Build struct {
 	SourceRepository      *string              `json:"sourceRepository"`
 	TargetLevel           *string              `json:"targetLevel"`
 	DenySelfHostedRunners *bool                `json:"denySelfHostedRunners"`
+	Enrichment            *Enrichment          `json:"enrichment"`
+}
+
+// Enrichment is the OPTIONAL build-enrichment obligation: which
+// resolved dependencies a signed enrichment claim must carry, and
+// which it may. Absent means the org signs no enrichment and none is
+// demanded; declared means a verdict is not proven until the claim
+// beside it is. The two name lists are a CLOSED set — a claim naming
+// anything outside them is refused, because a signed false dependency
+// is worse than an omitted one.
+type Enrichment struct {
+	PredicateType *string  `json:"predicateType"`
+	Required      []string `json:"required"`
+	Permitted     []string `json:"permitted"`
 }
 
 // BuildType is one accepted buildType's expectations. An empty key
@@ -303,6 +317,58 @@ func (p *Policy) validateBuild() error {
 
 	if p.Build.DenySelfHostedRunners == nil {
 		return errors.New("build.denySelfHostedRunners is absent — the stance is declared, never defaulted")
+	}
+
+	return p.validateEnrichment()
+}
+
+// validateEnrichment validates the OPTIONAL enrichment section.
+//
+// Its one cross-section rule is the exception that proves #82's:
+// absent sections refuse at USE, but a DECLARED obligation whose
+// proof needs an identity nobody declared is unprovable by
+// construction — a malformed policy, not a missing one — so it
+// refuses at LOAD. The enrichment is signed by the verdict identity;
+// without trust.verdict there is nothing to verify it against.
+func (p *Policy) validateEnrichment() error {
+	e := p.Build.Enrichment
+	if e == nil {
+		return nil
+	}
+
+	if p.Trust.Verdict == nil {
+		return errors.New(
+			"build.enrichment is declared but trust.verdict is not — " +
+				"the enrichment verifies under the verdict identity, so the obligation could never be proven")
+	}
+
+	if e.PredicateType == nil || !strings.HasPrefix(*e.PredicateType, "https://") {
+		return errors.New("build.enrichment.predicateType must be present and an https URI")
+	}
+
+	// An obligation requiring nothing would let an enrichment
+	// claiming nothing pass, which is the decoration this section
+	// exists to end.
+	if len(e.Required) == 0 {
+		return errors.New(
+			"build.enrichment.required is absent or empty — an obligation requiring nothing is not an obligation")
+	}
+
+	seen := map[string]bool{}
+
+	for _, list := range [][]string{e.Required, e.Permitted} {
+		for _, name := range list {
+			switch {
+			case name == "":
+				return errors.New("build.enrichment names an empty dependency name")
+			case seen[name]:
+				return fmt.Errorf(
+					"build.enrichment names %q twice — required and permitted are one closed set, and a name is in it once",
+					name)
+			}
+
+			seen[name] = true
+		}
 	}
 
 	return nil

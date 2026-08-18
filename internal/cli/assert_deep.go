@@ -140,7 +140,15 @@ func (e *engineVerifier) Release(
 	return err
 }
 
-func (e *engineVerifier) VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins) error {
+func (e *engineVerifier) VSA(
+	c verify.Coords, subjects []verify.Subject, pins verify.Pins, enrichment bool,
+) error {
+	if !enrichment {
+		_, err := verify.VSAVerdictOnly(e.vp, c, subjects, pins, e.store, e.bv, func(string, ...any) {})
+
+		return err
+	}
+
 	_, err := verify.VSA(e.vp, c, subjects, pins, e.store, e.bv, func(string, ...any) {})
 
 	return err
