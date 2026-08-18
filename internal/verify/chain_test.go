@@ -28,6 +28,14 @@ type fakeHistory struct {
 	notes   map[string][]byte
 	tipErr  error
 	noteErr map[string]error
+	// readErr fails one named read — "parent" or "noted". Keyed rather
+	// than a field each so this fixture stays small enough to pass by
+	// value: every variant below is a COPY of the default world.
+	readErr map[string]error
+	// noteErrAfter fails a revision's note read once the counter runs
+	// out — a store that tears BETWEEN the coverage walk and the
+	// ledger walk, which reads the same revisions again.
+	noteErrAfter map[string]*int
 }
 
 func (h fakeHistory) Tip(ref string) (string, error) {
@@ -44,6 +52,10 @@ func (h fakeHistory) Tip(ref string) (string, error) {
 }
 
 func (h fakeHistory) Parent(rev string) (string, error) {
+	if err := h.readErr["parent"]; err != nil {
+		return "", err
+	}
+
 	return h.parents[rev], nil
 }
 
@@ -52,10 +64,22 @@ func (h fakeHistory) Note(rev string) ([]byte, error) {
 		return nil, err
 	}
 
+	if left, ok := h.noteErrAfter[rev]; ok {
+		if *left <= 0 {
+			return nil, fakeError("io torn re-reading " + rev)
+		}
+
+		*left--
+	}
+
 	return h.notes[rev], nil
 }
 
 func (h fakeHistory) Noted() ([]string, error) {
+	if err := h.readErr["noted"]; err != nil {
+		return nil, err
+	}
+
 	out := make([]string, 0, len(h.notes))
 	for rev := range h.notes {
 		out = append(out, rev)
@@ -488,12 +512,44 @@ func TestChainEnumeratedLeaf(t *testing.T) {
 
 	h := defaultChain(t)
 	w := chainWorld{t: t}
-	h.notes[leafRev] = w.note(1,
-		w.linkStmt(leafRev, "prev", nil, []string{"ORG_SOURCE_GATED"}, false),
+
+	// A v3 link, off the ledger and off the first-parent walk: the ONLY
+	// thing that makes it acceptable is its enumeration in the policy.
+	// (This note was a v1 link until the format retirement, which made
+	// it scaffolding — not a link at all — and the assertion passed for
+	// the wrong reason.)
+	h.notes[leafRev] = w.note(3,
+		w.linkStmt(leafRev, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
 		w.vsaStmt(leafRev, []any{"SLSA_SOURCE_LEVEL_3"}))
 
-	if _, err := runChain(t, h); err != nil {
-		t.Errorf("Chain = %v, want the enumerated leaf accepted", err)
+	verdict, err := runChain(t, h)
+	if err != nil {
+		t.Fatalf("Chain = %v, want the enumerated leaf accepted", err)
+	}
+
+	// The leaf is off the first-parent walk, so it is a ledger member
+	// without being a coverage link.
+	if verdict.Links() != 2 {
+		t.Errorf("Links = %d, want the two links on the walked history", verdict.Links())
+	}
+}
+
+// TestChainUnenumeratedLeafRefused is the other half: the same
+// off-ledger link at a revision the policy does not name must refuse —
+// an exception to a cryptographic walk is itself named, or the ledger
+// forks silently.
+func TestChainUnenumeratedLeafRefused(t *testing.T) {
+	t.Parallel()
+
+	h := defaultChain(t)
+	w := chainWorld{t: t}
+	h.notes[revC9] = w.note(3,
+		w.linkStmt(revC9, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
+		w.vsaStmt(revC9, []any{"SLSA_SOURCE_LEVEL_3"}))
+
+	if _, err := runChain(t, h); err == nil ||
+		!strings.Contains(err.Error(), "not enumerated in source.legacyLeaves") {
+		t.Fatalf("Chain = %v, want the unenumerated-leaf refusal", err)
 	}
 }
 
@@ -678,4 +734,26 @@ func TestSourceLevel(t *testing.T) {
 			t.Errorf("SourceLevel = %v, want the since parse refusal", err)
 		}
 	})
+}
+
+// rawHalf packs arbitrary payload bytes as one signed half: the
+// signature covers exactly those bytes, so the CONTENT is what the
+// walk has to refuse — never the signature. The counterpart of half(),
+// which always packs a well-formed statement.
+func (cw chainWorld) rawHalf(payload []byte) map[string]any {
+	bundle := fakeBundle{
+		SAN: linkSAN, Issuer: issuer,
+		Digests: []string{digestHex(dsse.PAE(chain.StatementType, payload))},
+	}
+
+	return map[string]any{
+		"payloadType": chain.StatementType,
+		"statement":   b64(payload),
+		"bundle":      jsonRaw(cw.t, bundle),
+	}
+}
+
+// noteHalves assembles a v3 note from two prepared halves.
+func (cw chainWorld) noteHalves(prov, summary map[string]any) []byte {
+	return mustJSON(cw.t, map[string]any{"version": 3, "provenance": prov, "vsa": summary})
 }
