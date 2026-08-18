@@ -122,6 +122,22 @@ func runBumpCheck(d *derived, set *manifest.Set, out *latch) error {
 	}
 
 	if err := set.Check(base.String()); err != nil {
+		// The one state that is not drift: the mirrors carry exactly
+		// the version this range derives at this ref — the release
+		// being cut, written by this same derivation (the Release PR
+		// branch, and the merged release commit before phase 2 mints
+		// its tag; stele#115). A hand edit passes only by writing
+		// exactly what the machinery would have written, at which
+		// point it is not drift. Mirrors ahead of a range that
+		// releases nothing stay refused: that is a bump nothing
+		// called for.
+		if next, releases := d.decision.Next(); releases && set.Check(next.String()) == nil {
+			out.logf("check=pending")
+			out.logf("mirrors carry %s, the release this range calls for; its tag follows", next)
+
+			return nil
+		}
+
 		return err
 	}
 

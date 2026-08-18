@@ -217,6 +217,24 @@ func TestBumpCheck(t *testing.T) {
 			name: "no release yet checks agreement only", version: "0.1.0",
 			hist: &stubHistory{commitTime: "2026-08-18T10:00:00Z"}, code: exitOK, out: "check=agreement-only",
 		},
+		{
+			// The release-being-cut window (stele#115): the Release PR
+			// branch, and the merged release commit before its tag.
+			name: "mirrors at the release being cut are pending, not drift", version: "0.10.0",
+			hist: bumpHistory(), code: exitOK, out: "check=pending",
+		},
+		{
+			name: "mirrors ahead of a range that releases nothing fail", version: "0.10.0",
+			hist: &stubHistory{
+				tags: []string{"v0.9.0"}, commits: []string{"c1"},
+				messages: map[string]string{"c1": "chore: tidy"}, commitTime: "2026-08-18T10:00:00Z",
+			},
+			code: exitRefused, out: "",
+		},
+		{
+			name: "mirrors at a version neither released nor derivable fail", version: "0.11.0",
+			hist: bumpHistory(), code: exitRefused, out: "",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := bumpTree(t, tc.version)
