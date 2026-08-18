@@ -10,6 +10,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.10.0](https://github.com/monumental-archive/stele/compare/v0.9.0...v0.10.0) - 2026-08-18
+
+### Added
+
+- version-mirror bump and declared notes silence ([#102](https://github.com/monumental-archive/stele/pull/102))
+
+### Fixed
+
+- update module go.yaml.in/yaml/v3 to v3.0.5 ([#104](https://github.com/monumental-archive/stele/pull/104))
+- version gate first, schema 2, versioned report ([#110](https://github.com/monumental-archive/stele/pull/110))
+
+### Documentation
+
+- correct three statements the cutover made false ([#100](https://github.com/monumental-archive/stele/pull/100))
+- specify the v3 chain format here and test the spec's examples ([#105](https://github.com/monumental-archive/stele/pull/105))
+
+### Testing
+
+- raise coverage to 98.6% and name what cannot be covered ([#106](https://github.com/monumental-archive/stele/pull/106))
+
 ## [0.9.0](https://github.com/monumental-archive/stele/compare/v0.8.0...v0.9.0) - 2026-08-18
 
 ### Added
