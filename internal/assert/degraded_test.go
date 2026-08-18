@@ -41,7 +41,7 @@ func TestEvidenceForgeTears(t *testing.T) {
 			}
 
 			pol := loadTestPolicy(t)
-			src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+			src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 			_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
 				&fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
@@ -72,7 +72,7 @@ func TestEvidenceContractSourceTears(t *testing.T) {
 			// Both sources, so the workflow leg is reached when the
 			// manifest leg finds nothing.
 			src := assert.Sources{
-				assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"},
+				assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
 				assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 			}
 
@@ -243,7 +243,7 @@ func TestContinuousHalfTears(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+			src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 			_, err = assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
 				&fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
@@ -275,7 +275,7 @@ func TestSignerPinPatternWithoutACaptureGroup(t *testing.T) {
 	}
 
 	f := continuousForge()
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
 		&fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
@@ -475,7 +475,7 @@ func TestSubjectDigestsSeenOnce(t *testing.T) {
 	f.assetBytes["widget@v1.0.0"]["attestations-crates.intoto.jsonl"] = bundle
 
 	pol := loadTestPolicy(t)
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 	att := &fakeAttestor{}
 
 	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, att, nil, nil, nil,
@@ -499,7 +499,7 @@ func TestContractManifestThatIsNotOne(t *testing.T) {
 	f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = "not json"
 
 	pol := loadTestPolicy(t)
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, nil,
 		func(string, ...any) {})
@@ -633,7 +633,7 @@ func TestSelfSignedPinsTear(t *testing.T) {
 	}
 
 	pol := loadTestPolicy(t)
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
 		func(string, ...any) {})
@@ -669,7 +669,7 @@ func TestSignerPinPatternThatDoesNotCompile(t *testing.T) {
 	pol.Evidence.Continuous.SignerPinPattern = &broken
 
 	f := continuousForge()
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	_, err = assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
 		&fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
@@ -692,7 +692,7 @@ func TestShortDigestSurvivesWhole(t *testing.T) {
 	f := continuousForge()
 	f.pkgDigest = map[string]string{"widget": "sha256:abc"}
 
-	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	if _, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
 		&fakeAttestor{}, nil, nil, nil, func(string, ...any) {}); err != nil {

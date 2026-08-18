@@ -200,17 +200,35 @@ so the contract is immutable at the tag and readable by a stranger
 with no knowledge of the publisher's CI:
 
 ```json
-{ "schema": 1, "classes": ["oci-image", "rust-crate"], "storeVsa": true }
+{ "schema": 1, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+  "machineryVersion": "1.40.0" }
 ```
 
-All three fields are required. Releases without a manifest fall back
-to the workflow adapter — the quarantined org-convention read of the
-caller's publish workflow at the tag (`classes:` input, machinery
-version from the `uses:` pin comment), which is the only honest source for
-history and sunsets as manifests take over. A release neither source
-speaks for is **legacy**: it predates the machinery, owes nothing,
-and is recorded by name in the report's facts — a category derived
-from the tag's own tree, deliberately not assertable by hand.
+All four fields are required. The manifest declares **facts** —
+classes, verdict layout, and the version of the publish machinery
+that produced the release — never obligations: whether the release
+owes a decision or an enrichment claim is always *derived* from the
+policy's `*FromVersion` epochs against `machineryVersion`, through
+the same epoch semantics the workflow adapter uses. An adopter with
+no history declares no epochs, and every obligation simply always
+holds. `machineryVersion` is the attested spelling of the fact the
+workflow adapter regexes out of a pin comment; a manifest that omits
+it, or carries an unparsable one, refuses — a declaration that
+cannot answer the epochs excuses nothing silently.
+
+The manifest's `schema` is its own number, outside the live-document
+epoch ([versioning.md](versioning.md)): manifests are published
+release assets, immutable once shipped, so the number moves only
+when this format's own key set changes against documents that exist.
+
+Releases without a manifest fall back to the workflow adapter — the
+quarantined read of the first consumer's publish-workflow convention
+at the tag (`classes:` input, machinery version from the `uses:` pin
+comment), which is the only honest source for that history and
+sunsets as manifests take over. A release neither source speaks for
+is **legacy**: it predates the machinery, owes nothing, and is
+recorded by name in the report's facts — a category derived from the
+tag's own tree, deliberately not assertable by hand.
 
 ## The debt file
 

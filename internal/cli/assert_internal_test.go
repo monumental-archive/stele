@@ -236,7 +236,7 @@ func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snap
 		"snap/acme/widget/releases/v1.0.0/assets.json": `["evidence-manifest.json", "app.spdx.json", ` +
 			`"checksums.txt", "attestations-image.intoto.jsonl"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": 1, ` +
-			`"classes": ["oci-image"], "storeVsa": true}`,
+			`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9"}`,
 		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
 		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
 		"policy.json": `{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", ` +
