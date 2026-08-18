@@ -317,6 +317,20 @@ func TestDeriveRefusals(t *testing.T) {
 			want: "no VCS stamp",
 		},
 		{
+			// The first leg's stamp is read before the loop, the rest
+			// inside it: a later leg's missing stamp must refuse just
+			// as loudly, or the union would date itself from leg one
+			// alone.
+			name: "missing vcs stamp on a later leg",
+			bins: func() []sbom.Binary {
+				a, b := leg("linux", "amd64"), leg("darwin", "arm64")
+				setSetting(b, "vcs.time", "")
+
+				return []sbom.Binary{{Name: "a", Info: a}, {Name: "b", Info: b}}
+			},
+			want: "b carries no VCS stamp",
+		},
+		{
 			name: "modified tree",
 			bins: func() []sbom.Binary {
 				a := leg("linux", "amd64")

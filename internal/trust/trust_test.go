@@ -347,3 +347,21 @@ func TestPeekStatementRefusals(t *testing.T) {
 		t.Error("PeekStatement accepted non-JSON")
 	}
 }
+
+// TestPeekStatementRefusesABareSignature: the selection read exists to
+// pick DSSE statements out of a store, and a message-signature bundle
+// carries none. Returning empty bytes would let a caller select on
+// nothing; the refusal names what is missing.
+func TestPeekStatementRefusesABareSignature(t *testing.T) {
+	t.Parallel()
+
+	bundleJSON, err := data.Bundle(t, "othername.sigstore.json").MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON(bundle) = %v", err)
+	}
+
+	if _, err := trust.PeekStatement(bundleJSON); err == nil ||
+		!strings.Contains(err.Error(), "no DSSE envelope") {
+		t.Fatalf("PeekStatement = %v, want the bare-signature refusal", err)
+	}
+}

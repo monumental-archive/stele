@@ -90,13 +90,23 @@ func decided(t *testing.T, advisory, pkg, version string) *vexjoin.Decisions {
 	return d
 }
 
-func runBlast(t *testing.T, f *fakeForge, scanner osv.Scanner, d *vexjoin.Decisions) *report.Report {
+// loadBlastPolicy is the scan walk's policy, so rows that call the
+// engine directly declare the same obligations runBlast does.
+func loadBlastPolicy(t *testing.T) *assert.Policy {
 	t.Helper()
 
 	pol, err := assert.LoadPolicy(strings.NewReader(blastPolicyJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	return pol
+}
+
+func runBlast(t *testing.T, f *fakeForge, scanner osv.Scanner, d *vexjoin.Decisions) *report.Report {
+	t.Helper()
+
+	pol := loadBlastPolicy(t)
 
 	rep, err := assert.BlastRadius(pol, assert.Population{Org: "acme"}, f, scanner, d, func(string, ...any) {})
 	if err != nil {

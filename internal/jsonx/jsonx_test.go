@@ -153,3 +153,37 @@ func TestDecodeForeign(t *testing.T) {
 		})
 	}
 }
+
+// TestMarshal pins the encode-side contract the signing legs depend
+// on: exactly one value, and NO trailing newline — Encode's newline
+// would change the bytes that get hashed, base64-carried and verified.
+func TestMarshal(t *testing.T) {
+	t.Parallel()
+
+	three := 3
+
+	got, err := jsonx.Marshal(claim{Level: &three})
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	if want := `{"level":3}`; string(got) != want {
+		t.Fatalf("Marshal = %q, want %q — the signed bytes carry no newline", got, want)
+	}
+}
+
+// TestMarshalRefusesUnrenderable is the guard branch: a value
+// encoding/json cannot render must surface as an error, never as
+// half a document.
+func TestMarshalRefusesUnrenderable(t *testing.T) {
+	t.Parallel()
+
+	got, err := jsonx.Marshal(make(chan int))
+	if err == nil {
+		t.Fatalf("Marshal(chan) = %q, want a refusal", got)
+	}
+
+	if got != nil {
+		t.Fatalf("Marshal(chan) returned %q alongside its error — a refusal carries no bytes", got)
+	}
+}

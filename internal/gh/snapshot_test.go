@@ -6,6 +6,7 @@ package gh_test
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,7 +18,7 @@ import (
 )
 
 // scriptedForge is the "live" side for capture tests.
-type scriptedForge struct{}
+type scriptedForge struct{ noDigest bool }
 
 func (scriptedForge) TagCommit(_, _, _ string) (string, error) {
 	return strings.Repeat("c", 40), nil
@@ -49,14 +50,25 @@ func (scriptedForge) FileAt(_, _, path, _ string) ([]byte, bool, error) {
 }
 
 func (scriptedForge) Attestations(_, _, digest string) ([]jsonx.Raw, error) {
-	if digest == "aa" {
+	switch digest {
+	case "aa":
 		return []jsonx.Raw{jsonx.Raw(`{"bundle": 1}`)}, nil
+	case "unrenderable":
+		// A bundle whose bytes are not JSON: the live read carried them,
+		// and the capture must refuse to record what it cannot render.
+		return []jsonx.Raw{jsonx.Raw(`not json`)}, nil
+	default:
+		return nil, nil
 	}
-
-	return nil, nil
 }
 
-func (scriptedForge) PackageVersionDigest(_, _, _ string) (string, error) {
+// noDigest makes the rolling tag point at nothing — the answer a
+// capture must record as an absence rather than a file.
+func (f scriptedForge) PackageVersionDigest(_, _, _ string) (string, error) {
+	if f.noDigest {
+		return "", nil
+	}
+
 	return "sha256:" + strings.Repeat("a", 64), nil
 }
 
@@ -383,5 +395,397 @@ func TestSnapshotTagReadsMissing(t *testing.T) {
 
 	if notes, err := snap.ChainNotes("a", "b", "refs/notes/commits"); err != nil || notes != nil {
 		t.Fatalf("ChainNotes = %+v, %v — absence is the recorded empty chain", notes, err)
+	}
+}
+
+// scriptedTagReader is the tag half of the "live" side, so one
+// Capture can drive the WHOLE seam — Forge and TagReader — into one
+// directory.
+type scriptedTagReader struct{}
+
+func (scriptedTagReader) TagRefs(_, _ string) ([]gh.TagRef, error) {
+	return []gh.TagRef{{Name: "v1.0.0", ObjectSHA: tagObjID, Annotated: true}}, nil
+}
+
+func (scriptedTagReader) TagObject(_, _, _ string) (*gh.TagObject, error) {
+	return &gh.TagObject{Tagger: "release-mint[bot]", Target: noteRev}, nil
+}
+
+func (scriptedTagReader) ChainNotes(_, _, _ string) ([]gh.ChainNote, error) {
+	return []gh.ChainNote{{Rev: noteRev, Note: jsonx.Raw(`{"version": 3}`)}}, nil
+}
+
+func (scriptedTagReader) CommitMeta(_, _, _ string) (*gh.CommitMeta, error) {
+	return &gh.CommitMeta{Parents: []string{tagObjID}, CommitEpoch: 1}, nil
+}
+
+func (scriptedTagReader) IsAncestor(_, _, _, _ string) (bool, error) { return true, nil }
+
+// wholeSeam answers both halves at once: the two interfaces share no
+// method, so one value satisfies both.
+type wholeSeam struct {
+	scriptedForge
+	scriptedTagReader
+}
+
+// snapshotRead is one named read on a replayed snapshot, reduced to
+// its error.
+type snapshotRead struct {
+	name string
+	call func(gh.Snapshot) error
+}
+
+// everySnapshotRead is the whole replay surface, once each.
+func everySnapshotRead() []snapshotRead {
+	return []snapshotRead{
+		{"Repos", func(s gh.Snapshot) error { _, err := s.Repos("acme"); return err }},
+		{"ReleaseTags", func(s gh.Snapshot) error { _, err := s.ReleaseTags("acme", "widget"); return err }},
+		{"ReleaseAssets", func(s gh.Snapshot) error {
+			_, err := s.ReleaseAssets("acme", "widget", "v1.0.0")
+
+			return err
+		}},
+		{"Attestations", func(s gh.Snapshot) error { _, err := s.Attestations("acme", "widget", "aa"); return err }},
+		{"TagCommit", func(s gh.Snapshot) error { _, err := s.TagCommit("acme", "widget", "v1.0.0"); return err }},
+		{"PackageVersionDigest", func(s gh.Snapshot) error {
+			_, err := s.PackageVersionDigest("acme", "widget", "latest")
+
+			return err
+		}},
+		{"FailedRuns", func(s gh.Snapshot) error { _, err := s.FailedRuns("acme", "widget", "v1.0.0"); return err }},
+		{"TagRefs", func(s gh.Snapshot) error { _, err := s.TagRefs("acme", "widget"); return err }},
+		{"TagObject", func(s gh.Snapshot) error { _, err := s.TagObject("acme", "widget", tagObjID); return err }},
+		{"ChainNotes", func(s gh.Snapshot) error {
+			_, err := s.ChainNotes("acme", "widget", "refs/notes/commits")
+
+			return err
+		}},
+		{"CommitMeta", func(s gh.Snapshot) error { _, err := s.CommitMeta("acme", "widget", noteRev); return err }},
+		{"IsAncestor", func(s gh.Snapshot) error {
+			_, err := s.IsAncestor("acme", "widget", tagObjID, noteRev)
+
+			return err
+		}},
+	}
+}
+
+// captureWholeSeam drives every read once through a Capture and
+// returns the directory it recorded — the layout under test, built by
+// the code that owns it rather than by hand-written paths.
+func captureWholeSeam(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	rec := gh.Capture{Live: wholeSeam{}, Dir: dir}
+
+	for _, call := range []func() error{
+		func() error { _, err := rec.Repos("acme"); return err },
+		func() error { _, err := rec.ReleaseTags("acme", "widget"); return err },
+		func() error { _, err := rec.ReleaseAssets("acme", "widget", "v1.0.0"); return err },
+		func() error { _, err := rec.Attestations("acme", "widget", "aa"); return err },
+		func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err },
+		func() error { _, err := rec.PackageVersionDigest("acme", "widget", "latest"); return err },
+		func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err },
+		func() error { _, err := rec.TagRefs("acme", "widget"); return err },
+		func() error { _, err := rec.TagObject("acme", "widget", tagObjID); return err },
+		func() error { _, err := rec.ChainNotes("acme", "widget", "refs/notes/commits"); return err },
+		func() error { _, err := rec.CommitMeta("acme", "widget", noteRev); return err },
+		func() error { _, err := rec.IsAncestor("acme", "widget", tagObjID, noteRev); return err },
+	} {
+		if err := call(); err != nil {
+			t.Fatalf("capturing: %v", err)
+		}
+	}
+
+	return dir
+}
+
+// TestSnapshotRefusesTypeConfusedFiles is the corruption that matters:
+// "not json" is obvious, but a bare NUMBER decodes cleanly as a JSON
+// document and only fails at the target type. If any read shrugged at
+// that, replay would hand its caller a zero value indistinguishable
+// from a recorded empty.
+func TestSnapshotRefusesTypeConfusedFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := captureWholeSeam(t)
+
+	// Root-scoped: the walk and the writes both go through one os.Root,
+	// so no step re-resolves a path the walk already resolved.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("opening the snapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		if cerr := root.Close(); cerr != nil {
+			t.Errorf("closing the snapshot root: %v", cerr)
+		}
+	})
+
+	rewrite := func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+
+		return root.WriteFile(filepath.FromSlash(path), []byte("0"), 0o600)
+	}
+
+	if err := fs.WalkDir(root.FS(), ".", rewrite); err != nil {
+		t.Fatalf("rewriting the snapshot: %v", err)
+	}
+
+	for _, r := range everySnapshotRead() {
+		t.Run(r.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := r.call(gh.Snapshot{Dir: dir}); err == nil {
+				t.Fatalf("%s accepted a number where its own shape belongs", r.name)
+			}
+		})
+	}
+}
+
+// TestSnapshotUncapturedReads pins the difference the seam exists for:
+// a read the shadow run never made is a HOLE in the snapshot and must
+// refuse, while the reads that document absence-as-answer replay their
+// recorded absence. Both halves over the same empty directory.
+func TestSnapshotUncapturedReads(t *testing.T) {
+	t.Parallel()
+
+	snap := gh.Snapshot{Dir: t.TempDir()}
+
+	for _, r := range everySnapshotRead() {
+		switch r.name {
+		case "Attestations", "PackageVersionDigest", "FailedRuns", "ChainNotes":
+			continue // recorded absences, asserted below
+		}
+
+		t.Run(r.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := r.call(snap); err == nil {
+				t.Fatalf("%s replayed a read the capture never made", r.name)
+			}
+		})
+	}
+
+	t.Run("recorded absences replay as answers", func(t *testing.T) {
+		t.Parallel()
+
+		if runs, err := snap.FailedRuns("acme", "widget", "v1.0.0"); err != nil || runs != nil {
+			t.Errorf("FailedRuns = %v, %v — an uncaptured run list is the recorded empty", runs, err)
+		}
+
+		if _, err := snap.Asset("acme", "widget", "v1.0.0", "checksums.txt"); err == nil {
+			t.Error("an uncaptured asset replayed as bytes — a missing artifact is not an empty one")
+		}
+	})
+}
+
+// TestSnapshotUnreadablePaths: a snapshot is operator-supplied, so a
+// path that exists but cannot be read as what the layout says it is
+// must refuse. Read as absence, each of these would be a hole the
+// walk reports as clean.
+func TestSnapshotUnreadablePaths(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// A file's place taken by a directory, and a directory's place
+	// taken by a file — the two type confusions the filesystem allows.
+	for _, p := range []string{
+		filepath.Join("acme", "widget", "files", "v1.0.0", "ci.yml"),
+		filepath.Join("acme", "gadget", "workflows", "sub"),
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "acme", "widget"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "acme", "widget", "workflows"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := gh.Snapshot{Dir: dir}
+
+	if _, ok, err := snap.FileAt("acme", "widget", "ci.yml", "v1.0.0"); err == nil {
+		t.Errorf("FileAt = %v, %v — a directory is not a recorded file", ok, err)
+	}
+
+	if _, err := snap.WorkflowContents("acme", "widget"); err == nil {
+		t.Error("WorkflowContents read a file as a directory")
+	}
+
+	if _, err := snap.WorkflowContents("acme", "gadget"); err == nil {
+		t.Error("WorkflowContents read a directory as a workflow")
+	}
+}
+
+// failingForge refuses every read: the live forge is down.
+type failingForge struct{}
+
+var errForgeDown = errors.New("the forge is down")
+
+func (failingForge) Repos(string) ([]string, error)                 { return nil, errForgeDown }
+func (failingForge) ReleaseTags(_, _ string) ([]string, error)      { return nil, errForgeDown }
+func (failingForge) ReleaseAssets(_, _, _ string) ([]string, error) { return nil, errForgeDown }
+func (failingForge) Asset(_, _, _, _ string) ([]byte, error)        { return nil, errForgeDown }
+func (failingForge) TagCommit(_, _, _ string) (string, error)       { return "", errForgeDown }
+
+//nolint:gocritic // unnamedResult: the Forge interface documents the results
+func (failingForge) FileAt(_, _, _, _ string) ([]byte, bool, error) { return nil, false, errForgeDown }
+
+func (failingForge) Attestations(_, _, _ string) ([]jsonx.Raw, error) { return nil, errForgeDown }
+func (failingForge) PackageVersionDigest(_, _, _ string) (string, error) {
+	return "", errForgeDown
+}
+func (failingForge) WorkflowContents(_, _ string) ([][]byte, error) { return nil, errForgeDown }
+func (failingForge) FailedRuns(_, _, _ string) ([]string, error)    { return nil, errForgeDown }
+
+// TestCaptureRecordsNoFailures pins the documented stance: a snapshot
+// holds FACTS, and a failed read is not a fact about the subject. So
+// every read passes its error through AND leaves the directory empty
+// — a recorded failure would replay as an answer on the next run.
+func TestCaptureRecordsNoFailures(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	rec := gh.Capture{Live: failingForge{}, Dir: dir}
+
+	reads := []struct {
+		name string
+		call func() error
+	}{
+		{"Repos", func() error { _, err := rec.Repos("acme"); return err }},
+		{"ReleaseTags", func() error { _, err := rec.ReleaseTags("acme", "widget"); return err }},
+		{"ReleaseAssets", func() error { _, err := rec.ReleaseAssets("acme", "widget", "v1.0.0"); return err }},
+		{"Asset", func() error { _, err := rec.Asset("acme", "widget", "v1.0.0", "checksums.txt"); return err }},
+		{"TagCommit", func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err }},
+		{"FileAt", func() error { _, _, err := rec.FileAt("acme", "widget", "ci.yml", "v1.0.0"); return err }},
+		{"Attestations", func() error { _, err := rec.Attestations("acme", "widget", "aa"); return err }},
+		{"PackageVersionDigest", func() error {
+			_, err := rec.PackageVersionDigest("acme", "widget", "latest")
+
+			return err
+		}},
+		{"WorkflowContents", func() error { _, err := rec.WorkflowContents("acme", "widget"); return err }},
+		{"FailedRuns", func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err }},
+	}
+
+	for _, r := range reads {
+		if err := r.call(); !errors.Is(err, errForgeDown) {
+			t.Errorf("%s = %v, want the live error passed through", r.name, err)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 0 {
+		t.Fatalf("the capture wrote %d entries for reads that failed", len(entries))
+	}
+}
+
+// TestCaptureRecordsNoAbsence: a rolling tag pointing at nothing is
+// an ANSWER, and replay reads a missing file as exactly that — so
+// writing one would be recording the same fact twice, in a shape the
+// replay side would then have to agree with.
+func TestCaptureRecordsNoAbsence(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	rec := gh.Capture{Live: scriptedForge{noDigest: true}, Dir: dir}
+
+	got, err := rec.PackageVersionDigest("acme", "widget", "latest")
+	if err != nil || got != "" {
+		t.Fatalf("PackageVersionDigest = %q, %v", got, err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 0 {
+		t.Fatalf("the capture recorded an absence as %d entries", len(entries))
+	}
+}
+
+// TestCaptureRefusesUnrenderableBytes: the live read carried bundle
+// bytes that are not JSON. Rendering them into the snapshot would
+// write a file replay cannot read, so the capture refuses at the
+// write instead of leaving a corrupt fixture behind.
+func TestCaptureRefusesUnrenderableBytes(t *testing.T) {
+	t.Parallel()
+
+	rec := gh.Capture{Live: scriptedForge{}, Dir: t.TempDir()}
+
+	if _, err := rec.Attestations("acme", "widget", "unrenderable"); err == nil {
+		t.Fatal("the capture recorded bytes it cannot render")
+	}
+}
+
+// TestCaptureFileInTheWayOfAFile pins the other write failure: the
+// destination path exists, as a directory. MkdirAll is happy and the
+// write is not, and a capture that swallowed that would serve
+// live-only while claiming to have recorded.
+func TestCaptureFileInTheWayOfAFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "acme", "repos.json"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := gh.Capture{Live: scriptedForge{}, Dir: dir}
+
+	if _, err := rec.Repos("acme"); err == nil {
+		t.Fatal("the capture wrote a file over a directory")
+	}
+}
+
+// TestCaptureTagWritesRefuse extends the unwritable-directory law to
+// the tag half: every tag read records, so every tag read must refuse
+// when it cannot.
+func TestCaptureTagWritesRefuse(t *testing.T) {
+	t.Parallel()
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := gh.Capture{Live: wholeSeam{}, Dir: filepath.Join(blocker, "nested")}
+
+	reads := []struct {
+		name string
+		call func() error
+	}{
+		{"TagCommit", func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err }},
+		{"TagRefs", func() error { _, err := rec.TagRefs("acme", "widget"); return err }},
+		{"TagObject", func() error { _, err := rec.TagObject("acme", "widget", tagObjID); return err }},
+		{"ChainNotes", func() error {
+			_, err := rec.ChainNotes("acme", "widget", "refs/notes/commits")
+
+			return err
+		}},
+		{"CommitMeta", func() error { _, err := rec.CommitMeta("acme", "widget", noteRev); return err }},
+		{"IsAncestor", func() error {
+			_, err := rec.IsAncestor("acme", "widget", tagObjID, noteRev)
+
+			return err
+		}},
+	}
+
+	for _, r := range reads {
+		if err := r.call(); err == nil {
+			t.Errorf("%s capture into an unwritable dir did not refuse", r.name)
+		}
 	}
 }

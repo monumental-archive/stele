@@ -119,3 +119,29 @@ func TestAllAndLen(t *testing.T) {
 		t.Fatalf("All = %+v, want the one decision with its origin", all)
 	}
 }
+
+// TestParseSkipsProductsWithoutID pins the product-side tolerance: a
+// statement whose product carries no "@id" names nothing to join, so
+// it contributes no decision — and must not abort the document,
+// whose other products are still real triage.
+func TestParseSkipsProductsWithoutID(t *testing.T) {
+	t.Parallel()
+
+	var d vexjoin.Decisions
+
+	doc := []byte(`{"statements": [{"vulnerability": {"name": "CVE-2026-0001"},
+	  "products": [{}, {"@id": "pkg:cargo/serde_cbor@0.11.2"}]}]}`)
+
+	if err := vexjoin.Parse(&d, doc, "vex.json"); err != nil {
+		t.Fatalf("Parse = %v — an id-less product is not a document fault", err)
+	}
+
+	sibling := vexjoin.Key{Advisory: "CVE-2026-0001", Package: "serde_cbor", Version: "0.11.2"}
+	if !d.Has(sibling) {
+		t.Fatal("the sibling product with an @id did not join")
+	}
+
+	if n := d.Len(); n != 1 {
+		t.Fatalf("Len = %d, want 1 — the id-less product joined nothing", n)
+	}
+}

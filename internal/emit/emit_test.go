@@ -117,6 +117,18 @@ type fakeGit struct {
 	ref    string
 	onPush func(g *fakeGit) error
 	pushes int
+	// readErr fails one named store operation — "Note:<rev>", "Noted"
+	// or "AddNote". The emitter reads the object store several times
+	// per link, and WHICH read tears decides which refusal it makes.
+	readErr map[string]error
+	// mangle is what the store hands back for a revision instead of
+	// what was written: storage that rewrites a note into something
+	// else must refuse at the read-back, not verify red later.
+	mangle map[string][]byte
+	// mangleAfter delays that substitution by a number of successful
+	// reads, so a note can be whole when the chain is discovered and
+	// broken when the tail is proven — the emitter reads it twice.
+	mangleAfter map[string]*int
 }
 
 func newFakeGit() *fakeGit {
@@ -174,6 +186,19 @@ func (g *fakeGit) Parents(rev string) ([]string, error) {
 }
 
 func (g *fakeGit) Note(rev string) ([]byte, error) {
+	if err := g.readErr["Note:"+rev]; err != nil {
+		return nil, err
+	}
+
+	if mangled, ok := g.mangle[rev]; ok {
+		left, delayed := g.mangleAfter[rev]
+		if !delayed || *left <= 0 {
+			return bytes.Clone(mangled), nil
+		}
+
+		*left--
+	}
+
 	n, ok := g.notes[rev]
 	if !ok {
 		return nil, nil
@@ -183,6 +208,10 @@ func (g *fakeGit) Note(rev string) ([]byte, error) {
 }
 
 func (g *fakeGit) Noted() ([]string, error) {
+	if err := g.readErr["Noted"]; err != nil {
+		return nil, err
+	}
+
 	var revs []string
 	for rev := range g.notes {
 		revs = append(revs, rev)
@@ -209,6 +238,10 @@ func (g *fakeGit) IsAncestor(rev, ref string) (bool, error) {
 }
 
 func (g *fakeGit) AddNote(rev string, note []byte) error {
+	if err := g.readErr["AddNote"]; err != nil {
+		return err
+	}
+
 	stored := bytes.TrimRight(bytes.Clone(note), "\n")
 	stored = append(stored, '\n') // stripspace: stored bytes differ from written bytes
 

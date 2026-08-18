@@ -67,6 +67,9 @@ type fakeTags struct {
 	meta     map[string]*gh.CommitMeta
 	ancestry map[string]bool // "base...head"
 	refsErr  error
+	// torn fails one named read — the tag audit's own version of a
+	// forge that tears mid-walk.
+	torn map[string]error
 }
 
 func (f *fakeTags) TagRefs(_, repo string) ([]gh.TagRef, error) {
@@ -86,7 +89,9 @@ func (f *fakeTags) TagObject(_, _, sha string) (*gh.TagObject, error) {
 	return obj, nil
 }
 
-func (f *fakeTags) ChainNotes(_, repo, _ string) ([]gh.ChainNote, error) { return f.notes[repo], nil }
+func (f *fakeTags) ChainNotes(_, repo, _ string) ([]gh.ChainNote, error) {
+	return f.notes[repo], f.tear("ChainNotes")
+}
 
 func (f *fakeTags) CommitMeta(_, _, rev string) (*gh.CommitMeta, error) {
 	m, ok := f.meta[rev]
@@ -98,8 +103,11 @@ func (f *fakeTags) CommitMeta(_, _, rev string) (*gh.CommitMeta, error) {
 }
 
 func (f *fakeTags) IsAncestor(_, _, base, head string) (bool, error) {
-	return f.ancestry[base+"..."+head], nil
+	return f.ancestry[base+"..."+head], f.tear("IsAncestor")
 }
+
+// tear reports the scripted failure for one named read, if any.
+func (f *fakeTags) tear(read string) error { return f.torn[read] }
 
 // fakeTagVerifier scripts the trust seam.
 type fakeTagVerifier struct {

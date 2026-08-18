@@ -167,3 +167,102 @@ func TestBundlesFailFast(t *testing.T) {
 		t.Fatalf("calls = %d, want exactly 1 — fail fast means one look", calls.Load())
 	}
 }
+
+// TestNewDefaults pins the constructor's stance: the public API, the
+// documented retry budget, a bounded HTTP client and a real clock —
+// a caller that takes the default gets the propagation ladder, not a
+// zero-valued client that would panic on the first Sleep.
+func TestNewDefaults(t *testing.T) {
+	t.Parallel()
+
+	c := ghstore.New("tok")
+
+	if c.Base != "https://api.github.com" {
+		t.Errorf("Base = %q, want the public API", c.Base)
+	}
+
+	if c.Token != "tok" {
+		t.Errorf("Token = %q, want the one passed in", c.Token)
+	}
+
+	if c.Attempts != ghstore.DefaultAttempts {
+		t.Errorf("Attempts = %d, want DefaultAttempts (%d)", c.Attempts, ghstore.DefaultAttempts)
+	}
+
+	if c.HTTP == nil || c.HTTP.Timeout == 0 {
+		t.Errorf("HTTP = %+v, want a client with a timeout", c.HTTP)
+	}
+
+	if c.Sleep == nil {
+		t.Fatal("Sleep is nil — the retry ladder would panic on its first backoff")
+	}
+}
+
+// TestBundlesTransportFailures covers the three ways one fetch can
+// fail before a status code exists: the URL never becomes a request,
+// the connection never happens, and the body never finishes. Each is
+// a fault, and each must surface as a refusal rather than an empty
+// bundle list read as "nothing attested".
+func TestBundlesTransportFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an unbuildable URL is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// DEL is a control character net/url refuses, so the request
+		// never exists to be sent.
+		c := &ghstore.Client{Base: "http://example\x7f.invalid", HTTP: http.DefaultClient, Sleep: func(time.Duration) {}}
+
+		_, err := c.Bundles("acme/widget", digest)
+		if err == nil || !strings.Contains(err.Error(), "build request") {
+			t.Fatalf("Bundles = %v, want the build-request refusal", err)
+		}
+	})
+
+	t.Run("a dead endpoint is refused", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		base, cl := srv.URL, srv.Client()
+		srv.Close() // nothing listens now: the dial fails
+
+		c := &ghstore.Client{Base: base, HTTP: cl, Sleep: func(time.Duration) {}}
+
+		_, err := c.Bundles("acme/widget", digest)
+		if err == nil || !strings.Contains(err.Error(), "fetch") {
+			t.Fatalf("Bundles = %v, want the fetch refusal", err)
+		}
+	})
+
+	t.Run("a truncated body is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// A response that promises more bytes than it delivers: the
+		// read fails mid-envelope, which must never be read as an
+		// empty attestation list.
+		c, _ := client(t, func(w http.ResponseWriter, _ *http.Request) {
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("the test server's ResponseWriter cannot be hijacked")
+
+				return
+			}
+
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+
+				return
+			}
+			defer conn.Close() //nolint:errcheck // the test server's socket
+
+			//nolint:errcheck,gosec // test server write
+			conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n{\"attestations\":"))
+		})
+
+		_, err := c.Bundles("acme/widget", digest)
+		if err == nil || !strings.Contains(err.Error(), "read") {
+			t.Fatalf("Bundles = %v, want the read refusal", err)
+		}
+	})
+}
