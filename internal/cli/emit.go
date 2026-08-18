@@ -120,17 +120,16 @@ type emitArgs struct {
 	mode       string
 
 	// chain
-	gitDir          string
-	ref             string
-	rev             string
-	claims          string
-	actor           string
-	actorID         string
-	remote          string
-	genesis         bool
-	policyURI       string
-	machineryPin    string
-	retiredCanonPin string
+	gitDir       string
+	ref          string
+	rev          string
+	claims       string
+	actor        string
+	actorID      string
+	remote       string
+	genesis      bool
+	policyURI    string
+	machineryPin string
 
 	// vsa
 	tag       string
@@ -205,8 +204,6 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 	fs.StringVar(&ea.repo, "repo", "", "owner/repo being attested (required)")
 	fs.StringVar(&ea.machineryPin, "machinery-digest", "",
 		"commit digest the policy tree is pinned at — the VSA's policy.digest (required)")
-	fs.StringVar(&ea.retiredCanonPin, "canon-digest", "",
-		"retired: renamed --machinery-digest (stele#79)")
 	fs.StringVar(&ea.policyURI, "policy-uri", "",
 		"URI where a stranger reads the policy at that pin (required)")
 
@@ -248,12 +245,6 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 		}
 
 		return exitUsage
-	}
-
-	// The retired flag refuses with a pointer, never aliases (#79): a
-	// silently-accepted old spelling is a second name for the same pin.
-	if ea.retiredCanonPin != "" {
-		return fail(errors.New("--canon-digest was renamed --machinery-digest (stele#79)"))
 	}
 
 	owner, repo, ok := strings.Cut(ea.repo, "/")

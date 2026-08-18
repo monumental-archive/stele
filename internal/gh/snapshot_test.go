@@ -291,3 +291,97 @@ func TestSnapshotCorruptFile(t *testing.T) {
 		t.Fatal("a corrupt snapshot listing did not refuse")
 	}
 }
+
+// TestCaptureOverNonTagReader: a Capture wired over a Forge that
+// cannot read tags refuses every tag read by name instead of
+// panicking mid-walk.
+func TestCaptureOverNonTagReader(t *testing.T) {
+	t.Parallel()
+
+	rec := gh.Capture{Live: gh.Snapshot{Dir: t.TempDir()}, Dir: t.TempDir()}
+
+	// A Snapshot IS a TagReader; wrap it in a bare Forge shim to
+	// exercise the refusal path.
+	rec.Live = onlyForge{f: rec.Live}
+
+	if _, err := rec.TagRefs("a", "b"); err == nil {
+		t.Fatal("TagRefs did not refuse")
+	}
+
+	if _, err := rec.TagObject("a", "b", "c"); err == nil {
+		t.Fatal("TagObject did not refuse")
+	}
+
+	if _, err := rec.ChainNotes("a", "b", "refs/notes/commits"); err == nil {
+		t.Fatal("ChainNotes did not refuse")
+	}
+
+	if _, err := rec.CommitMeta("a", "b", "c"); err == nil {
+		t.Fatal("CommitMeta did not refuse")
+	}
+
+	if _, err := rec.IsAncestor("a", "b", "c", "d"); err == nil {
+		t.Fatal("IsAncestor did not refuse")
+	}
+}
+
+// onlyForge narrows a Forge to exactly the Forge interface.
+type onlyForge struct{ f gh.Forge }
+
+func (o onlyForge) Repos(org string) ([]string, error) { return o.f.Repos(org) }
+
+func (o onlyForge) ReleaseTags(a, b string) ([]string, error) {
+	return o.f.ReleaseTags(a, b)
+}
+
+func (o onlyForge) ReleaseAssets(a, b, c string) ([]string, error) {
+	return o.f.ReleaseAssets(a, b, c)
+}
+func (o onlyForge) Asset(a, b, c, d string) ([]byte, error) { return o.f.Asset(a, b, c, d) }
+
+func (o onlyForge) TagCommit(a, b, c string) (string, error) {
+	return o.f.TagCommit(a, b, c)
+}
+
+//nolint:gocritic // unnamedResult: the Forge interface documents the results
+func (o onlyForge) FileAt(a, b, c, d string) ([]byte, bool, error) { return o.f.FileAt(a, b, c, d) }
+
+func (o onlyForge) Attestations(a, b, c string) ([]jsonx.Raw, error) {
+	return o.f.Attestations(a, b, c)
+}
+
+func (o onlyForge) PackageVersionDigest(a, b, c string) (string, error) {
+	return o.f.PackageVersionDigest(a, b, c)
+}
+
+func (o onlyForge) WorkflowContents(a, b string) ([][]byte, error) { return o.f.WorkflowContents(a, b) }
+func (o onlyForge) FailedRuns(a, b, c string) ([]string, error)    { return o.f.FailedRuns(a, b, c) }
+
+// TestSnapshotTagReadsMissing: a tag read whose file the capture
+// never wrote refuses (the walk asked something the shadow run did
+// not), except the chain, whose absence is the recorded empty.
+func TestSnapshotTagReadsMissing(t *testing.T) {
+	t.Parallel()
+
+	snap := gh.Snapshot{Dir: t.TempDir()}
+
+	if _, err := snap.TagRefs("a", "b"); err == nil {
+		t.Fatal("TagRefs on an empty snapshot did not refuse")
+	}
+
+	if _, err := snap.TagObject("a", "b", "c"); err == nil {
+		t.Fatal("TagObject on an empty snapshot did not refuse")
+	}
+
+	if _, err := snap.CommitMeta("a", "b", "c"); err == nil {
+		t.Fatal("CommitMeta on an empty snapshot did not refuse")
+	}
+
+	if _, err := snap.IsAncestor("a", "b", "c", "d"); err == nil {
+		t.Fatal("IsAncestor on an empty snapshot did not refuse")
+	}
+
+	if notes, err := snap.ChainNotes("a", "b", "refs/notes/commits"); err != nil || notes != nil {
+		t.Fatalf("ChainNotes = %+v, %v — absence is the recorded empty chain", notes, err)
+	}
+}

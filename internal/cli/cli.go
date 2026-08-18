@@ -110,8 +110,13 @@ usage:
                  --policy [--debt --snapshot|--capture])
     blast-radius every SBOM scanned, every advisory finding joined
                  against the committed VEX decisions by exact
-                 (advisory, package, version) triple (--org --policy
-                 --vex [--snapshot|--capture])
+                 (advisory, package, version) triple (--org|--repo
+                 --policy --vex [--snapshot|--capture])
+    tags         every release tag: minted by the declared role,
+                 signed from the repository's epoch on (verified
+                 natively, no gitsign binary), target carries a
+                 source chain link (--org|--repo --policy
+                 [--trusted-root --snapshot|--capture])
 
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any

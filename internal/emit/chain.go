@@ -67,6 +67,10 @@ func Chain(
 		return errors.New("emit: no inputs")
 	}
 
+	if p.Source == nil {
+		return errors.New("emit: the policy declares no source section — the chain emitter needs one")
+	}
+
 	pb, err := validateChainInputs(p, in)
 	if err != nil {
 		return err

@@ -152,6 +152,15 @@ func expand(tmpl string, c Coords) string {
 	).Replace(tmpl)
 }
 
+// expandWorkflow substitutes the identity-role placeholders (#82):
+// a workflow identity templated `{owner}/{repo}/…` names the
+// repository under verification's own workflow — the self-attesting
+// topology. Only owner and repo: identities are roles, not per-tag
+// wildcards (the policy loader enforces the vocabulary).
+func expandWorkflow(workflow string, c Coords) string {
+	return strings.NewReplacer("{owner}", c.Owner, "{repo}", c.Repo).Replace(workflow)
+}
+
 // workflowSAN renders the certificate identity a workflow signs
 // under: its path on the given host, at an exact ref. Exact — a ref
 // wildcard here would turn the identity check into a suggestion.

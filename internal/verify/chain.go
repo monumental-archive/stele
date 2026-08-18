@@ -68,6 +68,10 @@ type linkFacts struct {
 // exact statement bytes the note carries; every revision since
 // genesis must carry a link; the ledger must reach every member.
 func Chain(p *policy.Policy, c Coords, ref string, h History, bv BundleVerifier, log Logf) (*ChainVerdict, error) {
+	if p.Source == nil {
+		return nil, errors.New("verify: the policy declares no source section — the chain walk needs one")
+	}
+
 	if err := validateCoords(c, false); err != nil {
 		return nil, err
 	}

@@ -41,7 +41,8 @@ type Verified struct {
 // Verifier verifies signed entities against one trusted material
 // set. The verification options are deliberately not configurable.
 type Verifier struct {
-	v *verify.Verifier
+	v       *verify.Verifier
+	trusted root.TrustedMaterial
 }
 
 // LoadRoot parses a trusted-root document (the TUF-delivered JSON).
@@ -76,7 +77,7 @@ func NewVerifier(trusted root.TrustedMaterial) (*Verifier, error) {
 		return nil, fmt.Errorf("trust: build verifier: %w", err)
 	}
 
-	return &Verifier{v: v}, nil
+	return &Verifier{v: v, trusted: trusted}, nil
 }
 
 // Verify proves one signed entity: signature chain to the trusted

@@ -7,6 +7,7 @@
 package verify
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -41,6 +42,13 @@ func VSA(
 	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf,
 ) (*VSAVerdict, error) {
+	switch {
+	case p.Trust.Verdict == nil:
+		return nil, errors.New("verify: the policy declares no trust.verdict — vsa verification needs one")
+	case p.Build == nil:
+		return nil, errors.New("verify: the policy declares no build section — vsa verification needs one")
+	}
+
 	if err := validateInputs(c, subjects, pins); err != nil {
 		return nil, err
 	}
@@ -70,11 +78,11 @@ func VSA(
 // signer. A release absent from the list verifies under the current
 // root or refuses, loudly; try-each is unrepresentable.
 func verdictIdentity(p *policy.Policy, c Coords, pins Pins) verdictRoot {
-	workflow, pin := *p.Trust.Verdict.VerifierWorkflow, pins.Machinery
+	workflow, pin := expandWorkflow(*p.Trust.Verdict.VerifierWorkflow, c), pins.Machinery
 
 	for _, lv := range p.Trust.Verdict.LegacyVerdicts {
 		if *lv.Repository == c.Slug() && *lv.Tag == c.Tag {
-			workflow, pin = *lv.SignerWorkflow, pins.Signer
+			workflow, pin = expandWorkflow(*lv.SignerWorkflow, c), pins.Signer
 
 			break
 		}
@@ -90,7 +98,7 @@ func verdictIdentity(p *policy.Policy, c Coords, pins Pins) verdictRoot {
 	return verdictRoot{
 		id:  trust.Identity{SAN: workflowSAN(workflow, identityRef(workflow, c, pin)), Issuer: *p.Issuer},
 		pin: pin,
-		uri: serverURL + "/" + *p.Trust.Verdict.VerifierWorkflow,
+		uri: serverURL + "/" + expandWorkflow(*p.Trust.Verdict.VerifierWorkflow, c),
 	}
 }
 

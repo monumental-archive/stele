@@ -18,6 +18,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/assert"
@@ -47,6 +48,7 @@ const (
 	targetImageFacts  = "image-facts"
 	targetEvidence    = "evidence"
 	targetBlastRadius = "blast-radius"
+	targetTags        = "tags"
 )
 
 // The effect seams, swapped only by tests.
@@ -88,9 +90,11 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertEvidence(args[1:], stdout, stderr)
 	case targetBlastRadius:
 		return assertBlastRadius(args[1:], stdout, stderr)
+	case targetTags:
+		return assertTags(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele assert: unknown target %q (image-facts, evidence, blast-radius)\n", args[0]); err != nil {
+			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags)\n", args[0]); err != nil {
 			return exitIO
 		}
 
@@ -471,12 +475,15 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 	var (
 		jsonOut                 bool
 		org, policyPath, vexDir string
+		repo                    string
 		snapshotDir, captureDir string
 	)
 
 	flags := flag.NewFlagSet("stele assert blast-radius", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&org, "org", "", "organisation whose SBOMs are scanned (required)")
+	flags.StringVar(&org, "org", "", "organisation whose SBOMs are scanned (this or --repo)")
+	flags.StringVar(&repo, "repo", "",
+		"owner/name whose SBOMs are scanned — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&vexDir, "vex", "", "directory of committed *.openvex.json decisions (required)")
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
@@ -497,8 +504,12 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch {
-	case org == "":
-		return usageFail("--org is required")
+	case org == "" && repo == "":
+		return usageFail("--org or --repo is required")
+	case org != "" && repo != "":
+		return usageFail("--org and --repo are exclusive: one population, named once")
+	case repo != "" && !strings.Contains(repo, "/"):
+		return usageFail("--repo must be owner/name")
 	case policyPath == "":
 		return usageFail("--policy is required")
 	case vexDir == "":
@@ -535,15 +546,17 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.BlastRadius(pol, org, forge, newScanner(), decisions, out.logf)
+	pop := assert.Population{Org: org, Repo: repo}
+
+	rep, err := assert.BlastRadius(pol, pop, forge, newScanner(), decisions, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = report.Seal("assert "+targetBlastRadius, org,
+		rep = report.Seal("assert "+targetBlastRadius, pop.Subject(),
 			report.PopulationFromListing(0, "walk incomplete"),
-			[]report.Finding{{Subject: org, Assertion: targetBlastRadius, Detail: err.Error()}},
+			[]report.Finding{{Subject: pop.Subject(), Assertion: targetBlastRadius, Detail: err.Error()}},
 			nil, report.NoCanary())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
@@ -596,4 +609,193 @@ func loadVEX(dir string, stderr io.Writer) (*vexjoin.Decisions, int) {
 	}
 
 	return decisions, exitOK
+}
+
+// assertTags runs the tag audit (stele#83): policy loaded, the tag
+// verifier bound to the trust boundary, the walk sealed out.
+func assertTags(args []string, stdout, stderr io.Writer) int {
+	var (
+		jsonOut                 bool
+		org, repo, policyPath   string
+		rootPath                string
+		snapshotDir, captureDir string
+	)
+
+	flags := flag.NewFlagSet("stele assert tags", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&org, "org", "", "organisation whose tags are audited (this or --repo)")
+	flags.StringVar(&repo, "repo", "",
+		"owner/name whose tags are audited — the single-repository population (this or --org)")
+	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	flags.StringVar(&rootPath, "trusted-root", "",
+		"path to the Sigstore trusted root JSON (required when any epoch is not pending)")
+	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
+	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	usageFail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele assert tags: %s\n", msg); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	switch {
+	case org == "" && repo == "":
+		return usageFail("--org or --repo is required")
+	case org != "" && repo != "":
+		return usageFail("--org and --repo are exclusive: one population, named once")
+	case repo != "" && !strings.Contains(repo, "/"):
+		return usageFail("--repo must be owner/name")
+	case policyPath == "":
+		return usageFail("--policy is required")
+	case snapshotDir != "" && captureDir != "":
+		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
+	}
+
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return usageFail(err.Error())
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	if pol.Tags == nil {
+		return usageFail("the policy declares no tags section")
+	}
+
+	tv, code := loadTagVerifier(pol, rootPath, stderr)
+	if code != exitOK {
+		return code
+	}
+
+	forge := newForge()
+	if snapshotDir != "" {
+		forge = gh.Snapshot{Dir: snapshotDir}
+	} else if captureDir != "" {
+		forge = gh.Capture{Live: forge, Dir: captureDir}
+	}
+
+	tags, ok := forge.(gh.TagReader)
+	if !ok {
+		return usageFail("this forge cannot read tags")
+	}
+
+	pop := assert.Population{Org: org, Repo: repo}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	rep, err := assert.Tags(pol, pop, forge, tags, tv, out.logf)
+	if out.err != nil {
+		return exitIO
+	}
+
+	if err != nil {
+		rep = report.Seal("assert "+targetTags, pop.Subject(),
+			report.PopulationFromListing(0, "walk incomplete"),
+			[]report.Finding{{Subject: pop.Subject(), Assertion: targetTags, Detail: err.Error()}},
+			nil, report.NoCanary())
+
+		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+			return exitIO
+		}
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// loadTagVerifier binds the tag audit's trust boundary. Signing
+// obligations exist exactly when some epoch is not pending; only
+// then is the trusted root required.
+//
+//nolint:gocritic,ireturn // exit-code result; the walk's own seam type is the point
+func loadTagVerifier(pol *assert.Policy, rootPath string, stderr io.Writer) (assert.TagVerifier, int) {
+	signing := false
+
+	for _, epoch := range pol.Tags.Epochs {
+		if epoch != assert.EpochPending {
+			signing = true
+
+			break
+		}
+	}
+
+	if !signing {
+		return nil, exitOK
+	}
+
+	fail := func(msg string) (assert.TagVerifier, int) {
+		if _, err := fmt.Fprintf(stderr, "stele assert tags: %s\n", msg); err != nil {
+			return nil, exitIO
+		}
+
+		return nil, exitUsage
+	}
+
+	if rootPath == "" {
+		return fail("--trusted-root is required: the policy declares signing epochs")
+	}
+
+	rootJSON, err := os.ReadFile(rootPath) //nolint:gosec // the root path is operator-supplied by design
+	if err != nil {
+		return fail(err.Error())
+	}
+
+	tv, err := newTagVerifier(rootJSON, *pol.Tags.IdentityPattern, *pol.Issuer)
+	if err != nil {
+		return fail(err.Error())
+	}
+
+	return tv, exitOK
+}
+
+// newTagVerifier builds the gitsign verifier over the trust package.
+// Swappable in tests.
+//
+//nolint:gochecknoglobals // test seam, written only by test setup
+var newTagVerifier = func(rootJSON []byte, sanPattern, issuer string) (assert.TagVerifier, error) {
+	tr, err := trust.LoadRoot(rootJSON)
+	if err != nil {
+		return nil, fmt.Errorf("trusted root: %w", err)
+	}
+
+	v, err := trust.NewVerifier(tr)
+	if err != nil {
+		return nil, fmt.Errorf("verifier: %w", err)
+	}
+
+	re, err := regexp.Compile(sanPattern)
+	if err != nil {
+		return nil, fmt.Errorf("identity pattern: %w", err)
+	}
+
+	return tagTrust{v: v, id: trust.TagIdentity{SANPattern: re, Issuer: issuer}}, nil
+}
+
+// tagTrust adapts trust.VerifyTag to the walk's seam.
+type tagTrust struct {
+	v  *trust.Verifier
+	id trust.TagIdentity
+}
+
+func (t tagTrust) Verify(payload, signature []byte) (string, error) {
+	san, err := t.v.VerifyTag(payload, signature, t.id)
+	if err != nil {
+		return "", err
+	}
+
+	return san, nil
 }

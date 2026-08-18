@@ -62,8 +62,12 @@ func (v *ReleaseVerdict) InputAttestations() []Ref {
 func (v *ReleaseVerdict) VSAPredicate(
 	p *policy.Policy, c Coords, policyURI, machineryDigest, timeVerified string,
 ) ([]byte, error) {
+	if p.Trust.Verdict == nil {
+		return nil, errors.New("verify: the policy declares no trust.verdict — a VSA cannot name its verifier")
+	}
+
 	pred, err := vsa.New(
-		serverURL+"/"+*p.Trust.Verdict.VerifierWorkflow,
+		serverURL+"/"+expandWorkflow(*p.Trust.Verdict.VerifierWorkflow, c),
 		timeVerified,
 		expand(*p.Build.ResourceURI, c),
 		policyURI, machineryDigest,
@@ -124,6 +128,10 @@ func Release(
 	p *policy.Policy, c Coords, subjects, sboms []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf,
 ) (*ReleaseVerdict, error) {
+	if p.Build == nil {
+		return nil, errors.New("verify: the policy declares no build section — release verification needs one")
+	}
+
 	// No declared decision obligation: the release proves what the
 	// policy asks of it — the provenance half whole, nothing invented
 	// beyond it. Deterministic on the policy, never a try-each.
@@ -165,6 +173,10 @@ func ReleaseProvenance(
 	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf,
 ) (*ReleaseVerdict, error) {
+	if p.Build == nil {
+		return nil, errors.New("verify: the policy declares no build section — release verification needs one")
+	}
+
 	verdict, prov, err := releaseProvenance(p, c, subjects, pins, store, bv, log)
 	if err != nil {
 		return nil, err
@@ -258,8 +270,8 @@ func newProvenancePass(p *policy.Policy, c Coords, pins Pins) *provenancePass {
 		c:    c,
 		pins: pins,
 		signerID: trust.Identity{
-			SAN: workflowSAN(*p.Trust.Provenance.SignerWorkflow,
-				identityRef(*p.Trust.Provenance.SignerWorkflow, c, pins.Signer)),
+			SAN: workflowSAN(expandWorkflow(*p.Trust.Provenance.SignerWorkflow, c),
+				identityRef(expandWorkflow(*p.Trust.Provenance.SignerWorkflow, c), c, pins.Signer)),
 			Issuer: *p.Issuer,
 		},
 		srcRepo:   expand(*p.Build.SourceRepository, c),
@@ -399,7 +411,7 @@ func (pp *provenancePass) checkPredicate(s Subject, pred *provenance.Predicate, 
 		return fmt.Errorf("verify: %s: %w", s.Name, err)
 	}
 
-	builderPrefix := serverURL + "/" + *pp.p.Trust.Provenance.SignerWorkflow + "@"
+	builderPrefix := serverURL + "/" + expandWorkflow(*pp.p.Trust.Provenance.SignerWorkflow, pp.c) + "@"
 	if !strings.HasPrefix(*pred.RunDetails.Builder.ID, builderPrefix) {
 		return fmt.Errorf("verify: %s: builder.id does not name the trusted signer", s.Name)
 	}
@@ -576,8 +588,8 @@ func verifyDecision(
 	store Store, bv BundleVerifier, log Logf,
 ) (*Ref, error) {
 	id := trust.Identity{
-		SAN: workflowSAN(*p.Trust.Decision.SignerWorkflow,
-			identityRef(*p.Trust.Decision.SignerWorkflow, c, pins.Machinery)),
+		SAN: workflowSAN(expandWorkflow(*p.Trust.Decision.SignerWorkflow, c),
+			identityRef(expandWorkflow(*p.Trust.Decision.SignerWorkflow, c), c, pins.Machinery)),
 		Issuer: *p.Issuer,
 	}
 

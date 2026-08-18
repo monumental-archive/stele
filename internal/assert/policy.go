@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -27,6 +28,69 @@ type Policy struct {
 	Issuer      *string            `json:"issuer,omitempty"`
 	Evidence    *EvidencePolicy    `json:"evidence"`
 	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
+	Tags        *TagsPolicy        `json:"tags,omitempty"`
+}
+
+// EpochPending is the declared-unsigned epoch value: the repository
+// releases tags and says so, but has not begun signing them.
+const EpochPending = "pending"
+
+// TagsPolicy parameterises the tag audit (stele#83). Tag signing is
+// a DECLARED obligation: the whole section is absent for orgs that
+// do not sign tags, never a precondition.
+type TagsPolicy struct {
+	// TagPattern selects the release tags among all tag refs.
+	TagPattern *string `json:"tagPattern"`
+	// TaggerName is the minting role's tagger name — an identity from
+	// policy, never a literal in code.
+	TaggerName *string `json:"taggerName"`
+	// IdentityPattern is the regular expression the signing
+	// certificate's SAN must match.
+	IdentityPattern *string `json:"identityPattern"`
+	// NotesRef is the source chain's notes ref, fully qualified.
+	NotesRef *string `json:"notesRef"`
+	// Epochs maps each releasing repository to the first tag that
+	// owes a signature, or EpochPending for declared-unsigned. A
+	// repository that releases tags without a line here is a finding:
+	// an undeclared population member is unchecked, not clean.
+	Epochs map[string]string `json:"epochs"`
+}
+
+func (tp *TagsPolicy) validate() error {
+	for name, f := range map[string]*string{
+		"tagPattern": tp.TagPattern, "taggerName": tp.TaggerName,
+		"identityPattern": tp.IdentityPattern, "notesRef": tp.NotesRef,
+	} {
+		if f == nil || *f == "" {
+			return fmt.Errorf("tags.%s is absent or empty", name)
+		}
+	}
+
+	for _, field := range []string{*tp.TagPattern, *tp.IdentityPattern} {
+		if _, err := regexp.Compile(field); err != nil {
+			return fmt.Errorf("tags pattern: %w", err)
+		}
+	}
+
+	if !strings.HasPrefix(*tp.NotesRef, "refs/") {
+		return errors.New("tags.notesRef must be fully qualified (refs/...)")
+	}
+
+	if len(tp.Epochs) == 0 {
+		return errors.New("tags.epochs is absent or empty — a tag policy covering no repository audits nothing")
+	}
+
+	for repo, epoch := range tp.Epochs {
+		if epoch == EpochPending {
+			continue
+		}
+
+		if _, err := semver.NewVersion(strings.TrimPrefix(epoch, "v")); err != nil {
+			return fmt.Errorf("tags.epochs[%s]: %w", repo, err)
+		}
+	}
+
+	return nil
 }
 
 // EvidencePolicy parameterises the evidence walk.
@@ -71,13 +135,6 @@ type EvidencePolicy struct {
 	// epoch semantics as StoreVSAFromVersion. Absent means always. An
 	// unparsable pin fails toward the stricter obligation.
 	DecisionFromVersion *string `json:"decisionFromVersion,omitempty"`
-	// StoreVSAFromCanonRetired and DecisionFromCanonRetired hold the
-	// pre-#79 names so a stale policy refuses with a pointer instead
-	// of a bare unknown-field error. Never read as values: an evidence
-	// tool with two names for one field invites two policies that look
-	// different and mean the same, so old names refuse, never alias.
-	StoreVSAFromCanonRetired jsonx.Raw `json:"storeVsaFromCanon,omitempty"`
-	DecisionFromCanonRetired jsonx.Raw `json:"decisionFromCanon,omitempty"`
 	// EvidenceSuffixes are additional asset-name suffixes that mark a
 	// checksum entry as an evidence document rather than an artifact
 	// (the org's per-release VEX documents, for one) — excluded from
@@ -246,24 +303,27 @@ func (p *Policy) validate() error {
 		}
 	}
 
-	return nil
+	return p.validateTags()
 }
 
-// validateEpochs refuses retired epoch names (with a pointer, never
-// an alias) and unparsable epochs — both epoch fields feed MustParse
-// downstream, so an epoch validate admits but the walk panics on
-// would turn a reviewed policy into a crash mid-walk.
+// validateTags validates the OPTIONAL tags section; declared means
+// every field, and the issuer beside it.
+func (p *Policy) validateTags() error {
+	if p.Tags == nil {
+		return nil
+	}
+
+	if p.Issuer == nil || *p.Issuer == "" {
+		return errors.New("issuer is required when tags is declared")
+	}
+
+	return p.Tags.validate()
+}
+
+// validateEpochs refuses unparsable epochs — both epoch fields feed
+// MustParse downstream, so an epoch validate admits but the walk
+// panics on would turn a reviewed policy into a crash mid-walk.
 func (e *EvidencePolicy) validateEpochs() error {
-	if e.StoreVSAFromCanonRetired != nil {
-		return errors.New(
-			"evidence.storeVsaFromCanon was renamed storeVsaFromVersion (stele#79) — old names refuse, never alias")
-	}
-
-	if e.DecisionFromCanonRetired != nil {
-		return errors.New(
-			"evidence.decisionFromCanon was renamed decisionFromVersion (stele#79) — old names refuse, never alias")
-	}
-
 	if e.StoreVSAFromVersion != nil {
 		if _, err := semver.NewVersion(*e.StoreVSAFromVersion); err != nil {
 			return fmt.Errorf("evidence.storeVsaFromVersion: %w", err)

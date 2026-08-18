@@ -13,7 +13,9 @@ never a hardcoded name. Four verbs, which are the command surface:
 - **derive** — versions from conventional commits, SBOM assembly, VEX
   from triage decisions, OCI image facts
 - **assert** — image facts, evidence-bundle completeness (releases,
-  continuous digests, base approvals), advisory blast radius.
+  continuous digests, base approvals), advisory blast radius, release
+  tags (tagger role, gitsign signature from the declared epoch, chain
+  link on the target).
   Repo-settings drift was in the original charter and is DROPPED by
   written decision: rulesets enforce; a setting that matters to
   evidence surfaces as a consequence in the evidence walk, and a

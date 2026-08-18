@@ -220,15 +220,6 @@ func TestEmitUsageRefusals(t *testing.T) {
 		{"unknown mode", []string{"emit", "conjure"}, "unknown mode"},
 		{"bad flag", []string{"emit", "chain", "--conjure"}, ""},
 		{
-			"retired canon-digest flag refuses with a pointer",
-			[]string{
-				"emit", "vsa", "--repo", "acme/widget",
-				"--policy", px.policy, "--trusted-root", px.root,
-				"--canon-digest", strings.Repeat("b", 40),
-			},
-			"renamed --machinery-digest",
-		},
-		{
 			"repo not owner/repo",
 			[]string{"emit", "chain", "--policy", px.policy, "--trusted-root", px.root, "--repo", "solo"},
 			"owner/repo",

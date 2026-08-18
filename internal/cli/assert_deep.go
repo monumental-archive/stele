@@ -30,7 +30,15 @@ var newDeepVerifier = func(vp *policy.Policy, forge gh.Forge, bv verify.BundleVe
 		bv:    bv,
 	}
 
-	return assert.NewFullDepth(ev, *vp.Trust.Verdict.VerifierWorkflow, *vp.Trust.Provenance.SignerWorkflow)
+	// The verdict obligation is declared, not assumed (#82): an empty
+	// verifier workflow tells the walk to skip the deep verdict half,
+	// logged per release.
+	verifierWorkflow := ""
+	if vp.Trust.Verdict != nil {
+		verifierWorkflow = *vp.Trust.Verdict.VerifierWorkflow
+	}
+
+	return assert.NewFullDepth(ev, verifierWorkflow, *vp.Trust.Provenance.SignerWorkflow)
 }
 
 // loadFullDepth reads the trust authority and builds the full-depth

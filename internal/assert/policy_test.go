@@ -57,16 +57,10 @@ func TestLoadPolicyRefusals(t *testing.T) {
 			"decisionFromVersion",
 		},
 		{
-			"retired store epoch name refuses with a pointer",
+			"a pre-rename policy refuses as unknown field",
 			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
 				`"storeVsaFromCanon": "1.13.0"`, 1),
-			"renamed storeVsaFromVersion",
-		},
-		{
-			"retired decision epoch name refuses with a pointer",
-			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
-				`"storeVsaFromVersion": "1.13.0", "decisionFromCanon": "1.23.1"`, 1),
-			"renamed decisionFromVersion",
+			"storeVsaFromCanon",
 		},
 	}
 
@@ -98,5 +92,60 @@ func TestParseDebt(t *testing.T) {
 		if _, err := assert.ParseDebt([]byte(bad), "debt.txt"); err == nil {
 			t.Fatalf("%q did not refuse", bad)
 		}
+	}
+}
+
+// TestTagsPolicyRefusals: the tags section is optional, but declared
+// means every field, validated strictly (stele#83).
+func TestTagsPolicyRefusals(t *testing.T) {
+	t.Parallel()
+
+	const base = `{"schema": 1, "issuer": "https://token.example.com",
+	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
+	    "classes": {"a": {"bundles": ["b"]}}},
+	  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
+	    "identityPattern": "^https://github\\.com/acme/", "notesRef": "refs/notes/commits",
+	    "epochs": {"widget": "v1.0.0", "gadget": "pending"}}}`
+
+	if _, err := assert.LoadPolicy(strings.NewReader(base)); err != nil {
+		t.Fatalf("the base tags policy must load: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		from string
+		to   string
+		want string
+	}{
+		{"missing tagger", `"taggerName": "mint[bot]",`, ``, "taggerName"},
+		{"bad tag pattern", `"tagPattern": "^v[0-9]"`, `"tagPattern": "("`, "pattern"},
+		{
+			"bad identity pattern", `"identityPattern": "^https://github\\.com/acme/"`,
+			`"identityPattern": "("`, "pattern",
+		},
+		{"unqualified notes ref", `"notesRef": "refs/notes/commits"`, `"notesRef": "commits"`, "fully qualified"},
+		{"no epochs", `"epochs": {"widget": "v1.0.0", "gadget": "pending"}`, `"epochs": {}`, "epochs"},
+		{
+			"unparsable epoch", `"epochs": {"widget": "v1.0.0", "gadget": "pending"}`,
+			`"epochs": {"widget": "soon"}`, "epochs[widget]",
+		},
+		{"issuer missing beside tags", `"issuer": "https://token.example.com",`, ``, "issuer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := strings.Replace(base, tt.from, tt.to, 1)
+			if doc == base {
+				t.Fatalf("mutation %q did not apply", tt.from)
+			}
+
+			if _, err := assert.LoadPolicy(strings.NewReader(doc)); err == nil ||
+				!strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
 	}
 }

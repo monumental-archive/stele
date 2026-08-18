@@ -347,3 +347,76 @@ func TestDepthFullBounds(t *testing.T) {
 		}
 	})
 }
+
+// TestDepthSelfAttesting covers the #82 topology on the full-depth
+// leg: templated signer identity, verdict obligation undeclared.
+func TestDepthSelfAttesting(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the self-attesting topology pins both roots to the tag", func(t *testing.T) {
+		t.Parallel()
+
+		f := deepForge()
+		f.tagCommits = map[string]string{"v1.0.0": tagSHA40}
+		// No machinery hop exists to read: the publish-workflow files
+		// disappear and the walk must not miss them.
+		f.files = map[string]string{}
+
+		deep := &fakeDeep{}
+
+		full, err := assert.NewFullDepth(deep, "", "{owner}/{repo}/.github/workflows/release.yml")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		pol := loadTestPolicy(t)
+		src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+
+		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+			func(string, ...any) {})
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+
+		if rep.Verdict() != report.VerdictPass {
+			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+		}
+
+		want := verify.Pins{Machinery: tagSHA40, Signer: tagSHA40}
+		if len(deep.releasePins) != 1 || deep.releasePins[0] != want {
+			t.Fatalf("release pins = %+v, want %+v — self-attesting pins are the tag's own commit",
+				deep.releasePins, want)
+		}
+
+		// The verify policy declared no verdict: the deep verdict half
+		// skips, so the engine's VSA leg is never reached.
+		if len(deep.vsaPins) != 0 {
+			t.Fatalf("vsa pins = %+v — the deep verdict half must skip when no trust.verdict is declared",
+				deep.vsaPins)
+		}
+	})
+
+	t.Run("no verdict and no template refuses pin derivation", func(t *testing.T) {
+		t.Parallel()
+
+		f := deepForge()
+
+		full, err := assert.NewFullDepth(&fakeDeep{}, "", "acme/signer/.github/workflows/sign.yml")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		pol := loadTestPolicy(t)
+		src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+
+		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+			func(string, ...any) {})
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+
+		if rep.Verdict() != report.VerdictFail {
+			t.Fatalf("verdict = %s — underivable pins must red, not pass silently", rep.Verdict())
+		}
+	})
+}

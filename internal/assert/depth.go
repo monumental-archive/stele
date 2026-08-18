@@ -14,6 +14,7 @@
 package assert
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -78,6 +79,16 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		// enumerated legacy roots — grandfathered history, held to
 		// presence depth. Logged, never silent.
 		w.log("assert: evidence: %s predates store verdicts — deep verdict check bounded to presence", subject)
+
+		return nil
+	}
+
+	if !w.full.VerdictDeclared {
+		// No verdict obligation exists in the trust authority: the
+		// deep verdict half cannot run, and saying so is the honest
+		// output — a skip that logs is a bounded walk, a skip that
+		// does not is a green lie.
+		w.log("assert: evidence: %s — the verify policy declares no trust.verdict; deep verdict check skipped", subject)
 
 		return nil
 	}
@@ -186,6 +197,26 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 	machineryOwner, machineryRepo := w.full.MachineryOwner, w.full.MachineryRepo
 	signerWorkflow := w.full.SignerWorkflow
 
+	// The self-attesting topology (#82): a templated signer identity
+	// means every repository signs for itself — there is no foreign
+	// machinery tree to hop through, and both pins ARE the release
+	// commit: the certificate names the repo's own workflow at the
+	// tag, and its signer digest is the tag's commit.
+	if w.full.SelfSigned {
+		sha, err := w.forge.TagCommit(w.org, repo, tag)
+		if err != nil {
+			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
+		}
+
+		return verify.Pins{Machinery: sha, Signer: sha}, nil
+	}
+
+	if machineryOwner == "" {
+		return verify.Pins{}, errors.New(
+			"the verify policy names no machinery repository (no trust.verdict) and the signer identity is not" +
+				" templated — pins cannot be derived; declare one or the other")
+	}
+
 	var machineryPin string
 
 	if w.org == machineryOwner && repo == machineryRepo {
@@ -244,19 +275,39 @@ type FullDepth struct {
 	Verifier                      DeepVerifier
 	MachineryOwner, MachineryRepo string
 	SignerWorkflow                string
+	// SelfSigned marks the self-attesting topology: the signer
+	// identity is templated to the repository under verification, so
+	// pins derive from each release's own tag, no machinery hop.
+	SelfSigned bool
+	// VerdictDeclared reports whether the verify policy declares a
+	// trust.verdict — undeclared, the deep verdict half skips with a
+	// log line, never a silent pass and never a refusal of the walk.
+	VerdictDeclared bool
 }
 
 // NewFullDepth derives the pin-resolution roots from the verify
-// policy's trust identities.
+// policy's trust identities. verifierWorkflow is empty when the
+// policy declares no verdict obligation.
 func NewFullDepth(v DeepVerifier, verifierWorkflow, signerWorkflow string) (*FullDepth, error) {
 	const ownerRepoPath = 3
+
+	fd := &FullDepth{
+		Verifier:        v,
+		SignerWorkflow:  signerWorkflow,
+		SelfSigned:      strings.Contains(signerWorkflow, "{"),
+		VerdictDeclared: verifierWorkflow != "",
+	}
+
+	if !fd.VerdictDeclared {
+		return fd, nil
+	}
 
 	parts := strings.SplitN(verifierWorkflow, "/", ownerRepoPath)
 	if len(parts) < ownerRepoPath {
 		return nil, fmt.Errorf("verifier workflow %q does not name owner/repo/path", verifierWorkflow)
 	}
 
-	return &FullDepth{
-		Verifier: v, MachineryOwner: parts[0], MachineryRepo: parts[1], SignerWorkflow: signerWorkflow,
-	}, nil
+	fd.MachineryOwner, fd.MachineryRepo = parts[0], parts[1]
+
+	return fd, nil
 }

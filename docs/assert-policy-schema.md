@@ -239,3 +239,42 @@ grandfathered history under the verify policy's enumerated legacy
 roots — and the bound is logged, never silent. Asking for full depth
 without `--verify-policy` and `--trusted-root` is a usage refusal,
 never a shallower walk that looks like the deep one.
+
+## The tags section
+
+Tag signing is a **declared obligation** (stele#79/#82/#83): the whole
+section is absent for orgs that do not sign tags, never a
+precondition. Declared means every field, validated strictly:
+
+```json
+"tags": {
+  "tagPattern": "^v[0-9]",
+  "taggerName": "tag-mint[bot]",
+  "identityPattern": "^https://github\\.com/example-org/",
+  "notesRef": "refs/notes/commits",
+  "epochs": {"widget": "v1.2.0", "gadget": "pending"}
+}
+```
+
+- `tagPattern` — which tag refs are release tags.
+- `taggerName` — the minting role's tagger name; an identity from
+  policy, never a literal in code.
+- `identityPattern` — the regular expression the signing
+  certificate's SAN must match; the issuer is the policy's top-level
+  `issuer`, required when this section is declared.
+- `notesRef` — the source chain's notes ref, fully qualified.
+- `epochs` — each releasing repository's first signed tag, or
+  `pending` for declared-unsigned. A repository that releases tags
+  without a line here seals CANNOT_JUDGE: an undeclared population
+  member is unchecked, not clean.
+
+The walk (`stele assert tags --org|--repo`): for every matching tag,
+the tagger is the declared role, the tag from the epoch onward
+carries a gitsign signature verified natively against the trusted
+root (CMS over the tag payload, chain to the root's certificate
+authorities at the payload's tagger time, SAN and issuer held to the
+policy — no gitsign binary, and the forge's own verification verdict
+is never consulted: it cannot judge x509-in-the-PGP-slot), and the
+tag's target carries a source chain link. The legacy bound is derived
+from the chain itself: a target that does not descend from the chain
+genesis predates the machinery and owes nothing, reported by name.

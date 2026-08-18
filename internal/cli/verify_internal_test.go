@@ -234,15 +234,6 @@ func TestVerifyUsageRefusals(t *testing.T) {
 		{"unknown mode", []string{"verify", "conjure"}, "unknown mode"},
 		{"bad flag", []string{"verify", "chain", "--conjure"}, ""},
 		{
-			"retired canon-digest flag refuses with a pointer",
-			[]string{
-				"verify", "vsa", "--repo", "acme/widget",
-				"--policy", px.policy, "--trusted-root", px.root,
-				"--canon-digest", strings.Repeat("b", 40),
-			},
-			"renamed --machinery-digest",
-		},
-		{
 			"repo not owner/repo",
 			[]string{"verify", "chain", "--policy", px.policy, "--trusted-root", px.root, "--repo", "solo"},
 			"owner/repo",
