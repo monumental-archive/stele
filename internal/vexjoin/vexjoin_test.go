@@ -13,6 +13,7 @@ import (
 
 const vexDoc = `{
   "@context": "https://openvex.dev/ns/v0.2.0",
+  "timestamp": "2026-01-01T00:00:00Z",
   "statements": [
     {
       "vulnerability": {"name": "RUSTSEC-2021-0127"},
@@ -80,7 +81,8 @@ func TestParseRefusals(t *testing.T) {
 		t.Fatal("non-JSON did not refuse")
 	}
 
-	noVuln := `{"statements": [{"products": [{"@id": "pkg:cargo/a@1"}]}]}`
+	noVuln := `{"timestamp": "2026-01-01T00:00:00Z",
+	  "statements": [{"products": [{"@id": "pkg:cargo/a@1"}], "status": "not_affected"}]}`
 	if err := vexjoin.Parse(d, []byte(noVuln), "x"); err == nil {
 		t.Fatal("a statement naming no vulnerability did not refuse")
 	}
@@ -90,7 +92,9 @@ func TestUnversionedProductCannotJoin(t *testing.T) {
 	t.Parallel()
 
 	d := &vexjoin.Decisions{}
-	doc := `{"statements": [{"vulnerability": {"name": "X"}, "products": [{"@id": "pkg:cargo/noversion"}]}]}`
+	doc := `{"timestamp": "2026-01-01T00:00:00Z",
+	  "statements": [{"vulnerability": {"name": "X"}, "status": "not_affected",
+	   "products": [{"@id": "pkg:cargo/noversion"}], "status": "not_affected"}]}`
 
 	if err := vexjoin.Parse(d, []byte(doc), "x"); err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -129,7 +133,8 @@ func TestParseSkipsProductsWithoutID(t *testing.T) {
 
 	var d vexjoin.Decisions
 
-	doc := []byte(`{"statements": [{"vulnerability": {"name": "CVE-2026-0001"},
+	doc := []byte(`{"timestamp": "2026-01-01T00:00:00Z",
+	  "statements": [{"vulnerability": {"name": "CVE-2026-0001"}, "status": "not_affected",
 	  "products": [{}, {"@id": "pkg:cargo/serde_cbor@0.11.2"}]}]}`)
 
 	if err := vexjoin.Parse(&d, doc, "vex.json"); err != nil {

@@ -342,8 +342,10 @@ func blastSnapshot(t *testing.T) (string, string, string) {
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
 			`"blastRadius": {"osEcosystems": ["debian"], ` +
 			`"canary": {"repo": "widget", "tag": "v1.0.0", "advisory": "RUSTSEC-2021-0127"}}}`,
-		"vex/decided.openvex.json": `{"statements": [{"vulnerability": {"name": "RUSTSEC-2021-0127"}, ` +
-			`"products": [{"@id": "pkg:cargo/serde_cbor@0.11.2"}]}]}`,
+		"vex/decided.openvex.json": `{"timestamp": "2026-01-01T00:00:00Z",
+	  "statements": [{"vulnerability": {"name": "RUSTSEC-2021-0127"}, ` +
+			`"status": "not_affected",
+	   "products": [{"@id": "pkg:cargo/serde_cbor@0.11.2"}]}]}`,
 	}
 
 	for path, content := range files {

@@ -80,7 +80,8 @@ func decided(t *testing.T, advisory, pkg, version string) *vexjoin.Decisions {
 	t.Helper()
 
 	d := &vexjoin.Decisions{}
-	doc := `{"statements": [{"vulnerability": {"name": "` + advisory + `"},
+	doc := `{"timestamp": "2026-01-01T00:00:00Z",
+	  "statements": [{"vulnerability": {"name": "` + advisory + `"}, "status": "not_affected",
 	  "products": [{"@id": "pkg:cargo/` + pkg + `@` + version + `"}]}]}`
 
 	if err := vexjoin.Parse(d, []byte(doc), "test.openvex.json"); err != nil {
@@ -244,7 +245,8 @@ func TestBlastRadiusStaleDecision(t *testing.T) {
 	extra := decided(t, canaryScan, "serde_cbor", "0.11.2")
 
 	for _, dec := range extra.All() {
-		doc := `{"statements": [{"vulnerability": {"name": "` + dec.Key.Advisory + `"},
+		doc := `{"timestamp": "2026-01-01T00:00:00Z",
+	  "statements": [{"vulnerability": {"name": "` + dec.Key.Advisory + `"}, "status": "not_affected",
 		  "products": [{"@id": "pkg:cargo/` + dec.Key.Package + `@` + dec.Key.Version + `"}]}]}`
 		if err := vexjoin.Parse(d, []byte(doc), dec.Origin); err != nil {
 			t.Fatal(err)

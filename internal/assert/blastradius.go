@@ -291,7 +291,9 @@ func (w *blastWalk) judgeOne(repo, tag, subject, pkg, version, ecosystem, adviso
 		w.exceptions = append(w.exceptions, report.Derived(subject, assertion,
 			"unfixed OS base-layer package: remediation is the next release on a refreshed base digest"))
 	case w.decisions.Has(key):
-		for _, d := range w.decisions.All() {
+		all := w.decisions.All()
+		for i := range all {
+			d := &all[i]
 			if d.Key == key {
 				w.used[key] = true
 				w.exceptions = append(w.exceptions, report.Declared(subject, assertion, d.Origin))
@@ -322,7 +324,9 @@ func (w *blastWalk) osEcosystem(ecosystem string) bool {
 // finding — retirement candidates by name. The exception's subject
 // matches nothing, so Seal lists it stale.
 func (w *blastWalk) staleDecisions() {
-	for _, d := range w.decisions.All() {
+	all := w.decisions.All()
+	for i := range all {
+		d := &all[i]
 		if !w.used[d.Key] {
 			w.exceptions = append(w.exceptions, report.Declared(
 				"(no current finding)",
