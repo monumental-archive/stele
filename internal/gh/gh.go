@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -563,7 +562,11 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 }
 
 // paged reads every page of a listing endpoint (per_page=100), up to
-// a sane page bound.
+// a sane page bound. path carries no query of its own — the
+// pagination parameters ARE the query string, which is true of every
+// listing endpoint this client reads; a caller that needs a filter
+// adds it here deliberately rather than through a separator branch no
+// call site ever takes.
 func (c *Client) paged(path string) ([][]byte, error) {
 	const maxPages = 50
 	// emptyPageLen is the API's empty array literal, the last page.
@@ -572,12 +575,7 @@ func (c *Client) paged(path string) ([][]byte, error) {
 	var pages [][]byte
 
 	for page := 1; page <= maxPages; page++ {
-		sep := "?"
-		if strings.Contains(path, "?") {
-			sep = "&"
-		}
-
-		body, ok, err := c.get(fmt.Sprintf("%s%sper_page=100&page=%d", path, sep, page), "application/vnd.github+json")
+		body, ok, err := c.get(fmt.Sprintf("%s?per_page=100&page=%d", path, page), "application/vnd.github+json")
 		if err != nil {
 			return nil, err
 		}
