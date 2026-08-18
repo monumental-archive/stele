@@ -116,7 +116,7 @@ func swap(t *testing.T, bv verify.BundleVerifier, store verify.Store) {
 	origBV, origStore, origHist := newBundleVerifier, newStore, openHistory
 
 	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return bv, nil }
-	newStore = func() verify.Store { return store }
+	newStore = func(bool) verify.Store { return store }
 	openHistory = func(string, string) (verify.History, error) {
 		return nil, errors.New("no history in this test")
 	}

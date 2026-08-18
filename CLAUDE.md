@@ -49,8 +49,12 @@ over whole, and only then does the next open. State and next step:
    hashes taken from the note read back out of the object store, and
    a compare-and-swap append that rebuilds on rejection. The
    defective spans were deleted and re-emitted through this emitter
-   (31 links on .github, 15 here); all four org chains verify at
-   `SLSA_SOURCE_LEVEL_3`.
+   (31 links on .github, 15 here). Note-format v3 (stele#19 item 6)
+   DSSE-authenticates both halves — signatures cover
+   PAE(payloadType, statement) — and retired v1/v2 reading whole:
+   the org ledgers re-emit at the canon cutover (the #434 healing
+   precedent), because pre-v1 nothing external consumes the old
+   bytes and dual-version reading would be dead weight.
 3. **release wiring — DONE** (#7): the `go-binary` class shipped and
    stele self-releases N-1 (v0.1.0 onward); the belt installs the
    released, attested binary and the `go run @<sha>` pins are
@@ -121,6 +125,13 @@ The canon speaks for the org; stele speaks for the mechanism.
   — by the disabled-rule law, a layout defect. What vendoring bought
   beyond go.sum was offline builds and upstream-deletion insurance;
   not worth that price.
+- **Pre-v1, correctness wins every tie.** Until stele cuts a v1,
+  nothing external depends on it: formats, schemas and vocabulary
+  change to the correct-by-construction shape without compatibility
+  shims, dual-version readers, or deprecation ladders. If a correct
+  stele breaks the canon, the canon conforms to the tool — never the
+  tool to the org's accumulated shape. Bad history is recorded
+  honestly (healed links, legacy categories), not designed around.
 - **The bash is a reference, not an oracle.** Ported logic runs beside
   it on identical inputs and divergence is investigated — but the bar
   is spec correctness (SLSA v1.2, in-toto/DSSE, git's actual storage

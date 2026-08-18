@@ -147,3 +147,23 @@ func TestBundlesRetries(t *testing.T) {
 		}
 	})
 }
+
+// TestBundlesFailFast pins the auditor stance (#19 item 4): a
+// one-attempt budget makes exactly one call — a wrong digest refuses
+// now instead of riding the propagation ladder.
+func TestBundlesFailFast(t *testing.T) {
+	t.Parallel()
+
+	c, calls := client(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	c.Attempts = 1
+
+	if _, err := c.Bundles("acme/widget", digest); err == nil {
+		t.Fatal("an empty store did not refuse")
+	}
+
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want exactly 1 — fail fast means one look", calls.Load())
+	}
+}

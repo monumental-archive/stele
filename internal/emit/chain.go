@@ -376,7 +376,7 @@ func linkIsGenesis(link *chain.Note) (bool, error) {
 		return false, fmt.Errorf("predicate: %w", err)
 	}
 
-	_, genesis, err := pred.Ledger(*link.Version)
+	_, genesis, err := pred.Ledger()
 	if err != nil {
 		return false, err
 	}
@@ -405,7 +405,8 @@ func (e *chainRun) verifyTail(rev string) error {
 		return fmt.Errorf("emit: tail at %s: statement: %w", rev, err)
 	}
 
-	if _, verr := e.bv.Blob(link.Provenance.Bundle, e.id, chain.SHA256Hex(stmtBytes)); verr != nil {
+	if _, verr := e.bv.Blob(link.Provenance.Bundle, e.id,
+		chain.SHA256Hex(dsse.PAE(chain.StatementType, stmtBytes))); verr != nil {
 		return fmt.Errorf(
 			"emit: link at %s does not verify against %s — refusing to extend a chain that fails the published root"+
 				" of trust: %w", rev, e.id.SAN, verr)
@@ -676,12 +677,17 @@ func (e *chainRun) statement(rev, predicateType string, pred any) ([]byte, error
 // consumer does not. A signature that does not verify against the
 // published contract refuses the run.
 func (e *chainRun) signAndProve(stmtBytes []byte) (jsonx.Raw, error) {
-	bundle, err := e.s.Sign(stmtBytes)
+	// The signature covers PAE(type, statement), never the bare
+	// statement bytes — DSSE's payload-type authentication, so a
+	// signed statement cannot be replayed as another document kind.
+	pae := dsse.PAE(chain.StatementType, stmtBytes)
+
+	bundle, err := e.s.Sign(pae)
 	if err != nil {
 		return nil, fmt.Errorf("signing: %w", err)
 	}
 
-	if _, verr := e.bv.Blob(bundle, e.id, chain.SHA256Hex(stmtBytes)); verr != nil {
+	if _, verr := e.bv.Blob(bundle, e.id, chain.SHA256Hex(pae)); verr != nil {
 		return nil, fmt.Errorf(
 			"the bundle just signed does not verify against %s — the certificate identity is not the published"+
 				" contract: %w", e.id.SAN, verr)
@@ -690,19 +696,20 @@ func (e *chainRun) signAndProve(stmtBytes []byte) (jsonx.Raw, error) {
 	return bundle, nil
 }
 
-// assembleNote renders the version-2 chain link: statements base64 so
-// the signed bytes survive any JSON re-encoding of the note, bundles
-// as JSON for tooling — validated through the consumer type before a
-// byte is written.
+// assembleNote renders the version-3 chain link: statements base64
+// so the signed bytes survive any JSON re-encoding of the note,
+// bundles as JSON for tooling — validated through the consumer type
+// before a byte is written.
 func assembleNote(provBytes, provBundle, vsaBytes, vsaBundle []byte) ([]byte, error) {
-	version := chain.NoteV2
+	version := chain.NoteV3
+	payloadType := chain.StatementType
 	provStmt := base64.StdEncoding.EncodeToString(provBytes)
 	vsaStmt := base64.StdEncoding.EncodeToString(vsaBytes)
 
 	note := chain.Note{
 		Version:    &version,
-		Provenance: &chain.Envelope{Statement: &provStmt, Bundle: provBundle},
-		VSA:        &chain.Envelope{Statement: &vsaStmt, Bundle: vsaBundle},
+		Provenance: &chain.Envelope{PayloadType: &payloadType, Statement: &provStmt, Bundle: provBundle},
+		VSA:        &chain.Envelope{PayloadType: &payloadType, Statement: &vsaStmt, Bundle: vsaBundle},
 	}
 
 	if err := note.Validate(); err != nil {

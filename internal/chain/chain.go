@@ -32,15 +32,21 @@ func SHA256Hex(b []byte) string {
 	return hex.EncodeToString(d[:])
 }
 
-// The two note versions readers accept. Version 1 carries `prev`,
-// one pointer holding two meanings (ledger order and git ancestry)
-// at once — the overload that made pre-v2 heals fork the ledger.
-// Version 2 splits them: `ledgerPrev` is emission order, and git
-// ancestry travels separately in `revisionParent` and `parents`.
-const (
-	NoteV1 = 1
-	NoteV2 = 2
-)
+// NoteV3 is the ONE note version this implementation reads and
+// writes. v3 = the v2 ledger semantics (`ledgerPrev` is emission
+// order; git ancestry travels in `revisionParent` and `parents`)
+// plus DSSE payload-type authentication: each half's bundle signs
+// PAE(payloadType, statement), never the bare statement bytes, so a
+// signed statement cannot be replayed as a different document type.
+// Earlier versions are not read: the ledgers are re-emitted whole at
+// the format bump (the #434 healing precedent) — nothing external
+// consumes the old bytes, so dual-version reading would be dead
+// weight, not compatibility.
+const NoteV3 = 3
+
+// StatementType is the DSSE payload type every half carries — the
+// in-toto statement media type.
+const StatementType = "application/vnd.in-toto+json"
 
 // Note is one chain link: a git note on the attested revision.
 // Statements travel base64 so the signed bytes survive any JSON
@@ -51,12 +57,15 @@ type Note struct {
 	VSA        *Envelope `json:"vsa"`
 }
 
-// Envelope pairs a base64 statement with its Sigstore bundle. The
-// bundle stays raw: its verification belongs to the trust layer, and
-// its exact shape belongs to Sigstore.
+// Envelope pairs a base64 statement with its payload type and its
+// Sigstore bundle. The bundle's signature covers
+// PAE(payloadType, statement); the bundle stays raw because its
+// verification belongs to the trust layer and its exact shape to
+// Sigstore.
 type Envelope struct {
-	Statement *string   `json:"statement"`
-	Bundle    jsonx.Raw `json:"bundle"`
+	PayloadType *string   `json:"payloadType"`
+	Statement   *string   `json:"statement"`
+	Bundle      jsonx.Raw `json:"bundle"`
 }
 
 // Pointer is a ledger step: the previous emitted note's revision and
@@ -86,18 +95,14 @@ type Repaired struct {
 	At *string `json:"at"`
 }
 
-// Predicate is the source-provenance predicate. LedgerPrev and Prev
-// are version-gated: exactly one of them is PRESENT (v2 and v1
-// respectively), and genesis is that key present AND null — which is
-// why both are jsonx.Raw first and interpreted by Ledger below: the
+// Predicate is the source-provenance predicate. LedgerPrev is
+// jsonx.Raw because absent and genesis-null are different facts: the
+// key is PRESENT on every link, null exactly at genesis — the
 // stdlib's absent and null both decode a pointer to nil, and this
-// format makes that exact distinction load-bearing.
-// The omitempty tags are encode-side (the emit leg renders v2
-// predicates through this same type): prev is never present in a v2
-// document, and repaired is present exactly on healed links. Decoding
-// is pointer/nil-driven and unaffected. LedgerPrev deliberately has
-// NO omitempty — a v2 predicate carries the key even at genesis,
-// where its value is null.
+// format makes that exact distinction load-bearing (interpreted by
+// Ledger below). LedgerPrev deliberately has NO omitempty — the key
+// travels even at genesis; repaired is present exactly on healed
+// links.
 type Predicate struct {
 	Repository     *string   `json:"repository"`
 	Ref            *string   `json:"ref"`
@@ -108,12 +113,8 @@ type Predicate struct {
 	Controls       []Control `json:"controls"`
 	LedgerPrev     jsonx.Raw `json:"ledgerPrev"`
 	RevisionParent *string   `json:"revisionParent"`
-	Prev           jsonx.Raw `json:"prev,omitempty"`
 	// MachineryRef pins the policy tree the link was emitted under.
-	// The WIRE name stays canonRef: it is inside signed statements at
-	// note-format v2, and renaming it is a format bump (#79 renamed
-	// only the unsigned surfaces; the role name lives in Go).
-	MachineryRef *string   `json:"canonRef"`
+	MachineryRef *string   `json:"machineryRef"`
 	Repaired     *Repaired `json:"repaired,omitempty"`
 }
 
@@ -129,8 +130,9 @@ func (n *Note) Validate() error {
 	switch {
 	case n.Version == nil:
 		return errors.New("chain: version is absent")
-	case *n.Version != NoteV1 && *n.Version != NoteV2:
-		return fmt.Errorf("chain: version %d is neither %d nor %d", *n.Version, NoteV1, NoteV2)
+	case *n.Version != NoteV3:
+		return fmt.Errorf("chain: version %d is not %d — earlier formats were retired whole with their ledgers",
+			*n.Version, NoteV3)
 	}
 
 	for _, half := range []struct {
@@ -139,6 +141,10 @@ func (n *Note) Validate() error {
 	}{{"provenance", n.Provenance}, {"vsa", n.VSA}} {
 		if half.env == nil {
 			return fmt.Errorf("chain: %s is absent — a link is provenance and summary, never one alone", half.name)
+		}
+
+		if half.env.PayloadType == nil || *half.env.PayloadType != StatementType {
+			return fmt.Errorf("chain: %s.payloadType is not %s", half.name, StatementType)
 		}
 
 		if half.env.Statement == nil || *half.env.Statement == "" {
@@ -157,40 +163,18 @@ func (n *Note) Validate() error {
 	return nil
 }
 
-// Ledger interprets the version-gated pointer of a validated note's
-// predicate: the ledger step for the walk, or genesis. The rules are
-// the documented ones — a v2 predicate carries ledgerPrev PRESENT
-// (null exactly at genesis) and no prev; a v1 predicate the reverse.
-// A predicate carrying both, neither, or the wrong key for its
-// version is refused: the audit's lesson (#349 S3) is that testing
-// bare null ends the walk at the first v2 link and calls the
-// truncation clean, so presence and nullness are judged separately.
-// Genesis is its own return, never a nil pointer a caller could
-// mistake for one more step.
-func (p *Predicate) Ledger(version int) (*Pointer, bool, error) {
-	var key string
-
-	var raw jsonx.Raw
-
-	switch version {
-	case NoteV1:
-		if p.LedgerPrev != nil {
-			return nil, false, errors.New("chain: a version-1 predicate must not carry ledgerPrev")
-		}
-
-		key, raw = "prev", p.Prev
-	case NoteV2:
-		if p.Prev != nil {
-			return nil, false, errors.New("chain: a version-2 predicate must not carry prev")
-		}
-
-		key, raw = "ledgerPrev", p.LedgerPrev
-	default:
-		return nil, false, fmt.Errorf("chain: version %d is neither %d nor %d", version, NoteV1, NoteV2)
-	}
+// Ledger interprets a validated predicate's ledger pointer: the
+// step for the walk, or genesis. ledgerPrev must be PRESENT (null
+// exactly at genesis): the audit's lesson (#349 S3) is that testing
+// bare null ends the walk at the first link and calls the truncation
+// clean, so presence and nullness are judged separately. Genesis is
+// its own return, never a nil pointer a caller could mistake for one
+// more step.
+func (p *Predicate) Ledger() (*Pointer, bool, error) {
+	raw := p.LedgerPrev
 
 	if raw == nil {
-		return nil, false, fmt.Errorf("chain: %s is absent — absent and genesis-null are different facts", key)
+		return nil, false, errors.New("chain: ledgerPrev is absent — absent and genesis-null are different facts")
 	}
 
 	if string(raw) == "null" {
@@ -199,15 +183,15 @@ func (p *Predicate) Ledger(version int) (*Pointer, bool, error) {
 
 	ptr, err := jsonx.DecodeBytes[Pointer](raw)
 	if err != nil {
-		return nil, false, fmt.Errorf("chain: %s: %w", key, err)
+		return nil, false, fmt.Errorf("chain: ledgerPrev: %w", err)
 	}
 
 	if ptr.Revision == nil || !revisionRE.MatchString(*ptr.Revision) {
-		return nil, false, fmt.Errorf("chain: %s.revision must be the full 40-hex identifier", key)
+		return nil, false, errors.New("chain: ledgerPrev.revision must be the full 40-hex identifier")
 	}
 
 	if ptr.NoteSHA256 == nil || !sha256RE.MatchString(*ptr.NoteSHA256) {
-		return nil, false, fmt.Errorf("chain: %s.noteSha256 must be 64 lowercase hex", key)
+		return nil, false, errors.New("chain: ledgerPrev.noteSha256 must be 64 lowercase hex")
 	}
 
 	return ptr, false, nil

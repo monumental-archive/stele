@@ -61,13 +61,20 @@ var (
 		return trustAdapter{v: v}, nil
 	}
 
-	newStore = func() verify.Store {
+	newStore = func(noRetry bool) verify.Store {
 		token := os.Getenv("GITHUB_TOKEN")
 		if token == "" {
 			token = os.Getenv("GH_TOKEN")
 		}
 
-		return ghstore.New(token)
+		c := ghstore.New(token)
+		if noRetry {
+			// The auditor stance: a wrong digest refuses now instead of
+			// riding the just-published propagation ladder (#19 item 4).
+			c.Attempts = 1
+		}
+
+		return c
 	}
 
 	openHistory = func(dir, notesRef string) (verify.History, error) {
@@ -148,6 +155,7 @@ type verifyArgs struct {
 	ref          string
 	mode         string
 	jsonOut      bool
+	noRetry      bool
 	p            *policy.Policy
 	coords       verify.Coords
 	subjectList  []verify.Subject
@@ -267,6 +275,8 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 	fs.StringVar(&va.repo, "repo", "", "owner/repo under verification (required)")
 	fs.BoolVar(&va.jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+	fs.BoolVar(&va.noRetry, "no-retry", false,
+		"fail fast on store reads instead of waiting out publication propagation (auditing history)")
 
 	switch mode {
 	case modeRelease, modeVSA:
@@ -411,7 +421,8 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 
 	switch va.mode {
 	case modeRelease:
-		verdict, err := verify.Release(va.p, va.coords, va.subjectList, va.sbomList, pins, newStore(), va.bv, out.logf)
+		verdict, err := verify.Release(
+			va.p, va.coords, va.subjectList, va.sbomList, pins, newStore(va.noRetry), va.bv, out.logf)
 		if err != nil {
 			return nil, err
 		}
@@ -421,7 +432,7 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 			facts: []report.Fact{{Name: "sourceRevision", Value: verdict.SourceRevision()}},
 		}, nil
 	case modeVSA:
-		verdict, err := verify.VSA(va.p, va.coords, va.subjectList, pins, newStore(), va.bv, out.logf)
+		verdict, err := verify.VSA(va.p, va.coords, va.subjectList, pins, newStore(va.noRetry), va.bv, out.logf)
 		if err != nil {
 			return nil, err
 		}

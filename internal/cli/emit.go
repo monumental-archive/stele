@@ -395,7 +395,7 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 func runEmitVSA(ea *emitArgs, out *latch) error {
 	pins := verify.Pins{Signer: ea.signerPin, Machinery: ea.machineryPin}
 
-	verdict, err := verify.Release(ea.p, ea.coords, ea.subjectList, ea.sbomList, pins, newStore(), ea.bv, out.logf)
+	verdict, err := verify.Release(ea.p, ea.coords, ea.subjectList, ea.sbomList, pins, newStore(false), ea.bv, out.logf)
 	if err != nil {
 		return err
 	}

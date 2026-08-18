@@ -22,11 +22,14 @@ import (
 // lists, and a response past this size is a fault, not evidence.
 const maxBody = 64 << 20
 
-// attempts and the growing backoff mirror the bash oracle's retry
-// stance: the store is often read moments after the signer wrote.
+// DefaultAttempts and the growing backoff mirror the original
+// workflow stance: the store is often read moments after the signer
+// wrote, and HTTP 404 is also the just-published propagation signal.
+// An auditor verifying history wants the opposite — fail fast — so
+// the attempt budget is a field, not a constant.
 const (
-	attempts    = 5
-	backoffStep = 5 * time.Second
+	DefaultAttempts = 5
+	backoffStep     = 5 * time.Second
 )
 
 // Client fetches attestation bundles. Token is optional — public
@@ -37,6 +40,8 @@ type Client struct {
 	Token string
 	HTTP  *http.Client
 	Sleep func(time.Duration)
+	// Attempts is the propagation retry budget; 1 means fail fast.
+	Attempts int
 }
 
 // httpTimeout bounds one API call end to end.
@@ -45,10 +50,11 @@ const httpTimeout = 60 * time.Second
 // New builds a client against the public GitHub API.
 func New(token string) *Client {
 	return &Client{
-		Base:  "https://api.github.com",
-		Token: token,
-		HTTP:  &http.Client{Timeout: httpTimeout},
-		Sleep: time.Sleep,
+		Base:     "https://api.github.com",
+		Token:    token,
+		HTTP:     &http.Client{Timeout: httpTimeout},
+		Sleep:    time.Sleep,
+		Attempts: DefaultAttempts,
 	}
 }
 
@@ -66,9 +72,16 @@ type response struct {
 func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) {
 	url := fmt.Sprintf("%s/repos/%s/attestations/sha256:%s?per_page=100", c.Base, slug, sha256Hex)
 
+	// A zero value means the caller never chose: the default ladder,
+	// so a hand-built client keeps the documented stance.
+	budget := c.Attempts
+	if budget <= 0 {
+		budget = DefaultAttempts
+	}
+
 	var lastErr error
 
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; attempt <= budget; attempt++ {
 		if attempt > 1 {
 			c.Sleep(time.Duration(attempt) * backoffStep)
 		}
@@ -85,7 +98,7 @@ func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) 
 		lastErr = err
 	}
 
-	return nil, fmt.Errorf("ghstore: %s after %d attempts: %w", url, attempts, lastErr)
+	return nil, fmt.Errorf("ghstore: %s after %d attempt(s): %w", url, budget, lastErr)
 }
 
 func (c *Client) fetch(url string) ([]verify.StoredBundle, error) {
