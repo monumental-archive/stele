@@ -15,10 +15,12 @@ const (
 	b64 = "e30="
 )
 
+const payloadType = "application/vnd.in-toto+json"
+
 const validNote = `{
-  "version": 2,
-  "provenance": {"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}},
-  "vsa": {"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}
+  "version": 3,
+  "provenance": {"payloadType": "` + payloadType + `", "statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}},
+  "vsa": {"payloadType": "` + payloadType + `", "statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}
 }`
 
 func decodeNote(t *testing.T, doc string) *chain.Note {
@@ -49,36 +51,48 @@ func TestNoteValidateRefusals(t *testing.T) {
 		to   string
 		want string
 	}{
-		{"version absent", `"version": 2,`, ``, "version is absent"},
-		{"version unknown", `"version": 2`, `"version": 3`, "neither 1 nor 2"},
+		{"version absent", `"version": 3,`, ``, "version is absent"},
+		{"version retired", `"version": 3`, `"version": 2`, "is not 3"},
+		{
+			"payloadType wrong",
+			`"provenance": {"payloadType": "` + payloadType + `"`,
+			`"provenance": {"payloadType": "text/plain"`,
+			"payloadType is not",
+		},
 		{
 			"provenance absent",
-			`"provenance": {"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}},`,
+			`"provenance": {"payloadType": "` + payloadType + `", "statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}},`,
 			`"provenance": null,`,
 			"provenance is absent",
 		},
 		{
 			"vsa absent",
-			`"vsa": {"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}`,
+			`"vsa": {"payloadType": "` + payloadType + `", "statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}`,
 			`"vsa": null`,
 			"vsa is absent",
 		},
 		{
 			"statement empty",
-			`"vsa": {"statement": "` + b64 + `"`,
-			`"vsa": {"statement": ""`,
+			`"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}
+}`,
+			`"statement": "", "bundle": {"dsseEnvelope": {}}}
+}`,
 			"vsa.statement is absent or empty",
 		},
 		{
 			"statement not base64",
-			`"vsa": {"statement": "` + b64 + `"`,
-			`"vsa": {"statement": "!!!"`,
+			`"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}
+}`,
+			`"statement": "!!!", "bundle": {"dsseEnvelope": {}}}
+}`,
 			"vsa.statement",
 		},
 		{
 			"bundle absent",
-			`"vsa": {"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}`,
-			`"vsa": {"statement": "` + b64 + `"}`,
+			`"statement": "` + b64 + `", "bundle": {"dsseEnvelope": {}}}
+}`,
+			`"statement": "` + b64 + `"}
+}`,
 			"vsa.bundle is absent",
 		},
 	}
@@ -118,60 +132,30 @@ const pointer = `{"revision": "` + revHex + `", "noteSha256": "` + noteHex + `"}
 func TestLedgerStep(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		doc     string
-		version int
-	}{
-		{"v2 step", `{"ledgerPrev": ` + pointer + `}`, chain.NoteV2},
-		{"v1 step", `{"prev": ` + pointer + `}`, chain.NoteV1},
+	ptr, genesis, err := decodePredicate(t, `{"ledgerPrev": `+pointer+`}`).Ledger()
+	if err != nil {
+		t.Fatalf("Ledger = %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	if genesis || ptr == nil {
+		t.Fatal("Ledger = genesis, want a step")
+	}
 
-			ptr, genesis, err := decodePredicate(t, tt.doc).Ledger(tt.version)
-			if err != nil {
-				t.Fatalf("Ledger = %v", err)
-			}
-
-			if genesis || ptr == nil {
-				t.Fatal("Ledger = genesis, want a step")
-			}
-
-			if *ptr.Revision != revHex || *ptr.NoteSHA256 != noteHex {
-				t.Errorf("Ledger = {%s %s}, want the pointer's values", *ptr.Revision, *ptr.NoteSHA256)
-			}
-		})
+	if *ptr.Revision != revHex || *ptr.NoteSHA256 != noteHex {
+		t.Errorf("Ledger = {%s %s}, want the pointer's values", *ptr.Revision, *ptr.NoteSHA256)
 	}
 }
 
 func TestLedgerGenesis(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		doc     string
-		version int
-	}{
-		{"v2 genesis", `{"ledgerPrev": null}`, chain.NoteV2},
-		{"v1 genesis", `{"prev": null}`, chain.NoteV1},
+	ptr, genesis, err := decodePredicate(t, `{"ledgerPrev": null}`).Ledger()
+	if err != nil {
+		t.Fatalf("Ledger = %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			ptr, genesis, err := decodePredicate(t, tt.doc).Ledger(tt.version)
-			if err != nil {
-				t.Fatalf("Ledger = %v", err)
-			}
-
-			if !genesis || ptr != nil {
-				t.Errorf("Ledger = %+v genesis=%v, want genesis", ptr, genesis)
-			}
-		})
+	if !genesis || ptr != nil {
+		t.Errorf("Ledger = %+v genesis=%v, want genesis", ptr, genesis)
 	}
 }
 
@@ -179,42 +163,31 @@ func TestLedgerRefusals(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		doc     string
-		version int
-		want    string
+		name string
+		doc  string
+		want string
 	}{
-		// The #349 S3 lesson, pinned from both directions: absence is
-		// never genesis, and the wrong key for the version is never
-		// read — a v1 walk that would read ledgerPrev, or a v2 walk
-		// that would read prev, is walking the other version's chain.
-		{"v2 key absent is not genesis", `{}`, chain.NoteV2, "ledgerPrev is absent"},
-		{"v1 key absent is not genesis", `{}`, chain.NoteV1, "prev is absent"},
-		{"v2 must not carry prev", `{"ledgerPrev": null, "prev": null}`, chain.NoteV2, "must not carry prev"},
-		{"v1 must not carry ledgerPrev", `{"ledgerPrev": null, "prev": null}`, chain.NoteV1, "must not carry ledgerPrev"},
-		{"unknown version", `{"ledgerPrev": null}`, 3, "neither 1 nor 2"},
+		// The #349 S3 lesson: absence is never genesis — presence and
+		// nullness are judged separately.
+		{"key absent is not genesis", `{}`, "ledgerPrev is absent"},
 		{
 			"pointer not an object",
 			`{"ledgerPrev": "` + revHex + `"}`,
-			chain.NoteV2,
 			"ledgerPrev",
 		},
 		{
 			"revision abbreviated",
 			`{"ledgerPrev": {"revision": "e1ad2dde", "noteSha256": "` + noteHex + `"}}`,
-			chain.NoteV2,
 			"full 40-hex",
 		},
 		{
 			"noteSha256 malformed",
 			`{"ledgerPrev": {"revision": "` + revHex + `", "noteSha256": "abc"}}`,
-			chain.NoteV2,
 			"64 lowercase hex",
 		},
 		{
 			"pointer with unknown field",
 			`{"ledgerPrev": {"revision": "` + revHex + `", "noteSha256": "` + noteHex + `", "extra": 1}}`,
-			chain.NoteV2,
 			"unknown field",
 		},
 	}
@@ -223,7 +196,7 @@ func TestLedgerRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, _, err := decodePredicate(t, tt.doc).Ledger(tt.version); err == nil {
+			if _, _, err := decodePredicate(t, tt.doc).Ledger(); err == nil {
 				t.Fatal("Ledger accepted a predicate it must refuse")
 			} else if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("Ledger error = %q, want it to name %q", err, tt.want)
@@ -233,7 +206,7 @@ func TestLedgerRefusals(t *testing.T) {
 }
 
 // TestPredicateFullDecode pins the whole documented field set on one
-// realistic v2 predicate, healed-link marker included.
+// realistic v3 predicate, healed-link marker included.
 func TestPredicateFullDecode(t *testing.T) {
 	t.Parallel()
 
@@ -247,13 +220,13 @@ func TestPredicateFullDecode(t *testing.T) {
   "controls": [{"property": "ACME_SOURCE_GATED", "evidence": {"rule": "required_status_checks"}}],
   "ledgerPrev": ` + pointer + `,
   "revisionParent": "` + revHex + `",
-  "canonRef": "` + revHex + `",
+  "machineryRef": "` + revHex + `",
   "repaired": {"at": "2026-08-16T09:00:00+01:00"}
 }`
 
 	p := decodePredicate(t, doc)
 
-	ptr, genesis, err := p.Ledger(chain.NoteV2)
+	ptr, genesis, err := p.Ledger()
 	if err != nil {
 		t.Fatalf("Ledger = %v", err)
 	}

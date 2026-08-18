@@ -93,6 +93,30 @@ states one value (the signer workflow).
 }
 ```
 
+## Declared obligations (the universality principle, #79/#82)
+
+**Obligations are declared; identities are roles; only provenance is
+intrinsic.** The minimal valid policy is `schema` + `issuer` +
+`trust.provenance` — everything an adopter needs on day one, with
+the provenance identity possibly templated to the repository itself.
+`trust.verdict`, `trust.decision`, `build` and `source` are sections
+an org declares when it builds the mechanism: absent means the
+obligation does not exist; declared means every field of it,
+validated strictly. The verbs refuse at USE when the section they
+need is undeclared (`verify release` needs `build`; `verify vsa`
+needs `build` and `trust.verdict`; the chain walk and emitter need
+`source`), so a missing section is a named refusal, never a load
+failure and never a silent skip.
+
+Workflow identity fields (`signerWorkflow`, `verifierWorkflow`)
+accept `{owner}` and `{repo}` — and only those two — so "each
+repository signs for itself" is expressible: a self-attesting
+repository's certificate names its own workflow at the release tag,
+and the SAN derivation composes through the same self-vs-foreign
+rule every literal identity already follows. A placeholder outside
+that vocabulary refuses at load: a per-tag identity would be a
+wildcard, not a role.
+
 ## Field by field
 
 ### `schema`

@@ -54,11 +54,13 @@ type Subject struct {
 // Pins are the commit digests the roots of trust are pinned at for
 // this invocation — derived from the consuming tree or supplied
 // explicitly, never read from the policy (the #314 lesson).
-// Signer pins the org signer's tree; Canon pins the canon tree that
-// carries the verifier and decision workflows.
+// Signer pins the signer's tree; Machinery pins the tree of the
+// repository carrying the shared release machinery — the verifier
+// and decision workflows. A repository carrying its own machinery
+// pins its own tree.
 type Pins struct {
-	Signer string
-	Canon  string
+	Signer    string
+	Machinery string
 }
 
 // StoredBundle is one attestation bundle as fetched: the raw bundle
@@ -148,6 +150,15 @@ func expand(tmpl string, c Coords) string {
 		"{tag}", c.Tag,
 		"{version}", c.Version(),
 	).Replace(tmpl)
+}
+
+// expandWorkflow substitutes the identity-role placeholders (#82):
+// a workflow identity templated `{owner}/{repo}/…` names the
+// repository under verification's own workflow — the self-attesting
+// topology. Only owner and repo: identities are roles, not per-tag
+// wildcards (the policy loader enforces the vocabulary).
+func expandWorkflow(workflow string, c Coords) string {
+	return strings.NewReplacer("{owner}", c.Owner, "{repo}", c.Repo).Replace(workflow)
 }
 
 // workflowSAN renders the certificate identity a workflow signs

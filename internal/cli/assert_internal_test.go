@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,6 +285,8 @@ func TestAssertEvidenceUsageRefusals(t *testing.T) {
 	rows := [][]string{
 		{"assert", "evidence", "--policy", policy},
 		{"assert", "evidence", "--org", "acme"},
+		{"assert", "evidence", "--org", "acme", "--repo", "acme/widget", "--policy", policy},
+		{"assert", "evidence", "--repo", "solo", "--policy", policy},
 		{"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap, "--capture", snap},
 		{"assert", "evidence", "--org", "acme", "--policy", "/no/such/policy.json"},
 	}
@@ -774,6 +777,254 @@ func TestAssertEvidenceStoreGuards(t *testing.T) {
 		}, &stdout, &stderr)
 		if code != exitOK {
 			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+		}
+	})
+}
+
+// tagsSnapshot writes a replayable tag-audit world: one annotated,
+// signed tag on a linked revision, with the chain genesis one commit
+// earlier.
+func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot dir, policy path
+	t.Helper()
+
+	dir := t.TempDir()
+
+	const (
+		genesis = "2222222222222222222222222222222222222222"
+		target  = "3333333333333333333333333333333333333333"
+		tagObj  = "4444444444444444444444444444444444444444"
+	)
+
+	link := `{"Rev": "%s", "Note": {"version": 2, "provenance": {"bundle": {}}}}`
+
+	files := map[string]string{
+		"snap/acme/widget/tagrefs.json": `[{"Name": "v1.0.0", "ObjectSHA": "` + tagObj + `", "Annotated": true}]`,
+		"snap/acme/widget/tagobjects/" + tagObj + ".json": `{"Tagger": "release-mint[bot]", ` +
+			`"Target": "` + target + `", "Payload": "b2JqZWN0", ` +
+			`"Signature": "c2ln"}`,
+		"snap/acme/widget/notes/refs%2Fnotes%2Fcommits.json": `[` +
+			fmt.Sprintf(link, genesis) + `, ` + fmt.Sprintf(link, target) + `]`,
+		"snap/acme/widget/commits/" + genesis + ".json": `{"Parents": [], "CommitEpoch": 100}`,
+		"snap/acme/widget/commits/" + target + ".json": `{"Parents": ["` +
+			genesis + `"], "CommitEpoch": 200}`,
+		"snap/acme/widget/ancestry/" + genesis + "..." + target + ".json": `true`,
+		"policy.json": `{"schema": 1, "issuer": "https://token.example.com", ` +
+			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
+			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
+			`"debtFile": "no-such-debt.txt", ` +
+			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
+			`"tags": {"tagPattern": "^v[0-9]", "taggerName": "release-mint[bot]", ` +
+			`"identityPattern": "^https://github\\.com/acme/", "notesRef": "refs/notes/commits", ` +
+			`"epochs": {"widget": "v0.1.0"}}}`,
+	}
+
+	for path, content := range files {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return filepath.Join(dir, "snap"), filepath.Join(dir, "policy.json")
+}
+
+// scriptedTagVerifier accepts every signature — the trust boundary is
+// proven in internal/trust; the cli layer under test only routes.
+type scriptedTagVerifier struct{ err error }
+
+func (s scriptedTagVerifier) Verify(_, _ []byte) (string, error) {
+	return "https://github.com/acme/widget/x", s.err
+}
+
+// swapTagVerifier installs the tag trust seam for one test.
+func swapTagVerifier(t *testing.T, tv assert.TagVerifier) {
+	t.Helper()
+
+	orig := newTagVerifier
+
+	newTagVerifier = func([]byte, string, string) (assert.TagVerifier, error) { return tv, nil }
+
+	t.Cleanup(func() { newTagVerifier = orig })
+}
+
+func TestAssertTagsSnapshotEndToEnd(t *testing.T) {
+	snap, policy := tagsSnapshot(t)
+	swapTagVerifier(t, scriptedTagVerifier{})
+
+	root := filepath.Join(t.TempDir(), "root.json")
+	if err := os.WriteFile(root, []byte(`{"seam": "swallows this"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"assert", "tags", "--repo", "acme/widget", "--policy", policy,
+		"--trusted-root", root, "--snapshot", snap,
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "PASS") {
+		t.Errorf("stdout = %q, want the PASS verdict", stdout.String())
+	}
+}
+
+func TestAssertTagsRefusingSignature(t *testing.T) {
+	snap, policy := tagsSnapshot(t)
+	swapTagVerifier(t, scriptedTagVerifier{err: errors.New("chains to no trusted authority")})
+
+	root := filepath.Join(t.TempDir(), "root.json")
+	if err := os.WriteFile(root, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"assert", "tags", "--repo", "acme/widget", "--policy", policy,
+		"--trusted-root", root, "--snapshot", snap,
+	}, &stdout, &stderr)
+	if code != exitRefused {
+		t.Fatalf("Run = %d, want %d\nstdout: %s", code, exitRefused, stdout.String())
+	}
+}
+
+func TestAssertTagsUsageRefusals(t *testing.T) {
+	snap, policy := tagsSnapshot(t)
+
+	rows := [][]string{
+		{"assert", "tags", "--policy", policy},
+		{"assert", "tags", "--org", "acme", "--repo", "acme/widget", "--policy", policy},
+		{"assert", "tags", "--repo", "solo", "--policy", policy},
+		{"assert", "tags", "--repo", "acme/widget"},
+		{"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--snapshot", snap, "--capture", snap},
+		// signing epochs declared but no trusted root offered
+		{"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--snapshot", snap},
+	}
+
+	for _, args := range rows {
+		t.Run(strings.Join(args[2:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			if code := Run(args, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("Run = %d, want %d; stderr: %s", code, exitUsage, stderr.String())
+			}
+		})
+	}
+}
+
+// TestNewTagVerifier exercises the real trust binding over the seed
+// trusted root: construction succeeds, junk signatures refuse, and a
+// malformed identity pattern refuses at build.
+func TestNewTagVerifier(t *testing.T) {
+	t.Parallel()
+
+	rootJSON, err := os.ReadFile("../trust/testdata/trusted-root-seed.json")
+	if err != nil {
+		t.Skipf("no seed root: %v", err)
+	}
+
+	tv, err := newTagVerifier(rootJSON, "^https://github\\.com/acme/", "https://token.example.com")
+	if err != nil {
+		t.Fatalf("newTagVerifier: %v", err)
+	}
+
+	if _, verr := tv.Verify([]byte("payload"), []byte("junk")); verr == nil {
+		t.Fatal("a junk signature verified")
+	}
+
+	if _, berr := newTagVerifier(rootJSON, "(", "https://token.example.com"); berr == nil {
+		t.Fatal("a malformed identity pattern built a verifier")
+	}
+
+	if _, rerr := newTagVerifier([]byte("junk"), ".*", "https://token.example.com"); rerr == nil {
+		t.Fatal("a junk trusted root built a verifier")
+	}
+}
+
+func TestAssertTagsPolicyWithoutSection(t *testing.T) {
+	dir := t.TempDir()
+	policy := filepath.Join(dir, "policy.json")
+	doc := `{"schema": 1, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+	  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
+	  "classes": {"a": {"bundles": ["b"]}}}}`
+
+	if err := os.WriteFile(policy, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	if code := Run([]string{"assert", "tags", "--repo", "acme/widget", "--policy", policy},
+		&stdout, &stderr); code != exitUsage {
+		t.Fatalf("Run = %d, want %d", code, exitUsage)
+	}
+
+	if !strings.Contains(stderr.String(), "no tags section") {
+		t.Errorf("stderr = %q, want the section refusal", stderr.String())
+	}
+}
+
+func TestAssertTagsJSONAndWalkFailure(t *testing.T) {
+	snap, policy := tagsSnapshot(t)
+	swapTagVerifier(t, scriptedTagVerifier{})
+
+	root := filepath.Join(t.TempDir(), "root.json")
+	if err := os.WriteFile(root, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("json emits one PASS document", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
+			"--trusted-root", root, "--snapshot", snap, "--json",
+		}, &stdout, &stderr)
+		if code != exitOK {
+			t.Fatalf("Run = %d, stderr: %s", code, stderr.String())
+		}
+
+		doc := decodeReport(t, &stdout)
+		if doc.Verdict == nil || *doc.Verdict != "PASS" {
+			t.Fatalf("verdict = %v, want PASS", doc.Verdict)
+		}
+	})
+
+	t.Run("a torn walk seals CANNOT_JUDGE", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		// An empty snapshot: the tag listing itself is unreadable.
+		code := Run([]string{
+			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
+			"--trusted-root", root, "--snapshot", t.TempDir(),
+		}, &stdout, &stderr)
+		if code != exitBlind {
+			t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s",
+				code, exitBlind, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("an unreadable policy refuses", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		if code := Run([]string{"assert", "tags", "--repo", "acme/widget", "--policy", "/no/such"},
+			&stdout, &stderr); code != exitUsage {
+			t.Fatalf("Run = %d, want %d", code, exitUsage)
+		}
+	})
+
+	t.Run("a bad flag refuses", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		if code := Run([]string{"assert", "tags", "--conjure"}, &stdout, &stderr); code != exitUsage {
+			t.Fatalf("Run = %d, want %d", code, exitUsage)
 		}
 	})
 }

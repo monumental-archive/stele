@@ -29,15 +29,15 @@ const (
 	sourceType   = "https://acme.example/attestations/source-provenance/v1"
 	buildType    = "https://actions.github.io/buildtypes/workflow/v1"
 
-	signerPin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	canonPin  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	srcRev    = "cccccccccccccccccccccccccccccccccccccccc"
-	leafRev   = "dddddddddddddddddddddddddddddddddddddddd"
+	signerPin    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	machineryPin = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	srcRev       = "cccccccccccccccccccccccccccccccccccccccc"
+	leafRev      = "dddddddddddddddddddddddddddddddddddddddd"
 )
 
 var (
 	coords = verify.Coords{Owner: "acme", Repo: "widget", Tag: "v1.2.3"}
-	pins   = verify.Pins{Signer: signerPin, Canon: canonPin}
+	pins   = verify.Pins{Signer: signerPin, Machinery: machineryPin}
 )
 
 const policyJSON = `{

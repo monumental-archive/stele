@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/dsse"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -125,13 +127,17 @@ func (cw chainWorld) vsaStmt(rev string, levels []any) map[string]any {
 func (cw chainWorld) half(stmt map[string]any) map[string]any {
 	raw := mustJSON(cw.t, stmt)
 
+	// The signature covers the DSSE pre-authentication encoding, the
+	// exact bytes the walk must reconstruct and verify.
 	bundle := fakeBundle{
-		SAN: linkSAN, Issuer: issuer, Digests: []string{digestHex(raw)},
+		SAN: linkSAN, Issuer: issuer,
+		Digests: []string{digestHex(dsse.PAE(chain.StatementType, raw))},
 	}
 
 	return map[string]any{
-		"statement": b64(raw),
-		"bundle":    jsonRaw(cw.t, bundle),
+		"payloadType": chain.StatementType,
+		"statement":   b64(raw),
+		"bundle":      jsonRaw(cw.t, bundle),
 	}
 }
 
@@ -163,11 +169,11 @@ func defaultChain(t *testing.T) fakeHistory {
 
 	cw := chainWorld{t: t}
 
-	genesis := cw.note(2,
+	genesis := cw.note(3,
 		cw.linkStmt(revC1, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
 		cw.vsaStmt(revC1, []any{"SLSA_SOURCE_LEVEL_3"}))
 
-	tip := cw.note(2,
+	tip := cw.note(3,
 		cw.linkStmt(revC2, "ledgerPrev", map[string]any{
 			"revision": revC1, "noteSha256": digestHex(genesis),
 		}, []string{"ORG_SOURCE_GATED"}, false),
@@ -251,7 +257,7 @@ func TestChainRefusals(t *testing.T) {
 				// re-pointed... simpler: tip at c3 with a fresh link,
 				// c2 loses its note, genesis at c1 stays.
 				w := chainWorld{t: t}
-				tip3 := w.note(2,
+				tip3 := w.note(3,
 					w.linkStmt(revC3, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false),
@@ -279,7 +285,7 @@ func TestChainRefusals(t *testing.T) {
 				half := w.half(stmt)
 				half["statement"] = b64(append(mustJSON(t, stmt), ' '))
 				h.notes[revC2] = mustJSON(t, map[string]any{
-					"version": 2, "provenance": half,
+					"version": 3, "provenance": half,
 					"vsa": w.half(w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})),
 				})
 
@@ -295,9 +301,9 @@ func TestChainRefusals(t *testing.T) {
 				w := chainWorld{t: t}
 				stmt := w.linkStmt(revC1, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false)
 				stmt["predicateType"] = "https://example.com/other/v1"
-				h.notes[revC1] = w.note(2, stmt, w.vsaStmt(revC1, []any{"SLSA_SOURCE_LEVEL_3"}))
+				h.notes[revC1] = w.note(3, stmt, w.vsaStmt(revC1, []any{"SLSA_SOURCE_LEVEL_3"}))
 				// The tip's pointer must keep matching the new bytes.
-				tip := w.note(2,
+				tip := w.note(3,
 					w.linkStmt(revC2, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false),
@@ -314,7 +320,7 @@ func TestChainRefusals(t *testing.T) {
 				t.Helper()
 				h := defaultChain(t)
 				w := chainWorld{t: t}
-				tip := w.note(2,
+				tip := w.note(3,
 					w.linkStmt(revC3, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false),
@@ -335,7 +341,7 @@ func TestChainRefusals(t *testing.T) {
 					"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 				}, []string{"ORG_SOURCE_GATED"}, false)
 				stmt["subject"] = []any{map[string]any{"digest": map[string]any{"sha256": digestHex([]byte("x"))}}}
-				h.notes[revC2] = w.note(2, stmt, w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"}))
+				h.notes[revC2] = w.note(3, stmt, w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"}))
 
 				return h
 			},
@@ -349,7 +355,7 @@ func TestChainRefusals(t *testing.T) {
 				w := chainWorld{t: t}
 				bad := w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})
 				bad["predicateType"] = "https://example.com/other/v1"
-				h.notes[revC2] = w.note(2,
+				h.notes[revC2] = w.note(3,
 					w.linkStmt(revC2, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false), bad)
@@ -368,7 +374,7 @@ func TestChainRefusals(t *testing.T) {
 				dig(bad, "predicate")["verifier"] = map[string]any{
 					"id": "https://github.com/mallory/widget/.github/workflows/source-attest.yml@refs/heads/main",
 				}
-				h.notes[revC2] = w.note(2,
+				h.notes[revC2] = w.note(3,
 					w.linkStmt(revC2, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false), bad)
@@ -385,7 +391,7 @@ func TestChainRefusals(t *testing.T) {
 				w := chainWorld{t: t}
 				bad := w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})
 				dig(bad, "predicate")["resourceUri"] = "git+https://github.com/mallory/widget"
-				h.notes[revC2] = w.note(2,
+				h.notes[revC2] = w.note(3,
 					w.linkStmt(revC2, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false), bad)
@@ -400,8 +406,11 @@ func TestChainRefusals(t *testing.T) {
 				t.Helper()
 				h := defaultChain(t)
 				w := chainWorld{t: t}
-				// A v2 note whose predicate carries prev instead.
-				h.notes[revC2] = w.note(2,
+				// A note whose predicate carries the retired v1 prev
+				// key: the strict decode refuses it as an unknown field
+				// — the retired format is unrepresentable, not merely
+				// rejected.
+				h.notes[revC2] = w.note(3,
 					w.linkStmt(revC2, "prev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false),
@@ -409,7 +418,7 @@ func TestChainRefusals(t *testing.T) {
 
 				return h
 			},
-			"must not carry prev",
+			"unknown field",
 		},
 		{
 			"ledger hash mismatch",
@@ -417,7 +426,7 @@ func TestChainRefusals(t *testing.T) {
 				t.Helper()
 				h := defaultChain(t)
 				w := chainWorld{t: t}
-				h.notes[revC2] = w.note(2,
+				h.notes[revC2] = w.note(3,
 					w.linkStmt(revC2, "ledgerPrev", map[string]any{
 						"revision": revC1, "noteSha256": digestHex([]byte("wrong")),
 					}, []string{"ORG_SOURCE_GATED"}, false),
@@ -433,7 +442,7 @@ func TestChainRefusals(t *testing.T) {
 				t.Helper()
 				h := defaultChain(t)
 				w := chainWorld{t: t}
-				h.notes[revC2] = w.note(2,
+				h.notes[revC2] = w.note(3,
 					w.linkStmt(revC2, "ledgerPrev", map[string]any{
 						"revision": revC9, "noteSha256": digestHex(h.notes[revC1]),
 					}, []string{"ORG_SOURCE_GATED"}, false),
@@ -444,27 +453,13 @@ func TestChainRefusals(t *testing.T) {
 			"which has no note",
 		},
 		{
-			"an unreachable v2 leaf is a fork",
+			"an unreachable leaf outside the enumeration refuses",
 			func(t *testing.T) fakeHistory {
 				t.Helper()
 				h := defaultChain(t)
 				w := chainWorld{t: t}
-				h.notes[revC9] = w.note(2,
+				h.notes[revC9] = w.note(3,
 					w.linkStmt(revC9, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
-					w.vsaStmt(revC9, []any{"SLSA_SOURCE_LEVEL_3"}))
-
-				return h
-			},
-			"must not fork",
-		},
-		{
-			"an unreachable v1 leaf outside the enumeration",
-			func(t *testing.T) fakeHistory {
-				t.Helper()
-				h := defaultChain(t)
-				w := chainWorld{t: t}
-				h.notes[revC9] = w.note(1,
-					w.linkStmt(revC9, "prev", nil, []string{"ORG_SOURCE_GATED"}, false),
 					w.vsaStmt(revC9, []any{"SLSA_SOURCE_LEVEL_3"}))
 
 				return h
@@ -568,8 +563,8 @@ func TestSourceLevel(t *testing.T) {
 		t.Helper()
 
 		w := chainWorld{t: t}
-		genesis := w.note(2, w.linkStmt(revC1, "ledgerPrev", nil, controls, repaired), w.vsaStmt(revC1, claimed))
-		tip := w.note(2,
+		genesis := w.note(3, w.linkStmt(revC1, "ledgerPrev", nil, controls, repaired), w.vsaStmt(revC1, claimed))
+		tip := w.note(3,
 			w.linkStmt(revC2, "ledgerPrev", map[string]any{
 				"revision": revC1, "noteSha256": digestHex(genesis),
 			}, controls, repaired),

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -27,6 +28,69 @@ type Policy struct {
 	Issuer      *string            `json:"issuer,omitempty"`
 	Evidence    *EvidencePolicy    `json:"evidence"`
 	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
+	Tags        *TagsPolicy        `json:"tags,omitempty"`
+}
+
+// EpochPending is the declared-unsigned epoch value: the repository
+// releases tags and says so, but has not begun signing them.
+const EpochPending = "pending"
+
+// TagsPolicy parameterises the tag audit (stele#83). Tag signing is
+// a DECLARED obligation: the whole section is absent for orgs that
+// do not sign tags, never a precondition.
+type TagsPolicy struct {
+	// TagPattern selects the release tags among all tag refs.
+	TagPattern *string `json:"tagPattern"`
+	// TaggerName is the minting role's tagger name — an identity from
+	// policy, never a literal in code.
+	TaggerName *string `json:"taggerName"`
+	// IdentityPattern is the regular expression the signing
+	// certificate's SAN must match.
+	IdentityPattern *string `json:"identityPattern"`
+	// NotesRef is the source chain's notes ref, fully qualified.
+	NotesRef *string `json:"notesRef"`
+	// Epochs maps each releasing repository to the first tag that
+	// owes a signature, or EpochPending for declared-unsigned. A
+	// repository that releases tags without a line here is a finding:
+	// an undeclared population member is unchecked, not clean.
+	Epochs map[string]string `json:"epochs"`
+}
+
+func (tp *TagsPolicy) validate() error {
+	for name, f := range map[string]*string{
+		"tagPattern": tp.TagPattern, "taggerName": tp.TaggerName,
+		"identityPattern": tp.IdentityPattern, "notesRef": tp.NotesRef,
+	} {
+		if f == nil || *f == "" {
+			return fmt.Errorf("tags.%s is absent or empty", name)
+		}
+	}
+
+	for _, field := range []string{*tp.TagPattern, *tp.IdentityPattern} {
+		if _, err := regexp.Compile(field); err != nil {
+			return fmt.Errorf("tags pattern: %w", err)
+		}
+	}
+
+	if !strings.HasPrefix(*tp.NotesRef, "refs/") {
+		return errors.New("tags.notesRef must be fully qualified (refs/...)")
+	}
+
+	if len(tp.Epochs) == 0 {
+		return errors.New("tags.epochs is absent or empty — a tag policy covering no repository audits nothing")
+	}
+
+	for repo, epoch := range tp.Epochs {
+		if epoch == EpochPending {
+			continue
+		}
+
+		if _, err := semver.NewVersion(strings.TrimPrefix(epoch, "v")); err != nil {
+			return fmt.Errorf("tags.epochs[%s]: %w", repo, err)
+		}
+	}
+
+	return nil
 }
 
 // EvidencePolicy parameterises the evidence walk.
@@ -44,10 +108,13 @@ type EvidencePolicy struct {
 	ManifestAsset *string `json:"manifestAsset"`
 	// Classes maps each evidence class to its required assets.
 	Classes map[string]ClassPolicy `json:"classes"`
-	// StoreVSAFromCanon is the canon version (inclusive) from which
-	// verdicts are store-resident; before it the legacy VSA bundles
-	// ride as release assets.
-	StoreVSAFromCanon *string `json:"storeVsaFromCanon"`
+	// StoreVSAFromVersion is the machinery version (inclusive) from
+	// which verdicts are store-resident; before it the legacy VSA
+	// bundles ride as release assets. The machinery version is the
+	// version of the shared release machinery the release pinned at
+	// its tag; a repository carrying its own machinery uses its own
+	// version (docs/assert-policy-schema.md defines it once).
+	StoreVSAFromVersion *string `json:"storeVsaFromVersion"`
 	// DebtFile is the committed exceptions file (repo-relative in the
 	// policy repo's checkout) holding human-asserted evidence debt.
 	DebtFile *string `json:"debtFile"`
@@ -63,11 +130,11 @@ type EvidencePolicy struct {
 	// roll that outran the approval run surfaces here rather than at
 	// the next release.
 	BaseImages *BaseImagesPolicy `json:"baseImages,omitempty"`
-	// DecisionFromCanon is the canon version (inclusive) from which a
-	// release owes a VERIFIABLE release decision — the machinery epoch,
-	// like StoreVSAFromCanon. Absent means always. An unparsable pin
-	// fails toward the stricter obligation.
-	DecisionFromCanon *string `json:"decisionFromCanon,omitempty"`
+	// DecisionFromVersion is the machinery version (inclusive) from
+	// which a release owes a VERIFIABLE release decision — the same
+	// epoch semantics as StoreVSAFromVersion. Absent means always. An
+	// unparsable pin fails toward the stricter obligation.
+	DecisionFromVersion *string `json:"decisionFromVersion,omitempty"`
 	// EvidenceSuffixes are additional asset-name suffixes that mark a
 	// checksum entry as an evidence document rather than an artifact
 	// (the org's per-release VEX documents, for one) — excluded from
@@ -206,10 +273,8 @@ func (p *Policy) validate() error {
 		}
 	}
 
-	if e.StoreVSAFromCanon != nil {
-		if _, err := semver.NewVersion(*e.StoreVSAFromCanon); err != nil {
-			return fmt.Errorf("evidence.storeVsaFromCanon: %w", err)
-		}
+	if err := e.validateEpochs(); err != nil {
+		return err
 	}
 
 	if e.ExpectedRepos != nil && *e.ExpectedRepos <= 0 {
@@ -238,20 +303,53 @@ func (p *Policy) validate() error {
 		}
 	}
 
+	return p.validateTags()
+}
+
+// validateTags validates the OPTIONAL tags section; declared means
+// every field, and the issuer beside it.
+func (p *Policy) validateTags() error {
+	if p.Tags == nil {
+		return nil
+	}
+
+	if p.Issuer == nil || *p.Issuer == "" {
+		return errors.New("issuer is required when tags is declared")
+	}
+
+	return p.Tags.validate()
+}
+
+// validateEpochs refuses unparsable epochs — both epoch fields feed
+// MustParse downstream, so an epoch validate admits but the walk
+// panics on would turn a reviewed policy into a crash mid-walk.
+func (e *EvidencePolicy) validateEpochs() error {
+	if e.StoreVSAFromVersion != nil {
+		if _, err := semver.NewVersion(*e.StoreVSAFromVersion); err != nil {
+			return fmt.Errorf("evidence.storeVsaFromVersion: %w", err)
+		}
+	}
+
+	if e.DecisionFromVersion != nil {
+		if _, err := semver.NewVersion(*e.DecisionFromVersion); err != nil {
+			return fmt.Errorf("evidence.decisionFromVersion: %w", err)
+		}
+	}
+
 	return nil
 }
 
-// storeVSA reports whether a release under the given canon version
-// keeps its verdicts in the attestation store. No epoch configured
-// means store-resident always.
-func (e *EvidencePolicy) storeVSA(canonVersion string) bool {
-	if e.StoreVSAFromCanon == nil {
+// storeVSA reports whether a release under the given machinery
+// version keeps its verdicts in the attestation store. No epoch
+// configured means store-resident always.
+func (e *EvidencePolicy) storeVSA(machineryVersion string) bool {
+	if e.StoreVSAFromVersion == nil {
 		return true
 	}
 
-	epoch := semver.MustParse(*e.StoreVSAFromCanon)
+	epoch := semver.MustParse(*e.StoreVSAFromVersion)
 
-	v, err := semver.NewVersion(canonVersion)
+	v, err := semver.NewVersion(machineryVersion)
 	if err != nil {
 		// An unparsable pin cannot prove the pre-epoch exemption;
 		// fail toward the stricter obligation.
@@ -261,17 +359,17 @@ func (e *EvidencePolicy) storeVSA(canonVersion string) bool {
 	return !v.LessThan(epoch)
 }
 
-// decision reports whether a release under the given canon version
-// owes a verifiable release decision. Same epoch semantics as
+// decision reports whether a release under the given machinery
+// version owes a verifiable release decision. Same epoch semantics as
 // storeVSA: no epoch means always, an unparsable pin fails strict.
-func (e *EvidencePolicy) decision(canonVersion string) bool {
-	if e.DecisionFromCanon == nil {
+func (e *EvidencePolicy) decision(machineryVersion string) bool {
+	if e.DecisionFromVersion == nil {
 		return true
 	}
 
-	epoch := semver.MustParse(*e.DecisionFromCanon)
+	epoch := semver.MustParse(*e.DecisionFromVersion)
 
-	v, err := semver.NewVersion(canonVersion)
+	v, err := semver.NewVersion(machineryVersion)
 	if err != nil {
 		return true
 	}

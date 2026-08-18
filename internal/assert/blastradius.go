@@ -65,15 +65,15 @@ func (b *BlastRadiusPolicy) validate() error {
 
 // BlastRadius walks one org's SBOMs and seals the triage verdict.
 func BlastRadius(
-	pol *Policy, org string, forge gh.Forge, scanner osv.Scanner, decisions *vexjoin.Decisions, log Logf,
+	pol *Policy, pop Population, forge gh.Forge, scanner osv.Scanner, decisions *vexjoin.Decisions, log Logf,
 ) (*report.Report, error) {
 	if pol.BlastRadius == nil {
 		return nil, errors.New("assert: the policy declares no blastRadius section")
 	}
 
-	repos, err := forge.Repos(org)
+	org, repos, err := pop.resolve(forge)
 	if err != nil {
-		return nil, fmt.Errorf("assert: listing %s: %w", org, err)
+		return nil, err
 	}
 
 	w := &blastWalk{
@@ -90,14 +90,14 @@ func BlastRadius(
 
 	w.staleDecisions()
 
-	pop := report.PopulationFromListing(w.scanned, "SBOMs scanned")
+	covered := report.PopulationFromListing(w.scanned, "SBOMs scanned")
 
 	facts := []report.Fact{}
 	if len(w.missing) > 0 {
 		facts = append(facts, report.Fact{Name: "releasesWithoutSBOM", Value: strings.Join(w.missing, " ")})
 	}
 
-	return report.Seal("assert blast-radius", org, pop, w.findings, w.exceptions, w.canary(), facts...), nil
+	return report.Seal("assert blast-radius", pop.Subject(), covered, w.findings, w.exceptions, w.canary(), facts...), nil
 }
 
 type blastWalk struct {

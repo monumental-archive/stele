@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/dsse"
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/policy"
@@ -26,8 +27,8 @@ const (
 	sourceType = "https://acme.example/attestations/source-provenance/v1"
 	identity   = "https://github.com/acme/widget/.github/workflows/source-attest.yml@refs/heads/main"
 
-	canonPin  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	policyURI = "https://github.com/acme/canon/blob/" + canonPin + "/slsa/verify-policy.json"
+	machineryPin = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	policyURI    = "https://github.com/acme/canon/blob/" + machineryPin + "/slsa/verify-policy.json"
 
 	rev1 = "1111111111111111111111111111111111111111"
 	rev2 = "2222222222222222222222222222222222222222"
@@ -320,7 +321,7 @@ func newWorld(t *testing.T) *world {
 			Ref: "refs/heads/main", Rev: rev4,
 			WorkflowRef: "acme/widget/.github/workflows/source-attest.yml@refs/heads/main",
 			ActorLogin:  "octocat", ActorID: "583231",
-			CanonRef: canonPin, PolicyURI: policyURI,
+			MachineryRef: machineryPin, PolicyURI: policyURI,
 			Claims: claims([]int64{1000000}, "ORG_SOURCE_GATED", "ORG_SOURCE_SIGNED"),
 		},
 	}
@@ -389,7 +390,7 @@ func TestChainGenesis(t *testing.T) {
 		t.Fatal("the genesis note does not decode as a chain link")
 	}
 
-	if *link.Version != chain.NoteV2 {
+	if *link.Version != chain.NoteV3 {
 		t.Errorf("genesis link version = %d, want 2", *link.Version)
 	}
 
@@ -479,7 +480,7 @@ func TestChainLedgerPrevHashesStoredBytes(t *testing.T) {
 
 	pred := provenancePredicate(t, w.g.notes[rev2])
 
-	ptr, genesis, err := pred.Ledger(chain.NoteV2)
+	ptr, genesis, err := pred.Ledger()
 	if err != nil || genesis {
 		t.Fatalf("Ledger = %v, genesis=%v", err, genesis)
 	}
@@ -544,7 +545,7 @@ func TestChainCompareAndSwap(t *testing.T) {
 		t.Errorf("pushes = %d, want 3", w.g.pushes)
 	}
 
-	ptr, _, err := provenancePredicate(t, w.g.notes[rev3]).Ledger(chain.NoteV2)
+	ptr, _, err := provenancePredicate(t, w.g.notes[rev3]).Ledger()
 	if err != nil {
 		t.Fatalf("Ledger = %v", err)
 	}
@@ -714,7 +715,7 @@ func TestChainRefusals(t *testing.T) {
 		},
 		{
 			"malformed canon pin",
-			func(w *world) { w.in.CanonRef = "v1.2.3" },
+			func(w *world) { w.in.MachineryRef = "v1.2.3" },
 			"pinned by full SHA",
 		},
 		{
@@ -873,8 +874,10 @@ func tamperTailIdentity(t *testing.T, g *fakeGit, rev, san string) {
 	}
 
 	stmtBytes := mustDecodeB64(t, *link.Provenance.Statement)
-	link.Provenance.Bundle = mustJSON(t,
-		fakeBundle{SAN: san, Issuer: issuer, Digests: []string{chain.SHA256Hex(stmtBytes)}})
+	link.Provenance.Bundle = mustJSON(t, fakeBundle{
+		SAN: san, Issuer: issuer,
+		Digests: []string{chain.SHA256Hex(dsse.PAE(chain.StatementType, stmtBytes))},
+	})
 
 	note := append(mustJSON(t, link), '\n')
 	g.notes[rev] = note
@@ -1204,8 +1207,10 @@ func tamperTailStatement(t *testing.T, g *fakeGit, rev string, stmt []byte) {
 
 	b64 := base64.StdEncoding.EncodeToString(stmt)
 	link.Provenance.Statement = &b64
-	link.Provenance.Bundle = mustJSON(t,
-		fakeBundle{SAN: identity, Issuer: issuer, Digests: []string{chain.SHA256Hex(stmt)}})
+	link.Provenance.Bundle = mustJSON(t, fakeBundle{
+		SAN: identity, Issuer: issuer,
+		Digests: []string{chain.SHA256Hex(dsse.PAE(chain.StatementType, stmt))},
+	})
 
 	note := append(mustJSON(t, link), '\n')
 	g.notes[rev] = note

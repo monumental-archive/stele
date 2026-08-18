@@ -42,7 +42,7 @@ func newReleaseWorld() *releaseWorld {
 			{Name: "widget-1.2.3.spdx.json", SHA256: sbomSHA},
 		},
 		provSAN: "https://github.com/" + signerWF + "@" + signerPin,
-		decSAN:  "https://github.com/" + publishWF + "@" + canonPin,
+		decSAN:  "https://github.com/" + publishWF + "@" + machineryPin,
 		provExt: certificate.Extensions{
 			BuildSignerDigest:   signerPin,
 			RunnerEnvironment:   "github-hosted",
@@ -123,7 +123,7 @@ func (w *releaseWorld) build(t *testing.T) {
 		SAN:     w.decSAN,
 		Issuer:  issuer,
 		Digests: []string{w.sbomSHA},
-		Ext:     certificate.Extensions{BuildSignerDigest: canonPin},
+		Ext:     certificate.Extensions{BuildSignerDigest: machineryPin},
 	}).bytes(t)
 
 	w.store = fakeStore{bundles: map[string][]verify.StoredBundle{
@@ -237,7 +237,7 @@ func TestReleaseRefusals(t *testing.T) {
 		},
 		{
 			"certificate pinned at a different signer commit",
-			func(w *releaseWorld) { w.provExt.BuildSignerDigest = canonPin },
+			func(w *releaseWorld) { w.provExt.BuildSignerDigest = machineryPin },
 			"provenance signed at",
 		},
 		{
@@ -379,7 +379,7 @@ func TestReleaseRefusals(t *testing.T) {
 		},
 		{
 			"decision signed under another identity",
-			func(w *releaseWorld) { w.decSAN = "https://github.com/mallory/canon/publish.yml@" + canonPin },
+			func(w *releaseWorld) { w.decSAN = "https://github.com/mallory/canon/publish.yml@" + machineryPin },
 			"decision bundle refused",
 		},
 		{
@@ -446,7 +446,7 @@ func TestReleaseInputRefusals(t *testing.T) {
 			[]verify.Subject{{Name: "a b", SHA256: digestHex([]byte("x"))}},
 			pins, "carries whitespace",
 		},
-		{"short pin", coords, valid, verify.Pins{Signer: "abc", Canon: canonPin}, "40-hex"},
+		{"short pin", coords, valid, verify.Pins{Signer: "abc", Machinery: machineryPin}, "40-hex"},
 	}
 
 	for _, tt := range tests {
@@ -548,7 +548,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 
 		// A second decision over the image SBOM's digest.
 		dec2 := (&fakeBundle{
-			Ext: certificate.Extensions{BuildSignerDigest: canonPin},
+			Ext: certificate.Extensions{BuildSignerDigest: machineryPin},
 			Stmt: mustJSON(t, map[string]any{
 				"_type": "https://in-toto.io/Statement/v1",
 				"subject": []any{
@@ -599,9 +599,9 @@ func TestReleaseVSAPredicate(t *testing.T) {
 		t.Fatalf("Release = %v", err)
 	}
 
-	const policyURI = "https://github.com/acme/canon/blob/" + canonPin + "/slsa/verify-policy.json"
+	const policyURI = "https://github.com/acme/canon/blob/" + machineryPin + "/slsa/verify-policy.json"
 
-	pred, err := verdict.VSAPredicate(loadPolicy(t), coords, policyURI, canonPin, "2026-08-15T12:00:00Z")
+	pred, err := verdict.VSAPredicate(loadPolicy(t), coords, policyURI, machineryPin, "2026-08-15T12:00:00Z")
 	if err != nil {
 		t.Fatalf("VSAPredicate = %v", err)
 	}
@@ -631,7 +631,7 @@ func TestReleaseVSAPredicate(t *testing.T) {
 		t.Errorf("verifiedLevels = %v, want exactly the target", got.VerifiedLevels)
 	}
 
-	if got.Policy.Digest["gitCommit"] != canonPin {
+	if got.Policy.Digest["gitCommit"] != machineryPin {
 		t.Errorf("policy.digest = %v, want the canon pin", got.Policy.Digest)
 	}
 
@@ -660,7 +660,7 @@ func TestReleaseVSAPredicateRefusals(t *testing.T) {
 		t.Error("VSAPredicate accepted a policy digest that is not a commit")
 	}
 
-	if _, err := verdict.VSAPredicate(loadPolicy(t), coords, "", canonPin, "2026-08-15T12:00:00Z"); err == nil {
+	if _, err := verdict.VSAPredicate(loadPolicy(t), coords, "", machineryPin, "2026-08-15T12:00:00Z"); err == nil {
 		t.Error("VSAPredicate accepted an empty policy URI — a verdict naming no policy must never recur")
 	}
 }

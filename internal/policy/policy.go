@@ -158,6 +158,15 @@ func Load(r io.Reader) (*Policy, error) {
 	return p, nil
 }
 
+// validate holds the universality principle (#79/#82): obligations
+// are declared; identities are roles; only provenance is intrinsic.
+// The minimal valid policy is schema + issuer + a provenance
+// identity (possibly templated to the repo itself). Every other
+// section — verdicts, decisions, the build and source tracks — is an
+// obligation an org declares when it builds the mechanism: absent
+// means the obligation does not exist; declared means every field of
+// it, validated strictly. The verbs refuse at USE when the section
+// they need is undeclared.
 func (p *Policy) validate() error {
 	switch {
 	case p.Schema == nil:
@@ -174,11 +183,17 @@ func (p *Policy) validate() error {
 		return err
 	}
 
-	if err := p.validateBuild(); err != nil {
-		return err
+	if p.Build != nil {
+		if err := p.validateBuild(); err != nil {
+			return err
+		}
 	}
 
-	return p.validateSource()
+	if p.Source != nil {
+		return p.validateSource()
+	}
+
+	return nil
 }
 
 func (p *Policy) validateTrust() error {
@@ -187,15 +202,26 @@ func (p *Policy) validateTrust() error {
 	}
 
 	if p.Trust.Provenance == nil {
-		return errors.New("trust.provenance is absent")
+		return errors.New("trust.provenance is absent — provenance is the one intrinsic obligation")
 	}
 
 	if err := workflowField("trust.provenance.signerWorkflow", p.Trust.Provenance.SignerWorkflow); err != nil {
 		return err
 	}
 
+	if err := p.validateVerdict(); err != nil {
+		return err
+	}
+
+	return p.validateDecision()
+}
+
+// validateVerdict validates the OPTIONAL verdict section: an adopter
+// who never emits VSAs cannot be forced to name a verifier. Declared
+// means every field, strictly.
+func (p *Policy) validateVerdict() error {
 	if p.Trust.Verdict == nil {
-		return errors.New("trust.verdict is absent")
+		return nil
 	}
 
 	if err := workflowField("trust.verdict.verifierWorkflow", p.Trust.Verdict.VerifierWorkflow); err != nil {
@@ -217,12 +243,13 @@ func (p *Policy) validateTrust() error {
 		}
 	}
 
-	// The decision section is OPTIONAL: a release decision is an
-	// obligation an org declares, not a precondition of using the
-	// verifier — a fresh adopter (or a single repository) picks the
-	// tool up with no such mechanism and must still be able to write
-	// a valid policy. Absent means the obligation does not exist;
-	// declared means every field of it, validated strictly.
+	return nil
+}
+
+// validateDecision validates the OPTIONAL decision section — a
+// release decision is an obligation an org declares, not a
+// precondition of using the verifier.
+func (p *Policy) validateDecision() error {
 	if p.Trust.Decision == nil {
 		return nil
 	}
@@ -243,10 +270,6 @@ func (p *Policy) validateTrust() error {
 }
 
 func (p *Policy) validateBuild() error {
-	if p.Build == nil {
-		return errors.New("build is absent")
-	}
-
 	if len(p.Build.BuildTypes) == 0 {
 		return errors.New("build.buildTypes is absent or empty — a verifier accepting no buildType verifies nothing")
 	}
@@ -284,9 +307,6 @@ func (p *Policy) validateBuild() error {
 
 func (p *Policy) validateSource() error {
 	s := p.Source
-	if s == nil {
-		return errors.New("source is absent")
-	}
 
 	if err := templateField("source.identity", s.Identity); err != nil {
 		return err
@@ -376,8 +396,29 @@ func (p *Policy) validateBranch(i int, b ProtectedBranch) error {
 }
 
 // workflowField refuses an absent or malformed workflow identity.
+// The identity is a ROLE (#82): `{owner}` and `{repo}` are accepted
+// so "each repository signs for itself" is expressible — a
+// self-attesting repository's certificate names its own workflow.
+// Only those two placeholders: a workflow path templated on tag or
+// version would move the identity per release, which is not a role
+// but a wildcard.
 func workflowField(name string, v *string) error {
-	if v == nil || !workflowRE.MatchString(*v) {
+	if v == nil {
+		return fmt.Errorf("%s must be present and owner/repo/path-to-workflow", name)
+	}
+
+	shape := *v
+
+	for _, ph := range placeholderRE.FindAllString(shape, -1) {
+		if ph != "{owner}" && ph != "{repo}" {
+			return fmt.Errorf("%s carries placeholder %s — workflow identities admit only {owner} and {repo}", name, ph)
+		}
+	}
+
+	// Substitute a well-formed dummy so the shape check judges the
+	// template's own syntax, not the placeholders.
+	shape = strings.NewReplacer("{owner}", "o", "{repo}", "r").Replace(shape)
+	if !workflowRE.MatchString(shape) {
 		return fmt.Errorf("%s must be present and owner/repo/path-to-workflow", name)
 	}
 

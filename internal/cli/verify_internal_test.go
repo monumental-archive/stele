@@ -116,7 +116,7 @@ func swap(t *testing.T, bv verify.BundleVerifier, store verify.Store) {
 	origBV, origStore, origHist := newBundleVerifier, newStore, openHistory
 
 	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return bv, nil }
-	newStore = func() verify.Store { return store }
+	newStore = func(bool) verify.Store { return store }
 	openHistory = func(string, string) (verify.History, error) {
 		return nil, errors.New("no history in this test")
 	}
@@ -167,7 +167,7 @@ func TestVerifyVSAPasses(t *testing.T) {
 		"verify", "vsa",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitOK {
@@ -190,7 +190,7 @@ func TestVerifyRefusalExitsOne(t *testing.T) {
 		"verify", "release",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects, "--sboms", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitRefused {
@@ -309,7 +309,7 @@ func TestVerifyManifestRefusals(t *testing.T) {
 		"verify", "vsa",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", bad,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitUsage || !strings.Contains(stderr.String(), "not a sha256sum record") {
@@ -326,7 +326,7 @@ func TestVerifyOutputFailures(t *testing.T) {
 		"verify", "vsa",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}
 
 	t.Run("dead stdout during a passing run", func(t *testing.T) {
@@ -408,7 +408,7 @@ func TestVerifyVSAJSONPasses(t *testing.T) {
 		"verify", "vsa", "--json",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitOK {
@@ -448,7 +448,7 @@ func TestVerifyJSONRefusal(t *testing.T) {
 		"verify", "vsa", "--json",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitRefused {
@@ -480,7 +480,7 @@ func TestVerifyJSONDeadStdout(t *testing.T) {
 		"verify", "vsa", "--json",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, failWriterI{}, &stderr)
 
 	if code != exitIO {

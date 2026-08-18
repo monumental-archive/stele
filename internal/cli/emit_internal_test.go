@@ -120,7 +120,7 @@ func chainArgs(px paths, claims string) []string {
 		"--repo", "acme/widget", "--git-dir", "ignored-by-the-seam",
 		"--rev", emitRev, "--claims", claims,
 		"--actor", "octocat", "--actor-id", "583231",
-		"--canon-digest", strings.Repeat("b", 40),
+		"--machinery-digest", strings.Repeat("b", 40),
 		"--policy-uri", "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
 		"--genesis",
 	}
@@ -197,7 +197,7 @@ func TestEmitVSARefusalExitsOne(t *testing.T) {
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3",
 		"--subjects", px.subjects, "--sboms", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 		"--policy-uri", "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
 	}, &stdout, &stderr)
 
@@ -440,7 +440,7 @@ func TestEmitVSAManifestRefusals(t *testing.T) {
 				"--policy", px.policy, "--trusted-root", px.root,
 				"--repo", "acme/widget", "--tag", "v1.2.3",
 				"--subjects", tt.subjects, "--sboms", tt.sboms,
-				"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+				"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 			}, &stdout, &stderr)
 
 			if code != exitUsage || !strings.Contains(stderr.String(), tt.want) {

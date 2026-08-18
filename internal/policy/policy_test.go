@@ -117,6 +117,58 @@ func TestLoadWithoutDecision(t *testing.T) {
 	}
 }
 
+// TestLoadMinimal proves the universality floor (#82): a valid policy
+// is schema + issuer + a provenance identity, possibly templated to
+// the repository itself. Verdicts, decisions, build and source are
+// obligations an org declares; the verbs refuse at use, not at load.
+func TestLoadMinimal(t *testing.T) {
+	t.Parallel()
+
+	const minimal = `{
+	  "schema": 1,
+	  "issuer": "https://token.example.com",
+	  "trust": {
+	    "provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/release.yml"}
+	  }
+	}`
+
+	p, err := policy.Load(strings.NewReader(minimal))
+	if err != nil {
+		t.Fatalf("Load minimal = %v — issuer plus a provenance identity must be a valid policy", err)
+	}
+
+	if p.Trust.Verdict != nil || p.Trust.Decision != nil || p.Build != nil || p.Source != nil {
+		t.Fatal("absent sections decoded as present")
+	}
+}
+
+// TestLoadTemplatedIdentities: workflow identities are roles — the
+// self-attesting template is accepted, and only {owner}/{repo} are
+// vocabulary (a per-tag identity is a wildcard, not a role).
+func TestLoadTemplatedIdentities(t *testing.T) {
+	t.Parallel()
+
+	templated := strings.Replace(valid,
+		`"provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"}`,
+		`"provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/release.yml"}`, 1)
+	if _, err := policy.Load(strings.NewReader(templated)); err != nil {
+		t.Fatalf("Load templated signerWorkflow = %v — the self-attesting role must be expressible", err)
+	}
+
+	for _, bad := range []string{
+		"{owner}/{repo}/.github/workflows/{tag}.yml",
+		"{owner}/{typo}/.github/workflows/release.yml",
+		"{owner}/{repo}",
+	} {
+		doc := strings.Replace(valid,
+			`"provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"}`,
+			`"provenance": {"signerWorkflow": "`+bad+`"}`, 1)
+		if _, err := policy.Load(strings.NewReader(doc)); err == nil {
+			t.Fatalf("Load accepted signerWorkflow %q", bad)
+		}
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -158,65 +210,12 @@ func TestLoadRefusals(t *testing.T) {
 			"trust is absent",
 		},
 		{
-			"verdict null",
-			`"verdict": {
-      "verifierWorkflow": "acme/canon/.github/workflows/verify-release.yml",
-      "legacyVerdicts": [
-        {"repository": "acme/lab", "tag": "v0.1.0", "signerWorkflow": "acme/signer/.github/workflows/sign.yml"}
-      ]
-    }`,
-			`"verdict": null`,
-			"trust.verdict is absent",
-		},
-		{
 			"decision declared but its signer broken",
 			`"signerWorkflow": "acme/canon/.github/workflows/publish.yml",
       "predicateType"`,
 			`"signerWorkflow": "not-a-workflow",
       "predicateType"`,
 			"trust.decision.signerWorkflow",
-		},
-		{
-			"build null",
-			`"build": {
-    "buildTypes": {
-      "https://actions.github.io/buildtypes/workflow/v1": {"externalParameterKeys": ["workflow", "inputs"]}
-    },
-    "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
-    "sourceRepository": "https://github.com/{owner}/{repo}",
-    "targetLevel": "SLSA_BUILD_LEVEL_3",
-    "denySelfHostedRunners": true
-  }`,
-			`"build": null`,
-			"build is absent",
-		},
-		{
-			"source null",
-			`"source": {
-    "identity": "https://github.com/{owner}/{repo}/.github/workflows/source-attest.yml@refs/heads/main",
-    "notesRef": "refs/notes/commits",
-    "provenancePredicateType": "https://acme.example/attestations/source-provenance/v1",
-    "propertyPrefix": "ACME_SOURCE_",
-    "resourceUri": "git+https://github.com/{owner}/{repo}",
-    "protectedBranches": [
-      {
-        "name": "main",
-        "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
-          {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
-        ]
-      }
-    ],
-    "healedContinuity": true,
-    "underclaimLevel": "SLSA_SOURCE_LEVEL_2",
-    "legacyLeaves": [
-      {"repository": "acme/canon",
-       "revision": "e1ad2dde9fd24fc521b4b37453dac052e655212b",
-       "reason": "pre-v2 healed fork"}
-    ]
-  }`,
-			`"source": null`,
-			"source is absent",
 		},
 		{
 			"provenance absent",

@@ -27,7 +27,7 @@ type Contract struct {
 	// (as opposed to legacy VSA bundle assets on the release).
 	StoreVSA bool
 	// Decision reports whether the release owes a verifiable release
-	// decision — false only for releases whose canon version predates
+	// decision — false only for releases whose machinery version predates
 	// the decision epoch (grandfathered history).
 	Decision bool
 	// Origin names where the contract was read from, for the report.
@@ -95,10 +95,10 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 // classes a release owes are read from the caller's publish workflow
 // AT THE TAG — the only honest source for releases that predate the
 // manifest. The parsing mirrors what the callers actually wrote
-// (a `classes:` input line; the canon's own publish.yml is a
-// reusable, so its caller stub is self-publish.yml), and the canon
+// (a `classes:` input line; the machinery repo's own publish.yml is
+// a reusable, so its caller stub is self-publish.yml), and the repo
 // version comes from the pin comment on the uses: line, the tag
-// itself for the canon repo.
+// itself for the machinery repo.
 type WorkflowSource struct {
 	Forge  gh.Forge
 	Policy *EvidencePolicy
@@ -142,24 +142,24 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, nil
 	}
 
-	// The canon version pinned at the tag decides the verdict
-	// obligation's shape; the canon's own stub uses a local reference,
-	// so its version is the tag itself.
-	canonVersion := strings.TrimPrefix(tag, "v")
+	// The machinery version pinned at the tag decides the verdict
+	// obligation's shape; a repository carrying its own machinery uses
+	// a local reference, so its version is the tag itself.
+	machineryVersion := strings.TrimPrefix(tag, "v")
 	if pm := pinCommentRE.FindSubmatch(wf); pm != nil {
-		canonVersion = string(pm[1])
+		machineryVersion = string(pm[1])
 	}
 
 	return &Contract{
 		Classes:  classes,
-		StoreVSA: w.Policy.storeVSA(canonVersion),
-		Decision: w.Policy.decision(canonVersion),
+		StoreVSA: w.Policy.storeVSA(machineryVersion),
+		Decision: w.Policy.decision(machineryVersion),
 		Origin:   "publish workflow at " + tag,
 	}, true, nil
 }
 
 // splitClasses reads the workflow input's class list. The separator
-// is a COMMA (the canon writes `classes: rust-binary,oci-image,…`,
+// is a COMMA (the org writes `classes: rust-binary,oci-image,…`,
 // and the bash matched it as `case ",${classes// /}," in *",X,"*`);
 // splitting on whitespace instead takes the whole list as one class
 // name, which the first live shadow run against the org caught on 17

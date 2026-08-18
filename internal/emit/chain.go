@@ -45,12 +45,12 @@ type ChainInputs struct {
 	// verify against the published contract. Empty means the runtime
 	// offered no claim (a local run); the caller decides whether that
 	// is acceptable, and the cutover makes it required in CI.
-	WorkflowRef string
-	ActorLogin  string
-	ActorID     string
-	CanonRef    string // the commit the canon policy tree is pinned at
-	PolicyURI   string // where a stranger reads the policy at that pin
-	Claims      *Claims
+	WorkflowRef  string
+	ActorLogin   string
+	ActorID      string
+	MachineryRef string // the commit the policy tree is pinned at
+	PolicyURI    string // where a stranger reads the policy at that pin
+	Claims       *Claims
 }
 
 // Chain runs one emission: discovery, per-revision link assembly and
@@ -65,6 +65,10 @@ func Chain(
 ) error {
 	if in == nil {
 		return errors.New("emit: no inputs")
+	}
+
+	if p.Source == nil {
+		return errors.New("emit: the policy declares no source section — the chain emitter needs one")
 	}
 
 	pb, err := validateChainInputs(p, in)
@@ -130,10 +134,10 @@ func validateChainInputs(p *policy.Policy, in *ChainInputs) (*policy.ProtectedBr
 		return nil, fmt.Errorf("emit: revision %q is not a full commit digest", in.Rev)
 	case !refRE.MatchString(in.Ref):
 		return nil, fmt.Errorf("emit: ref %q is not fully qualified", in.Ref)
-	case !revRE.MatchString(in.CanonRef):
+	case !revRE.MatchString(in.MachineryRef):
 		return nil, fmt.Errorf(
-			"emit: canon ref %q is not a commit digest — the policy tree must be pinned by full SHA so the VSA can carry"+
-				" its digest", in.CanonRef)
+			"emit: machinery ref %q is not a commit digest — the policy tree must be pinned by full SHA so the VSA can carry"+
+				" its digest", in.MachineryRef)
 	case in.PolicyURI == "":
 		return nil, errors.New("emit: a policy URI is required — a signed verdict naming no policy must never recur")
 	case in.ActorLogin == "" || in.ActorID == "":
@@ -372,7 +376,7 @@ func linkIsGenesis(link *chain.Note) (bool, error) {
 		return false, fmt.Errorf("predicate: %w", err)
 	}
 
-	_, genesis, err := pred.Ledger(*link.Version)
+	_, genesis, err := pred.Ledger()
 	if err != nil {
 		return false, err
 	}
@@ -401,7 +405,8 @@ func (e *chainRun) verifyTail(rev string) error {
 		return fmt.Errorf("emit: tail at %s: statement: %w", rev, err)
 	}
 
-	if _, verr := e.bv.Blob(link.Provenance.Bundle, e.id, chain.SHA256Hex(stmtBytes)); verr != nil {
+	if _, verr := e.bv.Blob(link.Provenance.Bundle, e.id,
+		chain.SHA256Hex(dsse.PAE(chain.StatementType, stmtBytes))); verr != nil {
 		return fmt.Errorf(
 			"emit: link at %s does not verify against %s — refusing to extend a chain that fails the published root"+
 				" of trust: %w", rev, e.id.SAN, verr)
@@ -545,15 +550,15 @@ func (e *chainRun) provenance(rev, tail string) (*provDoc, error) {
 	repository := serverURL + "/" + e.in.Owner + "/" + e.in.Repo
 
 	pred := chain.Predicate{
-		Repository:  &repository,
-		Ref:         &e.in.Ref,
-		Parents:     parents,
-		Actor:       &chain.Actor{Login: &e.in.ActorLogin, ID: actorID},
-		CommitTime:  &ctStr,
-		RulesReadAt: e.in.Claims.RulesReadAt,
-		Controls:    *e.in.Claims.Controls,
-		LedgerPrev:  ledgerPrev,
-		CanonRef:    &e.in.CanonRef,
+		Repository:   &repository,
+		Ref:          &e.in.Ref,
+		Parents:      parents,
+		Actor:        &chain.Actor{Login: &e.in.ActorLogin, ID: actorID},
+		CommitTime:   &ctStr,
+		RulesReadAt:  e.in.Claims.RulesReadAt,
+		Controls:     *e.in.Claims.Controls,
+		LedgerPrev:   ledgerPrev,
+		MachineryRef: &e.in.MachineryRef,
 	}
 
 	if len(parents) > 0 {
@@ -619,7 +624,7 @@ func (e *chainRun) summary(rev, lvl string) ([]byte, error) {
 		e.id.SAN,
 		e.nowUTC(),
 		expand(*e.p.Source.ResourceURI, e.in.Owner, e.in.Repo),
-		e.in.PolicyURI, e.in.CanonRef,
+		e.in.PolicyURI, e.in.MachineryRef,
 		vsa.ResultPassed,
 		levels,
 	)
@@ -672,12 +677,17 @@ func (e *chainRun) statement(rev, predicateType string, pred any) ([]byte, error
 // consumer does not. A signature that does not verify against the
 // published contract refuses the run.
 func (e *chainRun) signAndProve(stmtBytes []byte) (jsonx.Raw, error) {
-	bundle, err := e.s.Sign(stmtBytes)
+	// The signature covers PAE(type, statement), never the bare
+	// statement bytes — DSSE's payload-type authentication, so a
+	// signed statement cannot be replayed as another document kind.
+	pae := dsse.PAE(chain.StatementType, stmtBytes)
+
+	bundle, err := e.s.Sign(pae)
 	if err != nil {
 		return nil, fmt.Errorf("signing: %w", err)
 	}
 
-	if _, verr := e.bv.Blob(bundle, e.id, chain.SHA256Hex(stmtBytes)); verr != nil {
+	if _, verr := e.bv.Blob(bundle, e.id, chain.SHA256Hex(pae)); verr != nil {
 		return nil, fmt.Errorf(
 			"the bundle just signed does not verify against %s — the certificate identity is not the published"+
 				" contract: %w", e.id.SAN, verr)
@@ -686,19 +696,20 @@ func (e *chainRun) signAndProve(stmtBytes []byte) (jsonx.Raw, error) {
 	return bundle, nil
 }
 
-// assembleNote renders the version-2 chain link: statements base64 so
-// the signed bytes survive any JSON re-encoding of the note, bundles
-// as JSON for tooling — validated through the consumer type before a
-// byte is written.
+// assembleNote renders the version-3 chain link: statements base64
+// so the signed bytes survive any JSON re-encoding of the note,
+// bundles as JSON for tooling — validated through the consumer type
+// before a byte is written.
 func assembleNote(provBytes, provBundle, vsaBytes, vsaBundle []byte) ([]byte, error) {
-	version := chain.NoteV2
+	version := chain.NoteV3
+	payloadType := chain.StatementType
 	provStmt := base64.StdEncoding.EncodeToString(provBytes)
 	vsaStmt := base64.StdEncoding.EncodeToString(vsaBytes)
 
 	note := chain.Note{
 		Version:    &version,
-		Provenance: &chain.Envelope{Statement: &provStmt, Bundle: provBundle},
-		VSA:        &chain.Envelope{Statement: &vsaStmt, Bundle: vsaBundle},
+		Provenance: &chain.Envelope{PayloadType: &payloadType, Statement: &provStmt, Bundle: provBundle},
+		VSA:        &chain.Envelope{PayloadType: &payloadType, Statement: &vsaStmt, Bundle: vsaBundle},
 	}
 
 	if err := note.Validate(); err != nil {

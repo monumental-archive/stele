@@ -23,7 +23,7 @@ edit to this document first.
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "storeVsaFromCanon": "1.13.0",
+    "storeVsaFromVersion": "1.13.0",
     "debtFile": "security/attestation-debt.txt",
     "expectedRepos": 4,
     "publishWorkflows": ["publish", "self-publish"],
@@ -49,16 +49,23 @@ edit to this document first.
   nothing.
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
-- `storeVsaFromCanon` — the canon version (inclusive) from which
-  verdicts are store-resident. Absent means store-resident always.
-  An unparsable pin on a release fails TOWARD the store obligation.
-- `decisionFromCanon` — the canon version (inclusive) from which a
-  release owes a VERIFIABLE release decision; the full-depth leg runs
-  pre-epoch releases through the provenance half alone (grandfathered
-  history proves what it can). Same semantics as `storeVsaFromCanon`:
-  absent means always, an unparsable pin fails strict. Measured for
-  the first conforming org at 1.23.1 — the boundary release below
-  which no decision verifies, exactly.
+- `storeVsaFromVersion` — the machinery version (inclusive) from
+  which verdicts are store-resident. Absent means store-resident
+  always. An unparsable pin on a release fails TOWARD the store
+  obligation. The **machinery version** — defined once here, used by
+  every epoch field — is the version of the shared release machinery
+  a release pinned at its tag: the `uses:` pin comment on the
+  caller's publish workflow. A repository carrying its own machinery
+  has no pin comment, so its machinery version is its own tag. The
+  pre-#79 names `storeVsaFromCanon`/`decisionFromCanon` are refused
+  with a pointer, never aliased — one field, one name.
+- `decisionFromVersion` — the machinery version (inclusive) from
+  which a release owes a VERIFIABLE release decision; the full-depth
+  leg runs pre-epoch releases through the provenance half alone
+  (grandfathered history proves what it can). Same semantics as
+  `storeVsaFromVersion`: absent means always, an unparsable pin
+  fails strict. Measured for the first conforming org at 1.23.1 —
+  the boundary release below which no decision verifies, exactly.
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
   entry as an evidence DOCUMENT rather than an artifact (the org's
   per-release VEX documents, for one). Documents are excluded from
@@ -176,8 +183,8 @@ with no knowledge of the publisher's CI:
 
 All three fields are required. Releases without a manifest fall back
 to the workflow adapter — the quarantined org-convention read of the
-caller's publish workflow at the tag (`classes:` input, canon version
-from the `uses:` pin comment), which is the only honest source for
+caller's publish workflow at the tag (`classes:` input, machinery
+version from the `uses:` pin comment), which is the only honest source for
 history and sunsets as manifests take over. A release neither source
 speaks for is **legacy**: it predates the machinery, owes nothing,
 and is recorded by name in the report's facts — a category derived
@@ -218,9 +225,10 @@ same walk, not a second one: every covered release is handed to the
 verify engine — provenance bundles, certificates, the decision, and
 the store-resident verdict — under `--verify-policy`, the trust
 authority. Pins are derived per release from the trees a stranger
-reads: the caller's publish workflow at the tag carries the canon
-pin, the canon's publish workflow at that pin carries the signer
-pin, and the canon's own releases run at the tag commit. Refusals
+reads: the caller's publish workflow at the tag carries the
+machinery pin, the machinery repository's publish workflow at that
+pin carries the signer pin, and the machinery repository's own
+releases run at the tag commit. Refusals
 land in the walk's own taxonomy: verdict refusals carry a
 `vsa:`-prefixed assertion (so burn derivation and debt lines apply
 exactly as at presence depth, and the deep verdict check yields
@@ -231,3 +239,42 @@ grandfathered history under the verify policy's enumerated legacy
 roots — and the bound is logged, never silent. Asking for full depth
 without `--verify-policy` and `--trusted-root` is a usage refusal,
 never a shallower walk that looks like the deep one.
+
+## The tags section
+
+Tag signing is a **declared obligation** (stele#79/#82/#83): the whole
+section is absent for orgs that do not sign tags, never a
+precondition. Declared means every field, validated strictly:
+
+```json
+"tags": {
+  "tagPattern": "^v[0-9]",
+  "taggerName": "tag-mint[bot]",
+  "identityPattern": "^https://github\\.com/example-org/",
+  "notesRef": "refs/notes/commits",
+  "epochs": {"widget": "v1.2.0", "gadget": "pending"}
+}
+```
+
+- `tagPattern` — which tag refs are release tags.
+- `taggerName` — the minting role's tagger name; an identity from
+  policy, never a literal in code.
+- `identityPattern` — the regular expression the signing
+  certificate's SAN must match; the issuer is the policy's top-level
+  `issuer`, required when this section is declared.
+- `notesRef` — the source chain's notes ref, fully qualified.
+- `epochs` — each releasing repository's first signed tag, or
+  `pending` for declared-unsigned. A repository that releases tags
+  without a line here seals CANNOT_JUDGE: an undeclared population
+  member is unchecked, not clean.
+
+The walk (`stele assert tags --org|--repo`): for every matching tag,
+the tagger is the declared role, the tag from the epoch onward
+carries a gitsign signature verified natively against the trusted
+root (CMS over the tag payload, chain to the root's certificate
+authorities at the payload's tagger time, SAN and issuer held to the
+policy — no gitsign binary, and the forge's own verification verdict
+is never consulted: it cannot judge x509-in-the-PGP-slot), and the
+tag's target carries a source chain link. The legacy bound is derived
+from the chain itself: a target that does not descend from the chain
+genesis predates the machinery and owes nothing, reported by name.

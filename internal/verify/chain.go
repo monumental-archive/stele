@@ -68,6 +68,10 @@ type linkFacts struct {
 // exact statement bytes the note carries; every revision since
 // genesis must carry a link; the ledger must reach every member.
 func Chain(p *policy.Policy, c Coords, ref string, h History, bv BundleVerifier, log Logf) (*ChainVerdict, error) {
+	if p.Source == nil {
+		return nil, errors.New("verify: the policy declares no source section — the chain walk needs one")
+	}
+
 	if err := validateCoords(c, false); err != nil {
 		return nil, err
 	}
@@ -237,7 +241,7 @@ func (w *walker) verifyLink(rev string, link *chain.Note) (*linkFacts, bool, err
 		return nil, false, fmt.Errorf("verify: link at %s: predicate: %w", rev, err)
 	}
 
-	_, genesis, err := pred.Ledger(*link.Version)
+	_, genesis, err := pred.Ledger()
 	if err != nil {
 		return nil, false, fmt.Errorf("verify: link at %s: %w", rev, err)
 	}
@@ -262,15 +266,20 @@ func (w *walker) verifyLink(rev string, link *chain.Note) (*linkFacts, bool, err
 	return facts, genesis, nil
 }
 
-// verifyHalf proves one half's blob signature over its exact
-// statement bytes and returns the validated statement.
+// verifyHalf proves one half's signature over the DSSE
+// pre-authentication encoding of its exact statement bytes and
+// returns the validated statement. The payload type is inside the
+// signed encoding: a statement re-labelled as another document kind
+// fails here, not in a consumer's assumption.
 func (w *walker) verifyHalf(rev, name string, env *chain.Envelope) (*intoto.Statement, error) {
 	stmtBytes, err := dsse.DecodeBase64(*env.Statement)
 	if err != nil {
 		return nil, fmt.Errorf("verify: link at %s: %s statement: %w", rev, name, err)
 	}
 
-	if _, verr := w.bv.Blob(env.Bundle, w.id, sha256Hex(stmtBytes)); verr != nil {
+	pae := dsse.PAE(*env.PayloadType, stmtBytes)
+
+	if _, verr := w.bv.Blob(env.Bundle, w.id, sha256Hex(pae)); verr != nil {
 		return nil, fmt.Errorf("verify: link at %s: %s refused: %w", rev, name, verr)
 	}
 
@@ -435,7 +444,7 @@ func (w *walker) step(cur string, h History) (string, error) {
 		return "", fmt.Errorf("verify: link at %s: predicate: %w", cur, err)
 	}
 
-	ptr, genesis, err := pred.Ledger(*link.Version)
+	ptr, genesis, err := pred.Ledger()
 	if err != nil {
 		return "", fmt.Errorf("verify: link at %s: %w", cur, err)
 	}
@@ -461,28 +470,21 @@ func (w *walker) step(cur string, h History) (string, error) {
 	return *ptr.Revision, nil
 }
 
-// leaves judges unreachable members. The bash accepted ANY v1 leaf
-// as the known pre-v2 fork; the policy's rule is stricter and
-// spec-shaped — an exception to a cryptographic walk is itself named
-// cryptographically (docs/policy-schema.md), so a leaf must be
-// enumerated in legacyLeaves or it refuses, v1 and v2 alike, with
-// v2 named as the fork it is. Logged as a disagreement for shadow.
+// leaves judges unreachable members: an exception to a cryptographic
+// walk is itself named cryptographically (docs/policy-schema.md), so
+// an off-ledger link must be enumerated in legacyLeaves or the walk
+// refuses — the ledger must not fork silently.
 func (w *walker) leaves(members map[string]int, visited map[string]bool, log Logf) error {
-	for rev, version := range members {
+	for rev := range members {
 		if visited[rev] {
 			continue
 		}
 
-		if version != chain.NoteV1 {
-			return fmt.Errorf("verify: v%d link at %s is unreachable from the ledger — the v2 ledger must not fork",
-				version, rev)
-		}
-
 		if !w.enumeratedLeaf(rev) {
-			return fmt.Errorf("verify: v1 link at %s is off the ledger and not enumerated in source.legacyLeaves", rev)
+			return fmt.Errorf("verify: link at %s is off the ledger and not enumerated in source.legacyLeaves", rev)
 		}
 
-		log("verify: v1 link at %s is off the ledger — enumerated legacy leaf", rev[:12])
+		log("verify: link at %s is off the ledger — enumerated legacy leaf", rev[:12])
 	}
 
 	return nil

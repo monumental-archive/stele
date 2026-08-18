@@ -23,7 +23,7 @@ const testPolicyJSON = `{
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "storeVsaFromCanon": "1.13.0",
+    "storeVsaFromVersion": "1.13.0",
     "evidenceSuffixes": [".openvex.json"],
     "debtFile": "security/attestation-debt.txt",
     "classes": {
@@ -197,7 +197,8 @@ func runEvidence(t *testing.T, f *fakeForge, debt []report.Exception) *report.Re
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
-	rep, err := assert.Evidence(pol, "acme", f, src, &fakeAttestor{}, debt, nil, nil, func(string, ...any) {})
+	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, debt, nil, nil,
+		func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -364,7 +365,8 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	pol.Evidence.PublishWorkflows = []string{"publish", "self-publish"}
 	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Asset: "evidence-manifest.json"}}
 
-	rep4, err := assert.Evidence(pol, "acme", f4, src4, &fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
+	rep4, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f4, src4, &fakeAttestor{}, nil, nil, nil,
+		func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +381,8 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	f5.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard", "publish"}}
 	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Asset: "evidence-manifest.json"}}
 
-	rep5, err := assert.Evidence(pol, "acme", f5, src5, &fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
+	rep5, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f5, src5, &fakeAttestor{}, nil, nil, nil,
+		func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +457,62 @@ func TestEvidenceLegacyVSABundlesPreEpoch(t *testing.T) {
 	}
 }
 
+// TestEvidenceSingleRepoPopulation proves the single-repository
+// population (#79): the same walk over exactly one owner/name, no org
+// listing consulted, the report subject the repo itself.
+func TestEvidenceSingleRepoPopulation(t *testing.T) {
+	t.Parallel()
+
+	f := completeRelease()
+	f.reposErr = errors.New("the listing must not be consulted for a single-repo population")
+
+	pol := loadTestPolicy(t)
+	src := assert.Sources{
+		assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"},
+		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
+	}
+
+	rep, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src,
+		&fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("Evidence: %v", err)
+	}
+
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+}
+
+// TestEvidenceSingleRepoRefusals: the guard branches the single-repo
+// population adds — a declared org population cannot apply, and a
+// population that is not owner/name cannot resolve.
+func TestEvidenceSingleRepoRefusals(t *testing.T) {
+	t.Parallel()
+
+	pol := loadTestPolicy(t)
+	f := completeRelease()
+	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
+	silent := func(string, ...any) {}
+
+	expected := 1
+	pol.Evidence.ExpectedRepos = &expected
+
+	_, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src, &fakeAttestor{}, nil, nil, nil, silent)
+	if err == nil || !strings.Contains(err.Error(), "expectedRepos") {
+		t.Fatalf("error = %v, want the expectedRepos-over-one-repo refusal", err)
+	}
+
+	pol.Evidence.ExpectedRepos = nil
+
+	for _, bad := range []string{"solo", "/name", "owner/"} {
+		if _, err := assert.Evidence(pol, assert.Population{Repo: bad}, f, src,
+			&fakeAttestor{}, nil, nil, nil, silent); err == nil ||
+			!strings.Contains(err.Error(), "owner/name") {
+			t.Fatalf("population %q: error = %v, want the owner/name refusal", bad, err)
+		}
+	}
+}
+
 func TestEvidenceRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -465,7 +524,8 @@ func TestEvidenceRefusals(t *testing.T) {
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
 
-	_, err := assert.Evidence(pol, "acme", f, src, &fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
+	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, nil,
+		func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "declared population") {
 		t.Fatalf("error = %v, want the population guard", err)
 	}
@@ -473,7 +533,8 @@ func TestEvidenceRefusals(t *testing.T) {
 	broken := &fakeForge{reposErr: errors.New("listing torn")}
 
 	_, err = assert.Evidence(
-		loadTestPolicy(t), "acme", broken, src, &fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
+		loadTestPolicy(t), assert.Population{Org: "acme"}, broken, src, &fakeAttestor{}, nil, nil, nil,
+		func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "listing torn") {
 		t.Fatalf("error = %v, want the listing failure", err)
 	}

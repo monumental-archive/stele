@@ -98,7 +98,7 @@ func runBlast(t *testing.T, f *fakeForge, scanner osv.Scanner, d *vexjoin.Decisi
 		t.Fatal(err)
 	}
 
-	rep, err := assert.BlastRadius(pol, "acme", f, scanner, d, func(string, ...any) {})
+	rep, err := assert.BlastRadius(pol, assert.Population{Org: "acme"}, f, scanner, d, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("BlastRadius: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestBlastRadiusPolicyRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := assert.BlastRadius(noSection, "acme", blastForge(), fakeScanner{out: "{}"},
+	if _, err := assert.BlastRadius(noSection, assert.Population{Org: "acme"}, blastForge(), fakeScanner{out: "{}"},
 		&vexjoin.Decisions{}, func(string, ...any) {}); err == nil {
 		t.Fatal("a policy with no blastRadius section did not refuse")
 	}
