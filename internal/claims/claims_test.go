@@ -633,7 +633,7 @@ func TestHorizonFallbacks(t *testing.T) {
 			wantCount: 2,
 		},
 		{
-			name: "an unparseable change time is a failure: a wrong horizon over-claims",
+			name: "an unparsable change time is a failure: a wrong horizon over-claims",
 			ruleset: func(t *testing.T) string {
 				t.Helper()
 
