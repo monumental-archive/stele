@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "issuer": "https://token.actions.githubusercontent.com",
+  "trust": {
+    "provenance": {
+      "signerWorkflow": "monumental-archive/signer/.github/workflows/sign.yml"
+    },
+    "verdict": {
+      "verifierWorkflow": "monumental-archive/.github/.github/workflows/verify-release.yml",
+      "legacyVerdicts": [
+        {
+          "repository": "monumental-archive/.github",
+          "tag": "v1.13.0",
+          "signerWorkflow": "monumental-archive/signer/.github/workflows/sign.yml"
+        },
+        {
+          "repository": "monumental-archive/release-lab",
+          "tag": "v0.20.1",
+          "signerWorkflow": "monumental-archive/signer/.github/workflows/sign.yml"
+        }
+      ]
+    },
+    "decision": {
+      "signerWorkflow": "monumental-archive/.github/.github/workflows/publish.yml",
+      "predicateType": "https://monumental-archive.github.io/attestations/release-decision/v1",
+      "requiredConclusion": "OPEN"
+    }
+  },
+  "build": {
+    "buildTypes": {
+      "https://actions.github.io/buildtypes/workflow/v1": {
+        "externalParameterKeys": ["workflow", "inputs"]
+      }
+    },
+    "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
+    "sourceRepository": "https://github.com/{owner}/{repo}",
+    "targetLevel": "SLSA_BUILD_LEVEL_3",
+    "denySelfHostedRunners": true
+  },
+  "source": {
+    "identity": "https://github.com/{owner}/{repo}/.github/workflows/source-attest.yml@refs/heads/main",
+    "notesRef": "refs/notes/commits",
+    "provenancePredicateType": "https://monumental-archive.github.io/attestations/source-provenance/v1",
+    "propertyPrefix": "ORG_SOURCE_",
+    "resourceUri": "git+https://github.com/{owner}/{repo}",
+    "protectedBranches": [
+      {
+        "name": "main",
+        "targetLevel": "SLSA_SOURCE_LEVEL_3",
+        "requiredProperties": [
+          {
+            "name": "ORG_SOURCE_GATED",
+            "since": "2026-08-10T21:41:46+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_DCO",
+            "since": "2026-08-09T16:29:06+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_CAPABILITY_BOUNDARY",
+            "since": "2026-08-09T16:29:06+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_HISTORY_PROTECTED",
+            "since": "2026-08-09T16:29:06+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_SIGNED",
+            "since": "2026-08-09T16:29:06+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_REVIEWED_THREADS",
+            "since": "2026-08-10T21:41:46+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_TAG_IMMUTABLE",
+            "since": "2026-08-09T16:29:06+01:00"
+          },
+          {
+            "name": "ORG_SOURCE_RELEASE_TAG_MINTED",
+            "since": "2026-08-09T16:29:06+01:00"
+          }
+        ]
+      }
+    ],
+    "healedContinuity": true,
+    "underclaimLevel": "SLSA_SOURCE_LEVEL_2",
+    "legacyLeaves": [
+      {
+        "repository": "monumental-archive/.github",
+        "revision": "e1ad2dde9fd24fc521b4b37453dac052e655212b",
+        "reason": "pre-v2 healed fork, #349 finding 3"
+      }
+    ]
+  }
+}

@@ -5,8 +5,11 @@
 intoto = "intoto"
 
 [files]
-# go.sum is nothing but hashes.
-extend-exclude = ["go.sum"]
+# go.sum is nothing but hashes. Fuzz seed corpora are real foreign
+# artifacts (bundles, certificates, trusted roots) recorded byte-for-
+# byte — base64 blobs are not prose, and editing a seed to appease a
+# spellchecker would falsify the evidence.
+extend-exclude = ["go.sum", "internal/*/testdata/*-seed.*"]
 
 [default]
 # Go module pseudo-versions (v0.0.0-<stamp>-<hex12>) land in go.mod:
