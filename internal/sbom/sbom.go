@@ -51,6 +51,11 @@ const (
 // the version this writes and its data licence.
 const (
 	documentID     = "SPDXRef-DOCUMENT"
+	rootPackageID  = "SPDXRef-Package-0"
+	purposeApp     = "APPLICATION"
+	purposeLibrary = "LIBRARY"
+	relDescribes   = "DESCRIBES"
+	relDependsOn   = "DEPENDS_ON"
 	noAssertion    = "NOASSERTION"
 	spdxVersion    = "SPDX-2.3"
 	spdxDataLicHse = "CC0-1.0"
@@ -361,11 +366,11 @@ func render(f *facts, tool string, inv *inventory) *Document {
 	}
 
 	root := Package{
-		SPDXID:           "SPDXRef-Package-0",
+		SPDXID:           rootPackageID,
 		Name:             f.mainPath,
 		VersionInfo:      f.mainVersion,
 		DownloadLocation: noAssertion,
-		PrimaryPurpose:   "APPLICATION",
+		PrimaryPurpose:   purposeApp,
 		ExternalRefs:     []ExternalRef{purlRef(f.mainPath, f.mainVersion)},
 	}
 
@@ -373,7 +378,7 @@ func render(f *facts, tool string, inv *inventory) *Document {
 	doc.Relationships = append(doc.Relationships, Relationship{
 		SPDXElementID:      documentID,
 		RelatedSPDXElement: root.SPDXID,
-		RelationshipType:   "DESCRIBES",
+		RelationshipType:   relDescribes,
 	})
 
 	for i, m := range deps {
@@ -382,7 +387,7 @@ func render(f *facts, tool string, inv *inventory) *Document {
 			Name:             m.path,
 			VersionInfo:      m.version,
 			DownloadLocation: noAssertion,
-			PrimaryPurpose:   "LIBRARY",
+			PrimaryPurpose:   purposeLibrary,
 			SourceInfo:       linkedInto(m.platforms, inv.platforms),
 			ExternalRefs:     []ExternalRef{purlRef(m.path, m.version)},
 		}
@@ -391,7 +396,7 @@ func render(f *facts, tool string, inv *inventory) *Document {
 		doc.Relationships = append(doc.Relationships, Relationship{
 			SPDXElementID:      root.SPDXID,
 			RelatedSPDXElement: pkg.SPDXID,
-			RelationshipType:   "DEPENDS_ON",
+			RelationshipType:   relDependsOn,
 		})
 	}
 

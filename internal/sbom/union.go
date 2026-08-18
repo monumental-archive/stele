@@ -121,10 +121,10 @@ func renderUnion(name, created, tool string, arts []artifact) *Document {
 	}
 
 	root := Package{
-		SPDXID:           "SPDXRef-Package-0",
+		SPDXID:           rootPackageID,
 		Name:             name,
 		DownloadLocation: noAssertion,
-		PrimaryPurpose:   "APPLICATION",
+		PrimaryPurpose:   purposeApp,
 		SourceInfo:       "aggregated from " + strings.Join(artifactNames(arts), ", "),
 	}
 
@@ -132,7 +132,7 @@ func renderUnion(name, created, tool string, arts []artifact) *Document {
 	doc.Relationships = append(doc.Relationships, Relationship{
 		SPDXElementID:      documentID,
 		RelatedSPDXElement: root.SPDXID,
-		RelationshipType:   "DESCRIBES",
+		RelationshipType:   relDescribes,
 	})
 
 	for i, key := range keys {
@@ -145,7 +145,7 @@ func renderUnion(name, created, tool string, arts []artifact) *Document {
 		doc.Relationships = append(doc.Relationships, Relationship{
 			SPDXElementID:      root.SPDXID,
 			RelatedSPDXElement: pkg.SPDXID,
-			RelationshipType:   "DEPENDS_ON",
+			RelationshipType:   relDependsOn,
 		})
 	}
 
@@ -195,4 +195,79 @@ func dedupe(values []string) []string {
 	sort.Strings(out)
 
 	return out
+}
+
+// FromPackages renders one artifact's inventory from a resolved
+// closure: the artifact itself as the root, its dependencies beneath.
+//
+// The closure is computed by whoever owns the ecosystem's resolver
+// (internal/cargo for Cargo), so this function does no resolution of
+// its own — it is the SPDX rendering and nothing else. Keeping the two
+// apart is what lets a second ecosystem arrive without touching either.
+func FromPackages(artifact, created, tool string, deps []Package) (*Document, error) {
+	switch {
+	case artifact == "":
+		return nil, errors.New("sbom: the artifact must be named")
+	case created == "":
+		return nil, errors.New("sbom: the artifact's own instant is required, never a clock reading")
+	case len(deps) == 0:
+		return nil, errors.New("sbom: an inventory of nothing asserts nothing")
+	}
+
+	doc := &Document{
+		SPDXVersion:       spdxVersion,
+		DataLicense:       spdxDataLicHse,
+		SPDXID:            documentID,
+		Name:              artifact,
+		DocumentNamespace: "https://spdx.org/spdxdocs/" + strings.ReplaceAll(artifact, "/", "-"),
+		CreationInfo:      CreationInfo{Created: created, Creators: []string{"Tool: " + tool}},
+	}
+
+	root := deps[0]
+	root.SPDXID = rootPackageID
+	root.PrimaryPurpose = purposeApp
+	root.DownloadLocation = noAssertion
+
+	doc.Packages = append(doc.Packages, root)
+	doc.Relationships = append(doc.Relationships, Relationship{
+		SPDXElementID:      documentID,
+		RelatedSPDXElement: root.SPDXID,
+		RelationshipType:   relDescribes,
+	})
+
+	for i, dep := range deps[1:] {
+		dep.SPDXID = fmt.Sprintf("SPDXRef-Package-%d", i+1)
+		dep.PrimaryPurpose = purposeLibrary
+		dep.DownloadLocation = noAssertion
+
+		doc.Packages = append(doc.Packages, dep)
+		doc.Relationships = append(doc.Relationships, Relationship{
+			SPDXElementID:      root.SPDXID,
+			RelatedSPDXElement: dep.SPDXID,
+			RelationshipType:   relDependsOn,
+		})
+	}
+
+	return doc, nil
+}
+
+// CargoPackage renders one resolved Cargo package as an SPDX package.
+// Every PURL is versioned by construction: a versionless one matches
+// no advisory, so it is silently invisible to every scanner — which is
+// the defect the canon's bash asserts against after the fact.
+func CargoPackage(name, version string) Package {
+	return Package{
+		Name:         name,
+		VersionInfo:  version,
+		ExternalRefs: []ExternalRef{purlRef2("cargo", name, version)},
+	}
+}
+
+// purlRef2 renders a versioned PURL for one ecosystem.
+func purlRef2(ecosystem, name, version string) ExternalRef {
+	return ExternalRef{
+		ReferenceCategory: "PACKAGE-MANAGER",
+		ReferenceType:     "purl",
+		ReferenceLocator:  "pkg:" + ecosystem + "/" + name + "@" + version,
+	}
 }

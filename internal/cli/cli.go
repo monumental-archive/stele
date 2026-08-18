@@ -100,9 +100,12 @@ usage:
               internal path-dependency constraints, CITATION.cff),
               parsed and re-read, never pattern-matched; --check
               instead asserts the mirrors carry the released version
-    sbom      the release SBOM, read from the shipped binaries'
-              embedded module lists (SPDX 2.3, one union document
-              over every platform leg)
+    sbom      an artifact's inventory (SPDX 2.3), from one of three
+              sources: the shipped binaries' embedded module lists,
+              a Cargo package's own resolved closure scoped to the
+              target it was built for, or an aggregation of
+              per-artifact documents into the release view — which is
+              folded from them, never derived a second time
     facts     the OCI image metadata one release asserts on its
               images: provenance from the released commit and the
               forge, editorial with derived defaults, licence
@@ -142,7 +145,9 @@ usage:
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
 
-derive sbom flags: [--out --expect-version] <binary>...; derive claims
+derive sbom flags: [--out --expect-version] <binary>..., or
+--cargo-package --tree --created [--target], or --union --union-name
+--created; derive claims
 takes --policy --repo --branch [--canon-root --canon-digest --out
 --snapshot|--capture]; derive facts takes --archetype --repo --git-dir
 [--version --rev --tree --server-url --title --description]; derive vex

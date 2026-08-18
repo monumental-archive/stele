@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/cargo"
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
@@ -217,4 +219,169 @@ func TestDeriveSBOMFailingWriter(t *testing.T) {
 			t.Fatalf("deriveCmd = %d, want %d", got, exitIO)
 		}
 	})
+}
+
+// stubResolver returns recorded cargo output.
+type stubResolver struct {
+	metadata string
+	err      error
+	tree     string
+	target   string
+}
+
+func (s *stubResolver) Metadata(tree, target string) ([]byte, error) {
+	s.tree, s.target = tree, target
+
+	return []byte(s.metadata), s.err
+}
+
+func withResolver(t *testing.T, r cargo.Resolver) {
+	t.Helper()
+
+	previous := newCargoResolver
+	newCargoResolver = func() cargo.Resolver { return r }
+
+	t.Cleanup(func() { newCargoResolver = previous })
+}
+
+const cargoMetadata = `{"packages": [
+  {"id": "lab-cli 0.1.0 (path+file:///w/cli)", "name": "lab-cli", "version": "0.1.0", "source": ""},
+  {"id": "mimalloc 0.1.39 (registry+x)", "name": "mimalloc", "version": "0.1.39", "source": "registry+x"}],
+ "resolve": {"nodes": [
+  {"id": "lab-cli 0.1.0 (path+file:///w/cli)",
+   "deps": [{"pkg": "mimalloc 0.1.39 (registry+x)", "dep_kinds": [{"kind": ""}]}]},
+  {"id": "mimalloc 0.1.39 (registry+x)", "deps": []}]}}`
+
+// The per-artifact path: one package's own closure, every PURL
+// versioned, dated by the artifact rather than by the run.
+func TestDeriveSBOMFromACargoClosure(t *testing.T) {
+	resolver := &stubResolver{metadata: cargoMetadata}
+	withResolver(t, resolver)
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"sbom", "--cargo-package", "lab-cli", "--tree", "/w",
+		"--target", "x86_64-unknown-linux-gnu", "--created", "2026-08-18T12:00:00Z",
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		`"name":"lab-cli@0.1.0"`,
+		`"referenceLocator":"pkg:cargo/lab-cli@0.1.0"`,
+		`"referenceLocator":"pkg:cargo/mimalloc@0.1.39"`,
+		`"created":"2026-08-18T12:00:00Z"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("document lacks %s:\n%s", want, out)
+		}
+	}
+
+	// A versionless PURL matches no advisory, so it is invisible to
+	// every scanner — the defect the canon's bash asserts against
+	// afterwards and this renders unwritable.
+	if strings.Contains(out, `"pkg:cargo/lab-cli"`) || strings.Contains(out, `"pkg:cargo/mimalloc"`) {
+		t.Errorf("a versionless PURL was rendered:\n%s", out)
+	}
+
+	if resolver.tree != "/w" || resolver.target != "x86_64-unknown-linux-gnu" {
+		t.Errorf("resolved in %q for %q", resolver.tree, resolver.target)
+	}
+}
+
+// The view is folded from documents. Its input is documents and
+// nothing else, so it cannot be derived a second time from a tree.
+func TestDeriveSBOMUnionAggregates(t *testing.T) {
+	dir := t.TempDir()
+
+	write := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		return path
+	}
+
+	a := write("a.spdx.json", `{"packages": [
+	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-cli"},
+	  {"SPDXID": "SPDXRef-Package-1", "name": "shared", "versionInfo": "1.0.0"}]}`)
+	b := write("b.spdx.json", `{"packages": [
+	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-npm"},
+	  {"SPDXID": "SPDXRef-Package-1", "name": "only-npm", "versionInfo": "3.0.0"}]}`)
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"sbom", "--union", a + "," + b, "--union-name", "widget@1.0.0",
+		"--created", "2026-08-18T12:00:00Z",
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		`"name":"widget@1.0.0"`,
+		"aggregated from widget-cli, widget-npm",
+		// Each package names who ships it, so the view never
+		// over-claims the way the per-release document did.
+		"shipped in: widget-cli",
+		"shipped in: widget-npm",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("view lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDeriveSBOMSourceRefusals(t *testing.T) {
+	withResolver(t, &stubResolver{metadata: cargoMetadata})
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			"deriving and aggregating at once",
+			[]string{"sbom", "--cargo-package", "a", "--union", "x"},
+			"exclusive",
+		},
+		{
+			"a cargo closure with no workspace",
+			[]string{"sbom", "--cargo-package", "a", "--created", "2026-08-18T12:00:00Z"},
+			"--tree is required",
+		},
+		{
+			"a cargo closure dated by nothing",
+			[]string{"sbom", "--cargo-package", "a", "--tree", "/w"},
+			"dated by the artifact",
+		},
+		{
+			"a view naming no release",
+			[]string{"sbom", "--union", "x", "--created", "2026-08-18T12:00:00Z"},
+			"--union-name is required",
+		},
+		{
+			"a view dated by nothing",
+			[]string{"sbom", "--union", "x", "--union-name", "w"},
+			"--created is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			if got := deriveCmd(tc.args, &stdout, &stderr); got != exitRefused {
+				t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
+			}
+
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr = %q, want it to mention %q", stderr.String(), tc.want)
+			}
+		})
+	}
 }
