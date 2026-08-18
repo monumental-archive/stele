@@ -26,7 +26,7 @@ import (
 func baseImagesPolicy(t *testing.T, pinFile string) *assert.Policy {
 	t.Helper()
 
-	content := `{"schema": 2, "issuer": "https://token.example.com",
+	content := `{"schema": 3, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "debtFile": "no-such-debt.txt",
@@ -173,7 +173,7 @@ func TestAssertUsageMatrix(t *testing.T) {
 	dir := t.TempDir()
 
 	notAPolicy := filepath.Join(dir, "not-a-policy.json")
-	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 2}`), 0o600); err != nil {
+	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 3}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

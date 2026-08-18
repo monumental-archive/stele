@@ -21,7 +21,7 @@ import (
 )
 
 const testPolicy = `{
-  "schema": 2,
+  "schema": 3,
   "issuer": "https://token.actions.githubusercontent.com",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},

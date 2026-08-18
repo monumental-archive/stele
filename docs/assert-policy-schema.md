@@ -13,17 +13,17 @@ Three formats are defined here: the policy file, the release
 evidence manifest, and the debt file. A change to any is a reviewed
 edit to this document first.
 
-`schema` is the refusal boundary: current 2 (schema 1 is the pre-#84
-vocabulary; the rename was a key-set change, which moves the
-identifier — [docs/versioning.md](versioning.md)). The gate fires
-before strict decoding, so another schema refuses as a version
-mismatch, never as an unknown-field error.
+`schema` is the refusal boundary: current **3**, the one epoch shared
+by this policy, the verify policy and the report, so a bump cannot
+land on one document and miss another ([docs/versioning.md](versioning.md)).
+The gate fires before strict decoding, so another schema refuses as a
+version mismatch, never as an unknown-field error.
 
 ## The policy file
 
 ```json
 {
-  "schema": 2,
+  "schema": 3,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

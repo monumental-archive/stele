@@ -80,6 +80,16 @@ func DecodeForeign[T any](b []byte) (*T, error) {
 	return value, nil
 }
 
+// Epoch is the one document epoch every live-read stele document
+// carries — both policies and the report reference this constant,
+// never a local copy, so the "one number" of docs/versioning.md is
+// one definition and a bump that lands on one document and misses
+// another is unrepresentable (share the definition, never share the
+// derivation). Identifiers written into history — chain note
+// version, evidence-manifest schema — keep their own numbers and do
+// not reference this.
+const Epoch = 3
+
 // DecodeVersioned decodes one schema-versioned document under the
 // Decode contract, with the version gate structurally first: the
 // declared `schema` field is peeked tolerantly before the strict

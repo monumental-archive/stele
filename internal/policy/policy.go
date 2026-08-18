@@ -18,11 +18,16 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
-// Schema is the one schema version this implementation reads — any
-// other is refused, never best-efforted. Schema 1 is the pre-#84
-// vocabulary; #84's renames were a key-set change, which moves the
-// identifier (docs/versioning.md), so the current vocabulary is 2.
-const Schema = 2
+// Schema is the document epoch this implementation reads — any other
+// is refused, never best-efforted. It is ONE number across every
+// live-read stele document (both policies and the report), because
+// there are no dual readers: per-document numbers would buy no
+// tolerance a reader can use, and would drift the moment a human
+// bumped one and forgot another, which is what stele#107 found.
+// The number is defined once, at the version gate (jsonx.Epoch).
+// Identifiers written into history keep their own numbers — see
+// docs/versioning.md.
+const Schema = jsonx.Epoch
 
 // Policy is the decoded document. Field semantics live in
 // docs/policy-schema.md; this type carries exactly that shape.
