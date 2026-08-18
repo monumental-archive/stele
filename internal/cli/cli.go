@@ -95,6 +95,11 @@ usage:
               for, measured within one tag namespace
     notes     that release's changelog section, in the Keep a
               Changelog shape, printed or spliced into a file
+    bump      that release's version written into the tree's version
+              mirrors (Cargo workspace or single-crate version,
+              internal path-dependency constraints, CITATION.cff),
+              parsed and re-read, never pattern-matched; --check
+              instead asserts the mirrors carry the released version
     sbom      the release SBOM, read from the shipped binaries'
               embedded module lists (SPDX 2.3, one union document
               over every platform leg)
@@ -129,7 +134,7 @@ derive sbom flags: [--out --expect-version] <binary>...; the other
 derive modes take --git-dir [--ref --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
---date --changelog].
+--date --changelog]; bump adds [--check --date].
 
 verify flags: --policy --trusted-root --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain/level add
