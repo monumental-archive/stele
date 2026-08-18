@@ -74,10 +74,10 @@ const policyJSON = `{
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
+        "levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
           {"name": "ORG_SOURCE_GATED", "since": "2020-01-01T00:00:00Z"},
           {"name": "ORG_SOURCE_FUTURE", "since": "2099-01-01T00:00:00Z"}
-        ]
+        ]}]
       }
     ],
     "healedContinuity": true,

@@ -44,52 +44,78 @@ func (v *VSAVerdict) Levels() []string {
 // fold across subjects, never a loop survivor.
 func (v *VSAVerdict) SourceRevision() string { return v.sourceRevision }
 
-// VSA verifies the published verdict over every subject of one
-// release: for each subject, at least one VSA bundle must verify
-// under the verdict identity with that subject's digest, name the
-// expected resource, report PASSED, and claim the target level.
+// SubjectLevels pairs one release subject with the levels its
+// verified verdict claimed, and the attester that claimed them.
+// Constructor: VSALevels, alone — the levels here have been through
+// every step of the spec's procedure except the last.
+type SubjectLevels struct {
+	subject    Subject
+	levels     []string
+	attesterID string
+}
+
+// Subject is the release subject these levels were claimed for.
+func (s *SubjectLevels) Subject() Subject { return s.subject }
+
+// Levels are the claimed levels, copied.
+func (s *SubjectLevels) Levels() []string {
+	out := make([]string, len(s.levels))
+	copy(out, s.levels)
+
+	return out
+}
+
+// AttesterID is the verifier.id the verdict claimed — asserted to BE
+// the signing identity, which is what makes it a trust-map key.
+func (s *SubjectLevels) AttesterID() string { return s.attesterID }
+
+// VSALevels runs the spec's verification procedure over every
+// subject's published verdict and returns what each one CLAIMED,
+// plus the one source revision the enrichment claims name — steps 1
+// through 6, stopping before step 7. The last step compares the
+// claim with an expectation, and the two callers want different
+// things from it: `verify vsa` demands the target level and refuses
+// otherwise, `stele level` computes what the claim supports. Proving
+// and demanding are split so an underclaim stays computable instead
+// of becoming an error.
 //
-// Where the policy declares an enrichment obligation and the demand
-// says it is owed, each subject's enrichment claim is proven in the
-// same pass and under the same identity — deliberately not a
-// separate mode, because a mode a caller can decline is an
-// obligation a caller can decline, which is the decorative-enrichment
-// failure the leg exists to end. It costs no extra fetch: the store
-// returns verdict and enrichment together.
+// THE INVARIANT OF THIS SPLIT: every PROVING obligation lives here,
+// and only the comparison with an expectation lives in VSA. A leg
+// that proves less than `verify vsa` proves would be an opt-out path
+// around an obligation deliberately placed inside the engine — which
+// is exactly what putting the enrichment leg inside VSA was for
+// (#86). The enrichment proof is therefore on THIS side of the
+// split, and `stele level build` passes the empty demand: a
+// stranger's read owes the whole universal obligation.
 //
 // demand carries what this release owes its enrichment claim (three
-// states, documented on EnrichmentDemand). WHICH releases owe the
-// obligation is the corpus walk's question, answered from the
-// machinery version it already derives — the epoch deliberately does
-// not enter the verify policy: `verify vsa` judges the one release
-// it is pointed at, so a stranger passes the empty demand and gets
-// the whole universal obligation.
-func VSA(
+// states, documented on EnrichmentDemand).
+func VSALevels(
 	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf, demand *EnrichmentDemand,
-) (*VSAVerdict, error) {
+) ([]SubjectLevels, string, error) {
 	switch {
 	case p.Trust.Verdict == nil:
-		return nil, errors.New("verify: the policy declares no trust.verdict — vsa verification needs one")
+		return nil, "", errors.New("verify: the policy declares no trust.verdict — vsa verification needs one")
 	case p.Build == nil:
-		return nil, errors.New("verify: the policy declares no build section — vsa verification needs one")
+		return nil, "", errors.New("verify: the policy declares no build section — vsa verification needs one")
 	}
 
 	if err := validateInputs(c, subjects, pins); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// An incoherent demand is a defect in the POLICIES, refused
 	// before any subject is judged — never a finding pinned on a
 	// release that did nothing wrong.
 	if err := validateDemand(p.Build.Enrichment, demand); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	root := verdictIdentity(p, c, pins)
 	resource := expand(*p.Build.ResourceURI, c)
 
-	var levels []string
+	out := make([]SubjectLevels, 0, len(subjects))
 
 	// Revisions are accumulated as a set: the claimed source commit
 	// is a fold over every subject, so disagreement is a refusal and
@@ -99,10 +125,10 @@ func VSA(
 	for _, s := range subjects {
 		got, pred, err := vsaForSubject(p, c, s, root, resource, store, bv, demand)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
-		levels = got
+		out = append(out, SubjectLevels{subject: s, levels: got, attesterID: root.uri})
 
 		if pred != nil {
 			revisions[pred.Revision()] = true
@@ -111,16 +137,49 @@ func VSA(
 
 	revision, err := oneEnrichmentRevision(revisions)
 	if err != nil {
+		return nil, "", err
+	}
+
+	log("verify: vsa %s@%s: verdict verified over %d subject(s)", c.Slug(), c.Tag, len(subjects))
+
+	return out, revision, nil
+}
+
+// VSA verifies the published verdict over every subject of one
+// release: VSALevels' six steps and the enrichment proof, plus the
+// spec's step 7 — every subject's verdict must claim the policy's
+// target level.
+func VSA(
+	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
+	store Store, bv BundleVerifier, log Logf, demand *EnrichmentDemand,
+) (*VSAVerdict, error) {
+	claimed, revision, err := VSALevels(p, c, subjects, pins, store, bv, log, demand)
+	if err != nil {
 		return nil, err
 	}
 
-	log("verify: vsa %s@%s: verdict verified over %d subject(s), levels %v", c.Slug(), c.Tag, len(subjects), levels)
+	var levels []string
+
+	want := *p.Build.TargetLevel
+
+	for i := range claimed {
+		// The spec's step 7 verbatim: verifiedLevels contains the
+		// expected value. The one-per-track rule already held above, so
+		// containment cannot be a lower level smuggled beside a higher.
+		if !slices.Contains(claimed[i].levels, want) {
+			return nil, fmt.Errorf("verify: %s: verifiedLevels does not claim %s", claimed[i].subject.Name, want)
+		}
+
+		levels = claimed[i].levels
+	}
+
+	log("verify: vsa %s@%s: verdict claims %v", c.Slug(), c.Tag, levels)
 
 	if revision != "" {
 		log("verify: vsa %s@%s: enrichment verified, source revision %s", c.Slug(), c.Tag, revision)
 	}
 
-	return &VSAVerdict{levels: levels, subjects: len(subjects), sourceRevision: revision}, nil
+	return &VSAVerdict{levels: levels, subjects: len(claimed), sourceRevision: revision}, nil
 }
 
 // oneEnrichmentRevision collapses the per-subject claims into the one
@@ -279,7 +338,7 @@ func peekPredicateType(s Subject, sb StoredBundle, bv BundleVerifier) (string, e
 // verifier identity as a tautology with the certificate, resource,
 // result, and levels.
 func judgeVSA(
-	p *policy.Policy, s Subject, sb StoredBundle, root verdictRoot, resource string,
+	_ *policy.Policy, s Subject, sb StoredBundle, root verdictRoot, resource string,
 	bv BundleVerifier,
 ) ([]string, error) {
 	verified, err := bv.Attestation(sb.Bundle, root.id, s.SHA256)
@@ -331,14 +390,6 @@ func judgeVSA(
 	if *pred.VerificationResult != vsa.ResultPassed {
 		return nil, fmt.Errorf("verify: %s: verificationResult is %q, not %s",
 			s.Name, *pred.VerificationResult, vsa.ResultPassed)
-	}
-
-	// The spec's step 7 verbatim: verifiedLevels contains the
-	// expected value. The one-per-track rule already held above, so
-	// containment cannot be a lower level smuggled beside a higher.
-	want := *p.Build.TargetLevel
-	if !slices.Contains(pred.VerifiedLevels, want) {
-		return nil, fmt.Errorf("verify: %s: verifiedLevels does not claim %s", s.Name, want)
 	}
 
 	return pred.VerifiedLevels, nil

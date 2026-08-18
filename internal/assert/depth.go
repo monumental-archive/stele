@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
@@ -318,4 +319,48 @@ func NewFullDepth(v DeepVerifier, verifierWorkflow, signerWorkflow string) (*Ful
 	fd.MachineryOwner, fd.MachineryRepo = parts[0], parts[1]
 
 	return fd, nil
+}
+
+// ReleaseInputs derives the verify engine's inputs for one release
+// from the forge alone: the subjects its checksum manifest pins, the
+// SBOM candidates beside them, and the two commit pins its identities
+// are bound at.
+//
+// Exported for `stele level`, which asks the same question the deep
+// leg asks — "what did this release actually ship, and under which
+// pins" — and must not answer it a second way. A second derivation of
+// a subject set is a second answer waiting to disagree.
+//
+//nolint:gocritic // unnamedResult: subjects, sboms, pins — named in the doc
+func ReleaseInputs(
+	pol *Policy, full *FullDepth, forge gh.Forge, owner, repo, tag string,
+) ([]verify.Subject, []verify.Subject, verify.Pins, error) {
+	if pol.Evidence == nil {
+		return nil, nil, verify.Pins{}, errors.New("assert: the policy declares no evidence section")
+	}
+
+	w := &evidenceWalk{pol: pol.Evidence, org: owner, forge: forge, full: full}
+
+	subjects, sboms, err := w.checksumSubjects(repo, tag)
+	if err != nil {
+		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	pins, err := w.resolvePins(repo, tag)
+	if err != nil {
+		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	return subjects, sboms, pins, nil
+}
+
+// SBOMSuffix reports the policy's SBOM asset suffix — the naming
+// convention an inventory is published under, which is org data and
+// therefore never a literal in a judge.
+func (p *Policy) SBOMSuffix() string {
+	if p.Evidence == nil || p.Evidence.SBOMSuffix == nil {
+		return ""
+	}
+
+	return *p.Evidence.SBOMSuffix
 }

@@ -44,6 +44,13 @@ const (
 )
 
 // Forge is the read surface the evidence walk judges through.
+//
+// It is wide because a forge is wide: every method here is one read a
+// judgment needs, and splitting them into narrower interfaces would
+// give each caller a different partial view of one service — which is
+// how two callers come to disagree about what the forge said.
+//
+//nolint:interfacebloat // one service, one surface; see above
 type Forge interface {
 	// Repos lists the org's repositories, archived and forks excluded.
 	Repos(org string) ([]string, error)
@@ -53,6 +60,10 @@ type Forge interface {
 	ReleaseAssets(owner, repo, tag string) ([]string, error)
 	// Asset downloads one release asset's bytes.
 	Asset(owner, repo, tag, name string) ([]byte, error)
+	// ReleaseDate reports when one release was published — the moment
+	// its dependencies were taken, which is what an ingestion interval
+	// is measured against.
+	ReleaseDate(owner, repo, tag string) (time.Time, error)
 	// TagCommit resolves a tag to the commit it points at,
 	// dereferencing annotated tag objects — the commit is the pin the
 	// full-depth leg verifies identities against, and an annotated
@@ -165,9 +176,10 @@ func (c *Client) Repos(org string) ([]string, error) {
 }
 
 type releaseEntry struct {
-	TagName string `json:"tag_name"`
-	Draft   bool   `json:"draft"`
-	Assets  []struct {
+	TagName     string `json:"tag_name"` //nolint:tagliatelle // the forge's own field name
+	Draft       bool   `json:"draft"`
+	PublishedAt string `json:"published_at"` //nolint:tagliatelle // the forge's own field name
+	Assets      []struct {
 		Name string `json:"name"`
 	} `json:"assets"`
 }
@@ -188,6 +200,36 @@ func (c *Client) ReleaseTags(owner, repo string) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// ReleaseDate implements Forge.
+func (c *Client) ReleaseDate(owner, repo, tag string) (time.Time, error) {
+	body, ok, err := c.get(
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/releases/tags/"+url.PathEscape(tag),
+		"application/vnd.github+json")
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	if !ok {
+		return time.Time{}, fmt.Errorf("gh: release %s/%s@%s: not found", owner, repo, tag)
+	}
+
+	rel, err := jsonx.DecodeForeign[releaseEntry](body)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("gh: release %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	if rel.PublishedAt == "" {
+		return time.Time{}, fmt.Errorf("gh: release %s/%s@%s carries no publication date", owner, repo, tag)
+	}
+
+	when, err := time.Parse(time.RFC3339, rel.PublishedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("gh: release %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	return when, nil
 }
 
 // ReleaseAssets implements Forge.

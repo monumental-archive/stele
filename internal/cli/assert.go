@@ -441,13 +441,19 @@ func emitReport(rep *report.Report, jsonOut bool, stdout, stderr io.Writer) int 
 			return exitIO
 		}
 	} else {
+		// The report names the verb that sealed it, so a line in a log
+		// says which run it came from. Taking it from the document
+		// rather than from a literal is what keeps a second caller from
+		// printing another verb's name over its own output.
+		verb, _, _ := strings.Cut(rep.Target(), " ")
+
 		out := &latch{w: stdout}
 		findings := rep.Findings()
 		for i := range findings {
-			out.logf("assert: %s: %s: %s", findings[i].Subject, findings[i].Assertion, findingLine(&findings[i]))
+			out.logf("%s: %s: %s: %s", verb, findings[i].Subject, findings[i].Assertion, findingLine(&findings[i]))
 		}
 
-		out.logf("assert: %s", rep.Verdict())
+		out.logf("%s: %s", verb, rep.Verdict())
 
 		if out.err != nil {
 			return exitIO
@@ -463,7 +469,8 @@ func emitReport(rep *report.Report, jsonOut bool, stdout, stderr io.Writer) int 
 	}
 
 	// CANNOT_JUDGE — Seal admits no fourth verdict.
-	if _, err := fmt.Fprintln(stderr, "stele assert: the run could not see enough to judge"); err != nil {
+	verb, _, _ := strings.Cut(rep.Target(), " ")
+	if _, err := fmt.Fprintf(stderr, "stele %s: the run could not see enough to judge\n", verb); err != nil {
 		return exitIO
 	}
 

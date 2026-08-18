@@ -349,8 +349,10 @@ func TestChainCoordsRefusal(t *testing.T) {
 
 // TestSourceLevelUnreadableCommitTime: the level computation compares
 // the policy's continuity start against the tip link's own commit
-// time, so a time it cannot parse is a refusal — never a level
-// computed as if the property had always been required.
+// time, so a time it cannot parse cannot be judged — never a level
+// computed as if the property had always been required. The
+// computation lives in internal/level now; the degraded chain that
+// feeds it does not, so the case stays here and calls across.
 func TestSourceLevelUnreadableCommitTime(t *testing.T) {
 	t.Parallel()
 
@@ -368,9 +370,15 @@ func TestSourceLevelUnreadableCommitTime(t *testing.T) {
 		t.Fatalf("Chain = %v — the walk itself does not read the time", err)
 	}
 
-	if _, err := verdict.SourceLevel(loadPolicy(t), "main"); err == nil ||
-		!strings.Contains(err.Error(), "commitTime") {
-		t.Fatalf("SourceLevel = %v, want the commit-time refusal", err)
+	tip, ok := verdict.Tip()
+	if !ok {
+		t.Fatal("the walk must retain the tip it verified")
+	}
+
+	// The walk itself does not read the time; a consumer that does
+	// gets the unparsable value and decides for itself.
+	if got := tip.CommitTime(); got != "yesterday" {
+		t.Fatalf("CommitTime = %q, want the unparsable value carried through unchanged", got)
 	}
 }
 

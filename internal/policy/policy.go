@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,30 @@ type Policy struct {
 	Trust  *Trust  `json:"trust"`
 	Build  *Build  `json:"build"`
 	Source *Source `json:"source"`
+	// SLSARootsOfTrust is the spec's own root-of-trust map: which
+	// attesters this verifier vouches for, and up to which level per
+	// track. It bounds what `verify` will ACCEPT; it is deliberately
+	// not read by `stele level`, which measures rather than gates and
+	// must not be handed the answer it is computing.
+	SLSARootsOfTrust []RootOfTrust `json:"slsaRootsOfTrust,omitempty"`
+}
+
+// RootOfTrust is one attester and the maximum level per track this
+// verifier trusts it to. The spec keys this map on the PAIR (signer
+// key identity, attester id) — here the pair collapses to the
+// attester id alone, because the engine already asserts the
+// tautology the pair exists to prevent: a verdict's verifier.id must
+// BE the identity whose certificate signed it (verify/vsa.go, the
+// spec's step 4). Keying on a value that has been proven equal to
+// the signing identity is keying on the signing identity.
+type RootOfTrust struct {
+	// AttesterID is the provenance's builder.id or the summary's
+	// verifier.id — the role-neutral name for the same field.
+	AttesterID *string `json:"attesterId"`
+	// MaxLevels is one SLSA_<TRACK>_LEVEL_<N> per track, at most one
+	// per track: a level implies every level below it, so two entries
+	// for one track are a contradiction, not emphasis.
+	MaxLevels []string `json:"maxLevels"`
 }
 
 // Trust names the roots of trust.
@@ -124,11 +149,30 @@ type Source struct {
 	Claims *claims.Table `json:"claims,omitempty"`
 }
 
-// ProtectedBranch is one branch's target level and the properties
-// required to claim it.
+// ProtectedBranch is one branch's target level and the per-level
+// claims that establish it.
 type ProtectedBranch struct {
-	Name               *string            `json:"name"`
-	TargetLevel        *string            `json:"targetLevel"`
+	Name        *string `json:"name"`
+	TargetLevel *string `json:"targetLevel"`
+	// Levels declares, per level, what establishes it. The judge reads
+	// this rather than fixing requirements to rungs in code: WHICH
+	// level an organization's technical controls establish is that
+	// organization's claim, and a tool that pinned it would make every
+	// other shape unclaimable (CLAUDE.md's first rule).
+	//
+	// Levels the spec makes structurally judgeable from evidence this
+	// tool already holds — a verifying source VSA, continuous coverage
+	// — are judged from that evidence and need no entry here. A level
+	// with no entry and no structural judgment is UNCLAIMED: the
+	// policy said nothing, which is not the same as the judge deciding
+	// nobody could.
+	Levels []LevelClaim `json:"levels"`
+}
+
+// LevelClaim is one level an organization claims, and the properties
+// that establish it at that level.
+type LevelClaim struct {
+	Level              *string            `json:"level"`
 	RequiredProperties []RequiredProperty `json:"requiredProperties"`
 }
 
@@ -136,6 +180,13 @@ type ProtectedBranch struct {
 type RequiredProperty struct {
 	Name  *string `json:"name"`
 	Since *string `json:"since"`
+	// Evaluator optionally names the built-in that PROVES this
+	// property from evidence anyone holds, rather than accepting the
+	// SCS's signed claim at face value. The name vocabulary belongs
+	// to internal/level, which refuses an unknown one at use: this
+	// package would have to import the judge to check it here, and a
+	// policy that imports its consumer is a cycle.
+	Evaluator *string `json:"evaluator,omitempty"`
 }
 
 // LegacyLeaf is one ledger member accepted as known history. The
@@ -148,9 +199,10 @@ type LegacyLeaf struct {
 }
 
 var (
-	levelRE    = regexp.MustCompile(`^SLSA_[A-Z]+_LEVEL_\d+$`)
-	revisionRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	repoRE     = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
+	levelRE      = regexp.MustCompile(`^SLSA_[A-Z]+_LEVEL_\d+$`)
+	levelParseRE = regexp.MustCompile(`^SLSA_([A-Z]+)_LEVEL_(\d+)$`)
+	revisionRE   = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	repoRE       = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 	// workflowRE is owner/repo/path-to-workflow — the identity shape
 	// every root of trust names.
 	workflowRE    = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.ya?ml$`)
@@ -168,6 +220,40 @@ func knownPlaceholder(ph string) bool {
 	default:
 		return false
 	}
+}
+
+// MaxLevel reports the maximum level the policy trusts one attester
+// to on one track, and whether the attester is in the map at all.
+// Absence is an ANSWER — the spec's step 1 defaults an unmapped
+// attester to the track's floor — so the caller distinguishes the two
+// and never conflates "trusted to zero" with "not declared".
+func (p *Policy) MaxLevel(attesterID, track string) (int, bool) {
+	for _, r := range p.SLSARootsOfTrust {
+		if r.AttesterID != nil && *r.AttesterID == attesterID {
+			return r.trustedTo(track)
+		}
+	}
+
+	return 0, false
+}
+
+// ParseLevel splits a SlsaResult level value into its track and
+// number. The UNEVALUATED and FAILED values are deliberately not
+// levels: they are answers about the absence of one.
+//
+//nolint:nonamedreturns // the results are three unrelated values; naming them IS the doc
+func ParseLevel(s string) (track string, n int, ok bool) {
+	m := levelParseRE.FindStringSubmatch(s)
+	if m == nil {
+		return "", 0, false
+	}
+
+	num, err := strconv.Atoi(m[2])
+	if err != nil {
+		return "", 0, false
+	}
+
+	return m[1], num, true
 }
 
 // Load decodes and validates one policy document. Everything it
@@ -206,6 +292,10 @@ func (p *Policy) validate() error {
 		return err
 	}
 
+	if err := p.validateRoots(); err != nil {
+		return err
+	}
+
 	if p.Build != nil {
 		if err := p.validateBuild(); err != nil {
 			return err
@@ -213,10 +303,118 @@ func (p *Policy) validate() error {
 	}
 
 	if p.Source != nil {
-		return p.validateSource()
+		if err := p.validateSource(); err != nil {
+			return err
+		}
+	}
+
+	return p.validateReachable()
+}
+
+// validateRoots validates the OPTIONAL root-of-trust map. Declared
+// means every field, strictly: an attester named without a level, or
+// a track claimed twice, is a map that cannot answer the one question
+// it exists to answer.
+func (p *Policy) validateRoots() error {
+	seenAttester := map[string]bool{}
+
+	for i, r := range p.SLSARootsOfTrust {
+		if r.AttesterID == nil || !strings.HasPrefix(*r.AttesterID, "https://") {
+			return fmt.Errorf("slsaRootsOfTrust[%d].attesterId must be present and an https URI", i)
+		}
+
+		if seenAttester[*r.AttesterID] {
+			return fmt.Errorf(
+				"slsaRootsOfTrust[%d] names attester %s twice — two entries for one attester are two answers",
+				i, *r.AttesterID)
+		}
+
+		seenAttester[*r.AttesterID] = true
+
+		if len(r.MaxLevels) == 0 {
+			return fmt.Errorf(
+				"slsaRootsOfTrust[%d].maxLevels is absent or empty — an attester trusted to nothing is not a root of trust", i)
+		}
+
+		tracks := map[string]bool{}
+
+		for j, l := range r.MaxLevels {
+			track, _, ok := ParseLevel(l)
+			if !ok {
+				return fmt.Errorf("slsaRootsOfTrust[%d].maxLevels[%d] must be SLSA_<TRACK>_LEVEL_<N>", i, j)
+			}
+
+			if tracks[track] {
+				return fmt.Errorf(
+					"slsaRootsOfTrust[%d].maxLevels claims track %s more than once — a level implies those below it",
+					i, track)
+			}
+
+			tracks[track] = true
+		}
 	}
 
 	return nil
+}
+
+// validateReachable refuses a policy that demands more than it
+// vouches for. A target level no declared attester reaches is
+// unsatisfiable by construction: the judgment would cap below the
+// demand on every run, so the disagreement is in the file, not in the
+// evidence. Refused at load rather than reported every night.
+func (p *Policy) validateReachable() error {
+	if len(p.SLSARootsOfTrust) == 0 {
+		return nil // no map declared: the spec default applies, nothing to contradict
+	}
+
+	if p.Build != nil {
+		if err := p.reachable("build.targetLevel", *p.Build.TargetLevel); err != nil {
+			return err
+		}
+	}
+
+	if p.Source == nil {
+		return nil
+	}
+
+	for i, b := range p.Source.ProtectedBranches {
+		field := fmt.Sprintf("source.protectedBranches[%d].targetLevel", i)
+		if err := p.reachable(field, *b.TargetLevel); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// reachable reports whether some declared attester is trusted to at
+// least the demanded level on that level's track.
+func (p *Policy) reachable(field, want string) error {
+	track, n, ok := ParseLevel(want)
+	if !ok {
+		return fmt.Errorf("%s must be SLSA_<TRACK>_LEVEL_<N>", field)
+	}
+
+	for _, r := range p.SLSARootsOfTrust {
+		if trusted, found := r.trustedTo(track); found && trusted >= n {
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"%s demands %s but no slsaRootsOfTrust entry is trusted that far on the %s track",
+		field, want, track)
+}
+
+// max reports this attester's maximum level on one track.
+func (r RootOfTrust) trustedTo(track string) (int, bool) {
+	for _, l := range r.MaxLevels {
+		if t, n, ok := ParseLevel(l); ok && t == track {
+			return n, true
+		}
+	}
+
+	return 0, false
 }
 
 func (p *Policy) validateTrust() error {
@@ -464,11 +662,14 @@ func (p *Policy) validateClaims() error {
 	}
 
 	for i, b := range p.Source.ProtectedBranches {
-		for j, rp := range b.RequiredProperties {
-			if !table.Declares(*rp.Name) {
-				return fmt.Errorf(
-					"source.protectedBranches[%d].requiredProperties[%d] requires %q, which source.claims does"+
-						" not declare — the branch could never reach %s", i, j, *rp.Name, *b.TargetLevel)
+		for j, lc := range b.Levels {
+			for k, rp := range lc.RequiredProperties {
+				if !table.Declares(*rp.Name) {
+					return fmt.Errorf(
+						"source.protectedBranches[%d].levels[%d].requiredProperties[%d] requires %q, which"+
+							" source.claims does not declare — the branch could never reach %s",
+						i, j, k, *rp.Name, *lc.Level)
+				}
 			}
 		}
 	}
@@ -485,23 +686,59 @@ func (p *Policy) validateBranch(i int, b ProtectedBranch) error {
 		return err
 	}
 
-	if len(b.RequiredProperties) == 0 {
+	if len(b.Levels) == 0 {
 		return fmt.Errorf(
-			"source.protectedBranches[%d].requiredProperties is absent or empty"+
-				" — a level required by nothing is claimed by anything", i)
+			"source.protectedBranches[%d].levels is absent or empty"+
+				" — a level established by nothing is claimed by anything", i)
 	}
 
-	for j, rp := range b.RequiredProperties {
-		if rp.Name == nil || !strings.HasPrefix(*rp.Name, *p.Source.PropertyPrefix) {
-			return fmt.Errorf("source.protectedBranches[%d].requiredProperties[%d].name must carry the property prefix", i, j)
+	return validateLevelClaims(
+		fmt.Sprintf("source.protectedBranches[%d]", i), b.Levels, p.Source.PropertyPrefix)
+}
+
+// validateLevelClaims validates one track's per-level claims. prefix
+// is the property namespace when the track enforces one (the source
+// track's SCS-enforced ORG_SOURCE_ rule); nil where no namespace is
+// specified, because a namespace is a track's rule and not this
+// validator's opinion.
+func validateLevelClaims(field string, levels []LevelClaim, prefix *string) error {
+	seen := map[string]bool{}
+
+	for i, lc := range levels {
+		if err := levelField(fmt.Sprintf("%s.levels[%d].level", field, i), lc.Level); err != nil {
+			return err
 		}
 
-		if rp.Since == nil {
-			return fmt.Errorf("source.protectedBranches[%d].requiredProperties[%d].since is absent", i, j)
+		if seen[*lc.Level] {
+			return fmt.Errorf("%s.levels declares %s more than once — one level, one claim", field, *lc.Level)
 		}
 
-		if _, err := time.Parse(time.RFC3339, *rp.Since); err != nil {
-			return fmt.Errorf("source.protectedBranches[%d].requiredProperties[%d].since is not RFC 3339: %w", i, j, err)
+		seen[*lc.Level] = true
+
+		if len(lc.RequiredProperties) == 0 {
+			return fmt.Errorf(
+				"%s.levels[%d].requiredProperties is absent or empty"+
+					" — a level required by nothing is claimed by anything", field, i)
+		}
+
+		for j, rp := range lc.RequiredProperties {
+			where := fmt.Sprintf("%s.levels[%d].requiredProperties[%d]", field, i, j)
+
+			if rp.Name == nil || *rp.Name == "" {
+				return fmt.Errorf("%s.name is absent or empty", where)
+			}
+
+			if prefix != nil && !strings.HasPrefix(*rp.Name, *prefix) {
+				return fmt.Errorf("%s.name must carry the property prefix", where)
+			}
+
+			if rp.Since == nil {
+				return fmt.Errorf("%s.since is absent", where)
+			}
+
+			if _, err := time.Parse(time.RFC3339, *rp.Since); err != nil {
+				return fmt.Errorf("%s.since is not RFC 3339: %w", where, err)
+			}
 		}
 	}
 

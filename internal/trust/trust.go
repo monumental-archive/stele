@@ -147,6 +147,98 @@ func (t *Verifier) VerifyBlob(entity verify.SignedEntity, id Identity, alg, dige
 	}, nil
 }
 
+// MeasureBlob proves a message-signature bundle cryptographically and
+// reports WHO signed it, asserting no expected identity.
+//
+// This is measurement, not gating, and the distinction is the whole
+// reason it is a separate entry point with a separate name. Verify and
+// VerifyBlob answer "is this signed by the party I already decided to
+// trust" — the question a release gate asks. This answers "is this
+// signature genuine, and whose is it" — the question a measurement
+// asks when it has no business being told the answer in advance.
+//
+// The signature, the certificate chain to a trusted root, the
+// transparency log inclusion and the artifact digest binding are ALL
+// still proven. The only thing not asserted is the identity, which is
+// returned instead, so a caller that wants to compare it to something
+// can — and one that only wants to record it need not be handed an
+// expectation it would then be tempted to write down somewhere.
+//
+// Never route a gate through this. A gate that accepts any genuine
+// signature accepts an attacker's genuine signature.
+func (t *Verifier) MeasureBlob(b *bundle.Bundle, alg, digestHex string) (*Verified, error) {
+	digest, err := hex.DecodeString(digestHex)
+	if err != nil || len(digest) == 0 {
+		return nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
+	}
+
+	result, err := t.v.Verify(b, verify.NewPolicy(
+		verify.WithArtifactDigest(alg, digest),
+		verify.WithoutIdentitiesUnsafe(),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("trust: measure: %w", err)
+	}
+
+	if result.Signature == nil || result.Signature.Certificate == nil {
+		return nil, errors.New("trust: the bundle carries no certificate, so nothing identifies its signer")
+	}
+
+	return &Verified{
+		Payload:    nil,
+		SAN:        result.Signature.Certificate.SubjectAlternativeName,
+		Extensions: result.Signature.Certificate.Extensions,
+	}, nil
+}
+
+// MeasureAttestation proves a DSSE bundle cryptographically and
+// returns the signed statement together with who signed it, asserting
+// no expected identity.
+//
+// The measurement counterpart of Verify, and the same warning applies:
+// this answers "is this genuine, and whose is it", never "is this from
+// the party I trust". A gate routed through it accepts an attacker's
+// genuine signature.
+func (t *Verifier) MeasureAttestation(b *bundle.Bundle, alg, digestHex string) (*Verified, error) {
+	digest, err := hex.DecodeString(digestHex)
+	if err != nil || len(digest) == 0 {
+		return nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
+	}
+
+	result, err := t.v.Verify(b, verify.NewPolicy(
+		verify.WithArtifactDigest(alg, digest),
+		verify.WithoutIdentitiesUnsafe(),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("trust: measure: %w", err)
+	}
+
+	sig, err := b.SignatureContent()
+	if err != nil {
+		return nil, fmt.Errorf("trust: signature content: %w", err)
+	}
+
+	env := sig.EnvelopeContent()
+	if env == nil || env.RawEnvelope() == nil {
+		return nil, errors.New("trust: the entity carries no DSSE envelope — a bare signature attests nothing")
+	}
+
+	payload, err := dsse.DecodeBase64(env.RawEnvelope().Payload)
+	if err != nil {
+		return nil, fmt.Errorf("trust: envelope payload: %w", err)
+	}
+
+	if result.Signature == nil || result.Signature.Certificate == nil {
+		return nil, errors.New("trust: the bundle carries no certificate, so nothing identifies its signer")
+	}
+
+	return &Verified{
+		Payload:    payload,
+		SAN:        result.Signature.Certificate.SubjectAlternativeName,
+		Extensions: result.Signature.Certificate.Extensions,
+	}, nil
+}
+
 // verifyEntity runs the shared cryptographic core: both entry points
 // verify the same way and differ only in what a success returns.
 func (t *Verifier) verifyEntity(

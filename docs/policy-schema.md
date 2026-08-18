@@ -269,6 +269,54 @@ verify` requires a fetched VSA's `verifiedLevels` to contain. The
 `SLSA_<TRACK>_LEVEL_<N>` syntax and the one-level-per-track rule
 are spec, in code; which level is policy.
 
+### `slsaRootsOfTrust` (optional)
+
+The spec's own root-of-trust map, bounding what `stele verify` will
+ACCEPT. Deliberately NOT read by `stele level`, which measures rather
+than gates: a measurement handed the answer is a restatement of the
+claim ([level.md](level.md)). Verifying-artifacts
+step 1 is precise: a verifier holds a preconfigured map and then
+**looks the level up**, defaulting to Build L1; verifying-source
+step 1 says the same for the source track. A level is therefore
+never derived from an artifact, and this section is where the org
+says how far it vouches for each attester.
+
+```json
+"slsaRootsOfTrust": [
+  {
+    "attesterId": "https://github.com/acme/.github/.github/workflows/verify-release.yml",
+    "maxLevels": ["SLSA_BUILD_LEVEL_3", "SLSA_SOURCE_LEVEL_3"]
+  }
+]
+```
+
+- `attesterId` — the provenance's `builder.id` or the summary's
+  `verifier.id`. One role-neutral name because it is one field in
+  two roles.
+- `maxLevels` — at most one level per track. A level implies every
+  level below it, so two entries for one track are a contradiction,
+  not emphasis; the loader refuses them.
+
+The spec keys this map on the PAIR (signer key identity, attester
+id). Here the pair collapses to the attester id alone, because the
+engine already asserts the tautology the pair exists to prevent: a
+verdict's `verifier.id` must BE the identity whose certificate
+signed it (the spec's step 4, `internal/verify/vsa.go`). Keying on
+a value proven equal to the signing identity is keying on the
+signing identity.
+
+**Absent means the obligation does not exist** and no ceiling is
+applied. Declared means the map is complete: an attester missing
+from it is not vouched for, which on the build track is the spec's
+L1 default and on the source track is undetermined, because the
+spec states no default there and inventing one would be this tool
+asserting a level nobody declared.
+
+Refused at load: a `targetLevel` no declared attester reaches. That
+policy is unsatisfiable by construction — every run would cap below
+the demand — so the disagreement is in the file, not in the
+evidence, and it is refused once rather than reported nightly.
+
 ### `build.denySelfHostedRunners`
 
 The org runs verification with self-hosted runners refused. A named
@@ -595,6 +643,29 @@ that is a silent permanent under-claim discoverable only by reading
 two files and a shell script; here it refuses at load. The converse
 is allowed: a property may be claimed without being required, since
 claiming more than the target needs is honest.
+
+### `source.protectedBranches[].levels[].requiredProperties[].evaluator` (optional)
+
+Names the built-in that **proves** this property from evidence
+anyone holds, rather than accepting the SCS's signed claim at face
+value. Absent, the property is accepted as attested — which is what
+SLSA Source L3 asks for, since the requirement is that the control
+be *recorded in a contemporaneous attestation*.
+
+The vocabulary is closed and lives in `internal/level`
+([level.md](level.md)): `linear-history`, `conventional-history`.
+A name outside it is refused at use rather than ignored — a typo
+that silently proved nothing would leave the property reading as
+checked.
+
+The asymmetry this buys is the point: a claim an evaluator
+**refutes** is a finding, not a quieter level. A signed statement
+contradicted by the evidence it describes is a defect in the
+evidence, not a smaller amount of it.
+
+This is deliberately validated in the judge and not here: the
+vocabulary belongs to `internal/level`, and a policy package that
+imported its own consumer to check a string would be a cycle.
 
 ### `source.healedContinuity`
 

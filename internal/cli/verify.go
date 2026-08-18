@@ -33,7 +33,6 @@ const (
 	modeRelease = "release"
 	modeVSA     = "vsa"
 	modeChain   = "chain"
-	modeLevel   = "level"
 )
 
 // The effect seams, swapped only by tests: building the
@@ -116,6 +115,39 @@ func (a trustAdapter) Blob(bundleJSON []byte, id trust.Identity, sha256Hex strin
 	return v, nil
 }
 
+// MeasureBlob proves a bundle and reports who signed, asserting no
+// identity — the measurement path (internal/verify/measure.go), never
+// a gate.
+func (a trustAdapter) MeasureBlob(bundleJSON []byte, sha256Hex string) (*trust.Verified, error) {
+	b, err := trust.LoadBundle(bundleJSON)
+	if err != nil {
+		return nil, fmt.Errorf("measure: %w", err)
+	}
+
+	v, err := a.v.MeasureBlob(b, "sha256", sha256Hex)
+	if err != nil {
+		return nil, fmt.Errorf("measure: %w", err)
+	}
+
+	return v, nil
+}
+
+// MeasureAttestation proves a DSSE bundle and returns what it said,
+// asserting no identity — the measurement path, never a gate.
+func (a trustAdapter) MeasureAttestation(bundleJSON []byte, sha256Hex string) (*trust.Verified, error) {
+	b, err := trust.LoadBundle(bundleJSON)
+	if err != nil {
+		return nil, fmt.Errorf("measure: %w", err)
+	}
+
+	v, err := a.v.MeasureAttestation(b, "sha256", sha256Hex)
+	if err != nil {
+		return nil, fmt.Errorf("measure: %w", err)
+	}
+
+	return v, nil
+}
+
 func (a trustAdapter) Peek(bundleJSON []byte) ([]byte, error) {
 	payload, err := trust.PeekStatement(bundleJSON)
 	if err != nil {
@@ -166,7 +198,7 @@ type verifyArgs struct {
 // verifyCmd dispatches `stele verify <mode>`.
 func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele verify: a mode is required: release, vsa, chain or level"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele verify: a mode is required: release, vsa or chain"); err != nil {
 			return exitIO
 		}
 
@@ -175,9 +207,9 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case modeRelease, modeVSA, modeChain, modeLevel:
+	case modeRelease, modeVSA, modeChain:
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele verify: unknown mode %q (release, vsa, chain, level)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele verify: unknown mode %q (release, vsa, chain)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -293,7 +325,7 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&va.machineryPin, "machinery-digest", "",
 			"commit digest the verifier/decision identities are pinned at (required)")
-	case modeChain, modeLevel:
+	case modeChain:
 		fs.StringVar(&va.gitDir, "git-dir", "", "local clone with the branch and notes ref fetched (required)")
 		fs.StringVar(&va.ref, "ref", "refs/heads/main", "fully qualified branch ref to walk")
 	}
@@ -383,7 +415,7 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 		}
 	}
 
-	if (va.mode == modeChain || va.mode == modeLevel) && va.gitDir == "" {
+	if va.mode == modeChain && va.gitDir == "" {
 		return fail(errors.New("--git-dir is required"))
 	}
 
@@ -457,13 +489,14 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 			pop:   report.PopulationFromEvidence(len(va.subjectList), "release subjects"),
 			facts: facts,
 		}, nil
-	default: // chain, level — the mode switch upstream admits no other value
+	default: // chain — the mode switch upstream admits no other value
 		return runWalk(va, out)
 	}
 }
 
-// runWalk runs the chain walk, and for level also reports the honest
-// computed source level for the walked branch.
+// runWalk runs the chain walk. The honest computed level moved to
+// `stele level source` — one level computation, in the package that
+// owns the ladder.
 func runWalk(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 	h, err := openHistory(va.gitDir, *va.p.Source.NotesRef)
 	if err != nil {
@@ -475,28 +508,8 @@ func runWalk(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 		return nil, err
 	}
 
-	outcome := &verifyOutcome{
+	return &verifyOutcome{
 		pop:   report.PopulationFromEvidence(1, "branch ref under walk"),
 		facts: []report.Fact{{Name: "links", Value: strconv.Itoa(verdict.Links())}},
-	}
-
-	if va.mode != modeLevel {
-		return outcome, nil
-	}
-
-	// The policy names branches, not refs; the walked ref's final
-	// segment is the branch it locally maps (refs/heads/main and the
-	// audit's refs/sa/main both name main).
-	branch := va.ref[strings.LastIndex(va.ref, "/")+1:]
-
-	level, err := verdict.SourceLevel(va.p, branch)
-	if err != nil {
-		return nil, err
-	}
-
-	out.logf("verify: level %s %s: SOURCE %s", va.coords.Slug(), branch, level)
-
-	outcome.facts = append(outcome.facts, report.Fact{Name: "sourceLevel", Value: level})
-
-	return outcome, nil
+	}, nil
 }

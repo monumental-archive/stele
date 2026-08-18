@@ -228,6 +228,11 @@ func Seal(
 	return r
 }
 
+// Target reports the judging mode that produced this document, so a
+// caller rendering it can name the run rather than assuming which verb
+// it belongs to.
+func (r *Report) Target() string { return r.target }
+
 // Verdict reports the sealed verdict.
 func (r *Report) Verdict() Verdict { return r.verdict }
 

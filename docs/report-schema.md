@@ -1,7 +1,7 @@
 # The report document: the shared verdict shape
 
 The JSON document every judging verb emits — `stele verify --json`
-today; `assert` and `level` will speak it next, and `assert` will also
+today, `assert` and `level` too, and `assert` will also
 consume it. One shape for producer and consumer is the single-binary
 argument (.github#392 §7) applied to output: the verb that asserts
 "this verifies" reads the same document the verifier wrote.
@@ -94,7 +94,41 @@ never null.
 | `release` | release subjects (manifest size) | `sourceRevision` |
 | `vsa` | release subjects (manifest size) | `verifiedLevels`, `sourceRevision` |
 | `chain` | the one branch ref under walk | `links` |
-| `level` | the one branch ref under walk | `links`, `sourceLevel` |
+
+## What `stele level --json` puts in it
+
+One report per track (`docs/level.md`). The population is the
+subjects or branches **with a determinable ladder**, so a track that
+lost sight at its boundary is short-covered and seals `CANNOT_JUDGE`
+through the coverage law rather than through a second rule.
+
+| track | population | facts |
+| --- | --- | --- |
+| `build` | latest release's subjects | `level`, `ceiling`, `declared`, `weakest`, `ladder`, `specStatus`, `sealedAt`, `sourceRevision` |
+| `source` | the one protected branch | `level`, `ceiling`, `declared`, `weakest`, `ladder`, `specStatus`, `sealedAt` |
+| `dependency` | the release's shipped artifacts | `level`, `declared`, `ladder`, `specStatus`, `sealedAt` |
+
+- `level` — the computed scalar, in the spec's `SlsaResult`
+  vocabulary.
+- `ceiling` — the maximum `slsaRootsOfTrust` permits for the
+  attester, absent when no map entry applied.
+- `declared` — the policy's target, absent when the policy claims
+  nothing on that track.
+- `ladder` — each level and its determination, e.g.
+  `1:HELD 2:HELD 3:UNDETERMINED 4:UNCLAIMED`. A level with no account
+  of how it was reached is a number, not a judgment.
+- `specStatus` — `approved` for build and source, `draft` for
+  dependency. The dependency track is not part of SLSA v1.2 and every
+  output that carries its level says so.
+- `sealedAt` — when the judgment was made, RFC 3339. The document
+  states an instant; what counts as *stale* is the consumer's
+  declaration, and a tool that judged its own output's age would be
+  asserting an org convention.
+
+`--shield <path>` writes a shields.io endpoint document beside the
+report, from the same seal. There is deliberately no decoder from a
+report document back into a report, so a render that parsed one could
+be handed a forged verdict; both documents leave one seal instead.
 
 Every mode also carries `trustedRoot` and `trustedRootSha256` — the
 origin of the trust material this run held and the sha256 of the

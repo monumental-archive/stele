@@ -232,13 +232,13 @@ func TestChain(t *testing.T) {
 		t.Errorf("Links = %d, want 2", verdict.Links())
 	}
 
-	level, err := verdict.SourceLevel(loadPolicy(t), "main")
-	if err != nil {
-		t.Fatalf("SourceLevel = %v", err)
+	tip, ok := verdict.Tip()
+	if !ok {
+		t.Fatal("Tip = _, false — the walk must retain the tip link it verified")
 	}
 
-	if level != "SLSA_SOURCE_LEVEL_3" {
-		t.Errorf("SourceLevel = %q, want SLSA_SOURCE_LEVEL_3", level)
+	if !tip.HasProperty("ORG_SOURCE_GATED") {
+		t.Errorf("tip properties = %v, want the link's declared control", tip.Properties())
 	}
 }
 
@@ -612,134 +612,6 @@ func TestChainInputRefusals(t *testing.T) {
 	})
 }
 
-func TestSourceLevel(t *testing.T) {
-	t.Parallel()
-
-	build := func(t *testing.T, controls []string, repaired bool, claimed []any) *verify.ChainVerdict {
-		t.Helper()
-
-		w := chainWorld{t: t}
-		genesis := w.note(3, w.linkStmt(revC1, "ledgerPrev", nil, controls, repaired), w.vsaStmt(revC1, claimed))
-		tip := w.note(3,
-			w.linkStmt(revC2, "ledgerPrev", map[string]any{
-				"revision": revC1, "noteSha256": digestHex(genesis),
-			}, controls, repaired),
-			w.vsaStmt(revC2, claimed))
-
-		h := fakeHistory{
-			tips:    map[string]string{"refs/heads/main": revC2},
-			parents: map[string]string{revC2: revC1},
-			notes:   map[string][]byte{revC2: tip, revC1: genesis},
-		}
-
-		verdict, err := runChain(t, h)
-		if err != nil {
-			t.Fatalf("Chain = %v", err)
-		}
-
-		return verdict
-	}
-
-	t.Run("all required properties present claims the target", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_GATED"}, false, []any{"SLSA_SOURCE_LEVEL_3"})
-
-		level, err := verdict.SourceLevel(loadPolicy(t), "main")
-		if err != nil || level != "SLSA_SOURCE_LEVEL_3" {
-			t.Errorf("SourceLevel = %q, %v — want the target level", level, err)
-		}
-	})
-
-	t.Run("a missing property under-claims", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_OTHER"}, false, []any{"SLSA_SOURCE_LEVEL_2"})
-
-		level, err := verdict.SourceLevel(loadPolicy(t), "main")
-		if err != nil || level != "SLSA_SOURCE_LEVEL_2" {
-			t.Errorf("SourceLevel = %q, %v — want the under-claim", level, err)
-		}
-	})
-
-	t.Run("an overclaiming link is a refusal", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_OTHER"}, false, []any{"SLSA_SOURCE_LEVEL_3"})
-
-		if _, err := verdict.SourceLevel(loadPolicy(t), "main"); err == nil ||
-			!strings.Contains(err.Error(), "disagree") {
-			t.Errorf("SourceLevel = %v, want the disagreement refusal", err)
-		}
-	})
-
-	t.Run("a healed link keeps the target under healedContinuity", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_GATED"}, true, []any{"SLSA_SOURCE_LEVEL_3"})
-
-		level, err := verdict.SourceLevel(loadPolicy(t), "main")
-		if err != nil || level != "SLSA_SOURCE_LEVEL_3" {
-			t.Errorf("SourceLevel = %q, %v — want the continuity argument accepted", level, err)
-		}
-	})
-
-	t.Run("a healed link under-claims when the stance refuses continuity", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_GATED"}, true, []any{"SLSA_SOURCE_LEVEL_2"})
-
-		p := loadPolicy(t)
-		refused := false
-		p.Source.HealedContinuity = &refused
-
-		level, err := verdict.SourceLevel(p, "main")
-		if err != nil || level != "SLSA_SOURCE_LEVEL_2" {
-			t.Errorf("SourceLevel = %q, %v — want the under-claim", level, err)
-		}
-	})
-
-	t.Run("an unprotected branch is a refusal", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_GATED"}, false, []any{"SLSA_SOURCE_LEVEL_3"})
-
-		if _, err := verdict.SourceLevel(loadPolicy(t), "trunk"); err == nil ||
-			!strings.Contains(err.Error(), "not a protected branch") {
-			t.Errorf("SourceLevel = %v, want the unprotected-branch refusal", err)
-		}
-	})
-
-	t.Run("a zero verdict has no tip to compute from", func(t *testing.T) {
-		t.Parallel()
-
-		var zero verify.ChainVerdict
-		if _, err := zero.SourceLevel(loadPolicy(t), "main"); err == nil ||
-			!strings.Contains(err.Error(), "no tip link") {
-			t.Errorf("SourceLevel = %v, want the no-tip refusal", err)
-		}
-	})
-
-	t.Run("a malformed since in a hand-built policy is a refusal", func(t *testing.T) {
-		t.Parallel()
-
-		verdict := build(t, []string{"ORG_SOURCE_GATED"}, false, []any{"SLSA_SOURCE_LEVEL_3"})
-
-		p := loadPolicy(t)
-		bad := "not-a-time"
-		p.Source.ProtectedBranches[0].RequiredProperties[0].Since = &bad
-
-		if _, err := verdict.SourceLevel(p, "main"); err == nil ||
-			!strings.Contains(err.Error(), "since") {
-			t.Errorf("SourceLevel = %v, want the since parse refusal", err)
-		}
-	})
-}
-
-// rawHalf packs arbitrary payload bytes as one signed half: the
-// signature covers exactly those bytes, so the CONTENT is what the
-// walk has to refuse — never the signature. The counterpart of half(),
-// which always packs a well-formed statement.
 func (cw chainWorld) rawHalf(payload []byte) map[string]any {
 	bundle := fakeBundle{
 		SAN: linkSAN, Issuer: issuer,
@@ -756,4 +628,40 @@ func (cw chainWorld) rawHalf(payload []byte) map[string]any {
 // noteHalves assembles a v3 note from two prepared halves.
 func (cw chainWorld) noteHalves(prov, summary map[string]any) []byte {
 	return mustJSON(cw.t, map[string]any{"version": 3, "provenance": prov, "vsa": summary})
+}
+
+// TestChainCarriesTheRepairedMarker: a link emitted to fill an earlier
+// lapse records that it was, and the walk reads the marker back rather
+// than smoothing it away. A healed gap is history, and a consumer
+// judging continuity has to be able to see it.
+func TestChainCarriesTheRepairedMarker(t *testing.T) {
+	t.Parallel()
+
+	w := chainWorld{t: t}
+	genesis := w.note(3,
+		w.linkStmt(revC1, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
+		w.vsaStmt(revC1, []any{"SLSA_SOURCE_LEVEL_3"}))
+	tip := w.note(3,
+		w.linkStmt(revC2, "ledgerPrev", map[string]any{
+			"revision": revC1, "noteSha256": digestHex(genesis),
+		}, []string{"ORG_SOURCE_GATED"}, true),
+		w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"}))
+
+	verdict, err := runChain(t, fakeHistory{
+		tips:    map[string]string{"refs/heads/main": revC2},
+		parents: map[string]string{revC2: revC1},
+		notes:   map[string][]byte{revC2: tip, revC1: genesis},
+	})
+	if err != nil {
+		t.Fatalf("Chain = %v — a repaired link is still a valid link", err)
+	}
+
+	facts, ok := verdict.Tip()
+	if !ok {
+		t.Fatal("the walk retained no tip")
+	}
+
+	if !facts.Repaired() {
+		t.Error("Repaired = false, want the marker the emitter wrote — a healed lapse must stay visible")
+	}
 }

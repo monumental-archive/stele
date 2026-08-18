@@ -51,7 +51,10 @@ const testPolicy = `{
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [{"name": "ORG_SOURCE_GATED", "since": "2020-01-01T00:00:00Z"}]
+        "levels": [{
+          "level": "SLSA_SOURCE_LEVEL_3",
+          "requiredProperties": [{"name": "ORG_SOURCE_GATED", "since": "2020-01-01T00:00:00Z"}]
+        }]
       }
     ],
     "healedContinuity": true,
