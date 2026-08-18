@@ -46,6 +46,14 @@ type NotesOptions struct {
 	// Groups maps a commit type to its heading. A type with no heading
 	// contributes no entry, which is how the silent types stay out of a
 	// changelog without a second list to disagree with the first.
+	//
+	// A type MAPPED TO THE EMPTY HEADING is declared silence: the entry
+	// exists so a scoped key can silence exactly its scope while the bare
+	// type keeps a heading — chore(canon) silent, chore under
+	// Miscellaneous. Without it, silence is only expressible by not
+	// mapping, which silences the whole bare type. Absent and
+	// declared-silent render identically; they differ in what they claim,
+	// and the scoped-over-bare lookup is where the claim matters.
 	Groups map[string]string
 
 	// Order lists headings in the order they render. Rendering must not
@@ -97,8 +105,11 @@ func NewNotes(opts *NotesOptions) (Notes, error) {
 	}
 
 	for typ, heading := range opts.Groups {
+		// Declared silence, not a forgotten value: mapping a type to the
+		// empty heading says "this type writes no entry" — it needs no
+		// place in the ordering because it renders nothing.
 		if heading == "" {
-			return Notes{}, fmt.Errorf("derive: commit type %q maps to an empty heading", typ)
+			continue
 		}
 
 		if !ordered[heading] {
@@ -178,13 +189,25 @@ func (n *Notes) group(commits []convcommit.Commit) map[string][]entry {
 	for i := range commits {
 		commit := &commits[i]
 
-		headline := n.opts.Groups[commit.Type()]
+		// A scoped key wins over the bare type, so `chore(deps)` can
+		// carry a heading while bare `chore` stays out of the notes —
+		// the release-commit/dependency-bump split every changelog
+		// convention wants and type-only grouping cannot express.
+		headline, scoped := n.opts.Groups[commit.Type()+"("+commit.Scope()+")"]
+		if !scoped {
+			headline = n.opts.Groups[commit.Type()]
+		}
+
+		// Over unmapped and declared-silent types alike: silence is about
+		// noise, and a breaking change is never noise. A convention that
+		// could silence a break would hide the one fact a reader most
+		// needs and cannot recover.
 		if commit.IsBreaking() && n.opts.BreakingGroup != "" {
 			headline = n.opts.BreakingGroup
 		}
 
 		if headline == "" {
-			continue // a type with no heading is not a changelog entry
+			continue // a type with no heading, absent or declared, writes no entry
 		}
 
 		// The pull request number lives in the subject whatever the entry

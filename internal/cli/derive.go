@@ -95,7 +95,7 @@ type deriveArgs struct {
 // deriveCmd dispatches `stele derive <mode>`.
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version, notes or sbom"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version, notes, bump or sbom"); err != nil {
 			return exitIO
 		}
 
@@ -104,9 +104,9 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes, deriveSBOM:
+	case deriveVersion, deriveNotes, deriveBump, deriveSBOM:
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version, notes, sbom)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version, notes, bump, sbom)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -139,14 +139,14 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
-	da, na, code := parseDeriveArgs(mode, args[1:], stderr)
+	da, na, bump, code := parseDeriveArgs(mode, args[1:], stderr)
 	if code != exitOK {
 		return code
 	}
 
 	out := &latch{w: stdout}
 
-	err := runDerive(mode, da, na, out)
+	err := runDerive(mode, da, na, bump, out)
 	if out.err != nil {
 		return exitIO
 	}
@@ -163,8 +163,8 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // parseDeriveArgs reads the flag surface.
-func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs, *notesArgs, int) {
-	da, na := &deriveArgs{}, &notesArgs{}
+func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs, *notesArgs, *bumpArgs, int) {
+	da, na, bump := &deriveArgs{}, &notesArgs{}, &bumpArgs{}
 
 	fs := flag.NewFlagSet("stele derive "+mode, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -183,7 +183,9 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 
 	if mode == deriveNotes {
 		fs.StringVar(&na.groups, "groups", "feat=Added,fix=Fixed,perf=Changed,docs=Documentation",
-			"comma-separated type=Heading pairs; a type with no heading writes no entry")
+			"comma-separated type=Heading pairs, scoped keys like chore(deps)=Deps win over the bare type;"+
+				" a type with no heading writes no entry, and an explicit empty heading (chore(canon)=)"+
+				" declares silence for exactly that key while the bare type keeps its heading")
 		fs.StringVar(&na.order, "group-order", "Breaking,Added,Changed,Fixed,Documentation",
 			"headings in the order they render; rendering never depends on map order")
 		fs.StringVar(&na.breaking, "breaking-group", "Breaking",
@@ -199,28 +201,39 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 			"changelog to splice the section into, above its newest section; empty prints instead")
 	}
 
+	if mode == deriveBump {
+		fs.BoolVar(&bump.check, "check", false,
+			"assert every mirror carries the version last released, rewriting nothing; "+
+				"the drift gate a CI run holds between releases")
+		fs.StringVar(&bump.date, "date", "",
+			"release date for CITATION.cff's date-released; defaults to the committer date of --ref, never a wall clock")
+	}
+
 	if err := fs.Parse(args); err != nil {
-		return da, na, exitUsage
+		return da, na, bump, exitUsage
 	}
 
 	if da.gitDir == "" {
 		if _, err := fmt.Fprintf(stderr, "stele derive %s: --git-dir is required\n", mode); err != nil {
-			return da, na, exitIO
+			return da, na, bump, exitIO
 		}
 
-		return da, na, exitUsage
+		return da, na, bump, exitUsage
 	}
 
-	return da, na, exitOK
+	return da, na, bump, exitOK
 }
 
 // runDerive dispatches the mode onto the shared derivation.
-func runDerive(mode string, da *deriveArgs, na *notesArgs, out *latch) error {
-	if mode == deriveNotes {
+func runDerive(mode string, da *deriveArgs, na *notesArgs, bump *bumpArgs, out *latch) error {
+	switch mode {
+	case deriveNotes:
 		return runDeriveNotes(da, na, out)
+	case deriveBump:
+		return runDeriveBump(da, bump, out)
+	default:
+		return runDeriveVersion(da, out)
 	}
-
-	return runDeriveVersion(da, out)
 }
 
 // splitTypes reads a comma-separated type list, dropping the empty

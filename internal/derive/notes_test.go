@@ -44,10 +44,6 @@ func TestNewNotesRefuses(t *testing.T) {
 			name: "heading ordered twice",
 			opts: derive.NotesOptions{Order: []string{"Added", "Added"}},
 		},
-		{
-			name: "a type maps to an empty heading",
-			opts: derive.NotesOptions{Groups: map[string]string{"feat": ""}, Order: []string{"Added"}},
-		},
 		// Refused rather than appended last: silently ordering it is a
 		// decision nobody made, and it would move on the next addition.
 		{
@@ -62,6 +58,56 @@ func TestNewNotesRefuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := derive.NewNotes(&tc.opts); err == nil {
 				t.Fatal("NewNotes accepted conventions it cannot render deterministically")
+			}
+		})
+	}
+}
+
+// An empty heading in Groups is DECLARED silence, not a configuration
+// defect: it silences exactly its key while the bare-type fallback still
+// applies to every other scope. Each row breaks one fact about that
+// contract.
+func TestDeclaredSilence(t *testing.T) {
+	notes, err := derive.NewNotes(&derive.NotesOptions{
+		Groups: map[string]string{
+			"chore":        "Miscellaneous",
+			"chore(canon)": "", // declared silence for exactly this scope
+			"fix":          "Fixed",
+		},
+		Order:         []string{"Breaking", "Fixed", "Miscellaneous"},
+		BreakingGroup: "Breaking",
+	})
+	if err != nil {
+		t.Fatalf("NewNotes refused declared silence: %v", err)
+	}
+
+	got, err := notes.Render(derive.Release{
+		Version: mustVersion(t, "1.1.0"),
+		Date:    "2026-08-18",
+	}, parseAll(t,
+		"chore(canon): bump the canon pin",
+		"chore(deps): bump a dependency",
+		"chore: tidy the taskfile",
+		"chore(canon)!: retire the v2 note format",
+		"fix: close the right file",
+	))
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name, needle string
+		want         bool
+	}{
+		{name: "the silenced scope writes no entry", needle: "bump the canon pin", want: false},
+		{name: "an unlisted scope falls back to the bare type", needle: "- bump a dependency", want: true},
+		{name: "the bare type keeps its heading", needle: "- tidy the taskfile", want: true},
+		{name: "a break in the silenced scope still surfaces", needle: "- retire the v2 note format", want: true},
+		{name: "other types are untouched", needle: "- close the right file", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.Contains(got, tc.needle) != tc.want {
+				t.Errorf("Render() contains %q = %v, want %v\n%s", tc.needle, !tc.want, tc.want, got)
 			}
 		})
 	}
@@ -245,5 +291,51 @@ func TestRenderNoEntries(t *testing.T) {
 	// section is invented beneath it.
 	if strings.Contains(got, "###") {
 		t.Errorf("Render() =\n%s\nwant no section headings", got)
+	}
+}
+
+// TestRenderScopedGroups: a scoped key wins over the bare type, so
+// dependency bumps carry a heading while bare chores (release
+// commits, pin bumps) stay out of the notes — the split type-only
+// grouping cannot express.
+func TestRenderScopedGroups(t *testing.T) {
+	n, err := derive.NewNotes(&derive.NotesOptions{
+		Groups: map[string]string{
+			"feat":        "Added",
+			"chore(deps)": "Dependencies",
+		},
+		Order:         []string{"Breaking", "Added", "Dependencies"},
+		BreakingGroup: "Breaking",
+		CompareURL:    "https://example.test/o/r/compare/",
+		ReleaseURL:    "https://example.test/o/r/releases/tag/",
+		PullURL:       "https://example.test/o/r/pull/",
+	})
+	if err != nil {
+		t.Fatalf("NewNotes: %v", err)
+	}
+
+	got, err := n.Render(derive.Release{
+		Version:   mustVersion(t, "1.1.0"),
+		Previous:  mustVersion(t, "1.0.0"),
+		TagPrefix: "v",
+		Date:      "2026-08-18",
+	}, parseAll(t,
+		"feat: add the widget (#1)",
+		"chore(deps): update example to v2 (#2)",
+		"chore: release v1.1.0 (#3)",
+		"chore(canon): bump the self-pin (#4)",
+	))
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	if !strings.Contains(got, "### Dependencies") || !strings.Contains(got, "update example to v2") {
+		t.Fatalf("notes lack the scoped dependencies entry:\n%s", got)
+	}
+
+	for _, silent := range []string{"release v1.1.0", "bump the self-pin"} {
+		if strings.Contains(got, silent) {
+			t.Fatalf("unmapped chore %q reached the changelog:\n%s", silent, got)
+		}
 	}
 }

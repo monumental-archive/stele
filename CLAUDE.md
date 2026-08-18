@@ -132,6 +132,24 @@ The canon speaks for the org; stele speaks for the mechanism.
   stele breaks the canon, the canon conforms to the tool — never the
   tool to the org's accumulated shape. Bad history is recorded
   honestly (healed links, legacy categories), not designed around.
+- **Share the definition, never share the derivation.** Two rules the
+  org has applied from opposite directions, stated as one. When two
+  legs must agree on what a thing IS — the bytes a digest covers, where
+  a version mirror lives — they share the code, so disagreement is
+  unrepresentable (the one `chain.SHA256Hex` across emit and verify,
+  the .github#434 fix; `internal/manifest`'s one reader across detect,
+  preflight and post-write verify). When one leg CHECKS another's work,
+  the check must not be the writer inverted — a derivation verified by
+  its own inverse passes its own exam (`internal/manifest` re-reads the
+  spliced bytes through the reader; it never trusts the splicer's
+  bookkeeping).
+- **Derived state is refused when stale, never silently repaired.**
+  Version mirrors, upgrade scripts, lockfile copies of the version: all
+  derived, never typed, and one found already wrong is evidence of a
+  broken earlier release. Repairing it in passing destroys that
+  evidence (the pgrx `--next.sql` refusal, #374's fuzz-lockfile lint,
+  `derive bump`'s drift refusal). Surface, refuse, let a human read the
+  wreckage.
 - **The bash is a reference, not an oracle.** Ported logic runs beside
   it on identical inputs and divergence is investigated — but the bar
   is spec correctness (SLSA v1.2, in-toto/DSSE, git's actual storage
@@ -153,17 +171,15 @@ The canon speaks for the org; stele speaks for the mechanism.
   0BSD stays canon-only). REUSE.toml declares; per-file headers are
   refused by design.
 
-## Release (not yet wired — deliberate)
+## Release
 
-There is no `cliff.toml` and no release/publish stub yet: the
-`go-binary` release class does not exist in the canon, and wiring
-release machinery before it can release anything would claim what
-cannot be verified. Bootstrap sequence when it lands: `go run` from
-the pinned toolchain needs no release class at all; the class arrives
-with the first shippable subcommand; steady state is N-1 self-release
-(version N built and attested by version N-1, the .github#227 shape).
-CITATION.cff arrives with `mint-doi: true`, rendered by
-`fix:citation`, never hand-filled.
+stele self-releases N-1 (version N built and attested by version
+N-1, the .github#227 shape) through the canon's `go-binary` class,
+live since v0.1.0. Its own versions and notes come from
+`stele derive version` / `derive notes` — the tool eats first. The
+org-wide replacement landed with the canon cutover (.github#505/#507):
+every repository's version and changelog now come from these modes,
+and git-cliff has left the belt.
 
 ## Testing
 

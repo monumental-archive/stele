@@ -57,8 +57,10 @@ edit to this document first.
   a release pinned at its tag: the `uses:` pin comment on the
   caller's publish workflow. A repository carrying its own machinery
   has no pin comment, so its machinery version is its own tag. The
-  pre-#79 names `storeVsaFromCanon`/`decisionFromCanon` are refused
-  with a pointer, never aliased — one field, one name.
+  pre-#79 names `storeVsaFromCanon`/`decisionFromCanon` are not
+  understood at all: strict decoding refuses them as unknown fields,
+  naming them. One field, one name — no alias, no pointer, no shim
+  (pre-v1, correctness wins every tie).
 - `decisionFromVersion` — the machinery version (inclusive) from
   which a release owes a VERIFIABLE release decision; the full-depth
   leg runs pre-epoch releases through the provenance half alone
