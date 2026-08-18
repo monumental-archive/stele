@@ -19,6 +19,55 @@ import (
 	"strings"
 )
 
+// repoLocators are the environment variables through which git
+// resolves a repository INDEPENDENTLY of `-C dir` — GIT_DIR and its
+// companions override the directory argument outright. A git hook
+// exports GIT_DIR, so a child git spawned under a hook (the belt's
+// pre-push runs this package's tests) would silently operate on the
+// hook's repository, not the directory it was pointed at. Every git
+// this package or its tests spawn scrubs them via Env; nothing else
+// builds a git environment.
+func repoLocators() []string {
+	return []string{
+		"GIT_DIR=",
+		"GIT_WORK_TREE=",
+		"GIT_INDEX_FILE=",
+		"GIT_OBJECT_DIRECTORY=",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=",
+		"GIT_COMMON_DIR=",
+		"GIT_NAMESPACE=",
+		"GIT_PREFIX=",
+	}
+}
+
+// Env renders the environment for a spawned git: the process
+// environment minus every repo-locating GIT_* variable (so `-C dir`
+// is the ONE way a child git finds its repository), with global and
+// system config pinned to /dev/null, plus the caller's extras.
+func Env(extra ...string) []string {
+	out := make([]string, 0, len(os.Environ())+2+len(extra))
+
+	for _, kv := range os.Environ() {
+		scrubbed := false
+
+		for _, loc := range repoLocators() {
+			if strings.HasPrefix(kv, loc) {
+				scrubbed = true
+
+				break
+			}
+		}
+
+		if !scrubbed {
+			out = append(out, kv)
+		}
+	}
+
+	out = append(out, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+
+	return append(out, extra...)
+}
+
 // Repo is one local git directory and the notes ref chain links
 // live under.
 type Repo struct {
@@ -301,10 +350,7 @@ func (r *Repo) gitIn(stdin []byte, args ...string) ([]byte, error) {
 	// and this is the reviewed exception.
 	//nolint:gosec,noctx // fixed executable, validated args; local read, no cancellation surface
 	cmd := exec.Command("git", full...)
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
-	)
+	cmd.Env = Env()
 
 	var stdout, stderr bytes.Buffer
 
