@@ -10,6 +10,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.12.0](https://github.com/monumental-archive/stele/compare/v0.11.0...v0.12.0) - 2026-08-18
+
+### Added
+
+- bump --check states the release-being-cut as pending ([#116](https://github.com/monumental-archive/stele/pull/116))
+
 ## [0.11.0](https://github.com/monumental-archive/stele/compare/v0.10.0...v0.11.0) - 2026-08-18
 
 ### Added
