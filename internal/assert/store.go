@@ -174,7 +174,16 @@ var baseRefRE = regexp.MustCompile(`["']([a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{
 // the next release.
 func (w *evidenceWalk) baseImages(pinFileContent []byte) {
 	b := w.pol.BaseImages
-	if b == nil || pinFileContent == nil {
+	if b == nil {
+		return
+	}
+
+	if pinFileContent == nil {
+		// The policy declares base images and the walk was handed no
+		// pin file: whatever the caller's reason, the half would be
+		// checking nothing, and that may never look like PASS.
+		w.finding(*b.PinFile, assertBaseImage, "the declared pin file was not provided to the walk")
+
 		return
 	}
 

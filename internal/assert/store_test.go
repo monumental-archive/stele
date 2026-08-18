@@ -42,6 +42,29 @@ const storePolicyJSON = `{
   }
 }`
 
+// The single-half variants: each half is declared only where it is
+// under test, so a red from the other half cannot masquerade as the
+// row's own verdict.
+var (
+	continuousOnlyPolicyJSON = strings.Replace(storePolicyJSON, `,
+    "baseImages": {
+      "pinFile": "docker/base-images.toml",
+      "attestorRepo": ".github",
+      "attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main",
+      "predicateType": "https://acme.example/attestations/base-image-approval/v1"
+    }`, "", 1)
+
+	baseOnlyPolicyJSON = strings.Replace(storePolicyJSON, `"continuous": {
+      "stubPath": ".github/workflows/continuous.yml",
+      "stubUses": "acme/.github/",
+      "registry": "ghcr.io",
+      "tag": "latest",
+      "signerWorkflow": "acme/signer/.github/workflows/sign.yml",
+      "signerPinPattern": "acme/signer/.github/workflows/sign\\.yml@([0-9a-f]{40})"
+    },
+    `, "", 1)
+)
+
 const (
 	contDigest = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
 	baseDigest = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
@@ -63,10 +86,10 @@ func continuousForge() *fakeForge {
 	return f
 }
 
-func runStoreWalk(t *testing.T, f *fakeForge, att assert.Attestor, pinFile []byte) *report.Report {
+func runStoreWalk(t *testing.T, policyJSON string, f *fakeForge, att assert.Attestor, pinFile []byte) *report.Report {
 	t.Helper()
 
-	pol, err := assert.LoadPolicy(strings.NewReader(storePolicyJSON))
+	pol, err := assert.LoadPolicy(strings.NewReader(policyJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +112,7 @@ func TestContinuousHalf(t *testing.T) {
 
 		att := &fakeAttestor{}
 
-		rep := runStoreWalk(t, continuousForge(), att, nil)
+		rep := runStoreWalk(t, continuousOnlyPolicyJSON, continuousForge(), att, nil)
 		if rep.Verdict() != report.VerdictPass {
 			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
 		}
@@ -104,7 +127,7 @@ func TestContinuousHalf(t *testing.T) {
 
 		att := &fakeAttestor{refuse: map[string]error{contDigest: errors.New("signed at another pin")}}
 
-		rep := runStoreWalk(t, continuousForge(), att, nil)
+		rep := runStoreWalk(t, continuousOnlyPolicyJSON, continuousForge(), att, nil)
 		if rep.Verdict() != report.VerdictFail {
 			t.Fatalf("verdict = %s, want FAIL", rep.Verdict())
 		}
@@ -116,7 +139,7 @@ func TestContinuousHalf(t *testing.T) {
 		f := continuousForge()
 		f.pkgDigest = nil
 
-		rep := runStoreWalk(t, f, &fakeAttestor{}, nil)
+		rep := runStoreWalk(t, continuousOnlyPolicyJSON, f, &fakeAttestor{}, nil)
 		if rep.Verdict() != report.VerdictFail {
 			t.Fatalf("verdict = %s — a stub that publishes nothing is a gap, not a skip", rep.Verdict())
 		}
@@ -130,7 +153,7 @@ func TestContinuousHalf(t *testing.T) {
 
 		att := &fakeAttestor{}
 
-		rep := runStoreWalk(t, f, att, nil)
+		rep := runStoreWalk(t, continuousOnlyPolicyJSON, f, att, nil)
 		if rep.Verdict() != report.VerdictFail {
 			t.Fatalf("verdict = %s — an image the signer cannot be derived for must not pass", rep.Verdict())
 		}
@@ -150,7 +173,7 @@ func TestContinuousHalf(t *testing.T) {
 
 		att := &fakeAttestor{}
 
-		rep := runStoreWalk(t, f, att, nil)
+		rep := runStoreWalk(t, continuousOnlyPolicyJSON, f, att, nil)
 		if rep.Verdict() != report.VerdictPass || len(att.seen) != 0 {
 			t.Fatalf("verdict = %s, seen = %v — a foreign stub is an answer, not a subject", rep.Verdict(), att.seen)
 		}
@@ -167,7 +190,7 @@ func TestBaseImagesHalf(t *testing.T) {
 
 		att := &fakeAttestor{}
 
-		rep := runStoreWalk(t, completeRelease(), att, pins)
+		rep := runStoreWalk(t, baseOnlyPolicyJSON, completeRelease(), att, pins)
 		if rep.Verdict() != report.VerdictPass {
 			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
 		}
@@ -182,7 +205,7 @@ func TestBaseImagesHalf(t *testing.T) {
 
 		att := &fakeAttestor{refuse: map[string]error{baseDigest: errors.New("no approval")}}
 
-		rep := runStoreWalk(t, completeRelease(), att, pins)
+		rep := runStoreWalk(t, baseOnlyPolicyJSON, completeRelease(), att, pins)
 		if rep.Verdict() != report.VerdictFail {
 			t.Fatalf("verdict = %s — a base the approver never vouched for must not pass", rep.Verdict())
 		}
@@ -191,20 +214,21 @@ func TestBaseImagesHalf(t *testing.T) {
 	t.Run("a pin file that pins nothing reddens", func(t *testing.T) {
 		t.Parallel()
 
-		rep := runStoreWalk(t, completeRelease(), &fakeAttestor{}, []byte("images = []\n"))
+		rep := runStoreWalk(t, baseOnlyPolicyJSON, completeRelease(), &fakeAttestor{}, []byte("images = []\n"))
 		if rep.Verdict() != report.VerdictFail {
 			t.Fatalf("verdict = %s — a pin file checking nothing is a defect, not a clean answer", rep.Verdict())
 		}
 	})
 
-	t.Run("no pin file in this checkout is an answer", func(t *testing.T) {
+	t.Run("a declared half handed no pin file reddens", func(t *testing.T) {
 		t.Parallel()
 
 		att := &fakeAttestor{}
 
-		rep := runStoreWalk(t, completeRelease(), att, nil)
-		if rep.Verdict() != report.VerdictPass || len(att.seen) != 0 {
-			t.Fatalf("verdict = %s, seen = %v", rep.Verdict(), att.seen)
+		rep := runStoreWalk(t, baseOnlyPolicyJSON, completeRelease(), att, nil)
+		if rep.Verdict() != report.VerdictFail || len(att.seen) != 0 {
+			t.Fatalf("verdict = %s, seen = %v — a declared half checking nothing may never look like PASS",
+				rep.Verdict(), att.seen)
 		}
 	})
 }

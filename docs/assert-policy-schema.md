@@ -108,8 +108,11 @@ cannot be vouched for), and an attestation that refuses.
 **baseImages** — every digest-pinned base reference in `pinFile` must
 carry a `predicateType` attestation verifying under
 `attestorIdentity`. A pin file present but pinning nothing is a
-finding, not a clean answer: the walk was told to check something. No
-pin file in the checkout is an answer — this org pins no bases here.
+finding, not a clean answer: the walk was told to check something. A
+declared pin file absent from the checkout is a usage refusal, like
+the missing trusted root — the likelier cause is the wrong working
+directory, and proceeding would judge nothing while looking green. An
+org that pins no base images says so by omitting this section.
 
 ## The blastRadius section
 

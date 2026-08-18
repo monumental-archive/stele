@@ -634,7 +634,9 @@ func storeSnapshot(t *testing.T) (string, string) {
 
 // TestAssertEvidenceStoreGuards pins the CLI contract for the store
 // halves: declaring them without a trusted root is a usage refusal
-// (never a silent skip), and an absent pin file is an answer.
+// (never a silent skip), and so is a declared pin file absent from
+// the checkout — the likelier cause is the wrong working directory,
+// and proceeding would judge nothing while looking green.
 func TestAssertEvidenceStoreGuards(t *testing.T) {
 	snap, policy := storeSnapshot(t)
 
@@ -665,7 +667,7 @@ func TestAssertEvidenceStoreGuards(t *testing.T) {
 		}
 	})
 
-	t.Run("a root plus an absent pin file walks clean", func(t *testing.T) {
+	t.Run("a declared pin file absent from the checkout refuses by name", func(t *testing.T) {
 		swapOCI(t, cleanOCI())
 
 		root := filepath.Join(t.TempDir(), "root.json")
@@ -683,6 +685,55 @@ func TestAssertEvidenceStoreGuards(t *testing.T) {
 		code := Run([]string{
 			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
 			"--trusted-root", root, "--json",
+		}, &stdout, &stderr)
+		if code != exitUsage {
+			t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s", code, exitUsage, stdout.String(), stderr.String())
+		}
+
+		if !strings.Contains(stderr.String(), "no-such-pins.toml") {
+			t.Fatalf("stderr = %q, want the refusal to name the declared pin file", stderr.String())
+		}
+	})
+
+	t.Run("a root plus a present pin file walks clean", func(t *testing.T) {
+		swapOCI(t, cleanOCI())
+
+		dir := t.TempDir()
+
+		root := filepath.Join(dir, "root.json")
+		if err := os.WriteFile(root, []byte(`{"any": "bytes — the seam swallows them"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		pins := filepath.Join(dir, "pins.toml")
+		baseHex := strings.Repeat("8", 64)
+		pinLine := `images = ["docker.io/library/debian:trixie@sha256:` + baseHex + `"]`
+
+		if err := os.WriteFile(pins, []byte(pinLine), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		// The snapshot's store must hold a bundle for the pin — the
+		// seam-swapped verifier accepts any bytes it is handed.
+		attDir := filepath.Join(snap, "acme", ".github", "attestations")
+		if err := os.MkdirAll(attDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(filepath.Join(attDir, baseHex+".json"), []byte(`[{"bundle": true}]`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		orig := newBundleVerifier
+		newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{payload: okStatement}, nil }
+
+		t.Cleanup(func() { newBundleVerifier = orig })
+
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
+			"--trusted-root", root, "--base-pins", pins, "--json",
 		}, &stdout, &stderr)
 		if code != exitOK {
 			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())

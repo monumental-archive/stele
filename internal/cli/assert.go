@@ -294,11 +294,16 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 			pinPath = *pol.Evidence.BaseImages.PinFile
 		}
 
+		// The policy DECLARES this file, so its absence is a usage
+		// refusal like the missing trusted root: the far likelier
+		// cause is the wrong checkout, and proceeding would silently
+		// judge nothing. An org that pins no base images says so by
+		// omitting the baseImages section.
 		content, perr := os.ReadFile(pinPath) //nolint:gosec // the pin path is operator-supplied by design
 		switch {
 		case errors.Is(perr, fs.ErrNotExist):
-			// No pin file in this checkout: this org pins no base
-			// images here, which is an answer.
+			return usageFail(fmt.Sprintf(
+				"the policy declares baseImages but %s is absent from this checkout", pinPath))
 		case perr != nil:
 			return usageFail(perr.Error())
 		default:
