@@ -148,6 +148,16 @@ func (s Snapshot) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, erro
 	return out, nil
 }
 
+// TagCommit implements Forge.
+func (s Snapshot) TagCommit(owner, repo, tag string) (string, error) {
+	var out string
+	if err := s.readJSON(filepath.Join(seg(owner), seg(repo), "tagcommits", seg(tag)+".json"), &out); err != nil {
+		return "", err
+	}
+
+	return out, nil
+}
+
 // PackageVersionDigest implements Forge.
 func (s Snapshot) PackageVersionDigest(org, pkg, tag string) (string, error) {
 	p := filepath.Join(seg(org), "packages", seg(pkg), seg(tag)+".json")
@@ -319,6 +329,20 @@ func (c Capture) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 
 	if err := c.writeJSON(filepath.Join(seg(owner), seg(repo), "attestations", sha256Hex+".json"), out); err != nil {
 		return nil, err
+	}
+
+	return out, nil
+}
+
+// TagCommit implements Forge.
+func (c Capture) TagCommit(owner, repo, tag string) (string, error) {
+	out, err := c.Live.TagCommit(owner, repo, tag)
+	if err != nil {
+		return "", err
+	}
+
+	if werr := c.writeJSON(filepath.Join(seg(owner), seg(repo), "tagcommits", seg(tag)+".json"), out); werr != nil {
+		return "", werr
 	}
 
 	return out, nil

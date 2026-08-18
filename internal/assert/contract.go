@@ -26,6 +26,10 @@ type Contract struct {
 	// StoreVSA reports whether verdicts live in the attestation store
 	// (as opposed to legacy VSA bundle assets on the release).
 	StoreVSA bool
+	// Decision reports whether the release owes a verifiable release
+	// decision — false only for releases whose canon version predates
+	// the decision epoch (grandfathered history).
+	Decision bool
 	// Origin names where the contract was read from, for the report.
 	Origin string
 }
@@ -80,7 +84,11 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 			"assert: manifest of %s/%s@%s: schema, classes and storeVsa are all required", owner, repo, tag)
 	}
 
-	return &Contract{Classes: doc.Classes, StoreVSA: *doc.StoreVSA, Origin: "manifest " + m.Asset}, true, nil
+	// Manifest-era releases postdate every machinery epoch by
+	// construction: the manifest itself arrived after decisions did.
+	return &Contract{
+		Classes: doc.Classes, StoreVSA: *doc.StoreVSA, Decision: true, Origin: "manifest " + m.Asset,
+	}, true, nil
 }
 
 // WorkflowSource is the GitHub-workflow-convention adapter: the
@@ -145,6 +153,7 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	return &Contract{
 		Classes:  classes,
 		StoreVSA: w.Policy.storeVSA(canonVersion),
+		Decision: w.Policy.decision(canonVersion),
 		Origin:   "publish workflow at " + tag,
 	}, true, nil
 }

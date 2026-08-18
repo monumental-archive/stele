@@ -52,6 +52,21 @@ edit to this document first.
 - `storeVsaFromCanon` — the canon version (inclusive) from which
   verdicts are store-resident. Absent means store-resident always.
   An unparsable pin on a release fails TOWARD the store obligation.
+- `decisionFromCanon` — the canon version (inclusive) from which a
+  release owes a VERIFIABLE release decision; the full-depth leg runs
+  pre-epoch releases through the provenance half alone (grandfathered
+  history proves what it can). Same semantics as `storeVsaFromCanon`:
+  absent means always, an unparsable pin fails strict. Measured for
+  the first conforming org at 1.23.1 — the boundary release below
+  which no decision verifies, exactly.
+- `evidenceSuffixes` — extra asset-name suffixes marking a checksum
+  entry as an evidence DOCUMENT rather than an artifact (the org's
+  per-release VEX documents, for one). Documents are excluded from
+  the full-depth provenance subject set — a document about the
+  release is not a subject of its build; a bundle cannot vouch for
+  itself. The policy-known documents (bundles, the umbrella, the
+  contract manifest, prefixed assets) are always excluded; this field
+  covers what only the org can name.
 - `expectedRepos` — optional declared population. A listing that sees
   a different count refuses to judge: an unseen repo is unchecked,
   not clean, and a surplus one means this declaration is stale.
@@ -196,8 +211,23 @@ and what only evidence may assert are different types.
 
 ## Verification depth
 
-The walk ships at presence depth: assets exist, bundles parse, every
-covered subject has a VSA-typed attestation in the store. Full depth
-— the same walk with every bundle cryptographically re-verified
-through the verify engine — is the corpus re-verification leg
-(issue #4) and arrives as a flag on this same walk, not a second one.
+The walk defaults to presence depth: assets exist, bundles parse,
+every covered subject has a VSA-typed attestation in the store.
+`--depth full` (issue #4) is the corpus re-verification leg on this
+same walk, not a second one: every covered release is handed to the
+verify engine — provenance bundles, certificates, the decision, and
+the store-resident verdict — under `--verify-policy`, the trust
+authority. Pins are derived per release from the trees a stranger
+reads: the caller's publish workflow at the tag carries the canon
+pin, the canon's publish workflow at that pin carries the signer
+pin, and the canon's own releases run at the tag commit. Refusals
+land in the walk's own taxonomy: verdict refusals carry a
+`vsa:`-prefixed assertion (so burn derivation and debt lines apply
+exactly as at presence depth, and the deep verdict check yields
+entirely where presence already found verdicts missing); everything
+else reds under `deep`, excusable only by a written debt line.
+Pre-store releases are held to presence depth for their verdicts —
+grandfathered history under the verify policy's enumerated legacy
+roots — and the bound is logged, never silent. Asking for full depth
+without `--verify-policy` and `--trusted-root` is a usage refusal,
+never a shallower walk that looks like the deep one.

@@ -116,6 +116,20 @@ func testServer(t *testing.T) *gh.Client {
 			writeBody(w, []byte("jobs: {}\n"))
 		})
 
+	mux.HandleFunc("/repos/acme/widget/git/ref/tags/v1.0.0", func(w http.ResponseWriter, _ *http.Request) {
+		// An annotated tag: the ref names the tag OBJECT, which must be
+		// dereferenced to the commit — the annotated-tag pin trap.
+		writeBody(w, []byte(`{"object": {"type": "tag", "sha": "tagobj"}}`))
+	})
+
+	mux.HandleFunc("/repos/acme/widget/git/tags/tagobj", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`{"object": {"type": "commit", "sha": "`+strings.Repeat("c", 40)+`"}}`))
+	})
+
+	mux.HandleFunc("/repos/acme/widget/git/ref/tags/v0.9.0", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`{"object": {"type": "commit", "sha": "`+strings.Repeat("d", 40)+`"}}`))
+	})
+
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -400,5 +414,25 @@ func TestPackageAndWorkflowReads(t *testing.T) {
 	none, err := c.WorkflowContents("acme", "ghost")
 	if err != nil || none != nil {
 		t.Fatalf("missing workflows dir = %v, %v — absence is an answer", none, err)
+	}
+}
+
+func TestClientTagCommit(t *testing.T) {
+	t.Parallel()
+
+	c := testServer(t)
+
+	annotated, err := c.TagCommit("acme", "widget", "v1.0.0")
+	if err != nil || annotated != strings.Repeat("c", 40) {
+		t.Fatalf("TagCommit annotated = %q, %v — the tag object must be dereferenced to its commit", annotated, err)
+	}
+
+	light, err := c.TagCommit("acme", "widget", "v0.9.0")
+	if err != nil || light != strings.Repeat("d", 40) {
+		t.Fatalf("TagCommit lightweight = %q, %v", light, err)
+	}
+
+	if _, err := c.TagCommit("acme", "widget", "v9.9.9"); err == nil {
+		t.Fatal("TagCommit invented a commit for a tag that does not exist")
 	}
 }

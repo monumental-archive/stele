@@ -36,6 +36,12 @@ import (
 // failure (3).
 const exitBlind = 4
 
+// The evidence walk's depths.
+const (
+	depthPresence = "presence"
+	depthFull     = "full"
+)
+
 // The assert targets.
 const (
 	targetImageFacts  = "image-facts"
@@ -192,6 +198,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		jsonOut                   bool
 		org, policyPath, debtPath string
 		rootPath, pinPath         string
+		depth, verifyPolicyPath   string
 		snapshotDir, captureDir   string
 	)
 
@@ -204,6 +211,10 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		"path to the Sigstore trusted root JSON (required when the policy declares continuous or baseImages)")
 	flags.StringVar(&pinPath, "base-pins", "",
 		"path to the committed base-image pin file (defaults to the policy's baseImages.pinFile)")
+	flags.StringVar(&depth, "depth", depthPresence,
+		"presence (default) or full — full re-verifies every covered release through the verify engine (#4)")
+	flags.StringVar(&verifyPolicyPath, "verify-policy", "",
+		"path to the committed verify policy (required with --depth full: it names the trust identities)")
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
 	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
 	flags.BoolVar(&jsonOut, "json", false,
@@ -228,6 +239,18 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		return usageFail("--policy is required")
 	case snapshotDir != "" && captureDir != "":
 		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
+	}
+
+	// Depth is validated before anything is opened: asking for full
+	// depth without the trust authority is a usage refusal, never a
+	// shallower walk that looks like the deep one.
+	switch {
+	case depth != depthPresence && depth != depthFull:
+		return usageFail(fmt.Sprintf("--depth %q is not a depth (presence, full)", depth))
+	case depth == depthFull && verifyPolicyPath == "":
+		return usageFail("--verify-policy is required with --depth full: it names the trust identities")
+	case depth == depthFull && rootPath == "":
+		return usageFail("--trusted-root is required with --depth full")
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
@@ -262,53 +285,23 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		assert.WorkflowSource{Forge: forge, Policy: pol.Evidence},
 	}
 
-	// The store halves verify cryptographically, so they need the
-	// trust boundary. A policy that declares them without a root is a
-	// usage refusal, never a silent skip: the whole point of those
-	// halves is that nobody else is checking those artifacts.
-	var attestor assert.Attestor
-
-	needsRoot := pol.Evidence.Continuous != nil || pol.Evidence.BaseImages != nil
-	if needsRoot {
-		if rootPath == "" {
-			return usageFail("--trusted-root is required: the policy declares continuous or baseImages")
-		}
-
-		rootJSON, rerr := os.ReadFile(rootPath) //nolint:gosec // the root path is operator-supplied by design
-		if rerr != nil {
-			return usageFail(rerr.Error())
-		}
-
-		bv, berr := newBundleVerifier(rootJSON)
-		if berr != nil {
-			return usageFail(berr.Error())
-		}
-
-		attestor = newAttestor(forge, bv, *pol.Issuer)
+	attestor, pinFile, serr := loadStoreInputs(pol, forge, rootPath, pinPath)
+	if serr != nil {
+		return usageFail(serr.Error())
 	}
 
-	var pinFile []byte
+	// The full-depth leg (#4): the walk hands every covered release to
+	// the verify engine, so it needs the trust authority (the verify
+	// policy) and the cryptographic boundary.
+	var full *assert.FullDepth
 
-	if pol.Evidence.BaseImages != nil {
-		if pinPath == "" {
-			pinPath = *pol.Evidence.BaseImages.PinFile
+	if depth == depthFull {
+		fd, derr := loadFullDepth(verifyPolicyPath, rootPath, forge)
+		if derr != nil {
+			return usageFail(derr.Error())
 		}
 
-		// The policy DECLARES this file, so its absence is a usage
-		// refusal like the missing trusted root: the far likelier
-		// cause is the wrong checkout, and proceeding would silently
-		// judge nothing. An org that pins no base images says so by
-		// omitting the baseImages section.
-		content, perr := os.ReadFile(pinPath) //nolint:gosec // the pin path is operator-supplied by design
-		switch {
-		case errors.Is(perr, fs.ErrNotExist):
-			return usageFail(fmt.Sprintf(
-				"the policy declares baseImages but %s is absent from this checkout", pinPath))
-		case perr != nil:
-			return usageFail(perr.Error())
-		default:
-			pinFile = content
-		}
+		full = fd
 	}
 
 	out := &latch{w: stdout}
@@ -316,7 +309,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.Evidence(pol, org, forge, src, attestor, debt, pinFile, out.logf)
+	rep, err := assert.Evidence(pol, org, forge, src, attestor, debt, pinFile, full, out.logf)
 	if out.err != nil {
 		return exitIO
 	}

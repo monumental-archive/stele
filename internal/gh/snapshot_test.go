@@ -19,6 +19,10 @@ import (
 // scriptedForge is the "live" side for capture tests.
 type scriptedForge struct{}
 
+func (scriptedForge) TagCommit(_, _, _ string) (string, error) {
+	return strings.Repeat("c", 40), nil
+}
+
 func (scriptedForge) Repos(string) ([]string, error) { return []string{"widget", "gadget"}, nil }
 
 func (scriptedForge) ReleaseTags(_, repo string) ([]string, error) {
@@ -84,6 +88,7 @@ func TestCaptureThenReplay(t *testing.T) {
 		func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err },
 		func() error { _, err := rec.PackageVersionDigest("acme", "widget", "latest"); return err },
 		func() error { _, err := rec.WorkflowContents("acme", "widget"); return err },
+		func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err },
 	} {
 		if err := call(); err != nil {
 			t.Fatal(err)
@@ -151,6 +156,28 @@ func TestCaptureThenReplay(t *testing.T) {
 // TestSnapshotMissingListing pins the difference between a recorded
 // absence and an uncaptured listing: a listing the capture never
 // wrote is an error, not an empty population.
+func TestSnapshotTagCommitReplay(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	rec := gh.Capture{Live: scriptedForge{}, Dir: dir}
+
+	if _, err := rec.TagCommit("acme", "widget", "v1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := gh.Snapshot{Dir: dir}
+
+	sha, err := snap.TagCommit("acme", "widget", "v1.0.0")
+	if err != nil || sha != strings.Repeat("c", 40) {
+		t.Fatalf("TagCommit replay = %q, %v", sha, err)
+	}
+
+	if _, terr := snap.TagCommit("acme", "widget", "v9.9.9"); terr == nil {
+		t.Fatal("an uncaptured tag commit replayed as an answer — it must refuse")
+	}
+}
+
 func TestSnapshotMissingListing(t *testing.T) {
 	t.Parallel()
 

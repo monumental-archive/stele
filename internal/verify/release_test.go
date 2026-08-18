@@ -170,6 +170,36 @@ func TestRelease(t *testing.T) {
 	}
 }
 
+// TestReleaseProvenance pins the provenance-only entry (stele#4's
+// pre-decision-epoch path): the same pass, the same evidence list,
+// no decision demanded — and no decision opened.
+func TestReleaseProvenance(t *testing.T) {
+	t.Parallel()
+
+	w := newReleaseWorld()
+	w.build(t)
+
+	verdict, err := verify.ReleaseProvenance(loadPolicy(t), coords, w.subjects, pins, w.store, fakeBV{}, discardLog)
+	if err != nil {
+		t.Fatalf("ReleaseProvenance = %v", err)
+	}
+
+	if got := verdict.SourceRevision(); got != srcRev {
+		t.Errorf("SourceRevision = %q, want %q", got, srcRev)
+	}
+
+	// The provenance bundle alone: no decision ref may appear on an
+	// entry point that never judged one.
+	if got := verdict.InputAttestations(); len(got) != 1 {
+		t.Errorf("InputAttestations = %d entries, want the provenance bundle alone", len(got))
+	}
+
+	if _, perr := verify.ReleaseProvenance(
+		loadPolicy(t), coords, nil, pins, w.store, fakeBV{}, discardLog); perr == nil {
+		t.Error("ReleaseProvenance verified an empty subject manifest")
+	}
+}
+
 func TestReleaseRefusals(t *testing.T) {
 	t.Parallel()
 
