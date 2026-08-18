@@ -1,11 +1,11 @@
 // Package chain implements the source-track chain link — the git
 // note format and the source-provenance predicate it carries. The
-// format is the org's documented one (the canon's
-// docs/source-provenance.md, the SLSA v1.2 source track's required
-// SCS documentation); it lives in code typed to that documentation
-// because a policy cannot make an undocumented format verifiable.
-// Which predicate type URI names it, and which identity signs it,
-// stay in the policy.
+// format's specification is docs/chain-format.md (the SLSA v1.2
+// source track's required SCS documentation), whose examples this
+// package's doc test validates — the spec and the implementation
+// cannot disagree silently. Which predicate type URI names it, and
+// which identity signs it, stay in the policy; which refs an org
+// attests stays in that org's narrative docs.
 package chain
 
 import (
