@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "issuer": "https://token.actions.githubusercontent.com",
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "storeVsaFromCanon": "1.13.0",
+    "debtFile": "security/attestation-debt.txt",
+    "expectedRepos": 4,
+    "publishWorkflows": ["publish", "self-publish"],
+    "classes": {
+      "rust-crate": {
+        "bundles": ["attestations-crates.intoto.jsonl"],
+        "legacyVsaBundles": ["attestations-vsa-crates.intoto.jsonl"]
+      },
+      "oci-image": { "bundles": ["attestations-image.intoto.jsonl"] },
+      "rust-binary": { "bundles": ["attestations-binaries.intoto.jsonl"] },
+      "go-binary": { "bundles": ["attestations-go-binaries.intoto.jsonl"] },
+      "source-archive": { "bundles": ["attestations-source.intoto.jsonl"] },
+      "wasm-npm": {
+        "bundles": ["attestations-npm.intoto.jsonl"],
+        "legacyVsaBundles": ["attestations-vsa-npm.intoto.jsonl"]
+      },
+      "pgrx-extension": {
+        "bundles": ["attestations-extensions.intoto.jsonl"],
+        "assetPrefixes": ["attestations-extimg-pg"]
+      }
+    },
+    "continuous": {
+      "stubPath": ".github/workflows/continuous.yml",
+      "stubUses": "monumental-archive/.github/",
+      "registry": "ghcr.io",
+      "tag": "latest",
+      "signerWorkflow": "monumental-archive/signer/.github/workflows/sign.yml",
+      "signerPinPattern": "monumental-archive/signer/.github/workflows/sign\\.yml@([0-9a-f]{40})"
+    },
+    "baseImages": {
+      "pinFile": "docker/pgrx-base-images.toml",
+      "attestorRepo": ".github",
+      "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
+      "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+    }
+  },
+  "blastRadius": {
+    "osEcosystems": ["debian", "alpine", "ubuntu", "rocky", "redhat", "rpm"],
+    "canary": {
+      "repo": "release-lab",
+      "tag": "v0.17.0",
+      "advisory": "RUSTSEC-2021-0127"
+    }
+  }
+}
