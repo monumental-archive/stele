@@ -107,6 +107,10 @@ usage:
               images: provenance from the released commit and the
               forge, editorial with derived defaults, licence
               validated as an SPDX expression and shipped canonical
+    vex       this release's coverage document: every shipped
+              inventory scanned, every finding joined to the recorded
+              decisions by exact (advisory, package, version), and a
+              refusal when a gate-class finding has no decision
     claims    the control claims for one branch, matched by RULE
               CONTENT against the forge's live enforcement state
               through the policy's declared table; a lapsed control
@@ -141,7 +145,9 @@ usage:
 derive sbom flags: [--out --expect-version] <binary>...; derive claims
 takes --policy --repo --branch [--canon-root --canon-digest --out
 --snapshot|--capture]; derive facts takes --archetype --repo --git-dir
-[--version --rev --tree --server-url --title --description]; the other
+[--version --rev --tree --server-url --title --description]; derive vex
+takes --subjects --vex --author --id --released [--base-ecosystems
+--out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor]; notes adds [--groups

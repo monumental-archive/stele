@@ -96,7 +96,7 @@ type deriveArgs struct {
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele derive: a mode is required: version, notes, bump, sbom, claims or facts"); err != nil {
+			"stele derive: a mode is required: version, notes, bump, sbom, claims, facts or vex"); err != nil {
 			return exitIO
 		}
 
@@ -105,14 +105,25 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims, deriveFacts:
+	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims, deriveFacts, deriveVEX:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele derive: unknown mode %q (version, notes, bump, sbom, claims, facts)\n", mode); err != nil {
+			"stele derive: unknown mode %q (version, notes, bump, sbom, claims, facts, vex)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
+	}
+
+	// vex scans inventories and renders a document.
+	if mode == deriveVEX {
+		va, code := parseVEXArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		return runDeriveMode(va.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveVEX(va, doc, log) })
 	}
 
 	// facts reads a named checkout and the forge, and reports

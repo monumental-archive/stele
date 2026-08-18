@@ -39,6 +39,11 @@ type Key struct {
 type Decision struct {
 	Key    Key
 	Origin string
+	// Purl is the product identifier the decision was recorded
+	// against, carried verbatim so a derived statement names the
+	// subcomponent the human named rather than one reassembled from
+	// the parsed name and version.
+	Purl string
 
 	Status          string
 	Justification   string
@@ -154,7 +159,7 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 
 			k := Key{Advisory: *stmt.Vulnerability.Name, Package: m[1], Version: m[2]}
 			d.byKey[k] = Decision{
-				Key: k, Origin: origin,
+				Key: k, Origin: origin, Purl: *p.ID,
 				Status:          *stmt.Status,
 				Justification:   deref(stmt.Justification),
 				ImpactStatement: deref(stmt.ImpactStatement),
