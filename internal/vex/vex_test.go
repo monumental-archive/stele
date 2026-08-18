@@ -36,7 +36,12 @@ func coverage() []vex.Coverage {
 func render(t *testing.T, c []vex.Coverage) string {
 	t.Helper()
 
-	doc, err := vex.Render(opts(), c)
+	complete, err := vex.Cover(c, nil)
+	if err != nil {
+		t.Fatalf("Cover = %v", err)
+	}
+
+	doc, err := vex.Render(opts(), complete)
 	if err != nil {
 		t.Fatalf("Render = %v", err)
 	}
@@ -138,8 +143,35 @@ func TestRenderWithoutSubcomponent(t *testing.T) {
 func TestNoCoverage(t *testing.T) {
 	t.Parallel()
 
-	if _, err := vex.Render(opts(), nil); !errors.Is(err, vex.ErrNoCoverage) {
+	empty, err := vex.Cover(nil, nil)
+	if err != nil {
+		t.Fatalf("Cover = %v", err)
+	}
+
+	if _, err := vex.Render(opts(), empty); !errors.Is(err, vex.ErrNoCoverage) {
 		t.Fatalf("Render = %v, want ErrNoCoverage", err)
+	}
+}
+
+// The refusal is a TYPE, not a branch: Render takes only a sealed
+// set, so no caller — this one or a later one — can produce a
+// coverage document beside untriaged findings.
+func TestCoverRefusesUndecided(t *testing.T) {
+	t.Parallel()
+
+	_, err := vex.Cover(coverage(), []string{"CVE-9:x@1"})
+	if err == nil {
+		t.Fatal("Cover sealed a set with an undecided finding")
+	}
+
+	for _, want := range []string{"no recorded decision", "CVE-9:x@1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Cover = %v, want it to mention %q", err, want)
+		}
+	}
+
+	if _, err := vex.Render(opts(), nil); err == nil {
+		t.Fatal("Render accepted nothing sealed")
 	}
 }
 
@@ -203,7 +235,12 @@ func TestRenderRefusals(t *testing.T) {
 				tt.cover(&c[0])
 			}
 
-			_, err := vex.Render(o, c)
+			complete, cerr := vex.Cover(c, nil)
+			if cerr != nil {
+				t.Fatalf("Cover = %v", cerr)
+			}
+
+			_, err := vex.Render(o, complete)
 			if err == nil || !strings.Contains(err.Error(), tt.wantMsg) {
 				t.Fatalf("Render = %v, want it to mention %q", err, tt.wantMsg)
 			}

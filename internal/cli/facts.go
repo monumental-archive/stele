@@ -38,10 +38,6 @@ const (
 	archetypeContinuous = "continuous"
 )
 
-// defaultServerURL is the forge every identity and repository URI
-// lives under when the caller names no other.
-const defaultServerURL = "https://github.com"
-
 // The metadata-reading seam, swapped only by tests.
 //
 //nolint:gochecknoglobals // test seam, written only by test setup
@@ -96,7 +92,10 @@ func parseFactsArgs(args []string, stderr io.Writer) (*factsArgs, int) {
 	flags.StringVar(&fa.version, "version", "",
 		"the version being released; required for versioned, refused for continuous")
 	flags.StringVar(&fa.repo, "repo", "", "owner/name being released (required)")
-	flags.StringVar(&fa.serverURL, "server-url", defaultServerURL, "the forge these facts name")
+	flags.StringVar(&fa.serverURL, "server-url", "",
+		"the forge these facts name, e.g. https://github.com (required). Not defaulted: the source URL "+
+			"ships in a signed annotation, and a tool that guessed the host would be asserting where the "+
+			"code came from")
 	flags.StringVar(&fa.gitDir, "git-dir", "",
 		"the RELEASED checkout, whose commit dates the release (required)")
 	flags.StringVar(&fa.rev, "rev", "HEAD", "the revision being released")
@@ -131,6 +130,8 @@ func parseFactsArgs(args []string, stderr io.Writer) (*factsArgs, int) {
 		return fa, usageFail("--repo must be owner/name")
 	case fa.gitDir == "":
 		return fa, usageFail("--git-dir is required — the released commit dates the release")
+	case fa.serverURL == "":
+		return fa, usageFail("--server-url is required — the forge is named, never assumed")
 	}
 
 	if fa.tree == "" {

@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -118,9 +119,43 @@ type Options struct {
 // is, rather than as a failure.
 var ErrNoCoverage = errors.New("vex: no decision covers this inventory")
 
+// Complete is a coverage set with nothing left undecided. Cover is
+// the only constructor and Render takes nothing else, so a document
+// asserting coverage of an inventory that still holds untriaged
+// gate-class findings cannot be built.
+//
+// This is the difference between a check and a construction. As a
+// branch in one caller, the refusal holds only for that caller: a
+// second consumer of the same join can read the undecided list, do
+// nothing about it, and render anyway — and the document it produces
+// says "covered" about a release nobody triaged. As a type, there is
+// no such path to write.
+type Complete struct {
+	coverage []Coverage
+}
+
+// Cover seals a coverage set. undecided names the findings that have
+// no recorded decision; a non-empty list refuses, because a coverage
+// document derived beside untriaged findings is a false claim of
+// coverage rather than a partial one.
+func Cover(coverage []Coverage, undecided []string) (*Complete, error) {
+	if len(undecided) > 0 {
+		return nil, fmt.Errorf("vex: %d finding(s) have no recorded decision, so this inventory is not"+
+			" covered: %s", len(undecided), strings.Join(undecided, ", "))
+	}
+
+	return &Complete{coverage: coverage}, nil
+}
+
 // Render builds the document. Statements are ordered and deduplicated
 // so one set of inputs renders one set of bytes.
-func Render(opts Options, coverage []Coverage) (*Document, error) {
+func Render(opts Options, complete *Complete) (*Document, error) {
+	if complete == nil {
+		return nil, errors.New("vex: nothing sealed to render")
+	}
+
+	coverage := complete.coverage
+
 	switch {
 	case opts.ID == "":
 		return nil, errors.New("vex: a document id is required")

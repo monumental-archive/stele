@@ -63,6 +63,8 @@ func withFactsHistory(t *testing.T, h *factsStub, openErr error) *string {
 	return opened
 }
 
+const forge = "https://github.com"
+
 const factsRev = "aaaabbbbccccddddeeeeffff0000111122223333"
 
 func goodFactsStub() *factsStub {
@@ -121,15 +123,20 @@ func TestDeriveFactsUsage(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"no archetype", []string{"facts", "--repo", "acme/widget", "--git-dir", "."}},
+		{"no archetype", []string{
+			"facts", "--repo", "acme/widget", "--server-url", forge, "--git-dir", ".",
+		}},
 		{"an archetype outside the vocabulary", []string{
-			"facts", "--archetype", "rolling", "--repo", "acme/widget", "--git-dir", ".",
+			"facts", "--archetype", "rolling", "--repo", "acme/widget",
+			"--server-url", forge, "--git-dir", ".",
 		}},
 		{"versioned with no version", []string{
-			"facts", "--archetype", "versioned", "--repo", "acme/widget", "--git-dir", ".",
+			"facts", "--archetype", "versioned", "--repo", "acme/widget",
+			"--server-url", forge, "--git-dir", ".",
 		}},
 		{"continuous carrying a version", []string{
-			"facts", "--archetype", "continuous", "--version", "1.0.0", "--repo", "acme/widget", "--git-dir", ".",
+			"facts", "--archetype", "continuous", "--version", "1.0.0", "--repo", "acme/widget",
+			"--server-url", forge, "--git-dir", ".",
 		}},
 		{"no repo", []string{"facts", "--archetype", "continuous", "--git-dir", "."}},
 		{"a repo that is not owner/name", []string{
@@ -164,7 +171,8 @@ repository = "https://github.com/acme/widget"
 
 	args := []string{
 		"facts", "--archetype", "versioned", "--version", "1.2.3",
-		"--repo", "acme/widget", "--git-dir", tree, "--description", "a widget",
+		"--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", tree, "--description", "a widget",
 	}
 	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
 		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
@@ -211,7 +219,10 @@ func TestDeriveFactsContinuous(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", tree}
+	args := []string{
+		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", tree,
+	}
 	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
 		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
 	}
@@ -237,7 +248,10 @@ license = "Apache-2.0"
 
 	var stdout, stderr bytes.Buffer
 
-	args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", tree}
+	args := []string{
+		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", tree,
+	}
 	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
 		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
 	}
@@ -307,7 +321,10 @@ func TestDeriveFactsRefusals(t *testing.T) {
 
 			var stdout, stderr bytes.Buffer
 
-			args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", dir}
+			args := []string{
+				"facts", "--archetype", "continuous", "--repo", "acme/widget",
+				"--server-url", forge, "--git-dir", dir,
+			}
 			if got := deriveCmd(args, &stdout, &stderr); got != exitRefused {
 				t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
 			}
@@ -334,6 +351,7 @@ func TestDeriveFactsSeparatesDateFromDeclaration(t *testing.T) {
 
 	args := []string{
 		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge,
 		"--git-dir", dated, "--tree", declaring,
 	}
 	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
@@ -361,7 +379,10 @@ func TestDeriveFactsFallsBackToTheForge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	// t.TempDir() has no Cargo.toml, which is the manifest-less shape.
-	args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", t.TempDir()}
+	args := []string{
+		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", t.TempDir(),
+	}
 	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
 		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
 	}
@@ -381,7 +402,10 @@ func TestDeriveFactsNoDerivableLicence(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", t.TempDir()}
+	args := []string{
+		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", t.TempDir(),
+	}
 	if got := deriveCmd(args, &stdout, &stderr); got != exitRefused {
 		t.Fatalf("deriveCmd = %d, want %d", got, exitRefused)
 	}

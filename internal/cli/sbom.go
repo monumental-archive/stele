@@ -37,12 +37,15 @@ type sbomArgs struct {
 
 	// The Cargo path: an artifact's own closure, scoped to the package
 	// that ships it (.github#492).
-	cargoRoot string
-	tree      string
-	target    string
-	created   string
-	unionOf   string
-	unionName string
+	cargoRoot         string
+	tree              string
+	target            string
+	features          string
+	noDefaultFeatures bool
+	allFeatures       bool
+	created           string
+	unionOf           string
+	unionName         string
 }
 
 // parseSBOMArgs reads the flag surface. The binaries are positional:
@@ -65,6 +68,13 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	fs.StringVar(&sa.tree, "tree", "", "workspace root to resolve in (with --cargo-package)")
 	fs.StringVar(&sa.target, "target", "",
 		"target triple the artifact was built for; empty resolves without platform filtering")
+	fs.StringVar(&sa.features, "features", "",
+		"comma-separated cargo features the artifact was built with. One crate built once per feature set "+
+			"ships SEPARATE artifacts whose dependency graphs differ; resolving them alike would assert "+
+			"they are identical")
+	fs.BoolVar(&sa.noDefaultFeatures, "no-default-features", false,
+		"the artifact was built with default features off")
+	fs.BoolVar(&sa.allFeatures, "all-features", false, "the artifact was built with every feature on")
 	fs.StringVar(&sa.created, "created", "",
 		"the artifact's own instant, RFC 3339, never a clock reading (with --cargo-package or --union)")
 	fs.StringVar(&sa.unionOf, "union", "",
@@ -182,7 +192,12 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 			" artifact, never by the run that described it")
 	}
 
-	metadata, err := newCargoResolver().Metadata(sa.tree, sa.target)
+	selection, err := cargo.Select(sa.target, splitTypes(sa.features), sa.noDefaultFeatures, sa.allFeatures)
+	if err != nil {
+		return err
+	}
+
+	metadata, err := newCargoResolver().Metadata(sa.tree, selection)
 	if err != nil {
 		return err
 	}

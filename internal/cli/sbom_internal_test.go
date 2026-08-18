@@ -226,11 +226,11 @@ type stubResolver struct {
 	metadata string
 	err      error
 	tree     string
-	target   string
+	sel      cargo.Selection
 }
 
-func (s *stubResolver) Metadata(tree, target string) ([]byte, error) {
-	s.tree, s.target = tree, target
+func (s *stubResolver) Metadata(tree string, sel cargo.Selection) ([]byte, error) {
+	s.tree, s.sel = tree, sel
 
 	return []byte(s.metadata), s.err
 }
@@ -287,8 +287,8 @@ func TestDeriveSBOMFromACargoClosure(t *testing.T) {
 		t.Errorf("a versionless PURL was rendered:\n%s", out)
 	}
 
-	if resolver.tree != "/w" || resolver.target != "x86_64-unknown-linux-gnu" {
-		t.Errorf("resolved in %q for %q", resolver.tree, resolver.target)
+	if resolver.tree != "/w" || resolver.sel.Target() != "x86_64-unknown-linux-gnu" {
+		t.Errorf("resolved in %q for %q", resolver.tree, resolver.sel.Target())
 	}
 }
 
@@ -383,5 +383,53 @@ func TestDeriveSBOMSourceRefusals(t *testing.T) {
 				t.Fatalf("stderr = %q, want it to mention %q", stderr.String(), tc.want)
 			}
 		})
+	}
+}
+
+// One crate built once per feature set ships SEPARATE artifacts with
+// separate digests, and their dependency graphs differ because the
+// features differ. Resolving them alike would give every artifact the
+// same inventory and quietly assert they are identical — which is
+// exactly what a Postgres extension built for pg16 and pg17 would get.
+func TestDeriveSBOMCarriesTheFeatureSelection(t *testing.T) {
+	resolver := &stubResolver{metadata: cargoMetadata}
+	withResolver(t, resolver)
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"sbom", "--cargo-package", "lab-cli", "--tree", "/w", "--created", "2026-08-18T12:00:00Z",
+		"--features", "pg17,serde", "--no-default-features",
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	if strings.Join(resolver.sel.Features(), ",") != "pg17,serde" {
+		t.Errorf("features = %v, want the artifact's own", resolver.sel.Features())
+	}
+
+	if !strings.Contains(strings.Join(resolver.sel.Args(), " "), "--no-default-features") {
+		t.Error("--no-default-features did not reach the resolver")
+	}
+}
+
+// cargo refuses --all-features beside an explicit list, so a resolver
+// that silently preferred one would answer a question nobody asked.
+func TestDeriveSBOMRefusesContradictoryFeatures(t *testing.T) {
+	withResolver(t, &stubResolver{metadata: cargoMetadata})
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"sbom", "--cargo-package", "lab-cli", "--tree", "/w", "--created", "2026-08-18T12:00:00Z",
+		"--all-features", "--features", "pg17",
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitRefused {
+		t.Fatalf("deriveCmd = %d, want %d", got, exitRefused)
+	}
+
+	if !strings.Contains(stderr.String(), "exclusive") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

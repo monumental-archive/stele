@@ -146,11 +146,12 @@ usage:
               build-track VSA predicate the workflow signs
 
 derive sbom flags: [--out --expect-version] <binary>..., or
---cargo-package --tree --created [--target], or --union --union-name
+--cargo-package --tree --created [--target --features
+--no-default-features --all-features], or --union --union-name
 --created; derive claims
 takes --policy --repo --branch [--canon-root --canon-digest --out
---snapshot|--capture]; derive facts takes --archetype --repo --git-dir
-[--version --rev --tree --server-url --title --description]; derive vex
+--snapshot|--capture]; derive facts takes --archetype --repo --git-dir --server-url
+[--version --rev --tree --title --description]; derive vex
 takes --subjects --vex --author --id --released [--base-ecosystems
 --out]; the other
 derive modes take --git-dir [--ref

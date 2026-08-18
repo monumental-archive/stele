@@ -50,14 +50,78 @@ func (p Package) Purl() string {
 	return "pkg:cargo/" + p.Name + "@" + p.Version
 }
 
+// Selection is how an artifact was built. Cargo resolves a different
+// dependency graph per selection, so an inventory derived under the
+// wrong one describes an artifact nobody shipped.
+//
+// Features are why this type exists rather than a bare triple. A
+// workspace that builds one crate once per feature set — a Postgres
+// extension against pg16 and pg17, say — publishes those as SEPARATE
+// artifacts with separate digests, and their dependency graphs differ
+// because the features that select the Postgres bindings differ.
+// Resolving them all under one selection would give every artifact
+// the same inventory and quietly assert that they are identical.
+// Fields are unexported and Select is the only constructor, so a
+// contradictory selection cannot exist to be passed anywhere. The
+// alternative — validating inside the production resolver — puts the
+// guard where a test double bypasses it and the contradiction reaches
+// cargo instead of the caller.
+type Selection struct {
+	target            string
+	features          []string
+	noDefaultFeatures bool
+	allFeatures       bool
+}
+
+// Select builds a selection, refusing the one combination cargo
+// itself refuses.
+func Select(target string, features []string, noDefault, all bool) (Selection, error) {
+	if all && len(features) > 0 {
+		return Selection{}, errors.New("cargo: --all-features and an explicit feature list are exclusive")
+	}
+
+	return Selection{
+		target: target, features: features, noDefaultFeatures: noDefault, allFeatures: all,
+	}, nil
+}
+
+// Target reports the triple this selection resolves for.
+func (s Selection) Target() string { return s.target }
+
+// Features reports the features this selection enables.
+func (s Selection) Features() []string { return s.features }
+
+// Args renders the selection as cargo flags. No error: a Selection
+// that exists is already coherent.
+func (s Selection) Args() []string {
+	var args []string
+
+	if s.target != "" {
+		args = append(args, "--filter-platform", s.target)
+	}
+
+	if s.allFeatures {
+		args = append(args, "--all-features")
+	}
+
+	if len(s.features) > 0 {
+		args = append(args, "--features", strings.Join(s.features, ","))
+	}
+
+	if s.noDefaultFeatures {
+		args = append(args, "--no-default-features")
+	}
+
+	return args
+}
+
 // Resolver runs `cargo metadata`. An interface so the closure walk is
 // exercised against recorded output rather than against whatever
 // crates happen to be vendored on the machine running the tests.
 type Resolver interface {
-	// Metadata returns the resolved graph for one manifest, filtered
-	// to one target triple. An empty triple means no filtering, which
-	// is what a target-independent artifact wants.
-	Metadata(manifestDir, targetTriple string) ([]byte, error)
+	// Metadata returns the resolved graph for one manifest under one
+	// selection.
+	Metadata(manifestDir string, sel Selection) ([]byte, error)
 }
 
 // Runner is the production Resolver over the cargo binary.
@@ -71,16 +135,13 @@ type Runner struct {
 // lockfile describes a dependency set that differs from the one the
 // artifact was built with, which makes the inventory a description of
 // a build nobody shipped.
-func (r Runner) Metadata(manifestDir, targetTriple string) ([]byte, error) {
+func (r Runner) Metadata(manifestDir string, sel Selection) ([]byte, error) {
 	bin := r.Bin
 	if bin == "" {
 		bin = "cargo"
 	}
 
-	args := []string{"metadata", "--format-version", "1", "--locked"}
-	if targetTriple != "" {
-		args = append(args, "--filter-platform", targetTriple)
-	}
+	args := append([]string{"metadata", "--format-version", "1", "--locked"}, sel.Args()...)
 
 	// The CLI has no cancellation surface, so context.Background is the
 	// honest parent — the same reading internal/osv takes of the

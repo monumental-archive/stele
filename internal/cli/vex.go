@@ -183,14 +183,17 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 			s.product, len(split.Decided), len(split.Undecided), len(split.Rebuild))
 	}
 
-	if len(undecided) > 0 {
-		sort.Strings(undecided)
+	// Sealing is where the refusal lives, not here: Render takes only
+	// a *vex.Complete, so no caller — this one or a later one — can
+	// render a coverage document beside untriaged findings.
+	sort.Strings(undecided)
 
-		return fmt.Errorf("derive vex: %d advisory finding(s) in this release have no recorded decision — "+
-			"triage before releasing:\n  %s", len(undecided), strings.Join(undecided, "\n  "))
+	complete, err := vex.Cover(coverage, undecided)
+	if err != nil {
+		return fmt.Errorf("derive vex: triage before releasing: %w", err)
 	}
 
-	return renderVEX(va, released, coverage, rebuilds, doc, out)
+	return renderVEX(va, released, complete, rebuilds, doc, out)
 }
 
 // scanSubject scans one inventory and splits its findings.
@@ -244,10 +247,10 @@ func coverageOf(product string, d *triage.Decided) vex.Coverage {
 // applies. Nothing to say is the ordinary outcome, not a failure, and
 // saying so in machine-readable form spares the caller a glob.
 func renderVEX(
-	va *vexArgs, released time.Time, coverage []vex.Coverage, rebuilds int, doc io.Writer, out *latch,
+	va *vexArgs, released time.Time, complete *vex.Complete, rebuilds int, doc io.Writer, out *latch,
 ) error {
 	document, err := vex.Render(
-		vex.Options{ID: va.id, Author: va.author, Released: released}, coverage)
+		vex.Options{ID: va.id, Author: va.author, Released: released}, complete)
 	if errors.Is(err, vex.ErrNoCoverage) {
 		out.logf("derived=false")
 		out.logf("no recorded decision applies to this release; %d finding(s) on the rebuild cadence", rebuilds)
