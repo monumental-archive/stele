@@ -19,6 +19,12 @@ section does not ignore it, it dies on `unknown field`, which is a
 refusal for the wrong reason. Additive growth is not free; it is
 merely cheap — the bump rides the same PR as the section.
 
+The boundary the number guards is **shipped documents meeting shipped
+tools**, not pull requests meeting each other: one schema number
+names the key set of a *released* vocabulary, so every key-set change
+landing between two releases shares one bump. Schema 2 is whatever
+the next stele release reads, however many PRs assembled it.
+
 The identifier is a **refusal boundary, not a compatibility hint**.
 Pre-v1 there are no shims and no dual readers (the standing law): a
 reader implements exactly one version and refuses every other — but
@@ -66,6 +72,15 @@ Two consequences, both structural:
   signed under the old URI remain the accurate name of the old shape
   (the archived v2 ledger's `…/source-provenance/v1` claims stay as
   they are). Only the live side moves.
+
+One predicate gets a stronger rule than "bump on key-set change": the
+**source-provenance predicate's URI version segment mirrors the note
+format version**, because the predicate is the note's statement
+payload and its shape has only ever moved when the note's did
+(`canonRef`→`machineryRef` happened at the v2→v3 cutover). One
+number, defined once, read in two places — so the live URI is
+`…/source-provenance/v3`, not a freshly invented `/v2` whose meaning
+would collide with note-v2's. The historical URIs stay as signed.
 
 ## Explicitly out of scope
 

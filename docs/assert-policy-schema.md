@@ -76,6 +76,18 @@ mismatch, never as an unknown-field error.
   `storeVsaFromVersion`: absent means always, an unparsable pin
   fails strict. Measured for the first conforming org at 1.23.1 —
   the boundary release below which no decision verifies, exactly.
+- `enrichmentFromVersion` — the machinery version (inclusive) from
+  which a release owes a build-enrichment claim (stele#109). Same
+  semantics as its two siblings — the three share one definition in
+  code, so a fourth epoch cannot drift from the first three. The
+  epoch lives here and not in the verify policy by design: verify
+  judges the single release it is pointed at and stays epoch-free;
+  whether HISTORY owes an obligation is the corpus walk's question,
+  and the corpus walk is assert's — which already derives the
+  machinery version this field is compared against. Absent means
+  always; declare it before the canon declares `build.enrichment`,
+  or the Monday walk turns red on every release that predates the
+  mechanism.
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
   entry as an evidence DOCUMENT rather than an artifact (the org's
   per-release VEX documents, for one). Documents are excluded from
