@@ -45,12 +45,12 @@ type ChainInputs struct {
 	// verify against the published contract. Empty means the runtime
 	// offered no claim (a local run); the caller decides whether that
 	// is acceptable, and the cutover makes it required in CI.
-	WorkflowRef string
-	ActorLogin  string
-	ActorID     string
-	CanonRef    string // the commit the canon policy tree is pinned at
-	PolicyURI   string // where a stranger reads the policy at that pin
-	Claims      *Claims
+	WorkflowRef  string
+	ActorLogin   string
+	ActorID      string
+	MachineryRef string // the commit the policy tree is pinned at
+	PolicyURI    string // where a stranger reads the policy at that pin
+	Claims       *Claims
 }
 
 // Chain runs one emission: discovery, per-revision link assembly and
@@ -130,10 +130,10 @@ func validateChainInputs(p *policy.Policy, in *ChainInputs) (*policy.ProtectedBr
 		return nil, fmt.Errorf("emit: revision %q is not a full commit digest", in.Rev)
 	case !refRE.MatchString(in.Ref):
 		return nil, fmt.Errorf("emit: ref %q is not fully qualified", in.Ref)
-	case !revRE.MatchString(in.CanonRef):
+	case !revRE.MatchString(in.MachineryRef):
 		return nil, fmt.Errorf(
-			"emit: canon ref %q is not a commit digest — the policy tree must be pinned by full SHA so the VSA can carry"+
-				" its digest", in.CanonRef)
+			"emit: machinery ref %q is not a commit digest — the policy tree must be pinned by full SHA so the VSA can carry"+
+				" its digest", in.MachineryRef)
 	case in.PolicyURI == "":
 		return nil, errors.New("emit: a policy URI is required — a signed verdict naming no policy must never recur")
 	case in.ActorLogin == "" || in.ActorID == "":
@@ -545,15 +545,15 @@ func (e *chainRun) provenance(rev, tail string) (*provDoc, error) {
 	repository := serverURL + "/" + e.in.Owner + "/" + e.in.Repo
 
 	pred := chain.Predicate{
-		Repository:  &repository,
-		Ref:         &e.in.Ref,
-		Parents:     parents,
-		Actor:       &chain.Actor{Login: &e.in.ActorLogin, ID: actorID},
-		CommitTime:  &ctStr,
-		RulesReadAt: e.in.Claims.RulesReadAt,
-		Controls:    *e.in.Claims.Controls,
-		LedgerPrev:  ledgerPrev,
-		CanonRef:    &e.in.CanonRef,
+		Repository:   &repository,
+		Ref:          &e.in.Ref,
+		Parents:      parents,
+		Actor:        &chain.Actor{Login: &e.in.ActorLogin, ID: actorID},
+		CommitTime:   &ctStr,
+		RulesReadAt:  e.in.Claims.RulesReadAt,
+		Controls:     *e.in.Claims.Controls,
+		LedgerPrev:   ledgerPrev,
+		MachineryRef: &e.in.MachineryRef,
 	}
 
 	if len(parents) > 0 {
@@ -619,7 +619,7 @@ func (e *chainRun) summary(rev, lvl string) ([]byte, error) {
 		e.id.SAN,
 		e.nowUTC(),
 		expand(*e.p.Source.ResourceURI, e.in.Owner, e.in.Repo),
-		e.in.PolicyURI, e.in.CanonRef,
+		e.in.PolicyURI, e.in.MachineryRef,
 		vsa.ResultPassed,
 		levels,
 	)

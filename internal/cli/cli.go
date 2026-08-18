@@ -106,8 +106,8 @@ usage:
                  map (env contract: IMAGE, DIGEST, FACTS)
     evidence     nothing ships unattested: every release's declared
                  evidence contract is met and every covered subject
-                 carries a store-resident verdict (--org --policy
-                 [--debt --snapshot|--capture])
+                 carries a store-resident verdict (--org|--repo
+                 --policy [--debt --snapshot|--capture])
     blast-radius every SBOM scanned, every advisory finding joined
                  against the committed VEX decisions by exact
                  (advisory, package, version) triple (--org --policy
@@ -127,8 +127,8 @@ derive modes take --git-dir [--ref --tag-prefix --paths --minor-types
 --date --changelog].
 
 verify flags: --policy --trusted-root --repo; release/vsa add
---tag --subjects --signer-digest --canon-digest; chain/level add
---git-dir [--ref]. emit adds --canon-digest --policy-uri; emit chain
+--tag --subjects --signer-digest --machinery-digest; chain/level add
+--git-dir [--ref]. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]. GITHUB_TOKEN/GH_TOKEN authenticates store reads and the

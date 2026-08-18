@@ -70,7 +70,7 @@ func VSA(
 // signer. A release absent from the list verifies under the current
 // root or refuses, loudly; try-each is unrepresentable.
 func verdictIdentity(p *policy.Policy, c Coords, pins Pins) verdictRoot {
-	workflow, pin := *p.Trust.Verdict.VerifierWorkflow, pins.Canon
+	workflow, pin := *p.Trust.Verdict.VerifierWorkflow, pins.Machinery
 
 	for _, lv := range p.Trust.Verdict.LegacyVerdicts {
 		if *lv.Repository == c.Slug() && *lv.Tag == c.Tag {

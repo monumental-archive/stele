@@ -109,8 +109,12 @@ type Predicate struct {
 	LedgerPrev     jsonx.Raw `json:"ledgerPrev"`
 	RevisionParent *string   `json:"revisionParent"`
 	Prev           jsonx.Raw `json:"prev,omitempty"`
-	CanonRef       *string   `json:"canonRef"`
-	Repaired       *Repaired `json:"repaired,omitempty"`
+	// MachineryRef pins the policy tree the link was emitted under.
+	// The WIRE name stays canonRef: it is inside signed statements at
+	// note-format v2, and renaming it is a format bump (#79 renamed
+	// only the unsigned surfaces; the role name lives in Go).
+	MachineryRef *string   `json:"canonRef"`
+	Repaired     *Repaired `json:"repaired,omitempty"`
 }
 
 var (

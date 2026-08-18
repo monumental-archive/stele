@@ -284,6 +284,8 @@ func TestAssertEvidenceUsageRefusals(t *testing.T) {
 	rows := [][]string{
 		{"assert", "evidence", "--policy", policy},
 		{"assert", "evidence", "--org", "acme"},
+		{"assert", "evidence", "--org", "acme", "--repo", "acme/widget", "--policy", policy},
+		{"assert", "evidence", "--repo", "solo", "--policy", policy},
 		{"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap, "--capture", snap},
 		{"assert", "evidence", "--org", "acme", "--policy", "/no/such/policy.json"},
 	}

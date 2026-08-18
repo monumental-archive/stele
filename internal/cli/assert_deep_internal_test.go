@@ -98,8 +98,8 @@ func TestLoadFullDepthHappyPath(t *testing.T) {
 		t.Fatalf("loadFullDepth = %v", err)
 	}
 
-	if full.CanonOwner != "acme" || full.CanonRepo != "canon" {
-		t.Fatalf("roots = %s/%s, want the verifier workflow's own repository", full.CanonOwner, full.CanonRepo)
+	if full.MachineryOwner != "acme" || full.MachineryRepo != "canon" {
+		t.Fatalf("roots = %s/%s, want the verifier workflow's own repository", full.MachineryOwner, full.MachineryRepo)
 	}
 
 	if _, err := loadFullDepth(vp, filepath.Join(dir, "absent"), &storeForge{}); err == nil {
@@ -191,7 +191,7 @@ func TestEngineVerifierFailsClosed(t *testing.T) {
 
 	ev := &engineVerifier{vp: vp, store: forgeStore{forge: &storeForge{}}, bv: attestorBV{}}
 	c := verify.Coords{Owner: "acme", Repo: "widget", Tag: "v1.0.0"}
-	pins := verify.Pins{Canon: strings.Repeat("a", 40), Signer: strings.Repeat("b", 40)}
+	pins := verify.Pins{Machinery: strings.Repeat("a", 40), Signer: strings.Repeat("b", 40)}
 
 	if rerr := ev.Release(c, nil, nil, pins, true); rerr == nil {
 		t.Fatal("Release verified an empty subject list")

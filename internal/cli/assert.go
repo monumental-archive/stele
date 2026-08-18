@@ -197,6 +197,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	var (
 		jsonOut                   bool
 		org, policyPath, debtPath string
+		repo                      string
 		rootPath, pinPath         string
 		depth, verifyPolicyPath   string
 		snapshotDir, captureDir   string
@@ -204,7 +205,9 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 
 	flags := flag.NewFlagSet("stele assert evidence", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&org, "org", "", "organisation whose releases are walked (required)")
+	flags.StringVar(&org, "org", "", "organisation whose releases are walked (this or --repo)")
+	flags.StringVar(&repo, "repo", "",
+		"owner/name whose releases are walked — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&debtPath, "debt", "", "path to the committed evidence-debt file (defaults to the policy's debtFile)")
 	flags.StringVar(&rootPath, "trusted-root", "",
@@ -233,8 +236,12 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch {
-	case org == "":
-		return usageFail("--org is required")
+	case org == "" && repo == "":
+		return usageFail("--org or --repo is required")
+	case org != "" && repo != "":
+		return usageFail("--org and --repo are exclusive: one population, named once")
+	case repo != "" && !strings.Contains(repo, "/"):
+		return usageFail("--repo must be owner/name")
 	case policyPath == "":
 		return usageFail("--policy is required")
 	case snapshotDir != "" && captureDir != "":
@@ -309,15 +316,17 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.Evidence(pol, org, forge, src, attestor, debt, pinFile, full, out.logf)
+	pop := assert.Population{Org: org, Repo: repo}
+
+	rep, err := assert.Evidence(pol, pop, forge, src, attestor, debt, pinFile, full, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = report.Seal("assert "+targetEvidence, org,
+		rep = report.Seal("assert "+targetEvidence, pop.Subject(),
 			report.PopulationFromListing(0, "walk incomplete"),
-			[]report.Finding{{Subject: org, Assertion: targetEvidence, Detail: err.Error()}},
+			[]report.Finding{{Subject: pop.Subject(), Assertion: targetEvidence, Detail: err.Error()}},
 			nil, report.NoCanary())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {

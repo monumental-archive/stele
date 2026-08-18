@@ -44,10 +44,13 @@ type EvidencePolicy struct {
 	ManifestAsset *string `json:"manifestAsset"`
 	// Classes maps each evidence class to its required assets.
 	Classes map[string]ClassPolicy `json:"classes"`
-	// StoreVSAFromCanon is the canon version (inclusive) from which
-	// verdicts are store-resident; before it the legacy VSA bundles
-	// ride as release assets.
-	StoreVSAFromCanon *string `json:"storeVsaFromCanon"`
+	// StoreVSAFromVersion is the machinery version (inclusive) from
+	// which verdicts are store-resident; before it the legacy VSA
+	// bundles ride as release assets. The machinery version is the
+	// version of the shared release machinery the release pinned at
+	// its tag; a repository carrying its own machinery uses its own
+	// version (docs/assert-policy-schema.md defines it once).
+	StoreVSAFromVersion *string `json:"storeVsaFromVersion"`
 	// DebtFile is the committed exceptions file (repo-relative in the
 	// policy repo's checkout) holding human-asserted evidence debt.
 	DebtFile *string `json:"debtFile"`
@@ -63,11 +66,18 @@ type EvidencePolicy struct {
 	// roll that outran the approval run surfaces here rather than at
 	// the next release.
 	BaseImages *BaseImagesPolicy `json:"baseImages,omitempty"`
-	// DecisionFromCanon is the canon version (inclusive) from which a
-	// release owes a VERIFIABLE release decision — the machinery epoch,
-	// like StoreVSAFromCanon. Absent means always. An unparsable pin
-	// fails toward the stricter obligation.
-	DecisionFromCanon *string `json:"decisionFromCanon,omitempty"`
+	// DecisionFromVersion is the machinery version (inclusive) from
+	// which a release owes a VERIFIABLE release decision — the same
+	// epoch semantics as StoreVSAFromVersion. Absent means always. An
+	// unparsable pin fails toward the stricter obligation.
+	DecisionFromVersion *string `json:"decisionFromVersion,omitempty"`
+	// StoreVSAFromCanonRetired and DecisionFromCanonRetired hold the
+	// pre-#79 names so a stale policy refuses with a pointer instead
+	// of a bare unknown-field error. Never read as values: an evidence
+	// tool with two names for one field invites two policies that look
+	// different and mean the same, so old names refuse, never alias.
+	StoreVSAFromCanonRetired jsonx.Raw `json:"storeVsaFromCanon,omitempty"`
+	DecisionFromCanonRetired jsonx.Raw `json:"decisionFromCanon,omitempty"`
 	// EvidenceSuffixes are additional asset-name suffixes that mark a
 	// checksum entry as an evidence document rather than an artifact
 	// (the org's per-release VEX documents, for one) — excluded from
@@ -206,10 +216,8 @@ func (p *Policy) validate() error {
 		}
 	}
 
-	if e.StoreVSAFromCanon != nil {
-		if _, err := semver.NewVersion(*e.StoreVSAFromCanon); err != nil {
-			return fmt.Errorf("evidence.storeVsaFromCanon: %w", err)
-		}
+	if err := e.validateEpochs(); err != nil {
+		return err
 	}
 
 	if e.ExpectedRepos != nil && *e.ExpectedRepos <= 0 {
@@ -241,17 +249,47 @@ func (p *Policy) validate() error {
 	return nil
 }
 
-// storeVSA reports whether a release under the given canon version
-// keeps its verdicts in the attestation store. No epoch configured
-// means store-resident always.
-func (e *EvidencePolicy) storeVSA(canonVersion string) bool {
-	if e.StoreVSAFromCanon == nil {
+// validateEpochs refuses retired epoch names (with a pointer, never
+// an alias) and unparsable epochs — both epoch fields feed MustParse
+// downstream, so an epoch validate admits but the walk panics on
+// would turn a reviewed policy into a crash mid-walk.
+func (e *EvidencePolicy) validateEpochs() error {
+	if e.StoreVSAFromCanonRetired != nil {
+		return errors.New(
+			"evidence.storeVsaFromCanon was renamed storeVsaFromVersion (stele#79) — old names refuse, never alias")
+	}
+
+	if e.DecisionFromCanonRetired != nil {
+		return errors.New(
+			"evidence.decisionFromCanon was renamed decisionFromVersion (stele#79) — old names refuse, never alias")
+	}
+
+	if e.StoreVSAFromVersion != nil {
+		if _, err := semver.NewVersion(*e.StoreVSAFromVersion); err != nil {
+			return fmt.Errorf("evidence.storeVsaFromVersion: %w", err)
+		}
+	}
+
+	if e.DecisionFromVersion != nil {
+		if _, err := semver.NewVersion(*e.DecisionFromVersion); err != nil {
+			return fmt.Errorf("evidence.decisionFromVersion: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// storeVSA reports whether a release under the given machinery
+// version keeps its verdicts in the attestation store. No epoch
+// configured means store-resident always.
+func (e *EvidencePolicy) storeVSA(machineryVersion string) bool {
+	if e.StoreVSAFromVersion == nil {
 		return true
 	}
 
-	epoch := semver.MustParse(*e.StoreVSAFromCanon)
+	epoch := semver.MustParse(*e.StoreVSAFromVersion)
 
-	v, err := semver.NewVersion(canonVersion)
+	v, err := semver.NewVersion(machineryVersion)
 	if err != nil {
 		// An unparsable pin cannot prove the pre-epoch exemption;
 		// fail toward the stricter obligation.
@@ -261,17 +299,17 @@ func (e *EvidencePolicy) storeVSA(canonVersion string) bool {
 	return !v.LessThan(epoch)
 }
 
-// decision reports whether a release under the given canon version
-// owes a verifiable release decision. Same epoch semantics as
+// decision reports whether a release under the given machinery
+// version owes a verifiable release decision. Same epoch semantics as
 // storeVSA: no epoch means always, an unparsable pin fails strict.
-func (e *EvidencePolicy) decision(canonVersion string) bool {
-	if e.DecisionFromCanon == nil {
+func (e *EvidencePolicy) decision(machineryVersion string) bool {
+	if e.DecisionFromVersion == nil {
 		return true
 	}
 
-	epoch := semver.MustParse(*e.DecisionFromCanon)
+	epoch := semver.MustParse(*e.DecisionFromVersion)
 
-	v, err := semver.NewVersion(canonVersion)
+	v, err := semver.NewVersion(machineryVersion)
 	if err != nil {
 		return true
 	}

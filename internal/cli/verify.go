@@ -136,23 +136,24 @@ func (l *latch) logf(format string, args ...any) {
 
 // verifyArgs is everything the four modes read, parsed in one place.
 type verifyArgs struct {
-	policyPath  string
-	rootPath    string
-	repo        string
-	tag         string
-	subjects    string
-	sboms       string
-	signerPin   string
-	canonPin    string
-	gitDir      string
-	ref         string
-	mode        string
-	jsonOut     bool
-	p           *policy.Policy
-	coords      verify.Coords
-	subjectList []verify.Subject
-	sbomList    []verify.Subject
-	bv          verify.BundleVerifier
+	policyPath      string
+	rootPath        string
+	repo            string
+	tag             string
+	subjects        string
+	sboms           string
+	signerPin       string
+	machineryPin    string
+	retiredCanonPin string
+	gitDir          string
+	ref             string
+	mode            string
+	jsonOut         bool
+	p               *policy.Policy
+	coords          verify.Coords
+	subjectList     []verify.Subject
+	sbomList        []verify.Subject
+	bv              verify.BundleVerifier
 }
 
 // verifyCmd dispatches `stele verify <mode>`.
@@ -275,8 +276,10 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 		fs.StringVar(&va.sboms, "sboms", "",
 			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode, required)")
 		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
-		fs.StringVar(&va.canonPin, "canon-digest", "",
+		fs.StringVar(&va.machineryPin, "machinery-digest", "",
 			"commit digest the verifier/decision identities are pinned at (required)")
+		fs.StringVar(&va.retiredCanonPin, "canon-digest", "",
+			"retired: renamed --machinery-digest (stele#79)")
 	case modeChain, modeLevel:
 		fs.StringVar(&va.gitDir, "git-dir", "", "local clone with the branch and notes ref fetched (required)")
 		fs.StringVar(&va.ref, "ref", "refs/heads/main", "fully qualified branch ref to walk")
@@ -301,6 +304,11 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 		}
 
 		return exitUsage
+	}
+
+	// The retired flag refuses with a pointer, never aliases (#79).
+	if va.retiredCanonPin != "" {
+		return fail(errors.New("--canon-digest was renamed --machinery-digest (stele#79)"))
 	}
 
 	owner, repo, ok := strings.Cut(va.repo, "/")
@@ -407,7 +415,7 @@ func parseManifest(text string) ([]verify.Subject, error) {
 // runVerify runs the selected mode against real dependencies and
 // reports what it proved.
 func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
-	pins := verify.Pins{Signer: va.signerPin, Canon: va.canonPin}
+	pins := verify.Pins{Signer: va.signerPin, Machinery: va.machineryPin}
 
 	switch va.mode {
 	case modeRelease:

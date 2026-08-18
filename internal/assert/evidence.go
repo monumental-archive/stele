@@ -32,18 +32,70 @@ import (
 
 var hex64OnlyRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// Evidence walks one org's releases and seals the completeness
-// verdict. debt carries the committed file's declared exceptions;
-// burned exceptions are derived inside the walk.
+// Population names what the evidence walk covers: an organisation's
+// listing, or exactly one repository. Exactly one field is set — the
+// CLI enforces the exclusivity, the walk refuses the impossible
+// combinations it can still see.
+type Population struct {
+	// Org is the organisation whose listing is the population.
+	Org string
+	// Repo is a single owner/name population — the single-repo
+	// consumer (#79): the same walk, the population enumeration
+	// replaced by the one repository named.
+	Repo string
+}
+
+// Subject is the report subject the population walks under.
+func (p Population) Subject() string {
+	if p.Repo != "" {
+		return p.Repo
+	}
+
+	return p.Org
+}
+
+// resolve turns the population into the owner and its repositories —
+// a listing for an org, the one named repository otherwise.
+//
+//nolint:gocritic // unnamedResult: the doc line names the results
+func (p Population) resolve(forge gh.Forge) (string, []string, error) {
+	if p.Repo == "" {
+		repos, err := forge.Repos(p.Org)
+		if err != nil {
+			return "", nil, fmt.Errorf("assert: listing %s: %w", p.Org, err)
+		}
+
+		return p.Org, repos, nil
+	}
+
+	owner, name, ok := strings.Cut(p.Repo, "/")
+	if !ok || owner == "" || name == "" {
+		return "", nil, fmt.Errorf("assert: population %q is not owner/name", p.Repo)
+	}
+
+	return owner, []string{name}, nil
+}
+
+// Evidence walks the population's releases and seals the
+// completeness verdict. debt carries the committed file's declared
+// exceptions; burned exceptions are derived inside the walk.
 func Evidence(
-	pol *Policy, org string, forge gh.Forge, src ContractSource, att Attestor,
+	pol *Policy, pop Population, forge gh.Forge, src ContractSource, att Attestor,
 	debt []report.Exception, pinFile []byte, full *FullDepth, log Logf,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
-	repos, err := forge.Repos(org)
+	// A declared org population is meaningless over a single
+	// repository, and silently ignoring it would let one policy mean
+	// two things (#79): refused, never reinterpreted.
+	if pop.Repo != "" && e.ExpectedRepos != nil {
+		return nil, errors.New(
+			"assert: expectedRepos is declared but the population is one repository — the declaration cannot apply")
+	}
+
+	org, repos, err := pop.resolve(forge)
 	if err != nil {
-		return nil, fmt.Errorf("assert: listing %s: %w", org, err)
+		return nil, err
 	}
 
 	// The declared-population guard, before anything else: a token
@@ -55,7 +107,10 @@ func Evidence(
 			len(repos), *e.ExpectedRepos)
 	}
 
-	w := &evidenceWalk{pol: e, org: org, forge: forge, src: src, attestor: att, full: full, log: log}
+	w := &evidenceWalk{
+		pol: e, org: org, subject: pop.Subject(),
+		forge: forge, src: src, attestor: att, full: full, log: log,
+	}
 
 	for _, repo := range repos {
 		if err := w.repo(repo); err != nil {
@@ -78,14 +133,15 @@ func Evidence(
 		facts = append(facts, report.Fact{Name: "legacyReleases", Value: strings.Join(w.legacy, " ")})
 	}
 
-	pop := report.PopulationFromListing(w.checked, "subjects with a declared evidence contract")
+	covered := report.PopulationFromListing(w.checked, "subjects with a declared evidence contract")
 
-	return report.Seal("assert evidence", org, pop, w.findings, exceptions, report.NoCanary(), facts...), nil
+	return report.Seal("assert evidence", w.subject, covered, w.findings, exceptions, report.NoCanary(), facts...), nil
 }
 
 type evidenceWalk struct {
 	pol      *EvidencePolicy
 	org      string
+	subject  string
 	forge    gh.Forge
 	src      ContractSource
 	attestor Attestor

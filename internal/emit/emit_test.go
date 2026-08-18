@@ -26,8 +26,8 @@ const (
 	sourceType = "https://acme.example/attestations/source-provenance/v1"
 	identity   = "https://github.com/acme/widget/.github/workflows/source-attest.yml@refs/heads/main"
 
-	canonPin  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	policyURI = "https://github.com/acme/canon/blob/" + canonPin + "/slsa/verify-policy.json"
+	machineryPin = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	policyURI    = "https://github.com/acme/canon/blob/" + machineryPin + "/slsa/verify-policy.json"
 
 	rev1 = "1111111111111111111111111111111111111111"
 	rev2 = "2222222222222222222222222222222222222222"
@@ -320,7 +320,7 @@ func newWorld(t *testing.T) *world {
 			Ref: "refs/heads/main", Rev: rev4,
 			WorkflowRef: "acme/widget/.github/workflows/source-attest.yml@refs/heads/main",
 			ActorLogin:  "octocat", ActorID: "583231",
-			CanonRef: canonPin, PolicyURI: policyURI,
+			MachineryRef: machineryPin, PolicyURI: policyURI,
 			Claims: claims([]int64{1000000}, "ORG_SOURCE_GATED", "ORG_SOURCE_SIGNED"),
 		},
 	}
@@ -714,7 +714,7 @@ func TestChainRefusals(t *testing.T) {
 		},
 		{
 			"malformed canon pin",
-			func(w *world) { w.in.CanonRef = "v1.2.3" },
+			func(w *world) { w.in.MachineryRef = "v1.2.3" },
 			"pinned by full SHA",
 		},
 		{

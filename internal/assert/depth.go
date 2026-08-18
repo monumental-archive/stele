@@ -5,10 +5,10 @@
 // derives its inputs and maps refusals into the report taxonomy.
 //
 // Pins are derived per release from the consuming tree, never policy
-// literals: a foreign repository reaches the canon through the
+// literals: a foreign repository reaches the machinery repo through the
 // commit-pinned uses: on its own publish workflow at the tag, and the
-// canon's releases run their verifier at the tag itself. The signer
-// pin is read from the canon's publish workflow at that same pin —
+// machinery repo's releases run their verifier at the tag itself. The
+// signer pin is read from the machinery publish workflow at that pin —
 // the two-hop resolution a stranger performs.
 
 package assert
@@ -34,8 +34,8 @@ type DeepVerifier interface {
 	VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins) error
 }
 
-// uses40RE finds the canon pin on a caller's publish workflow: the
-// full-commit uses: reference to the canon's publish or release
+// uses40RE finds the machinery pin on a caller's publish workflow:
+// the full-commit uses: reference to the machinery repo's publish or release
 // workflow. The 40-hex capture is the certificate-grade binding; the
 // version comment beside it is presentation.
 var uses40RE = regexp.MustCompile(`uses:\s*\S*/(?:publish|release)\.ya?ml@([0-9a-f]{40})`)
@@ -177,23 +177,24 @@ func (w *evidenceWalk) evidenceDocument(name string) bool {
 	return false
 }
 
-// resolvePins derives the canon and signer pins for one release from
+// resolvePins derives the machinery and signer pins for one release from
 // the trees a stranger can read: the caller's publish workflow at the
-// tag carries the canon pin; the canon's publish workflow at that pin
-// carries the signer pin. The canon's own releases run at the tag.
+// tag carries the machinery pin; the machinery publish workflow at that
+// pin carries the signer pin. The machinery repo's own releases run at
+// the tag.
 func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
-	canonOwner, canonRepo := w.full.CanonOwner, w.full.CanonRepo
+	machineryOwner, machineryRepo := w.full.MachineryOwner, w.full.MachineryRepo
 	signerWorkflow := w.full.SignerWorkflow
 
-	var canonPin string
+	var machineryPin string
 
-	if w.org == canonOwner && repo == canonRepo {
+	if w.org == machineryOwner && repo == machineryRepo {
 		sha, err := w.forge.TagCommit(w.org, repo, tag)
 		if err != nil {
 			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
 		}
 
-		canonPin = sha
+		machineryPin = sha
 	} else {
 		wf, ok, err := w.forge.FileAt(w.org, repo, ".github/workflows/publish.yml", tag)
 		if err != nil {
@@ -203,19 +204,21 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 		m := uses40RE.FindSubmatch(wf)
 		if !ok || m == nil {
 			return verify.Pins{}, fmt.Errorf(
-				"no full-commit canon pin on the publish workflow at %s — the verifier identity cannot be derived", tag)
+				"no full-commit machinery pin on the publish workflow at %s — the verifier identity cannot be derived", tag)
 		}
 
-		canonPin = string(m[1])
+		machineryPin = string(m[1])
 	}
 
-	canonPublish, ok, err := w.forge.FileAt(canonOwner, canonRepo, ".github/workflows/publish.yml", canonPin)
+	machineryPublish, ok, err := w.forge.FileAt(
+		machineryOwner, machineryRepo, ".github/workflows/publish.yml", machineryPin)
 	if err != nil {
-		return verify.Pins{}, fmt.Errorf("the canon publish workflow at %.12s is unreadable: %w", canonPin, err)
+		return verify.Pins{}, fmt.Errorf(
+			"the machinery publish workflow at %.12s is unreadable: %w", machineryPin, err)
 	}
 
 	if !ok {
-		return verify.Pins{}, fmt.Errorf("the canon carries no publish workflow at %.12s", canonPin)
+		return verify.Pins{}, fmt.Errorf("the machinery repository carries no publish workflow at %.12s", machineryPin)
 	}
 
 	signerRE, err := regexp.Compile(regexp.QuoteMeta(signerWorkflow) + `@([0-9a-f]{40})`)
@@ -223,24 +226,24 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 		return verify.Pins{}, fmt.Errorf("the signer pin pattern does not compile: %w", err)
 	}
 
-	sm := signerRE.FindSubmatch(canonPublish)
+	sm := signerRE.FindSubmatch(machineryPublish)
 	if sm == nil {
 		return verify.Pins{}, fmt.Errorf(
-			"the canon at %.12s declares no signer pin for %s — the provenance identity cannot be derived",
-			canonPin, signerWorkflow)
+			"the machinery repository at %.12s declares no signer pin for %s — the provenance identity cannot be derived",
+			machineryPin, signerWorkflow)
 	}
 
-	return verify.Pins{Canon: canonPin, Signer: string(sm[1])}, nil
+	return verify.Pins{Machinery: machineryPin, Signer: string(sm[1])}, nil
 }
 
 // FullDepth is everything the full-depth leg needs beyond the walk:
 // the engine (behind the seam) and the pin-resolution roots derived
-// from the VERIFY policy — the canon repository is the verifier
+// from the VERIFY policy — the machinery repository is the verifier
 // workflow's own, a fact of the identity, not a second declaration.
 type FullDepth struct {
-	Verifier              DeepVerifier
-	CanonOwner, CanonRepo string
-	SignerWorkflow        string
+	Verifier                      DeepVerifier
+	MachineryOwner, MachineryRepo string
+	SignerWorkflow                string
 }
 
 // NewFullDepth derives the pin-resolution roots from the verify
@@ -254,6 +257,6 @@ func NewFullDepth(v DeepVerifier, verifierWorkflow, signerWorkflow string) (*Ful
 	}
 
 	return &FullDepth{
-		Verifier: v, CanonOwner: parts[0], CanonRepo: parts[1], SignerWorkflow: signerWorkflow,
+		Verifier: v, MachineryOwner: parts[0], MachineryRepo: parts[1], SignerWorkflow: signerWorkflow,
 	}, nil
 }

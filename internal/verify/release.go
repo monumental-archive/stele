@@ -60,13 +60,13 @@ func (v *ReleaseVerdict) InputAttestations() []Ref {
 // consumer read (VSA) requires the signing certificate to carry, and
 // the policy is pinned by uri and commit digest as the spec asks.
 func (v *ReleaseVerdict) VSAPredicate(
-	p *policy.Policy, c Coords, policyURI, canonDigest, timeVerified string,
+	p *policy.Policy, c Coords, policyURI, machineryDigest, timeVerified string,
 ) ([]byte, error) {
 	pred, err := vsa.New(
 		serverURL+"/"+*p.Trust.Verdict.VerifierWorkflow,
 		timeVerified,
 		expand(*p.Build.ResourceURI, c),
-		policyURI, canonDigest,
+		policyURI, machineryDigest,
 		vsa.ResultPassed,
 		[]string{*p.Build.TargetLevel},
 	)
@@ -229,7 +229,7 @@ func validateInputs(c Coords, subjects []Subject, pins Pins) error {
 		return err
 	}
 
-	if !hex40RE.MatchString(pins.Signer) || !hex40RE.MatchString(pins.Canon) {
+	if !hex40RE.MatchString(pins.Signer) || !hex40RE.MatchString(pins.Machinery) {
 		return errors.New("verify: pins must be full 40-hex commit digests — an unpinned identity matches too much")
 	}
 
@@ -576,7 +576,8 @@ func verifyDecision(
 	store Store, bv BundleVerifier, log Logf,
 ) (*Ref, error) {
 	id := trust.Identity{
-		SAN:    workflowSAN(*p.Trust.Decision.SignerWorkflow, identityRef(*p.Trust.Decision.SignerWorkflow, c, pins.Canon)),
+		SAN: workflowSAN(*p.Trust.Decision.SignerWorkflow,
+			identityRef(*p.Trust.Decision.SignerWorkflow, c, pins.Machinery)),
 		Issuer: *p.Issuer,
 	}
 
@@ -586,7 +587,7 @@ func verifyDecision(
 	)
 
 	for _, s := range sboms {
-		ref, pred, err := decisionFor(p, c.Slug(), s, id, pins.Canon, store, bv)
+		ref, pred, err := decisionFor(p, c.Slug(), s, id, pins.Machinery, store, bv)
 		if err != nil {
 			return nil, err
 		}

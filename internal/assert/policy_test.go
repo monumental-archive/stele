@@ -41,14 +41,32 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		},
 		{
 			"unparsable epoch",
-			strings.Replace(testPolicyJSON, `"storeVsaFromCanon": "1.13.0"`, `"storeVsaFromCanon": "not-a-version"`, 1),
-			"storeVsaFromCanon",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`, `"storeVsaFromVersion": "not-a-version"`, 1),
+			"storeVsaFromVersion",
 		},
 		{
 			"non-positive population",
-			strings.Replace(testPolicyJSON, `"storeVsaFromCanon": "1.13.0"`,
-				`"storeVsaFromCanon": "1.13.0", "expectedRepos": 0`, 1),
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "expectedRepos": 0`, 1),
 			"expectedRepos",
+		},
+		{
+			"unparsable decision epoch",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "decisionFromVersion": "not-a-version"`, 1),
+			"decisionFromVersion",
+		},
+		{
+			"retired store epoch name refuses with a pointer",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromCanon": "1.13.0"`, 1),
+			"renamed storeVsaFromVersion",
+		},
+		{
+			"retired decision epoch name refuses with a pointer",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "decisionFromCanon": "1.23.1"`, 1),
+			"renamed decisionFromVersion",
 		},
 	}
 

@@ -120,16 +120,17 @@ type emitArgs struct {
 	mode       string
 
 	// chain
-	gitDir    string
-	ref       string
-	rev       string
-	claims    string
-	actor     string
-	actorID   string
-	remote    string
-	genesis   bool
-	policyURI string
-	canonPin  string
+	gitDir          string
+	ref             string
+	rev             string
+	claims          string
+	actor           string
+	actorID         string
+	remote          string
+	genesis         bool
+	policyURI       string
+	machineryPin    string
+	retiredCanonPin string
 
 	// vsa
 	tag       string
@@ -202,8 +203,10 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 	fs.StringVar(&ea.policyPath, "policy", "", "path to the committed verify policy (required)")
 	fs.StringVar(&ea.rootPath, "trusted-root", "", "path to the Sigstore trusted root JSON (required)")
 	fs.StringVar(&ea.repo, "repo", "", "owner/repo being attested (required)")
-	fs.StringVar(&ea.canonPin, "canon-digest", "",
+	fs.StringVar(&ea.machineryPin, "machinery-digest", "",
 		"commit digest the policy tree is pinned at — the VSA's policy.digest (required)")
+	fs.StringVar(&ea.retiredCanonPin, "canon-digest", "",
+		"retired: renamed --machinery-digest (stele#79)")
 	fs.StringVar(&ea.policyURI, "policy-uri", "",
 		"URI where a stranger reads the policy at that pin (required)")
 
@@ -245,6 +248,12 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 		}
 
 		return exitUsage
+	}
+
+	// The retired flag refuses with a pointer, never aliases (#79): a
+	// silently-accepted old spelling is a second name for the same pin.
+	if ea.retiredCanonPin != "" {
+		return fail(errors.New("--canon-digest was renamed --machinery-digest (stele#79)"))
 	}
 
 	owner, repo, ok := strings.Cut(ea.repo, "/")
@@ -374,17 +383,17 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 	defer os.RemoveAll(workDir) //nolint:errcheck // best-effort cleanup of a temp dir
 
 	in := &emit.ChainInputs{
-		Owner:       ea.coords.Owner,
-		Repo:        ea.coords.Repo,
-		Ref:         ea.ref,
-		Rev:         ea.rev,
-		Genesis:     ea.genesis,
-		WorkflowRef: os.Getenv("GITHUB_WORKFLOW_REF"),
-		ActorLogin:  ea.actor,
-		ActorID:     ea.actorID,
-		CanonRef:    ea.canonPin,
-		PolicyURI:   ea.policyURI,
-		Claims:      ea.claimsDoc,
+		Owner:        ea.coords.Owner,
+		Repo:         ea.coords.Repo,
+		Ref:          ea.ref,
+		Rev:          ea.rev,
+		Genesis:      ea.genesis,
+		WorkflowRef:  os.Getenv("GITHUB_WORKFLOW_REF"),
+		ActorLogin:   ea.actor,
+		ActorID:      ea.actorID,
+		MachineryRef: ea.machineryPin,
+		PolicyURI:    ea.policyURI,
+		Claims:       ea.claimsDoc,
 	}
 
 	return emit.Chain(ea.p, in, g, newSigner(workDir), ea.bv, emitNow, out.logf)
@@ -393,7 +402,7 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 // runEmitVSA verifies the release in full and renders the verdict
 // predicate — written whole or not at all.
 func runEmitVSA(ea *emitArgs, out *latch) error {
-	pins := verify.Pins{Signer: ea.signerPin, Canon: ea.canonPin}
+	pins := verify.Pins{Signer: ea.signerPin, Machinery: ea.machineryPin}
 
 	verdict, err := verify.Release(ea.p, ea.coords, ea.subjectList, ea.sbomList, pins, newStore(), ea.bv, out.logf)
 	if err != nil {
@@ -408,7 +417,7 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 
 	when := emitNow().UTC().Truncate(time.Second).Format(time.RFC3339)
 
-	pred, err := verdict.VSAPredicate(ea.p, ea.coords, ea.policyURI, ea.canonPin, when)
+	pred, err := verdict.VSAPredicate(ea.p, ea.coords, ea.policyURI, ea.machineryPin, when)
 	if err != nil {
 		return err
 	}

@@ -26,8 +26,8 @@ func newVSAWorld() *vsaWorld {
 	w := &vsaWorld{
 		appSHA:   appSHA,
 		subjects: []verify.Subject{{Name: "app.tar.gz", SHA256: appSHA}},
-		san:      "https://github.com/" + verifierWF + "@" + canonPin,
-		pin:      canonPin,
+		san:      "https://github.com/" + verifierWF + "@" + machineryPin,
+		pin:      machineryPin,
 	}
 
 	w.stmt = map[string]any{
@@ -134,7 +134,7 @@ func TestVSARefusals(t *testing.T) {
 	}{
 		{
 			"verdict signed under another identity",
-			func(w *vsaWorld) { w.san = "https://github.com/mallory/canon/v.yml@" + canonPin },
+			func(w *vsaWorld) { w.san = "https://github.com/mallory/canon/v.yml@" + machineryPin },
 			"verdict bundle refused",
 		},
 		{
@@ -256,7 +256,7 @@ func TestReleaseDivergentPeek(t *testing.T) {
 			Stmt:     mustJSON(t, foreign),
 			PeekStmt: mustJSON(t, w.decStmt),
 			SAN:      w.decSAN, Issuer: issuer, Digests: []string{w.sbomSHA},
-			Ext: certificate.Extensions{BuildSignerDigest: canonPin},
+			Ext: certificate.Extensions{BuildSignerDigest: machineryPin},
 		}).bytes(t)
 		w.store.bundles[w.sbomSHA] = []verify.StoredBundle{w.store.bundles[w.sbomSHA][0], {URI: "u", Bundle: bundle}}
 

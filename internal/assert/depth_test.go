@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	canonPin40  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	signerPin40 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	tagSHA40    = "cccccccccccccccccccccccccccccccccccccccc"
+	machineryPin40 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	signerPin40    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	tagSHA40       = "cccccccccccccccccccccccccccccccccccccccc"
 )
 
 // fakeDeep scripts the verify engine seam and records the pins each
@@ -66,8 +66,8 @@ func deepForge() *fakeForge {
 		strings.Repeat("e", 64) + "  evidence-manifest.json\n"
 	f.files = map[string]string{
 		"widget:v1.0.0:.github/workflows/publish.yml": "jobs:\n  publish:\n" +
-			"    uses: acme/canon/.github/workflows/publish.yml@" + canonPin40 + " # v1.2.3\n",
-		"canon:" + canonPin40 + ":.github/workflows/publish.yml": "jobs:\n  sign:\n" +
+			"    uses: acme/canon/.github/workflows/publish.yml@" + machineryPin40 + " # v1.2.3\n",
+		"canon:" + machineryPin40 + ":.github/workflows/publish.yml": "jobs:\n  sign:\n" +
 			"    uses: acme/signer/.github/workflows/sign.yml@" + signerPin40 + "\n",
 	}
 
@@ -86,7 +86,8 @@ func runDeepWalk(t *testing.T, f *fakeForge, deep *fakeDeep) *report.Report {
 	pol := loadTestPolicy(t)
 	src := assert.Sources{assert.ManifestSource{Forge: f, Asset: "evidence-manifest.json"}}
 
-	rep, err := assert.Evidence(pol, "acme", f, src, &fakeAttestor{}, nil, nil, full, func(string, ...any) {})
+	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+		func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestDepthFull(t *testing.T) {
 			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
 		}
 
-		want := verify.Pins{Canon: canonPin40, Signer: signerPin40}
+		want := verify.Pins{Machinery: machineryPin40, Signer: signerPin40}
 		if len(deep.releasePins) != 1 || deep.releasePins[0] != want {
 			t.Fatalf("release pins = %+v, want %+v — the two-hop derivation is the contract",
 				deep.releasePins, want)
@@ -132,7 +133,7 @@ func TestDepthFull(t *testing.T) {
 		f.assets["canon@v1.0.0"] = f.assets["widget@v1.0.0"]
 		f.assetBytes["canon@v1.0.0"] = f.assetBytes["widget@v1.0.0"]
 		f.tagCommits = map[string]string{"v1.0.0": tagSHA40}
-		canonWF := f.files["canon:"+canonPin40+":.github/workflows/publish.yml"]
+		canonWF := f.files["canon:"+machineryPin40+":.github/workflows/publish.yml"]
 		f.files["canon:"+tagSHA40+":.github/workflows/publish.yml"] = canonWF
 
 		deep := &fakeDeep{}
@@ -142,7 +143,7 @@ func TestDepthFull(t *testing.T) {
 			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
 		}
 
-		want := verify.Pins{Canon: tagSHA40, Signer: signerPin40}
+		want := verify.Pins{Machinery: tagSHA40, Signer: signerPin40}
 		if len(deep.releasePins) != 1 || deep.releasePins[0] != want {
 			t.Fatalf("release pins = %+v, want the tag commit %+v", deep.releasePins, want)
 		}
@@ -243,7 +244,7 @@ func TestDepthFullRefusals(t *testing.T) {
 		t.Parallel()
 
 		f := deepForge()
-		f.files["canon:"+canonPin40+":.github/workflows/publish.yml"] = "jobs: {}\n"
+		f.files["canon:"+machineryPin40+":.github/workflows/publish.yml"] = "jobs: {}\n"
 
 		rep := runDeepWalk(t, f, &fakeDeep{})
 		if rep.Verdict() != report.VerdictFail {
@@ -280,12 +281,12 @@ func TestDepthFullBounds(t *testing.T) {
 		t.Parallel()
 
 		// The workflow adapter carries the canon version; a pin older
-		// than decisionFromCanon must reach the engine with the
+		// than decisionFromVersion must reach the engine with the
 		// decision obligation OFF — grandfathered history verifies
 		// what it can prove, decided by policy data, never a try-each.
 		polJSON := strings.Replace(testPolicyJSON,
-			`"storeVsaFromCanon": "1.13.0",`,
-			`"storeVsaFromCanon": "1.13.0", "decisionFromCanon": "1.23.1",`, 1)
+			`"storeVsaFromVersion": "1.13.0",`,
+			`"storeVsaFromVersion": "1.13.0", "decisionFromVersion": "1.23.1",`, 1)
 
 		pol, err := assert.LoadPolicy(strings.NewReader(polJSON))
 		if err != nil {
@@ -296,7 +297,7 @@ func TestDepthFullBounds(t *testing.T) {
 		delete(f.assetBytes["widget@v1.0.0"], "evidence-manifest.json")
 		f.files["widget:v1.0.0:.github/workflows/publish.yml"] = "jobs:\n  publish:\n" +
 			"    with:\n      classes: oci-image\n" +
-			"    uses: acme/canon/.github/workflows/publish.yml@" + canonPin40 + " # v1.20.0\n"
+			"    uses: acme/canon/.github/workflows/publish.yml@" + machineryPin40 + " # v1.20.0\n"
 
 		deep := &fakeDeep{}
 		full, err := assert.NewFullDepth(deep,
@@ -307,7 +308,8 @@ func TestDepthFullBounds(t *testing.T) {
 
 		src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-		rep, rerr := assert.Evidence(pol, "acme", f, src, &fakeAttestor{}, nil, nil, full, func(string, ...any) {})
+		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+			func(string, ...any) {})
 		if rerr != nil {
 			t.Fatal(rerr)
 		}

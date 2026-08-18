@@ -167,7 +167,7 @@ func TestVerifyVSAPasses(t *testing.T) {
 		"verify", "vsa",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitOK {
@@ -190,7 +190,7 @@ func TestVerifyRefusalExitsOne(t *testing.T) {
 		"verify", "release",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects, "--sboms", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitRefused {
@@ -233,6 +233,15 @@ func TestVerifyUsageRefusals(t *testing.T) {
 		{"no mode", []string{"verify"}, "a mode is required"},
 		{"unknown mode", []string{"verify", "conjure"}, "unknown mode"},
 		{"bad flag", []string{"verify", "chain", "--conjure"}, ""},
+		{
+			"retired canon-digest flag refuses with a pointer",
+			[]string{
+				"verify", "vsa", "--repo", "acme/widget",
+				"--policy", px.policy, "--trusted-root", px.root,
+				"--canon-digest", strings.Repeat("b", 40),
+			},
+			"renamed --machinery-digest",
+		},
 		{
 			"repo not owner/repo",
 			[]string{"verify", "chain", "--policy", px.policy, "--trusted-root", px.root, "--repo", "solo"},
@@ -309,7 +318,7 @@ func TestVerifyManifestRefusals(t *testing.T) {
 		"verify", "vsa",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", bad,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitUsage || !strings.Contains(stderr.String(), "not a sha256sum record") {
@@ -326,7 +335,7 @@ func TestVerifyOutputFailures(t *testing.T) {
 		"verify", "vsa",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}
 
 	t.Run("dead stdout during a passing run", func(t *testing.T) {
@@ -408,7 +417,7 @@ func TestVerifyVSAJSONPasses(t *testing.T) {
 		"verify", "vsa", "--json",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitOK {
@@ -448,7 +457,7 @@ func TestVerifyJSONRefusal(t *testing.T) {
 		"verify", "vsa", "--json",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, &stdout, &stderr)
 
 	if code != exitRefused {
@@ -480,7 +489,7 @@ func TestVerifyJSONDeadStdout(t *testing.T) {
 		"verify", "vsa", "--json",
 		"--policy", px.policy, "--trusted-root", px.root,
 		"--repo", "acme/widget", "--tag", "v1.2.3", "--subjects", px.subjects,
-		"--signer-digest", strings.Repeat("a", 40), "--canon-digest", strings.Repeat("b", 40),
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
 	}, failWriterI{}, &stderr)
 
 	if code != exitIO {
