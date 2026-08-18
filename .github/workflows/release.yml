@@ -48,10 +48,10 @@ jobs:
     permissions:
       # Required, and easy to omit. A `uses:` job with no `permissions:`
       # block inherits the WORKFLOW-level default — `permissions: {}` above
-      # — not some ambient grant. git-cliff reads the repository's commits
-      # through the GitHub API, so the shared workflow needs this; without
-      # it the run dies as startup_failure with no jobs and no log.
-      contents: read # git-cliff's API calls, and the checkout
+      # — not some ambient grant. The shared workflow reads this
+      # repository's commits to derive the version, so it needs this;
+      # without it the run dies as startup_failure with no jobs and no log.
+      contents: read # the version derivation's history read, and the checkout
       id-token: write # gitsign's keyless signature on the release tag (#349 S4)
     secrets:
       app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
