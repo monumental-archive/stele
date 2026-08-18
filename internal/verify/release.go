@@ -124,6 +124,13 @@ func Release(
 	p *policy.Policy, c Coords, subjects, sboms []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf,
 ) (*ReleaseVerdict, error) {
+	// No declared decision obligation: the release proves what the
+	// policy asks of it — the provenance half whole, nothing invented
+	// beyond it. Deterministic on the policy, never a try-each.
+	if p.Trust.Decision == nil {
+		return ReleaseProvenance(p, c, subjects, pins, store, bv, log)
+	}
+
 	if err := validateSubjects(sboms); err != nil {
 		return nil, fmt.Errorf("%w — the decision has no subject to verify against", err)
 	}

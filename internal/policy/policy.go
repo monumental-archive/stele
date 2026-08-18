@@ -217,8 +217,14 @@ func (p *Policy) validateTrust() error {
 		}
 	}
 
+	// The decision section is OPTIONAL: a release decision is an
+	// obligation an org declares, not a precondition of using the
+	// verifier — a fresh adopter (or a single repository) picks the
+	// tool up with no such mechanism and must still be able to write
+	// a valid policy. Absent means the obligation does not exist;
+	// declared means every field of it, validated strictly.
 	if p.Trust.Decision == nil {
-		return errors.New("trust.decision is absent")
+		return nil
 	}
 
 	if err := workflowField("trust.decision.signerWorkflow", p.Trust.Decision.SignerWorkflow); err != nil {
