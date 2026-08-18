@@ -6,14 +6,11 @@ package cli
 
 import (
 	"debug/buildinfo"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"runtime/debug"
 
-	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/sbom"
 )
 
@@ -67,7 +64,7 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 
 // runDeriveSBOM reads every leg, derives the union document, and
 // writes it where asked.
-func runDeriveSBOM(sa *sbomArgs, out *latch) error {
+func runDeriveSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	bins := make([]sbom.Binary, 0, len(sa.binaries))
 
 	for _, path := range sa.binaries {
@@ -79,12 +76,12 @@ func runDeriveSBOM(sa *sbomArgs, out *latch) error {
 		bins = append(bins, sbom.Binary{Name: path, Info: info})
 	}
 
-	doc, err := sbom.Derive(bins, "stele-"+selfVersion())
+	document, err := sbom.Derive(bins, "stele-"+selfVersion())
 	if err != nil {
 		return err
 	}
 
-	root := doc.Packages[0]
+	root := document.Packages[0]
 
 	// The cross-check, not the source: the version in the document came
 	// from the artifact, and the pipeline's belief is only allowed to
@@ -101,39 +98,11 @@ func runDeriveSBOM(sa *sbomArgs, out *latch) error {
 		}
 	}
 
-	if err := writeDoc(sa.out, doc, out); err != nil {
+	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
 		return err
 	}
 
-	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(doc.Packages), len(bins))
-
-	return nil
-}
-
-// writeDoc places the document: a named file, or the latch's stream
-// when unnamed — through the latch, so a failed stdout write is the
-// same exitIO every other stream failure is.
-func writeDoc(path string, doc *sbom.Document, out *latch) error {
-	if path == "" {
-		if out.err == nil {
-			out.err = jsonx.Encode(out.w, doc)
-		}
-
-		return nil
-	}
-
-	f, err := os.Create(path) //nolint:gosec // the path is the --out flag; writing where asked is the feature
-	if err != nil {
-		return fmt.Errorf("derive sbom: %w", err)
-	}
-
-	if err := jsonx.Encode(f, doc); err != nil {
-		return errors.Join(err, f.Close())
-	}
-
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("derive sbom: %w", err)
-	}
+	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(document.Packages), len(bins))
 
 	return nil
 }

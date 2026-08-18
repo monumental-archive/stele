@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/dsse"
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -355,12 +356,12 @@ func newWorld(t *testing.T) *world {
 			WorkflowRef: "acme/widget/.github/workflows/source-attest.yml@refs/heads/main",
 			ActorLogin:  "octocat", ActorID: "583231",
 			MachineryRef: machineryPin, PolicyURI: policyURI,
-			Claims: claims([]int64{1000000}, "ORG_SOURCE_GATED", "ORG_SOURCE_SIGNED"),
+			Claims: claimsPayload([]int64{1000000}, "ORG_SOURCE_GATED", "ORG_SOURCE_SIGNED"),
 		},
 	}
 }
 
-func claims(epochs []int64, properties ...string) *emit.Claims {
+func claimsPayload(epochs []int64, properties ...string) *claims.Payload {
 	readAt := "2026-08-15T00:00:00Z"
 	controls := make([]chain.Control, 0, len(properties))
 
@@ -369,7 +370,7 @@ func claims(epochs []int64, properties ...string) *emit.Claims {
 		controls = append(controls, chain.Control{Property: &p, Evidence: jsonx.Raw(`[{"rule":"live"}]`)})
 	}
 
-	return &emit.Claims{RulesReadAt: &readAt, RulesetsUpdatedAt: &epochs, Controls: &controls}
+	return &claims.Payload{RulesReadAt: &readAt, RulesetsUpdatedAt: &epochs, Controls: &controls}
 }
 
 func (w *world) emit(t *testing.T) error {
@@ -627,14 +628,14 @@ func TestChainLevels(t *testing.T) {
 		{
 			"a missing required property under-claims",
 			func(w *world) {
-				w.in.Claims = claims([]int64{1000000}, "ORG_SOURCE_SIGNED")
+				w.in.Claims = claimsPayload([]int64{1000000}, "ORG_SOURCE_SIGNED")
 			},
 			"SLSA_SOURCE_LEVEL_2",
 		},
 		{
 			"a property required only in the future is not required yet",
 			func(w *world) {
-				w.in.Claims = claims([]int64{1000000}, "ORG_SOURCE_GATED")
+				w.in.Claims = claimsPayload([]int64{1000000}, "ORG_SOURCE_GATED")
 			},
 			"SLSA_SOURCE_LEVEL_3",
 		},
@@ -680,7 +681,7 @@ func TestChainHealedContinuity(t *testing.T) {
 
 			w := newWorld(t)
 			w.found(t)
-			w.in.Claims = claims(tt.epochs, "ORG_SOURCE_GATED")
+			w.in.Claims = claimsPayload(tt.epochs, "ORG_SOURCE_GATED")
 
 			// rev4 is the push; rev2 and rev3 are healed. Judge rev2.
 			if err := w.emit(t); err != nil {
@@ -844,28 +845,28 @@ func TestClaimsValidate(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		claims emit.Claims
+		claims claims.Payload
 		want   string
 	}{
-		{"absent rulesReadAt", emit.Claims{RulesetsUpdatedAt: &epochs, Controls: &controls}, "rulesReadAt is absent"},
+		{"absent rulesReadAt", claims.Payload{RulesetsUpdatedAt: &epochs, Controls: &controls}, "rulesReadAt is absent"},
 		{
 			"unparsable rulesReadAt",
-			emit.Claims{RulesReadAt: &badTime, RulesetsUpdatedAt: &epochs, Controls: &controls},
+			claims.Payload{RulesReadAt: &badTime, RulesetsUpdatedAt: &epochs, Controls: &controls},
 			"rulesReadAt",
 		},
 		{
 			"absent rulesetsUpdatedAt",
-			emit.Claims{RulesReadAt: &readAt, Controls: &controls},
+			claims.Payload{RulesReadAt: &readAt, Controls: &controls},
 			"rulesetsUpdatedAt is absent",
 		},
 		{
 			"absent controls",
-			emit.Claims{RulesReadAt: &readAt, RulesetsUpdatedAt: &epochs},
+			claims.Payload{RulesReadAt: &readAt, RulesetsUpdatedAt: &epochs},
 			"controls is absent",
 		},
 		{
 			"control without a property",
-			emit.Claims{
+			claims.Payload{
 				RulesReadAt: &readAt, RulesetsUpdatedAt: &epochs,
 				Controls: &[]chain.Control{{Evidence: jsonx.Raw(`{}`)}},
 			},
@@ -873,7 +874,7 @@ func TestClaimsValidate(t *testing.T) {
 		},
 		{
 			"control without evidence",
-			emit.Claims{
+			claims.Payload{
 				RulesReadAt: &readAt, RulesetsUpdatedAt: &epochs,
 				Controls: &[]chain.Control{{Property: &gated}},
 			},

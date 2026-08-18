@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/dsse"
-	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
@@ -236,7 +236,7 @@ func TestChainRefusesIncompleteClaims(t *testing.T) {
 	t.Parallel()
 
 	w := newWorld(t)
-	w.in.Claims = &emit.Claims{}
+	w.in.Claims = &claims.Payload{}
 	w.in.Genesis = true
 	w.in.Rev = rev1
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
@@ -116,6 +117,11 @@ type Source struct {
 	HealedContinuity        *bool             `json:"healedContinuity"`
 	UnderclaimLevel         *string           `json:"underclaimLevel"`
 	LegacyLeaves            []LegacyLeaf      `json:"legacyLeaves"`
+	// Claims is the frozen control table: what makes each property
+	// live. An obligation like every other section — absent means the
+	// org does not derive claims with this tool. Declared, it is
+	// cross-checked against RequiredProperties below.
+	Claims *claims.Table `json:"claims,omitempty"`
 }
 
 // ProtectedBranch is one branch's target level and the properties
@@ -407,6 +413,10 @@ func (p *Policy) validateSource() error {
 		}
 	}
 
+	if err := p.validateClaims(); err != nil {
+		return err
+	}
+
 	if s.HealedContinuity == nil {
 		return errors.New("source.healedContinuity is absent — the stance is declared, never defaulted")
 	}
@@ -426,6 +436,40 @@ func (p *Policy) validateSource() error {
 
 		if l.Reason == nil || *l.Reason == "" {
 			return fmt.Errorf("source.legacyLeaves[%d].reason is absent or empty — a silent exception is silence", i)
+		}
+	}
+
+	return nil
+}
+
+// validateClaims holds the control table and the cross-check that is
+// this section's reason for existing. A property a branch REQUIRES
+// but the table cannot derive is unclaimable, so that branch can
+// never reach its target level — a permanent silent under-claim,
+// discoverable today only by reading the policy, the org's docs and a
+// shell script together. Here it refuses at load.
+//
+// The converse is deliberately allowed: a property may be derived
+// without being required. Claiming more than the target needs is
+// honest, and an org tightening its policy should not have to
+// choreograph two files in one commit.
+func (p *Policy) validateClaims() error {
+	table := p.Source.Claims
+	if table == nil {
+		return nil
+	}
+
+	if err := table.Validate(); err != nil {
+		return fmt.Errorf("source.%w", err)
+	}
+
+	for i, b := range p.Source.ProtectedBranches {
+		for j, rp := range b.RequiredProperties {
+			if !table.Declares(*rp.Name) {
+				return fmt.Errorf(
+					"source.protectedBranches[%d].requiredProperties[%d] requires %q, which source.claims does"+
+						" not declare — the branch could never reach %s", i, j, *rp.Name, *b.TargetLevel)
+			}
 		}
 	}
 

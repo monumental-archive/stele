@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -143,7 +144,7 @@ type emitArgs struct {
 	subjectList []verify.Subject
 	sbomList    []verify.Subject
 	bv          verify.BundleVerifier
-	claimsDoc   *emit.Claims
+	claimsDoc   *claims.Payload
 }
 
 // emitCmd dispatches `stele emit <mode>`.
@@ -301,7 +302,7 @@ func (ea *emitArgs) loadChain(fail func(error) int) int {
 		return fail(err)
 	}
 
-	ea.claimsDoc, err = jsonx.DecodeBytes[emit.Claims](claimsJSON)
+	ea.claimsDoc, err = jsonx.DecodeBytes[claims.Payload](claimsJSON)
 	if err != nil {
 		return fail(fmt.Errorf("claims payload: %w", err))
 	}

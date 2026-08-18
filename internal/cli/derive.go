@@ -95,7 +95,8 @@ type deriveArgs struct {
 // deriveCmd dispatches `stele derive <mode>`.
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele derive: a mode is required: version, notes, bump or sbom"); err != nil {
+		if _, err := fmt.Fprintln(stderr,
+			"stele derive: a mode is required: version, notes, bump, sbom or claims"); err != nil {
 			return exitIO
 		}
 
@@ -104,13 +105,27 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes, deriveBump, deriveSBOM:
+	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims:
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele derive: unknown mode %q (version, notes, bump, sbom)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr,
+			"stele derive: unknown mode %q (version, notes, bump, sbom, claims)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
+	}
+
+	// claims reads the forge, not a git history: no --git-dir, no
+	// range, nothing in common with the version derivation but the
+	// verb.
+	if mode == deriveClaims {
+		ca, code := parseClaimsArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		return runDeriveMode(ca.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveClaims(ca, doc, log) })
 	}
 
 	// sbom reads binaries, not a git history; it shares nothing with
@@ -121,22 +136,8 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 
-		out := &latch{w: stdout}
-
-		err := runDeriveSBOM(sa, out)
-		if out.err != nil {
-			return exitIO
-		}
-
-		if err != nil {
-			if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
-				return exitIO
-			}
-
-			return exitRefused
-		}
-
-		return exitOK
+		return runDeriveMode(sa.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveSBOM(sa, doc, log) })
 	}
 
 	da, na, bump, code := parseDeriveArgs(mode, args[1:], stderr)
@@ -387,4 +388,39 @@ func reportVersion(prefix string, d *derived, out *latch) error {
 	out.logf("tag=%s", derive.Tag(prefix, next))
 
 	return nil
+}
+
+// runDeriveMode runs one mode that writes its own document, mapping
+// the two failure kinds onto their exit codes: a broken stream is
+// exitIO, a refusal is exitRefused. Shared so a new mode cannot
+// invent a third mapping.
+//
+// It also decides who owns stdout. When the document is going there
+// (no --out), progress moves to stderr: a caller piping the payload
+// into a job output must receive the payload and nothing else, and a
+// progress line in the middle of a JSON document is a corruption that
+// only shows up in production. When the document has a file of its
+// own, progress keeps stdout.
+func runDeriveMode(docPath string, stdout, stderr io.Writer, run func(io.Writer, *latch) error) int {
+	logTo := stdout
+	if docPath == "" {
+		logTo = stderr
+	}
+
+	out := &latch{w: logTo}
+
+	err := run(stdout, out)
+	if out.err != nil {
+		return exitIO
+	}
+
+	if err != nil {
+		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+			return exitIO
+		}
+
+		return exitRefused
+	}
+
+	return exitOK
 }

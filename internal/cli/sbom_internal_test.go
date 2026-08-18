@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
 // releaseInfo is one release-shaped leg, as the toolchain would stamp
@@ -74,15 +76,30 @@ func TestDeriveSBOMPrintsTheUnion(t *testing.T) {
 		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
 	}
 
+	// The document owns stdout when it is going there, so a caller can
+	// pipe it. Progress is on stderr for exactly that reason: a
+	// progress line spliced into a JSON document is a corruption that
+	// only surfaces in production.
 	text := stdout.String()
 	for _, want := range []string{
 		`"spdxVersion":"SPDX-2.3"`,
 		"pkg:golang/github.com/monumental-archive/stele@v0.3.0",
-		"github.com/monumental-archive/stele@v0.3.0: 2 packages, 2 platform(s)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, text)
 		}
+	}
+
+	if strings.Contains(text, "2 packages, 2 platform(s)") {
+		t.Errorf("progress polluted the document stream:\n%s", text)
+	}
+
+	if !strings.Contains(stderr.String(), "github.com/monumental-archive/stele@v0.3.0: 2 packages, 2 platform(s)") {
+		t.Errorf("stderr lacks the progress line:\n%s", stderr.String())
+	}
+
+	if _, err := jsonx.DecodeBytes[jsonx.Raw](stdout.Bytes()); err != nil {
+		t.Errorf("stdout is not exactly one JSON document: %v", err)
 	}
 }
 

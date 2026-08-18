@@ -103,6 +103,10 @@ usage:
     sbom      the release SBOM, read from the shipped binaries'
               embedded module lists (SPDX 2.3, one union document
               over every platform leg)
+    claims    the control claims for one branch, matched by RULE
+              CONTENT against the forge's live enforcement state
+              through the policy's declared table; a lapsed control
+              is absent, an unreadable one refuses
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge:
@@ -130,8 +134,10 @@ usage:
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
 
-derive sbom flags: [--out --expect-version] <binary>...; the other
-derive modes take --git-dir [--ref --tag-prefix --paths --minor-types
+derive sbom flags: [--out --expect-version] <binary>...; derive claims
+takes --policy --repo --branch [--canon-root --canon-digest --out
+--snapshot|--capture]; the other derive modes take --git-dir [--ref
+--tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
 --date --changelog]; bump adds [--check --date].
