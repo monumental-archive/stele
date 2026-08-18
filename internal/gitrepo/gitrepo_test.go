@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,9 +36,7 @@ func repo(t *testing.T) fixture {
 
 		cmd := exec.Command("git", //nolint:gosec,noctx // fixed executable, test-owned args
 			append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null",
-			"GIT_CONFIG_SYSTEM=/dev/null",
+		cmd.Env = gitrepo.Env(
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
@@ -408,9 +407,7 @@ func gitCmd(t *testing.T, dir string) func(args ...string) string {
 
 		cmd := exec.Command("git", //nolint:gosec,noctx // fixed executable, test-owned args
 			append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null",
-			"GIT_CONFIG_SYSTEM=/dev/null",
+		cmd.Env = gitrepo.Env(
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
@@ -495,5 +492,73 @@ func TestPreflightProofs(t *testing.T) {
 		if perr := bare.DryRunPushNotes("origin", "", fx.tip); perr == nil {
 			t.Fatal("a repository with no notes ref proved a push")
 		}
+	}
+}
+
+// TestEnvScrubsRepoLocators pins the hook-safety guarantee: every
+// environment variable through which git resolves a repository
+// independently of `-C dir` is removed, one table row per variable.
+// A git hook exports GIT_DIR, and the belt's pre-push runs this
+// suite — an inherited locator silently redirects every fixture
+// command into the REAL repository (observed live: fixture commits
+// landing on a work branch during push, stele#101's PR).
+func TestEnvScrubsRepoLocators(t *testing.T) {
+	locators := []string{
+		"GIT_DIR",
+		"GIT_WORK_TREE",
+		"GIT_INDEX_FILE",
+		"GIT_OBJECT_DIRECTORY",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"GIT_COMMON_DIR",
+		"GIT_NAMESPACE",
+		"GIT_PREFIX",
+	}
+
+	for _, name := range locators {
+		t.Run(name, func(t *testing.T) { //nolint:paralleltest // t.Setenv forbids parallel
+			t.Setenv(name, "/decoy")
+
+			for _, kv := range gitrepo.Env() {
+				if strings.HasPrefix(kv, name+"=") {
+					t.Fatalf("Env() carries %s — a hook's repository would hijack -C", kv)
+				}
+			}
+		})
+	}
+}
+
+// TestEnvExtrasAndPins proves the config pins survive and extras
+// append after them, so a caller's override wins.
+func TestEnvExtrasAndPins(t *testing.T) {
+	t.Parallel()
+
+	env := gitrepo.Env("GIT_AUTHOR_NAME=t")
+
+	for _, want := range []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_AUTHOR_NAME=t"} {
+		if !slices.Contains(env, want) {
+			t.Errorf("Env() lacks %s", want)
+		}
+	}
+}
+
+// TestEnvHookedGitStaysInDir is the behavioural half: with GIT_DIR
+// pointing at a decoy repository (a hook's environment), a fixture
+// git still operates on the -C directory and the decoy stays empty.
+func TestEnvHookedGitStaysInDir(t *testing.T) { //nolint:paralleltest // t.Setenv forbids parallel
+	decoy := t.TempDir()
+	fx := repo(t)
+
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+
+	git := gitCmd(t, fx.dir)
+	git("commit", "-q", "--allow-empty", "-m", "chore: stay home")
+
+	tip := strings.TrimSpace(git("rev-parse", "HEAD"))
+	if strings.TrimSpace(git("log", "-1", "--format=%s")) != "chore: stay home" || tip == fx.tip {
+		t.Fatal("the commit did not land in the -C repository")
+	}
+
+	if _, err := os.Stat(filepath.Join(decoy, ".git")); err == nil {
+		t.Fatal("the decoy GIT_DIR was written — the hook's repository would have been vandalised")
 	}
 }

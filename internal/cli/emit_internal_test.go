@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/emit"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 )
 
 const emitRev = "1111111111111111111111111111111111111111"
@@ -370,8 +371,7 @@ func TestEmitGitWrapper(t *testing.T) {
 		t.Helper()
 
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec,noctx // test-owned args
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		cmd.Env = gitrepo.Env(
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e",
 		)
 
@@ -386,6 +386,7 @@ func TestEmitGitWrapper(t *testing.T) {
 
 	remote := t.TempDir()
 	run2 := exec.Command("git", "-C", remote, "init", "-q", "--bare") //nolint:gosec,noctx // test-owned args
+	run2.Env = gitrepo.Env()
 	if out, err := run2.CombinedOutput(); err != nil {
 		t.Fatalf("git init --bare: %v: %s", err, out)
 	}
@@ -473,6 +474,7 @@ func TestEmitGitPreflightAdapters(t *testing.T) {
 		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "seed"},
 	} {
 		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // test fixture
+		cmd.Env = gitrepo.Env()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}

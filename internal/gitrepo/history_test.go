@@ -64,9 +64,7 @@ func gitIn(t *testing.T, dir string) func(args ...string) string {
 
 		cmd := exec.Command("git", //nolint:gosec,noctx // fixed executable, test-owned args
 			append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null",
-			"GIT_CONFIG_SYSTEM=/dev/null",
+		cmd.Env = gitrepo.Env(
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
