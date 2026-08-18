@@ -8,12 +8,20 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2/unstable"
 )
+
+// workspaceTable is Cargo's inheritance root: fields under
+// [workspace.package] are what members inherit with `field.workspace
+// = true`.
+const workspaceTable = "workspace"
 
 // record is one key/value the walk saw: the full dotted key (table
 // prefix included) and the value node's location. Inline tables expand
@@ -36,7 +44,7 @@ func cargoSites(data []byte) (string, []Site, error) {
 		return "", nil, err
 	}
 
-	if site, ok := versionSite(records, "workspace", "package"); ok {
+	if site, ok := versionSite(records, workspaceTable, "package"); ok {
 		sites := append([]Site{site}, dependencySites(records)...)
 
 		return KindCargoWorkspace, sites, nil
@@ -90,7 +98,7 @@ func dependencySites(records []record) []Site {
 	hasPath := make(map[string]bool)
 
 	for _, r := range records {
-		if len(r.key) == prefixLen+2 && r.key[0] == "workspace" && r.key[1] == "dependencies" &&
+		if len(r.key) == prefixLen+2 && r.key[0] == workspaceTable && r.key[1] == "dependencies" &&
 			r.key[3] == "path" {
 			hasPath[r.key[2]] = true
 		}
@@ -99,7 +107,7 @@ func dependencySites(records []record) []Site {
 	var sites []Site
 
 	for _, r := range records {
-		if len(r.key) == prefixLen+2 && r.key[0] == "workspace" && r.key[1] == "dependencies" &&
+		if len(r.key) == prefixLen+2 && r.key[0] == workspaceTable && r.key[1] == "dependencies" &&
 			r.key[3] == "version" && hasPath[r.key[2]] {
 			sites = append(sites, Site{
 				Path:   cargoFile,
@@ -189,4 +197,57 @@ func keyParts(it unstable.Iterator) []string {
 	}
 
 	return parts
+}
+
+// CargoPackageField reads one string field of a tree's Cargo.toml
+// package table, preferring `[workspace.package]` over `[package]` —
+// Cargo's own inheritance order, so a workspace member inheriting
+// `license.workspace = true` resolves to the same value Cargo would
+// give it.
+//
+// ok is false when the tree has no Cargo.toml, or has one that
+// declares the field in neither table. Absence is an answer here: a
+// repository with no manifest is a legitimate shape, and the caller
+// decides what to do about it.
+//
+// It goes through this package's one Cargo reader rather than a
+// second parse, so a manifest spelling `derive bump` understands and
+// a manifest the facts resolver understands cannot diverge. The
+// alternative — the bash's — is `taplo get` in one place and version
+// regexes in another.
+//
+//nolint:gocritic // unnamedResult: the value, whether it was declared, and any error
+func CargoPackageField(root, field string) (string, bool, error) {
+	data, err := os.ReadFile(filepath.Join(root, cargoFile)) //nolint:gosec // a tree the operator named
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("manifest: reading %s: %w", cargoFile, err)
+	}
+
+	records, err := cargoRecords(data)
+	if err != nil {
+		return "", false, err
+	}
+
+	for _, table := range [][]string{{workspaceTable, "package"}, {"package"}} {
+		if value, ok := stringField(records, append(table, field)); ok {
+			return value, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// stringField finds one string-valued key by its full dotted path.
+func stringField(records []record, key []string) (string, bool) {
+	for _, r := range records {
+		if r.kind == unstable.String && slices.Equal(r.key, key) {
+			return r.value, true
+		}
+	}
+
+	return "", false
 }

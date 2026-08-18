@@ -96,7 +96,7 @@ type deriveArgs struct {
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele derive: a mode is required: version, notes, bump, sbom or claims"); err != nil {
+			"stele derive: a mode is required: version, notes, bump, sbom, claims or facts"); err != nil {
 			return exitIO
 		}
 
@@ -105,14 +105,27 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims:
+	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims, deriveFacts:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele derive: unknown mode %q (version, notes, bump, sbom, claims)\n", mode); err != nil {
+			"stele derive: unknown mode %q (version, notes, bump, sbom, claims, facts)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
+	}
+
+	// facts reads a named checkout and the forge, and reports
+	// key=value lines rather than a document.
+	if mode == deriveFacts {
+		fa, code := parseFactsArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		out := &latch{w: stdout}
+
+		return finishDerive(runDeriveFacts(fa, out), out, stderr)
 	}
 
 	// claims reads the forge, not a git history: no --git-dir, no
@@ -147,7 +160,13 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	out := &latch{w: stdout}
 
-	err := runDerive(mode, da, na, bump, out)
+	return finishDerive(runDerive(mode, da, na, bump, out), out, stderr)
+}
+
+// finishDerive maps one mode's outcome onto its exit code: a broken
+// stream is exitIO, a refusal is exitRefused. Shared so a new mode
+// cannot invent a third mapping.
+func finishDerive(err error, out *latch, stderr io.Writer) int {
 	if out.err != nil {
 		return exitIO
 	}
@@ -409,18 +428,5 @@ func runDeriveMode(docPath string, stdout, stderr io.Writer, run func(io.Writer,
 
 	out := &latch{w: logTo}
 
-	err := run(stdout, out)
-	if out.err != nil {
-		return exitIO
-	}
-
-	if err != nil {
-		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
-			return exitIO
-		}
-
-		return exitRefused
-	}
-
-	return exitOK
+	return finishDerive(run(stdout, out), out, stderr)
 }

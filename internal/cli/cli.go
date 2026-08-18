@@ -103,6 +103,10 @@ usage:
     sbom      the release SBOM, read from the shipped binaries'
               embedded module lists (SPDX 2.3, one union document
               over every platform leg)
+    facts     the OCI image metadata one release asserts on its
+              images: provenance from the released commit and the
+              forge, editorial with derived defaults, licence
+              validated as an SPDX expression and shipped canonical
     claims    the control claims for one branch, matched by RULE
               CONTENT against the forge's live enforcement state
               through the policy's declared table; a lapsed control
@@ -136,7 +140,9 @@ usage:
 
 derive sbom flags: [--out --expect-version] <binary>...; derive claims
 takes --policy --repo --branch [--canon-root --canon-digest --out
---snapshot|--capture]; the other derive modes take --git-dir [--ref
+--snapshot|--capture]; derive facts takes --archetype --repo --git-dir
+[--version --rev --tree --server-url --title --description]; the other
+derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
