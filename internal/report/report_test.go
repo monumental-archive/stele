@@ -324,3 +324,29 @@ func TestEncodeWriteFailure(t *testing.T) {
 		t.Fatal("a failed write did not surface")
 	}
 }
+
+// TestFindingsAreTheUnexcusedOnes pins both halves of the accessor's
+// contract: an excused finding is not a finding, and the slice handed
+// out is a copy — a caller that mutates it cannot rewrite a sealed
+// report.
+func TestFindingsAreTheUnexcusedOnes(t *testing.T) {
+	t.Parallel()
+
+	r := report.Seal("target", "subject",
+		report.PopulationFromEvidence(2, "subjects"),
+		[]report.Finding{finding("a", "unexcused"), finding("b", "excused")},
+		[]report.Exception{report.Declared("b", "excused", "debt.txt:1")},
+		report.NoCanary(),
+	)
+
+	got := r.Findings()
+	if len(got) != 1 || got[0].Subject != "a" {
+		t.Fatalf("Findings = %+v, want only the unexcused one", got)
+	}
+
+	got[0].Subject = "rewritten"
+
+	if again := r.Findings(); again[0].Subject != "a" {
+		t.Fatalf("Findings = %+v after a caller mutated the copy — the sealed report moved", again)
+	}
+}

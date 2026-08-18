@@ -8,28 +8,36 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/osv"
 )
 
-// scriptScanner writes a stand-in scanner script with the given exit
-// code and returns a Runner pointed at it.
-func scriptScanner(t *testing.T, exit int) osv.Runner {
+// scannerDir writes a stand-in scanner script with the given exit
+// code into a fresh directory, under the name the belt installs, and
+// returns the directory — so the same world serves both a Runner
+// pointed at an explicit path and a PATH lookup.
+func scannerDir(t *testing.T, exit int) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "osv-scanner")
-	script := "#!/bin/sh\necho '{\"results\": []}'\nexit " + string(rune('0'+exit%10))
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho '{\"results\": []}'\nexit " + strconv.Itoa(exit)
 
-	if exit >= 10 {
-		script = "#!/bin/sh\necho '{\"results\": []}'\nexit 128"
-	}
-
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // a test script must execute
+	//nolint:gosec // a test script must execute
+	if err := os.WriteFile(filepath.Join(dir, "osv-scanner"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	return osv.Runner{Bin: path}
+	return dir
+}
+
+// scriptScanner returns a Runner pointed at that stand-in by path.
+func scriptScanner(t *testing.T, exit int) osv.Runner {
+	t.Helper()
+
+	return osv.Runner{Bin: filepath.Join(scannerDir(t, exit), "osv-scanner")}
 }
 
 func TestRunnerExitContract(t *testing.T) {
@@ -52,5 +60,30 @@ func TestRunnerExitContract(t *testing.T) {
 
 	if _, err := (osv.Runner{Bin: "/no/such/scanner"}).Scan([]byte("{}")); err == nil {
 		t.Fatal("a missing binary did not refuse")
+	}
+}
+
+// TestRunnerDefaultsToPATH pins the zero-value Runner's stance: an
+// unset Bin is the binary the belt installs, resolved from PATH — not
+// an empty argv[0] the exec layer would refuse before any scan.
+func TestRunnerDefaultsToPATH(t *testing.T) {
+	t.Setenv("PATH", scannerDir(t, 0))
+
+	out, err := (osv.Runner{}).Scan([]byte("{}"))
+	if err != nil || len(out) == 0 {
+		t.Fatalf("Scan = %q, %v — an unset Bin must resolve osv-scanner from PATH", out, err)
+	}
+}
+
+// TestRunnerRefusesUnwritableScratch: the scanner reads paths, so an
+// SBOM that never reaches a scratch file is a fault BEFORE the scan —
+// never a scan of nothing reported clean.
+func TestRunnerRefusesUnwritableScratch(t *testing.T) {
+	scanner := scriptScanner(t, 0)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "absent"))
+
+	_, err := scanner.Scan([]byte("{}"))
+	if err == nil || !strings.Contains(err.Error(), "scratch file") {
+		t.Fatalf("Scan = %v, want the scratch-file refusal", err)
 	}
 }
