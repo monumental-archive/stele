@@ -20,6 +20,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/ghstore"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/trust"
@@ -278,9 +279,10 @@ func gitWorld(t *testing.T) string {
 
 		cmd := exec.Command("git", //nolint:gosec,noctx // fixed executable, test-owned args
 			append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null",
-			"GIT_CONFIG_SYSTEM=/dev/null",
+		// gitrepo.Env, never os.Environ: a hook exporting GIT_DIR
+		// overrides -C outright, and a fixture that inherited one
+		// commits its scratch history onto the real branch (#101).
+		cmd.Env = gitrepo.Env(
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
