@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352
+	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
 	github.com/google/go-containerregistry v0.21.9
 	github.com/sigstore/sigstore-go v1.3.0
 	golang.org/x/mod v0.39.0
