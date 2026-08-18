@@ -204,7 +204,9 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 	if mode == deriveBump {
 		fs.BoolVar(&bump.check, "check", false,
 			"assert every mirror carries the version last released, rewriting nothing; "+
-				"the drift gate a CI run holds between releases")
+				"the drift gate a CI run holds between releases. Mirrors carrying exactly "+
+				"the version this range derives are the release being cut (check=pending), "+
+				"not drift")
 		fs.StringVar(&bump.date, "date", "",
 			"release date for CITATION.cff's date-released; defaults to the committer date of --ref, never a wall clock")
 	}
