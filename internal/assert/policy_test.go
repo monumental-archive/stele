@@ -17,24 +17,24 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 2`, `"schema": 3`, 1), "schema"},
-		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 2`, `"schema": 2, "extra": true`, 1), "unknown"},
+		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 3`, `"schema": 4`, 1), "schema"},
+		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 3`, `"schema": 3, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",
-			`{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt", "classes": {}}}`,
 			"classes is empty",
 		},
 		{
 			"a class requiring nothing",
-			`{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 			  "classes": {"idle": {"bundles": []}}}}`,
 			"requires nothing",
 		},
 		{
 			"missing required string",
-			`{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
 			  "classes": {"a": {"bundles": ["b"]}}}}`,
 			"debtFile",
@@ -62,7 +62,7 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		{
 			"a pre-rename policy refuses as a version error",
 			strings.NewReplacer(
-				`"schema": 2`, `"schema": 1`,
+				`"schema": 3`, `"schema": 1`,
 				`"storeVsaFromVersion": "1.13.0"`, `"storeVsaFromCanon": "1.13.0"`,
 			).Replace(testPolicyJSON),
 			"not the implemented schema",
@@ -105,7 +105,7 @@ func TestParseDebt(t *testing.T) {
 func TestTagsPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	const base = `{"schema": 2, "issuer": "https://token.example.com",
+	const base = `{"schema": 3, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 	    "classes": {"a": {"bundles": ["b"]}}},

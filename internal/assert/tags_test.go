@@ -15,7 +15,7 @@ import (
 )
 
 const tagsPolicyJSON = `{
-  "schema": 2,
+  "schema": 3,
   "issuer": "https://token.example.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",

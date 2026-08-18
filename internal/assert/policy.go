@@ -19,12 +19,14 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
-// PolicySchema is the one schema version this implementation reads —
-// any other is refused, never best-efforted. Schema 1 is the pre-#84
-// vocabulary (`storeVsaFromCanon` and kin); #84's renames were a
-// key-set change, which moves the identifier (docs/versioning.md),
-// so the current vocabulary is 2.
-const PolicySchema = 2
+// PolicySchema is the document epoch this implementation reads — any
+// other is refused, never best-efforted. It is the SAME number the
+// verify policy and the report carry: one epoch across every
+// live-read stele document (docs/versioning.md), so a bump can never
+// land on one document and miss another, which is the drift
+// stele#107 found. The pre-#84 vocabulary (`storeVsaFromCanon` and
+// kin) is refused here as a version, not as a field typo.
+const PolicySchema = 3
 
 // Policy is the committed assert policy. Constructor: LoadPolicy.
 type Policy struct {

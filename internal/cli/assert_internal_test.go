@@ -239,7 +239,7 @@ func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snap
 			`"classes": ["oci-image"], "storeVsa": true}`,
 		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
 		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
-		"policy.json": `{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", "debtFile": "no-such-debt.txt", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
@@ -336,7 +336,7 @@ func blastSnapshot(t *testing.T) (string, string, string) {
 		"snap/acme/widget/releases/v1.0.0/assets.json":          `["app.spdx.json"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,
 		"snap/acme/widget/attestations/" + digest + ".json":     `[{"bundle": 1}]`,
-		"policy.json": `{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", "debtFile": "no-such-debt.txt", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
@@ -620,7 +620,7 @@ func storeSnapshot(t *testing.T) (string, string) {
 	dir := filepath.Dir(snap)
 	policy := filepath.Join(dir, "store-policy.json")
 
-	content := `{"schema": 2, "issuer": "https://token.actions.githubusercontent.com",
+	content := `{"schema": 3, "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "debtFile": "no-such-debt.txt",
@@ -808,7 +808,7 @@ func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot
 		"snap/acme/widget/commits/" + target + ".json": `{"Parents": ["` +
 			genesis + `"], "CommitEpoch": 200}`,
 		"snap/acme/widget/ancestry/" + genesis + "..." + target + ".json": `true`,
-		"policy.json": `{"schema": 2, "issuer": "https://token.example.com", ` +
+		"policy.json": `{"schema": 3, "issuer": "https://token.example.com", ` +
 			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
 			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
 			`"debtFile": "no-such-debt.txt", ` +
@@ -951,7 +951,7 @@ func TestNewTagVerifier(t *testing.T) {
 func TestAssertTagsPolicyWithoutSection(t *testing.T) {
 	dir := t.TempDir()
 	policy := filepath.Join(dir, "policy.json")
-	doc := `{"schema": 2, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+	doc := `{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 	  "classes": {"a": {"bundles": ["b"]}}}}`
 

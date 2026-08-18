@@ -29,7 +29,7 @@ states one value (the signer workflow).
 
 ```json
 {
-  "schema": 2,
+  "schema": 3,
 
   "issuer": "https://token.actions.githubusercontent.com",
 
@@ -126,9 +126,12 @@ implement refuses; it never best-efforts a newer schema — and it
 refuses with a **version error from the gate**, which runs before
 strict decoding, never incidentally with an unknown-field error
 (stele#107). When the number moves is governed by
-[docs/versioning.md](versioning.md). Current: 2. Schema 1 is the
-pre-#84 vocabulary — #84's renames were a key-set change, which
-moves the identifier; the bump was applied retroactively at #107.
+[docs/versioning.md](versioning.md). Current: **3** — ONE epoch
+shared by the verify policy, the assert policy and the report, so a
+bump cannot land on one document and miss another (the drift #107
+found). Identifiers written into history — the chain note version,
+the evidence-manifest schema — keep their own numbers, because they
+cannot be re-emitted on demand.
 
 ### `issuer`
 
