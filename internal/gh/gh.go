@@ -53,6 +53,11 @@ type Forge interface {
 	ReleaseAssets(owner, repo, tag string) ([]string, error)
 	// Asset downloads one release asset's bytes.
 	Asset(owner, repo, tag, name string) ([]byte, error)
+	// TagCommit resolves a tag to the commit it points at,
+	// dereferencing annotated tag objects — the commit is the pin the
+	// full-depth leg verifies identities against, and an annotated
+	// tag's own object id is never that commit.
+	TagCommit(owner, repo, tag string) (string, error)
 	// FileAt reads a repository file at a ref; ok=false means the file
 	// (or the ref) does not exist there — absence is an answer, not an
 	// error.
@@ -209,6 +214,52 @@ func (c *Client) Asset(owner, repo, tag, name string) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("gh: asset %s@%s/%s: after %d attempts: %w", repo, tag, name, transientAttempts, lastErr)
+}
+
+type refObject struct {
+	Object struct {
+		Type string `json:"type"`
+		SHA  string `json:"sha"`
+	} `json:"object"`
+}
+
+// TagCommit implements Forge.
+func (c *Client) TagCommit(owner, repo, tag string) (string, error) {
+	base := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
+
+	body, found, err := c.get(base+"/git/ref/tags/"+url.PathEscape(tag), "application/vnd.github+json")
+	if err != nil {
+		return "", err
+	}
+
+	if !found {
+		return "", fmt.Errorf("gh: tag %s/%s@%s does not exist", owner, repo, tag)
+	}
+
+	ref, err := jsonx.DecodeForeign[refObject](body)
+	if err != nil {
+		return "", fmt.Errorf("gh: ref of %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	// A lightweight tag's ref names the commit; an annotated tag's
+	// names the tag OBJECT, which must be dereferenced — pinning the
+	// tag object id where a commit is expected is the annotated-tag
+	// trap, and it verifies nothing.
+	if ref.Object.Type != "tag" {
+		return ref.Object.SHA, nil
+	}
+
+	body, found, err = c.get(base+"/git/tags/"+url.PathEscape(ref.Object.SHA), "application/vnd.github+json")
+	if err != nil || !found {
+		return "", fmt.Errorf("gh: tag object %s of %s/%s@%s: %w", ref.Object.SHA, owner, repo, tag, err)
+	}
+
+	deref, err := jsonx.DecodeForeign[refObject](body)
+	if err != nil {
+		return "", fmt.Errorf("gh: tag object of %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	return deref.Object.SHA, nil
 }
 
 type contentsResponse struct {

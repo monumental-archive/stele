@@ -468,6 +468,7 @@ func (s *storeForge) FileAt(_, _, _, _ string) ([]byte, bool, error)      { retu
 func (s *storeForge) PackageVersionDigest(_, _, _ string) (string, error) { return "", nil }
 func (s *storeForge) WorkflowContents(_, _ string) ([][]byte, error)      { return nil, nil }
 func (s *storeForge) FailedRuns(_, _, _ string) ([]string, error)         { return nil, nil }
+func (s *storeForge) TagCommit(_, _, _ string) (string, error)            { return "", nil }
 
 // attestorBV scripts the cryptographic boundary.
 type attestorBV struct {
@@ -692,6 +693,42 @@ func TestAssertEvidenceStoreGuards(t *testing.T) {
 
 		if !strings.Contains(stderr.String(), "no-such-pins.toml") {
 			t.Fatalf("stderr = %q, want the refusal to name the declared pin file", stderr.String())
+		}
+	})
+
+	t.Run("an unknown depth refuses by name", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
+			"--trusted-root", "/no/such/root.json", "--depth", "bottomless",
+		}, &stdout, &stderr)
+		if code != exitUsage || !strings.Contains(stderr.String(), "bottomless") {
+			t.Fatalf("Run = %d, stderr = %q — want the depth refusal", code, stderr.String())
+		}
+	})
+
+	t.Run("full depth without a verify policy refuses by name", func(t *testing.T) {
+		swapOCI(t, cleanOCI())
+
+		root := filepath.Join(t.TempDir(), "root.json")
+		if err := os.WriteFile(root, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		orig := newBundleVerifier
+		newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{payload: okStatement}, nil }
+
+		t.Cleanup(func() { newBundleVerifier = orig })
+
+		var stdout, stderr bytes.Buffer
+
+		code := Run([]string{
+			"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap,
+			"--trusted-root", root, "--depth", "full",
+		}, &stdout, &stderr)
+		if code != exitUsage || !strings.Contains(stderr.String(), "verify-policy") {
+			t.Fatalf("Run = %d, stderr = %q — full depth must not silently run shallow", code, stderr.String())
 		}
 	})
 

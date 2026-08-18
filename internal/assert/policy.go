@@ -63,6 +63,17 @@ type EvidencePolicy struct {
 	// roll that outran the approval run surfaces here rather than at
 	// the next release.
 	BaseImages *BaseImagesPolicy `json:"baseImages,omitempty"`
+	// DecisionFromCanon is the canon version (inclusive) from which a
+	// release owes a VERIFIABLE release decision — the machinery epoch,
+	// like StoreVSAFromCanon. Absent means always. An unparsable pin
+	// fails toward the stricter obligation.
+	DecisionFromCanon *string `json:"decisionFromCanon,omitempty"`
+	// EvidenceSuffixes are additional asset-name suffixes that mark a
+	// checksum entry as an evidence document rather than an artifact
+	// (the org's per-release VEX documents, for one) — excluded from
+	// the full-depth provenance subject set, because a document about
+	// the release is not a subject of its build.
+	EvidenceSuffixes []string `json:"evidenceSuffixes,omitempty"`
 	// PublishWorkflows names the workflows whose failure can burn a
 	// release (#378). Absent means ANY failed run on the tag counts —
 	// the bash's semantics, and too broad: an unrelated flaky workflow
@@ -244,6 +255,24 @@ func (e *EvidencePolicy) storeVSA(canonVersion string) bool {
 	if err != nil {
 		// An unparsable pin cannot prove the pre-epoch exemption;
 		// fail toward the stricter obligation.
+		return true
+	}
+
+	return !v.LessThan(epoch)
+}
+
+// decision reports whether a release under the given canon version
+// owes a verifiable release decision. Same epoch semantics as
+// storeVSA: no epoch means always, an unparsable pin fails strict.
+func (e *EvidencePolicy) decision(canonVersion string) bool {
+	if e.DecisionFromCanon == nil {
+		return true
+	}
+
+	epoch := semver.MustParse(*e.DecisionFromCanon)
+
+	v, err := semver.NewVersion(canonVersion)
+	if err != nil {
 		return true
 	}
 

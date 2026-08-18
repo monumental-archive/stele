@@ -37,7 +37,7 @@ var hex64OnlyRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // burned exceptions are derived inside the walk.
 func Evidence(
 	pol *Policy, org string, forge gh.Forge, src ContractSource, att Attestor,
-	debt []report.Exception, pinFile []byte, log Logf,
+	debt []report.Exception, pinFile []byte, full *FullDepth, log Logf,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
@@ -55,7 +55,7 @@ func Evidence(
 			len(repos), *e.ExpectedRepos)
 	}
 
-	w := &evidenceWalk{pol: e, org: org, forge: forge, src: src, attestor: att, log: log}
+	w := &evidenceWalk{pol: e, org: org, forge: forge, src: src, attestor: att, full: full, log: log}
 
 	for _, repo := range repos {
 		if err := w.repo(repo); err != nil {
@@ -89,6 +89,7 @@ type evidenceWalk struct {
 	forge    gh.Forge
 	src      ContractSource
 	attestor Attestor
+	full     *FullDepth
 	log      Logf
 	checked  int
 	legacy   []string
@@ -148,6 +149,10 @@ func (w *evidenceWalk) release(repo, tag string) error {
 		if err := w.storeVerdicts(repo, tag, bundles); err != nil {
 			return err
 		}
+	}
+
+	if w.full != nil {
+		return w.fullDepth(repo, tag, contract)
 	}
 
 	return nil

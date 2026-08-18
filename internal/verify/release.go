@@ -124,12 +124,63 @@ func Release(
 	p *policy.Policy, c Coords, subjects, sboms []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf,
 ) (*ReleaseVerdict, error) {
-	if err := validateInputs(c, subjects, pins); err != nil {
+	if err := validateSubjects(sboms); err != nil {
+		return nil, fmt.Errorf("%w — the decision has no subject to verify against", err)
+	}
+
+	verdict, prov, err := releaseProvenance(p, c, subjects, pins, store, bv, log)
+	if err != nil {
 		return nil, err
 	}
 
-	if err := validateSubjects(sboms); err != nil {
-		return nil, fmt.Errorf("%w — the decision has no subject to verify against", err)
+	decisionRef, err := verifyDecision(p, c, sboms, pins, store, bv, log)
+	if err != nil {
+		return nil, err
+	}
+
+	prov.opened = append(prov.opened, *decisionRef)
+	verdict.opened = prov.opened
+
+	log("verify: release %s@%s: %d attestation(s) opened over %d subject(s), source revision %s",
+		c.Slug(), c.Tag, len(verdict.opened), verdict.subjects, verdict.sourceRevision)
+
+	return verdict, nil
+}
+
+// ReleaseProvenance is the provenance half of Release alone: every
+// subject covered by verified provenance under the pinned identities,
+// with no release decision demanded. It exists for corpus
+// re-verification over releases that predate the decision mechanism
+// (stele#4) — grandfathered history verifies what it CAN prove, and
+// the epoch that decides which releases owe a decision is policy
+// data, never a try-each.
+func ReleaseProvenance(
+	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
+	store Store, bv BundleVerifier, log Logf,
+) (*ReleaseVerdict, error) {
+	verdict, prov, err := releaseProvenance(p, c, subjects, pins, store, bv, log)
+	if err != nil {
+		return nil, err
+	}
+
+	verdict.opened = prov.opened
+
+	log("verify: release %s@%s: %d provenance attestation(s) opened over %d subject(s), source revision %s",
+		c.Slug(), c.Tag, len(verdict.opened), verdict.subjects, verdict.sourceRevision)
+
+	return verdict, nil
+}
+
+// releaseProvenance runs the shared provenance pass: input
+// validation, every subject proven against the store, and the
+// coverage close. Both entry points build on exactly this — one
+// implementation, two obligations.
+func releaseProvenance(
+	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
+	store Store, bv BundleVerifier, log Logf,
+) (*ReleaseVerdict, *provenancePass, error) {
+	if err := validateInputs(c, subjects, pins); err != nil {
+		return nil, nil, err
 	}
 
 	prov := newProvenancePass(p, c, pins)
@@ -144,33 +195,22 @@ func Release(
 	for _, s := range subjects {
 		bundles, err := store.Bundles(c.Slug(), s.SHA256)
 		if err != nil {
-			return nil, fmt.Errorf("verify: %s: no attestation retrievable: %w", s.Name, err)
+			return nil, nil, fmt.Errorf("verify: %s: no attestation retrievable: %w", s.Name, err)
 		}
 
 		if err := prov.subject(s, bundles, bv, log); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	if err := prov.close(subjects); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	decisionRef, err := verifyDecision(p, c, sboms, pins, store, bv, log)
-	if err != nil {
-		return nil, err
-	}
-
-	verdict := &ReleaseVerdict{
+	return &ReleaseVerdict{
 		sourceRevision: prov.oneRevision(),
-		opened:         append(prov.opened, *decisionRef),
 		subjects:       len(subjects),
-	}
-
-	log("verify: release %s@%s: %d attestation(s) opened over %d subject(s), source revision %s",
-		c.Slug(), c.Tag, len(verdict.opened), verdict.subjects, verdict.sourceRevision)
-
-	return verdict, nil
+	}, prov, nil
 }
 
 func validateInputs(c Coords, subjects []Subject, pins Pins) error {
