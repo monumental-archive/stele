@@ -19,9 +19,9 @@ import (
 
 	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/gh"
-	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/triage"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 )
 
@@ -203,121 +203,83 @@ func (w *blastWalk) scanSBOM(repo, tag, name string) error {
 	w.scanned++
 	w.log("assert: blast-radius: %s scanned", subject)
 
-	return w.judge(repo, tag, subject, out)
-}
-
-// The scanner's report shape — foreign, read leniently.
-type scanReport struct {
-	Results []struct {
-		Packages []struct {
-			Package struct {
-				Name      string `json:"name"`
-				Version   string `json:"version"`
-				Ecosystem string `json:"ecosystem"`
-			} `json:"package"`
-			Vulnerabilities []struct {
-				ID       string `json:"id"`
-				Affected []struct {
-					Ranges []struct {
-						Events []struct {
-							Fixed string `json:"fixed"`
-						} `json:"events"`
-					} `json:"ranges"`
-				} `json:"affected"`
-			} `json:"vulnerabilities"`
-		} `json:"packages"`
-	} `json:"results"`
-}
-
-// judge classifies every finding and joins it against the decisions.
-func (w *blastWalk) judge(repo, tag, subject string, out []byte) error {
-	decoded, err := jsonx.DecodeForeign[scanReport](out)
-	if err != nil {
-		return fmt.Errorf("assert: scanner report for %s: %w", subject, err)
+	if err := w.judge(subject, out); err != nil {
+		return err
 	}
 
-	for _, res := range decoded.Results {
-		for _, pkg := range res.Packages {
-			for _, vuln := range pkg.Vulnerabilities {
-				w.judgeOne(repo, tag, subject, pkg.Package.Name, pkg.Package.Version, pkg.Package.Ecosystem, vuln.ID,
-					fixable(vuln))
-			}
-		}
+	w.noteCanary(repo, tag, out)
+
+	return nil
+}
+
+// judge classifies every finding through the SHARED derivation and
+// joins it against the decisions. Neither the classification nor the
+// join lives here: this walk and the VEX leg must agree on what a
+// finding IS, and two implementations of that drift into disagreeing
+// about whether a release was ever covered (internal/triage).
+func (w *blastWalk) judge(subject string, out []byte) error {
+	pol := &triage.Policy{BaseEcosystems: w.pol.OSEcosystems}
+
+	findings, err := pol.Findings(out)
+	if err != nil {
+		return fmt.Errorf("assert: %s: %w", subject, err)
+	}
+
+	split := triage.Join(findings, w.decisions)
+
+	for i := range findings {
+		w.record(subject, &findings[i])
+	}
+
+	for i := range split.Rebuild {
+		// The perpetual base-layer background: no shipped fix anywhere,
+		// so remediation is the next build on a refreshed base digest
+		// and a per-advisory decision would decide nothing. DERIVED, so
+		// a human cannot widen it.
+		w.exceptions = append(w.exceptions, report.Derived(subject, split.Rebuild[i].String(),
+			"unfixed OS base-layer package: remediation is the next release on a refreshed base digest"))
+	}
+
+	for i := range split.Decided {
+		d := &split.Decided[i]
+		w.used[d.Finding.Key] = true
+		w.exceptions = append(w.exceptions, report.Declared(subject, d.Finding.String(), d.Decision.Origin))
 	}
 
 	return nil
 }
 
-type vulnEntry = struct {
-	ID       string `json:"id"`
-	Affected []struct {
-		Ranges []struct {
-			Events []struct {
-				Fixed string `json:"fixed"`
-			} `json:"events"`
-		} `json:"ranges"`
-	} `json:"affected"`
-}
-
-func fixable(v vulnEntry) bool {
-	for _, a := range v.Affected {
-		for _, r := range a.Ranges {
-			for _, e := range r.Events {
-				if e.Fixed != "" {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-func (w *blastWalk) judgeOne(repo, tag, subject, pkg, version, ecosystem, advisory string, fix bool) {
-	key := vexjoin.Key{Advisory: advisory, Package: pkg, Version: version}
-	assertion := advisory + ":" + pkg + "@" + version
-	isOS := w.osEcosystem(ecosystem)
-
+// record adds one finding as a fact carrying no verdict of its own;
+// Seal decides what the set of facts amounts to.
+func (w *blastWalk) record(subject string, f *triage.Finding) {
 	w.findings = append(w.findings, report.Finding{
-		Subject: subject, Assertion: assertion,
-		Detail: fmt.Sprintf("%s affects %s@%s (%s)", advisory, pkg, version, ecosystem),
+		Subject: subject, Assertion: f.String(),
+		Detail: fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory, f.Key.Package, f.Key.Version, f.Ecosystem),
 	})
-
-	switch {
-	case isOS && !fix:
-		// The perpetual base-layer background: no shipped fix anywhere,
-		// remediation is the rebuild cadence — a per-CVE decision would
-		// decide nothing. Derived, so a human cannot widen it.
-		w.exceptions = append(w.exceptions, report.Derived(subject, assertion,
-			"unfixed OS base-layer package: remediation is the next release on a refreshed base digest"))
-	case w.decisions.Has(key):
-		all := w.decisions.All()
-		for i := range all {
-			d := &all[i]
-			if d.Key == key {
-				w.used[key] = true
-				w.exceptions = append(w.exceptions, report.Declared(subject, assertion, d.Origin))
-
-				break
-			}
-		}
-	}
-
-	if w.pol.Canary != nil && repo == *w.pol.Canary.Repo && tag == *w.pol.Canary.Tag &&
-		advisory == *w.pol.Canary.Advisory {
-		w.canarySeen = true
-	}
 }
 
-func (w *blastWalk) osEcosystem(ecosystem string) bool {
-	lower := strings.ToLower(ecosystem)
-	for _, e := range w.pol.OSEcosystems {
-		if strings.Contains(lower, e) {
-			return true
-		}
+// noteCanary records whether this scan reproduced the declared
+// known-positive. A walk that declares one and misses it cannot see,
+// which is CANNOT_JUDGE rather than a pass.
+func (w *blastWalk) noteCanary(repo, tag string, out []byte) {
+	if w.pol.Canary == nil || repo != *w.pol.Canary.Repo || tag != *w.pol.Canary.Tag {
+		return
 	}
 
-	return false
+	pol := &triage.Policy{BaseEcosystems: w.pol.OSEcosystems}
+
+	findings, err := pol.Findings(out)
+	if err != nil {
+		return
+	}
+
+	for i := range findings {
+		if findings[i].Key.Advisory == *w.pol.Canary.Advisory {
+			w.canarySeen = true
+
+			return
+		}
+	}
 }
 
 // staleDecisions surfaces every decision that matched no current

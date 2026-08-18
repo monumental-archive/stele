@@ -9,10 +9,14 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/monumental-archive/stele/internal/gh"
 )
 
 // factsStub answers the two reads the facts resolver makes.
@@ -65,6 +69,41 @@ func goodFactsStub() *factsStub {
 	return &factsStub{tip: factsRev, stamp: "2026-08-18T09:30:00+01:00"}
 }
 
+// withMeta points the metadata seam at a local server. Without it a
+// test that supplies no --description reaches the real forge, which
+// is both slow and a test whose result depends on a token.
+func withMeta(t *testing.T, licence, description string) {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/widget/license", func(w http.ResponseWriter, _ *http.Request) {
+		if licence == "" {
+			w.WriteHeader(http.StatusNotFound)
+
+			return
+		}
+
+		if _, err := w.Write([]byte(`{"license": {"spdx_id": "` + licence + `"}}`)); err != nil {
+			t.Error(err)
+		}
+	})
+	mux.HandleFunc("/repos/acme/widget", func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write([]byte(`{"description": "` + description + `"}`)); err != nil {
+			t.Error(err)
+		}
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	previous := newMetaClient
+	newMetaClient = func() *gh.Client {
+		return &gh.Client{Base: srv.URL, Download: srv.URL, HTTP: srv.Client()}
+	}
+
+	t.Cleanup(func() { newMetaClient = previous })
+}
+
 // cargoTree writes a Cargo.toml declaring the given fields.
 func cargoTree(t *testing.T, body string) string {
 	t.Helper()
@@ -114,6 +153,7 @@ func TestDeriveFactsUsage(t *testing.T) {
 func TestDeriveFactsFromTheManifest(t *testing.T) {
 	history := goodFactsStub()
 	opened := withFactsHistory(t, history, nil)
+	withMeta(t, "", "")
 
 	tree := cargoTree(t, `[workspace.package]
 license = "Apache-2.0"
@@ -165,6 +205,7 @@ repository = "https://github.com/acme/widget"
 // A continuous release renders no version key at all.
 func TestDeriveFactsContinuous(t *testing.T) {
 	withFactsHistory(t, goodFactsStub(), nil)
+	withMeta(t, "", "")
 
 	tree := cargoTree(t, "[package]\nlicense = \"MIT\"\n")
 
@@ -185,6 +226,7 @@ func TestDeriveFactsContinuous(t *testing.T) {
 // same answer stele does.
 func TestDeriveFactsLicencePrecedence(t *testing.T) {
 	withFactsHistory(t, goodFactsStub(), nil)
+	withMeta(t, "", "")
 
 	tree := cargoTree(t, `[package]
 license = "MIT"
@@ -256,6 +298,7 @@ func TestDeriveFactsRefusals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			withFactsHistory(t, tt.history, tt.openErr)
+			withMeta(t, "", "")
 
 			dir := cargoTree(t, "[package]\nlicense = \"MIT\"\n")
 			if tt.tree != nil {
@@ -282,6 +325,7 @@ func TestDeriveFactsRefusals(t *testing.T) {
 // commit's timestamp onto every extension image once.
 func TestDeriveFactsSeparatesDateFromDeclaration(t *testing.T) {
 	opened := withFactsHistory(t, goodFactsStub(), nil)
+	withMeta(t, "", "")
 
 	dated := t.TempDir()
 	declaring := cargoTree(t, "[package]\nlicense = \"MIT\"\n")
@@ -302,5 +346,47 @@ func TestDeriveFactsSeparatesDateFromDeclaration(t *testing.T) {
 
 	if !strings.Contains(stdout.String(), `"MIT"`) {
 		t.Errorf("did not read the licence from --tree:\n%s", stdout.String())
+	}
+}
+
+// A tree with no manifest falls back to the forge's own detection.
+// The two tiers are deliberately not cross-checked: the manifest is
+// the author's declaration, the forge's is a heuristic reading of one
+// file that flattens a disjunction to a single id, so a mismatch
+// between them would mean nothing.
+func TestDeriveFactsFallsBackToTheForge(t *testing.T) {
+	withFactsHistory(t, goodFactsStub(), nil)
+	withMeta(t, "Apache-2.0", "from the forge")
+
+	var stdout, stderr bytes.Buffer
+
+	// t.TempDir() has no Cargo.toml, which is the manifest-less shape.
+	args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", t.TempDir()}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	for _, want := range []string{`"org.opencontainers.image.licenses":"Apache-2.0"`, `"from the forge"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout lacks %s:\n%s", want, stdout.String())
+		}
+	}
+}
+
+// A tree declaring nothing, with a forge that detects nothing, has no
+// derivable licence — refused rather than published empty.
+func TestDeriveFactsNoDerivableLicence(t *testing.T) {
+	withFactsHistory(t, goodFactsStub(), nil)
+	withMeta(t, "", "")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"facts", "--archetype", "continuous", "--repo", "acme/widget", "--git-dir", t.TempDir()}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitRefused {
+		t.Fatalf("deriveCmd = %d, want %d", got, exitRefused)
+	}
+
+	if !strings.Contains(stderr.String(), "no derivable licence") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
