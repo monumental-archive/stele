@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
+	github.com/github/go-spdx/v2 v2.7.0
 	github.com/google/go-containerregistry v0.21.9
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/sigstore/sigstore-go v1.3.0
