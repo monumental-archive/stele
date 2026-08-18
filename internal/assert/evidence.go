@@ -78,10 +78,12 @@ func (p Population) resolve(forge gh.Forge) (string, []string, error) {
 
 // Evidence walks the population's releases and seals the
 // completeness verdict. debt carries the committed file's declared
-// exceptions; burned exceptions are derived inside the walk.
+// exceptions; burned exceptions are derived inside the walk. runFacts
+// are the caller's facts about the run itself — the trust material it
+// held, which the walk cannot know and the document must record.
 func Evidence(
 	pol *Policy, pop Population, forge gh.Forge, src ContractSource, att Attestor,
-	debt []report.Exception, pinFile []byte, full *FullDepth, log Logf,
+	debt []report.Exception, pinFile []byte, full *FullDepth, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
@@ -128,7 +130,8 @@ func Evidence(
 	exceptions = append(exceptions, debt...)
 	exceptions = append(exceptions, w.burned...)
 
-	facts := []report.Fact{{Name: "releasesChecked", Value: strconv.Itoa(w.checked)}}
+	facts := append(append([]report.Fact{}, runFacts...),
+		report.Fact{Name: "releasesChecked", Value: strconv.Itoa(w.checked)})
 	if len(w.legacy) > 0 {
 		facts = append(facts, report.Fact{Name: "legacyReleases", Value: strings.Join(w.legacy, " ")})
 	}

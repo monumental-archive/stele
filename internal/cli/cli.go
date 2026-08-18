@@ -121,7 +121,7 @@ usage:
                  signed from the repository's epoch on (verified
                  natively, no gitsign binary), target carries a
                  source chain link (--org|--repo --policy
-                 [--trusted-root --snapshot|--capture])
+                 [--snapshot|--capture])
 
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
@@ -136,7 +136,12 @@ derive modes take --git-dir [--ref --tag-prefix --paths --minor-types
 --group-order --breaking-group --compare-url --release-url --pull-url
 --date --changelog]; bump adds [--check --date].
 
-verify flags: --policy --trusted-root --repo; release/vsa add
+Trust material: every verifying verb takes [--trusted-root] for an
+offline document, or [--tuf-root --tuf-mirror] for a private Sigstore
+instance; naming none resolves one through TUF from the anchor pinned
+in this binary.
+
+verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain/level add
 --git-dir [--ref]. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote

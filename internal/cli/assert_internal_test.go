@@ -637,14 +637,15 @@ func storeSnapshot(t *testing.T) (string, string) {
 }
 
 // TestAssertEvidenceStoreGuards pins the CLI contract for the store
-// halves: declaring them without a trusted root is a usage refusal
-// (never a silent skip), and so is a declared pin file absent from
-// the checkout — the likelier cause is the wrong working directory,
-// and proceeding would judge nothing while looking green.
+// halves: a policy declaring them always resolves trust material —
+// never a silent skip — and a declared pin file absent from the
+// checkout is a usage refusal, because the likelier cause is the
+// wrong working directory and proceeding would judge nothing while
+// looking green.
 func TestAssertEvidenceStoreGuards(t *testing.T) {
 	snap, policy := storeSnapshot(t)
 
-	t.Run("no trusted root refuses by name", func(t *testing.T) {
+	t.Run("declared halves resolve a root rather than skipping", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 
 		code := Run([]string{
@@ -654,8 +655,11 @@ func TestAssertEvidenceStoreGuards(t *testing.T) {
 			t.Fatalf("Run = %d, want %d", code, exitUsage)
 		}
 
-		if !strings.Contains(stderr.String(), "trusted-root") {
-			t.Fatalf("stderr = %q, want the named refusal", stderr.String())
+		// Naming no local document takes the TUF origin, which the
+		// package fence refuses. What this pins is that the halves
+		// went looking for trust material at all.
+		if !strings.Contains(stderr.String(), "tuf ") {
+			t.Fatalf("stderr = %q, want the run to have resolved a root", stderr.String())
 		}
 	})
 
@@ -904,7 +908,9 @@ func TestAssertTagsUsageRefusals(t *testing.T) {
 		{"assert", "tags", "--repo", "solo", "--policy", policy},
 		{"assert", "tags", "--repo", "acme/widget"},
 		{"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--snapshot", snap, "--capture", snap},
-		// signing epochs declared but no trusted root offered
+		// Signing epochs declared: the run goes looking for trust
+		// material rather than skipping the audit — no local document
+		// takes the TUF origin, which the package fence refuses.
 		{"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--snapshot", snap},
 	}
 

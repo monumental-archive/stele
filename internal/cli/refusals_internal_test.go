@@ -216,12 +216,12 @@ func TestAssertUsageMatrix(t *testing.T) {
 			"--verify-policy is required",
 		},
 		{
-			"evidence: full depth without a trusted root",
+			"evidence: full depth resolves a root rather than skipping",
 			[]string{
 				"assert", "evidence", "--org", "acme", "--policy", evidencePolicy,
 				"--depth", "full", "--verify-policy", evidencePolicy,
 			},
-			"--trusted-root is required",
+			"tuf ",
 		},
 		{
 			"evidence: an unreadable policy",
@@ -282,9 +282,9 @@ func TestAssertUsageMatrix(t *testing.T) {
 			"absent-root.json",
 		},
 		{
-			"tags: signing epochs without a trusted root",
+			"tags: signing epochs resolve a root rather than skipping",
 			[]string{"assert", "tags", "--repo", "acme/widget", "--policy", tagsPolicy},
-			"--trusted-root is required",
+			"tuf ",
 		},
 	}
 
@@ -317,7 +317,7 @@ func TestLoadTagVerifierPendingOnly(t *testing.T) {
 
 	var stderr bytes.Buffer
 
-	tv, code := loadTagVerifier(pol, "", &stderr)
+	tv, code := loadTagVerifier(pol, &rootFlags{}, &stderr)
 	if code != exitOK {
 		t.Fatalf("loadTagVerifier = %d, want exitOK: %s", code, stderr.String())
 	}
@@ -349,7 +349,7 @@ func TestLoadTagVerifierRefusesABrokenRoot(t *testing.T) {
 
 	var stderr bytes.Buffer
 
-	if _, code := loadTagVerifier(pol, root, &stderr); code != exitUsage {
+	if _, code := loadTagVerifier(pol, &rootFlags{file: root}, &stderr); code != exitUsage {
 		t.Fatalf("loadTagVerifier = %d, want exitUsage", code)
 	}
 
@@ -479,11 +479,7 @@ func TestStoreAttestorWithoutCandidates(t *testing.T) {
 // house rule every other seam-swapping test here follows.
 func TestLoadStoreInputsGuards(t *testing.T) {
 	dir := t.TempDir()
-
-	root := filepath.Join(dir, "root.json")
-	if err := os.WriteFile(root, []byte("not a trusted root"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	root := []byte("not a trusted root")
 
 	t.Run("a root that is not one refuses", func(t *testing.T) {
 		if _, _, err := loadStoreInputs(baseImagesPolicy(t, "no-such-pins.toml"), &storeForge{}, root, ""); err == nil {
@@ -521,12 +517,7 @@ func TestLoadFullDepthRefusesABrokenRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := filepath.Join(dir, "root.json")
-	if err := os.WriteFile(root, []byte("not a trusted root"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := loadFullDepth(vp, root, &storeForge{}); err == nil {
+	if _, err := loadFullDepth(vp, []byte("not a trusted root"), &storeForge{}); err == nil {
 		t.Fatal("loadFullDepth accepted a root that is not one")
 	}
 }

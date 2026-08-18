@@ -144,7 +144,7 @@ func (l *latch) logf(format string, args ...any) {
 // verifyArgs is everything the four modes read, parsed in one place.
 type verifyArgs struct {
 	policyPath   string
-	rootPath     string
+	root         rootFlags
 	repo         string
 	tag          string
 	subjects     string
@@ -240,13 +240,19 @@ func sealVerifyReport(va *verifyArgs, outcome *verifyOutcome, err error) *report
 
 	target := "verify " + va.mode
 
+	// What the run trusted travels with every verdict, clean or
+	// refused: a verification document that does not name its trust
+	// material has not said what it proved.
+	trusted := va.root.facts()
+
 	if err == nil {
-		return report.Seal(target, subject, outcome.pop, nil, nil, report.NoCanary(), outcome.facts...)
+		return report.Seal(target, subject, outcome.pop, nil, nil, report.NoCanary(),
+			append(trusted, outcome.facts...)...)
 	}
 
 	findings := []report.Finding{{Subject: subject, Assertion: va.mode, Detail: err.Error()}}
 
-	return report.Seal(target, subject, declaredPop(va), findings, nil, report.NoCanary())
+	return report.Seal(target, subject, declaredPop(va), findings, nil, report.NoCanary(), trusted...)
 }
 
 // declaredPop reports what a refused run HAD under test: the subject
@@ -271,7 +277,7 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 	fs := flag.NewFlagSet("stele verify "+mode, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&va.policyPath, "policy", "", "path to the committed verify policy (required)")
-	fs.StringVar(&va.rootPath, "trusted-root", "", "path to the Sigstore trusted root JSON (required)")
+	va.root.register(fs)
 	fs.StringVar(&va.repo, "repo", "", "owner/repo under verification (required)")
 	fs.BoolVar(&va.jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
@@ -335,11 +341,7 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 		return fail(err)
 	}
 
-	if va.rootPath == "" {
-		return fail(errors.New("--trusted-root is required"))
-	}
-
-	rootJSON, err := os.ReadFile(va.rootPath)
+	rootJSON, err := va.root.resolve()
 	if err != nil {
 		return fail(err)
 	}

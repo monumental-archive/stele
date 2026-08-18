@@ -254,9 +254,12 @@ func TestVerifyUsageRefusals(t *testing.T) {
 			"policy",
 		},
 		{
-			"trusted root missing",
-			[]string{"verify", "chain", "--repo", "acme/widget", "--policy", px.policy},
-			"--trusted-root is required",
+			"two roots named at once",
+			[]string{
+				"verify", "chain", "--repo", "acme/widget", "--policy", px.policy,
+				"--trusted-root", px.root, "--tuf-mirror", "https://tuf.acme.example",
+			},
+			"one root, named once",
 		},
 		{
 			"trusted root unreadable",
@@ -424,8 +427,9 @@ func TestVerifyVSAJSONPasses(t *testing.T) {
 		t.Fatalf("subject = %v", doc.Subject)
 	case doc.Population == nil || doc.Population.Size == nil || *doc.Population.Size != 1:
 		t.Fatalf("population = %+v", doc.Population)
-	case len(doc.Facts) != 1 || doc.Facts[0].Name != "verifiedLevels" ||
-		doc.Facts[0].Value != "SLSA_BUILD_LEVEL_3":
+	case len(doc.Facts) != 3 || doc.Facts[0].Name != factTrustedRoot || doc.Facts[1].Name != factTrustedRootSHA:
+		t.Fatalf("facts = %+v, want the trust material recorded beside the verdict", doc.Facts)
+	case doc.Facts[2].Name != "verifiedLevels" || doc.Facts[2].Value != "SLSA_BUILD_LEVEL_3":
 		t.Fatalf("facts = %+v", doc.Facts)
 	}
 

@@ -115,7 +115,7 @@ func (c cosignSigner) Sign(payload []byte) ([]byte, error) {
 // emitArgs is everything the two modes read, parsed in one place.
 type emitArgs struct {
 	policyPath string
-	rootPath   string
+	root       rootFlags
 	repo       string
 	mode       string
 
@@ -200,7 +200,7 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 	fs := flag.NewFlagSet("stele emit "+mode, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&ea.policyPath, "policy", "", "path to the committed verify policy (required)")
-	fs.StringVar(&ea.rootPath, "trusted-root", "", "path to the Sigstore trusted root JSON (required)")
+	ea.root.register(fs)
 	fs.StringVar(&ea.repo, "repo", "", "owner/repo being attested (required)")
 	fs.StringVar(&ea.machineryPin, "machinery-digest", "",
 		"commit digest the policy tree is pinned at — the VSA's policy.digest (required)")
@@ -269,11 +269,7 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 		return fail(err)
 	}
 
-	if ea.rootPath == "" {
-		return fail(errors.New("--trusted-root is required"))
-	}
-
-	rootJSON, err := os.ReadFile(ea.rootPath)
+	rootJSON, err := ea.root.resolve()
 	if err != nil {
 		return fail(err)
 	}
