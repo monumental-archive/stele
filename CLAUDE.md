@@ -132,6 +132,24 @@ The canon speaks for the org; stele speaks for the mechanism.
   stele breaks the canon, the canon conforms to the tool — never the
   tool to the org's accumulated shape. Bad history is recorded
   honestly (healed links, legacy categories), not designed around.
+- **Share the definition, never share the derivation.** Two rules the
+  org has applied from opposite directions, stated as one. When two
+  legs must agree on what a thing IS — the bytes a digest covers, where
+  a version mirror lives — they share the code, so disagreement is
+  unrepresentable (the one `chain.SHA256Hex` across emit and verify,
+  the .github#434 fix; `internal/manifest`'s one reader across detect,
+  preflight and post-write verify). When one leg CHECKS another's work,
+  the check must not be the writer inverted — a derivation verified by
+  its own inverse passes its own exam (`internal/manifest` re-reads the
+  spliced bytes through the reader; it never trusts the splicer's
+  bookkeeping).
+- **Derived state is refused when stale, never silently repaired.**
+  Version mirrors, upgrade scripts, lockfile copies of the version: all
+  derived, never typed, and one found already wrong is evidence of a
+  broken earlier release. Repairing it in passing destroys that
+  evidence (the pgrx `--next.sql` refusal, #374's fuzz-lockfile lint,
+  `derive bump`'s drift refusal). Surface, refuse, let a human read the
+  wreckage.
 - **The bash is a reference, not an oracle.** Ported logic runs beside
   it on identical inputs and divergence is investigated — but the bar
   is spec correctness (SLSA v1.2, in-toto/DSSE, git's actual storage
