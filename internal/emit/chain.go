@@ -184,13 +184,18 @@ type chainRun struct {
 // too: an emitter running under an unreserved workflow path would
 // mint links nobody can verify against the published contract.
 func (e *chainRun) preflight() error {
-	if e.in.WorkflowRef != "" {
-		if got := serverURL + "/" + e.in.WorkflowRef; got != e.id.SAN {
-			return fmt.Errorf(
-				"emit: invoked from %q — the emitter runs only under the reserved identity %q", got, e.id.SAN)
-		}
-	} else {
-		e.log("emit: preflight: the runtime offered no workflow identity — the reserved-path guard did not run")
+	if e.in.WorkflowRef == "" {
+		// An emitter that cannot state its own workflow identity
+		// cannot prove it runs under the reserved path, and an
+		// unprovable identity must not sign. The logged-skip grace
+		// existed only for the cutover window (stele#69 item 4).
+		return errors.New(
+			"emit: the runtime offered no workflow identity (GITHUB_WORKFLOW_REF) — the reserved-path guard cannot run")
+	}
+
+	if got := serverURL + "/" + e.in.WorkflowRef; got != e.id.SAN {
+		return fmt.Errorf(
+			"emit: invoked from %q — the emitter runs only under the reserved identity %q", got, e.id.SAN)
 	}
 
 	if err := e.s.Check(); err != nil {

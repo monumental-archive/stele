@@ -69,7 +69,9 @@ func swapEmit(t *testing.T, g emit.Git, gitErr error) {
 
 	// CI itself runs under a workflow ref; the guard under test must
 	// see the caller's scripted world, not the harness's own identity.
-	t.Setenv("GITHUB_WORKFLOW_REF", "")
+	// The scripted world's reserved identity, since an absent ref is
+	// now a refusal in its own right (stele#69 item 4).
+	t.Setenv("GITHUB_WORKFLOW_REF", "acme/widget/.github/workflows/source-attest.yml@refs/heads/main")
 
 	origSigner, origGit, origNow := newSigner, openEmitGit, emitNow
 

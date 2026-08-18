@@ -318,7 +318,8 @@ func newWorld(t *testing.T) *world {
 		in: emit.ChainInputs{
 			Owner: "acme", Repo: "widget",
 			Ref: "refs/heads/main", Rev: rev4,
-			ActorLogin: "octocat", ActorID: "583231",
+			WorkflowRef: "acme/widget/.github/workflows/source-attest.yml@refs/heads/main",
+			ActorLogin:  "octocat", ActorID: "583231",
 			CanonRef: canonPin, PolicyURI: policyURI,
 			Claims: claims([]int64{1000000}, "ORG_SOURCE_GATED", "ORG_SOURCE_SIGNED"),
 		},
@@ -1231,6 +1232,20 @@ func (badCheckSigner) Check() error { return fakeError("cosign is not usable") }
 // proof (there is no ledger to prove against yet).
 func TestChainPreflight(t *testing.T) {
 	t.Parallel()
+
+	t.Run("no workflow identity at all refuses by name", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.found(t)
+		w.in.Rev = rev2
+		w.in.WorkflowRef = ""
+
+		err := w.emit(t)
+		if err == nil || !strings.Contains(err.Error(), "GITHUB_WORKFLOW_REF") {
+			t.Fatalf("err = %v, want the missing-identity refusal — an unprovable identity must not sign", err)
+		}
+	})
 
 	t.Run("a foreign workflow identity refuses", func(t *testing.T) {
 		t.Parallel()
