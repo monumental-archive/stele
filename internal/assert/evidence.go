@@ -247,7 +247,7 @@ func (w *evidenceWalk) requiredAssets(
 			required = append(required, cp.LegacyVSABundles...)
 		}
 
-		for _, prefix := range cp.AssetPrefixes {
+		for _, prefix := range cp.owedPrefixes(contract.MachineryVersion) {
 			if !anyPrefix(assets, prefix) {
 				w.finding(subject, prefix, "no asset carries the required prefix")
 			}

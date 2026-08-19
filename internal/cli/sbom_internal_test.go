@@ -536,3 +536,33 @@ func TestDeriveSBOMNpmRefusals(t *testing.T) {
 		})
 	}
 }
+
+// --artifact renames what the document CALLS the artifact — feature
+// variants of one package must union as distinct artifacts — while
+// the purl keeps the package's real identity, because advisory
+// matching runs on what the artifact IS (stele#126).
+func TestDeriveSBOMArtifactDisplayName(t *testing.T) {
+	resolver := &stubResolver{metadata: cargoMetadata}
+	withResolver(t, resolver)
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"sbom", "--cargo-package", "lab-cli", "--tree", "/w",
+		"--artifact", "lab-cli-pg16", "--created", "2026-08-18T12:00:00Z",
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		`"name":"lab-cli-pg16@0.1.0"`,
+		`"name":"lab-cli-pg16"`,
+		`"pkg:cargo/lab-cli@0.1.0"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("document lacks %s:\n%s", want, out)
+		}
+	}
+}

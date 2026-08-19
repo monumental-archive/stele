@@ -24,7 +24,7 @@ import (
 // claimsPolicy is a minimal valid policy carrying a two-property
 // table: one matched against branch rules, one carried by the gate.
 const claimsPolicy = `{
-  "schema": 3,
+  "schema": 4,
   "issuer": "https://token.example.com",
   "trust": {"provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"}},
   "source": {

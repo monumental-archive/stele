@@ -17,7 +17,7 @@ import (
 )
 
 const testPolicyJSON = `{
-  "schema": 3,
+  "schema": 4,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -34,7 +34,7 @@ const testPolicyJSON = `{
       "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
-        "assetPrefixes": ["attestations-extimg-pg"]
+        "assetPrefixes": [{"prefix": "attestations-extimg-pg"}]
       }
     }
   }
@@ -233,7 +233,16 @@ func (a *fakeAttestor) Verify(_, _, digest string, candidates []assert.Candidate
 func runEvidence(t *testing.T, f *fakeForge, debt []report.Exception) *report.Report {
 	t.Helper()
 
-	pol := loadTestPolicy(t)
+	return runEvidenceWith(t, f, debt, testPolicyJSON)
+}
+
+func runEvidenceWith(t *testing.T, f *fakeForge, debt []report.Exception, policyJSON string) *report.Report {
+	t.Helper()
+
+	pol, err := assert.LoadPolicy(strings.NewReader(policyJSON))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
 	src := assert.Sources{
 		assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
@@ -606,4 +615,60 @@ func TestEvidencePrefixAssets(t *testing.T) {
 	if rep.Verdict() != report.VerdictFail {
 		t.Fatalf("verdict = %s, want FAIL for the missing prefix asset", rep.Verdict())
 	}
+}
+
+// TestEvidencePrefixEpoch pins the per-obligation epoch (stele#128):
+// a class asset the machinery only began publishing at some release
+// is owed from that release inclusive, and history before it stays
+// green — the same measured-at-cutover shape as enrichmentFromVersion.
+// The fixture manifest declares machinery version 9.9.9.
+func TestEvidencePrefixEpoch(t *testing.T) {
+	t.Parallel()
+
+	// The release ships everything EXCEPT the prefix asset.
+	fixture := func() *fakeForge {
+		f := completeRelease()
+		f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = manifestAsset([]string{"pgrx-extension"}, true)
+		f.assets["widget@v1.0.0"] = []string{
+			"evidence-manifest.json", "app.spdx.json", "checksums.txt",
+			"attestations-extensions.intoto.jsonl",
+		}
+		image := f.assetBytes["widget@v1.0.0"]["attestations-image.intoto.jsonl"]
+		f.assetBytes["widget@v1.0.0"]["attestations-extensions.intoto.jsonl"] = image
+
+		return f
+	}
+
+	withEpoch := func(epoch string) string {
+		return strings.Replace(testPolicyJSON,
+			`"assetPrefixes": [{"prefix": "attestations-extimg-pg"}]`,
+			`"assetPrefixes": [{"prefix": "attestations-extimg-pg", "owedFrom": "`+epoch+`"}]`, 1)
+	}
+
+	t.Run("a release before the epoch does not owe the asset", func(t *testing.T) {
+		t.Parallel()
+
+		rep := runEvidenceWith(t, fixture(), nil, withEpoch("10.0.0"))
+		if rep.Verdict() != report.VerdictPass {
+			t.Fatalf("verdict = %s, want PASS for pre-epoch history\nfindings: %+v", rep.Verdict(), rep.Findings())
+		}
+	})
+
+	t.Run("the epoch itself owes (inclusive)", func(t *testing.T) {
+		t.Parallel()
+
+		rep := runEvidenceWith(t, fixture(), nil, withEpoch("9.9.9"))
+		if rep.Verdict() != report.VerdictFail {
+			t.Fatalf("verdict = %s, want FAIL from the epoch inclusive", rep.Verdict())
+		}
+	})
+
+	t.Run("absent owedFrom is always owed", func(t *testing.T) {
+		t.Parallel()
+
+		rep := runEvidenceWith(t, fixture(), nil, testPolicyJSON)
+		if rep.Verdict() != report.VerdictFail {
+			t.Fatalf("verdict = %s, want FAIL with no epoch declared", rep.Verdict())
+		}
+	})
 }

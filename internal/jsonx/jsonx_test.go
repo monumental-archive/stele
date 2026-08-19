@@ -212,7 +212,7 @@ func TestDecodeVersioned(t *testing.T) {
 		{name: "absent schema refused", input: `{"name": "x"}`, wantErr: "schema is absent"},
 		{
 			name:  "newer schema refused with a version error",
-			input: `{"schema": 3, "name": "x"}`, wantErr: "not the implemented schema",
+			input: `{"schema": 4, "name": "x"}`, wantErr: "not the implemented schema",
 		},
 		// The reason this function exists (stele#107): on a document
 		// from a DIFFERENT schema whose fields this implementation does

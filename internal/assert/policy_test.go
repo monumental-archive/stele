@@ -3,6 +3,7 @@
 package assert_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -18,24 +19,33 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 3`, `"schema": 4`, 1), "schema"},
-		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 3`, `"schema": 3, "extra": true`, 1), "unknown"},
+		// The wrong value is DERIVED from the implemented constant, so
+		// an epoch-bump sweep over `"schema": N` literals can never
+		// rewrite this row into agreement with the document it must
+		// refuse (the guard carries no second copy of the number).
+		{
+			"wrong schema",
+			strings.Replace(testPolicyJSON, `"schema": 4`,
+				fmt.Sprintf(`"schema": %d`, assert.PolicySchema+1), 1),
+			"schema",
+		},
+		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 4`, `"schema": 4, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",
-			`{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 4, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt", "classes": {}}}`,
 			"classes is empty",
 		},
 		{
 			"a class requiring nothing",
-			`{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 4, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 			  "classes": {"idle": {"bundles": []}}}}`,
 			"requires nothing",
 		},
 		{
 			"missing required string",
-			`{"schema": 3, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 4, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
 			  "classes": {"a": {"bundles": ["b"]}}}}`,
 			"debtFile",
@@ -64,6 +74,30 @@ func TestLoadPolicyRefusals(t *testing.T) {
 			"empty dependency name",
 		},
 		{
+			"an asset obligation with no prefix",
+			strings.Replace(testPolicyJSON, `"assetPrefixes": [{"prefix": "attestations-extimg-pg"}]`,
+				`"assetPrefixes": [{}]`, 1),
+			"no prefix",
+		},
+		{
+			"an asset obligation with an empty prefix",
+			strings.Replace(testPolicyJSON, `"assetPrefixes": [{"prefix": "attestations-extimg-pg"}]`,
+				`"assetPrefixes": [{"prefix": ""}]`, 1),
+			"no prefix",
+		},
+		{
+			"a duplicated asset prefix",
+			strings.Replace(testPolicyJSON, `"assetPrefixes": [{"prefix": "attestations-extimg-pg"}]`,
+				`"assetPrefixes": [{"prefix": "p"}, {"prefix": "p"}]`, 1),
+			"names \"p\" twice",
+		},
+		{
+			"an unparsable asset obligation epoch",
+			strings.Replace(testPolicyJSON, `"assetPrefixes": [{"prefix": "attestations-extimg-pg"}]`,
+				`"assetPrefixes": [{"prefix": "p", "owedFrom": "not-a-version"}]`, 1),
+			"owedFrom",
+		},
+		{
 			"a duplicated enrichment name",
 			strings.Replace(testPolicyJSON, `"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}`,
 				`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": ["base-images", "base-images"]}`, 1),
@@ -75,7 +109,7 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		{
 			"a pre-rename policy refuses as a version error",
 			strings.NewReplacer(
-				`"schema": 3`, `"schema": 1`,
+				`"schema": 4`, `"schema": 1`,
 				`"storeVsaFromVersion": "1.13.0"`, `"storeVsaFromCanon": "1.13.0"`,
 			).Replace(testPolicyJSON),
 			"not the implemented schema",
@@ -118,7 +152,7 @@ func TestParseDebt(t *testing.T) {
 func TestTagsPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	const base = `{"schema": 3, "issuer": "https://token.example.com",
+	const base = `{"schema": 4, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
 	    "classes": {"a": {"bundles": ["b"]}}},
@@ -180,8 +214,8 @@ func TestEnrichmentDemand(t *testing.T) {
 		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},`,
 		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": ["base-images"]},`, 1)
 	enriched = strings.Replace(enriched,
-		`"assetPrefixes": ["attestations-extimg-pg"]`,
-		`"assetPrefixes": ["attestations-extimg-pg"], "enrichment": ["pgrx-base", "base-images"]`, 1)
+		`"assetPrefixes": [{"prefix": "attestations-extimg-pg"}]`,
+		`"assetPrefixes": [{"prefix": "attestations-extimg-pg"}], "enrichment": ["pgrx-base", "base-images"]`, 1)
 
 	p, err := assert.LoadPolicy(strings.NewReader(enriched))
 	if err != nil {

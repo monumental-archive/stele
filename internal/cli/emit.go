@@ -232,7 +232,8 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 
 	switch mode {
 	case emitChain:
-		fs.StringVar(&ea.gitDir, "git-dir", "", "local clone with the branch and notes ref fetched (required)")
+		fs.StringVar(&ea.gitDir, "git-dir", "",
+			"local clone with the branch and notes ref fetched (required without --clone; refused with it)")
 		fs.StringVar(&ea.ref, "ref", "refs/heads/main", "fully qualified protected branch ref")
 		fs.StringVar(&ea.rev, "rev", "", "the pushed revision (required)")
 		fs.StringVar(&ea.claims, "claims", "", "path to the claims stage's payload JSON (required)")
@@ -240,8 +241,9 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.actorID, "actor-id", "", "id of the actor who triggered the run (required)")
 		fs.StringVar(&ea.remote, "remote", "origin", "remote the notes ref is fetched from and pushed to")
 		fs.StringVar(&ea.clone, "clone", "",
-			"clone URL to prepare --git-dir from, fetching the branch under attestation and the ledger "+
-				"this policy names. Omitted, the tree must already exist and nothing networks before the push")
+			"clone URL: the engine materializes its own scratch repository and fetches the branch under "+
+				"attestation and the ledger this policy names. Omitted, --git-dir must already exist and "+
+				"nothing networks before the push")
 		fs.StringVar(&ea.committer, "committer", "",
 			"name <email> every note this run writes is authored by; required with --clone, since a scratch "+
 				"tree has no identity to inherit and the author lands in a permanent ledger")
@@ -317,8 +319,12 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 
 // loadChain reads the chain mode's file inputs.
 func (ea *emitArgs) loadChain(fail func(error) int) int {
-	if ea.gitDir == "" {
-		return fail(errors.New("--git-dir is required"))
+	switch {
+	case ea.clone != "" && ea.gitDir != "":
+		return fail(errors.New("--git-dir cannot accompany --clone — the engine materializes its own scratch " +
+			"repository, and a caller-named path is the restated preparation --clone exists to remove"))
+	case ea.clone == "" && ea.gitDir == "":
+		return fail(errors.New("--git-dir is required without --clone"))
 	}
 
 	if ea.claims == "" {
@@ -387,16 +393,16 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 		token = os.Getenv("GH_TOKEN")
 	}
 
-	g, err := emitRepo(ea, token)
-	if err != nil {
-		return err
-	}
-
 	workDir, err := os.MkdirTemp("", "stele-emit-*")
 	if err != nil {
 		return fmt.Errorf("emit: staging directory: %w", err)
 	}
 	defer os.RemoveAll(workDir) //nolint:errcheck // best-effort cleanup of a temp dir
+
+	g, err := emitRepo(ea, token, workDir)
+	if err != nil {
+		return err
+	}
 
 	in := &emit.ChainInputs{
 		Owner:        ea.coords.Owner,
@@ -463,8 +469,13 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 // nobody brought down — and founding a new chain rather than
 // extending one.
 //
+// The scratch location under --clone is engine-owned: a directory
+// inside this run's staging temp, never a caller-named path — the
+// missing-directory class that took source-attest down org-wide is
+// unrepresentable when no caller supplies a path at all.
+//
 //nolint:ireturn // the git seam is the point
-func emitRepo(ea *emitArgs, token string) (emit.Git, error) {
+func emitRepo(ea *emitArgs, token, workDir string) (emit.Git, error) {
 	notesRef := *ea.p.Source.NotesRef
 	if ea.clone == "" {
 		return openEmitGit(ea.gitDir, notesRef, ea.remote, token)
@@ -480,7 +491,7 @@ func emitRepo(ea *emitArgs, token string) (emit.Git, error) {
 		return nil, errors.New("emit: --clone needs --ref: the branch under attestation is what it fetches")
 	}
 
-	return cloneEmitGit(ea.gitDir, notesRef, ea.clone, token, branch, name, email)
+	return cloneEmitGit(filepath.Join(workDir, "scratch-repo"), notesRef, ea.clone, token, branch, name, email)
 }
 
 // splitCommitter reads a `Name <email>` identity, returning the name,

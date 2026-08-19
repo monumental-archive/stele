@@ -18,7 +18,7 @@ func minimalPolicy(t *testing.T) *policy.Policy {
 	t.Helper()
 
 	const doc = `{
-	  "schema": 3,
+	  "schema": 4,
 	  "issuer": "https://token.example.com",
 	  "trust": {
 	    "provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/release.yml"}

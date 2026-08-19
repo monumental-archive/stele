@@ -16,7 +16,7 @@ import (
 )
 
 const blastPolicyJSON = `{
-  "schema": 3,
+  "schema": 4,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

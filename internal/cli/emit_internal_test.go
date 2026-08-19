@@ -245,6 +245,18 @@ func TestEmitUsageRefusals(t *testing.T) {
 			"--git-dir is required",
 		},
 		{
+			// The scratch location under --clone is engine-owned; a
+			// caller-named path is the restated preparation the flag
+			// exists to remove, refused rather than ignored.
+			"git-dir alongside clone",
+			[]string{
+				"emit", "chain", "--repo", "acme/widget",
+				"--policy", px.policy, "--trusted-root", px.root,
+				"--git-dir", "x", "--clone", "https://example.test/acme/widget.git",
+			},
+			"--git-dir cannot accompany --clone",
+		},
+		{
 			"claims missing",
 			[]string{
 				"emit", "chain", "--repo", "acme/widget",
@@ -532,14 +544,15 @@ func TestEmitClonePreparesTheRefsThePolicyNames(t *testing.T) {
 	t.Cleanup(func() { cloneEmitGit = previous })
 
 	ea := &emitArgs{
-		gitDir:    "/scratch",
 		clone:     "https://example.test/acme/widget.git",
 		ref:       "refs/heads/main",
 		committer: "source-attest <attest@example.test>",
 		p:         policyNamingNotesRef("refs/notes/ledger"),
 	}
 
-	if _, err := emitRepo(ea, "tok"); err == nil {
+	work := t.TempDir()
+
+	if _, err := emitRepo(ea, "tok", work); err == nil {
 		t.Fatal("emitRepo = nil error, want the stub's")
 	}
 
@@ -555,8 +568,10 @@ func TestEmitClonePreparesTheRefsThePolicyNames(t *testing.T) {
 		t.Errorf("fetched branch %q, want the ref under attestation", got.branch)
 	}
 
-	if got.remote != "https://example.test/acme/widget.git" || got.dir != "/scratch" {
-		t.Errorf("clone = %q into %q", got.remote, got.dir)
+	// The scratch location is ENGINE-owned: inside this run's staging
+	// temp, never a caller-named path (the missing-directory class).
+	if got.remote != "https://example.test/acme/widget.git" || got.dir != filepath.Join(work, "scratch-repo") {
+		t.Errorf("clone = %q into %q, want the engine-owned scratch under %q", got.remote, got.dir, work)
 	}
 
 	if got.name != "source-attest" || got.email != "attest@example.test" {
@@ -587,7 +602,7 @@ func TestEmitWithoutCloneDoesNotNetwork(t *testing.T) {
 	t.Cleanup(func() { cloneEmitGit, openEmitGit = previousClone, previousOpen })
 
 	ea := &emitArgs{gitDir: "/existing", p: policyNamingNotesRef("refs/notes/commits")}
-	if _, err := emitRepo(ea, ""); err == nil {
+	if _, err := emitRepo(ea, "", t.TempDir()); err == nil {
 		t.Fatal("emitRepo = nil error, want the stub's")
 	}
 
@@ -633,10 +648,101 @@ func TestEmitCloneRefusals(t *testing.T) {
 			ea := tt.args
 			ea.p = policyNamingNotesRef("refs/notes/commits")
 
-			_, err := emitRepo(&ea, "")
+			_, err := emitRepo(&ea, "", t.TempDir())
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("emitRepo = %v, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// gitAt returns a runner for real git in dir, echoing output — the
+// end-to-end clone test builds and inspects real repositories.
+func gitAt(t *testing.T, dir string) func(...string) string {
+	t.Helper()
+
+	return func(args ...string) string {
+		t.Helper()
+
+		cmd := exec.Command("git", //nolint:gosec,noctx // fixed executable, test-owned args
+			append([]string{"-C", dir}, args...)...)
+		cmd.Env = gitrepo.Env(
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+
+		var out bytes.Buffer
+
+		cmd.Stdout, cmd.Stderr = &out, &out
+
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out.String())
+		}
+
+		return strings.TrimSpace(out.String())
+	}
+}
+
+// TestEmitChainClonesForReal runs the whole --clone leg with NO git
+// seam stubbed: the outage shipped because the seams hid the real
+// path from every test, so the real path is now a tested path —
+// engine-owned scratch materialization, the bare init, the strict
+// branch fetch, the ledger probe on an unfounded chain (genesis),
+// the note write and the push back to the remote. Only the signer,
+// the bundle verifier and the clock are scripted.
+func TestEmitChainClonesForReal(t *testing.T) {
+	swap(t, scriptedBV{}, scriptedStore{})
+	t.Setenv("GITHUB_WORKFLOW_REF", "acme/widget/.github/workflows/source-attest.yml@refs/heads/main")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	origSigner, origNow := newSigner, emitNow
+
+	newSigner = func(string) emit.Signer { return fakeEmitSigner{} }
+	emitNow = func() time.Time { return time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC) }
+
+	t.Cleanup(func() { newSigner, emitNow = origSigner, origNow })
+
+	// A bare remote seeded with one commit on main and NO ledger —
+	// the fresh repository every genesis run meets.
+	remoteDir := t.TempDir()
+	gitAt(t, remoteDir)("init", "-q", "--bare")
+
+	seed := gitWorld(t)
+	seedGit := gitAt(t, seed)
+	seedGit("remote", "add", "origin", remoteDir)
+	seedGit("push", "-q", "origin", "main")
+	tip := seedGit("rev-parse", "HEAD")
+
+	px, claims := emitFiles(t)
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"emit", "chain",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget",
+		"--clone", remoteDir,
+		"--committer", "source-attest <attest@example.test>",
+		"--ref", "refs/heads/main",
+		"--rev", tip, "--claims", claims,
+		"--actor", "octocat", "--actor-id", "583231",
+		"--machinery-digest", strings.Repeat("b", 40),
+		"--policy-uri", "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
+		"--genesis",
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d, stderr: %s", code, stderr.String())
+	}
+
+	// The push landed: the REMOTE now carries the founded ledger,
+	// with a note on the attested revision.
+	remoteGit := gitAt(t, remoteDir)
+	if ref := remoteGit("rev-parse", "--verify", "refs/notes/commits"); ref == "" {
+		t.Fatal("the remote has no ledger after a genesis emit")
+	}
+
+	if listing := remoteGit("notes", "--ref", "refs/notes/commits", "list", tip); listing == "" {
+		t.Errorf("no note on the attested revision %s", tip)
 	}
 }

@@ -1,6 +1,7 @@
 package policy_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 // this document with exactly one fact broken, so a failing row names
 // its guard and nothing else.
 const valid = `{
-  "schema": 3,
+  "schema": 4,
   "issuer": "https://token.example.com",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},
@@ -125,7 +126,7 @@ func TestLoadMinimal(t *testing.T) {
 	t.Parallel()
 
 	const minimal = `{
-	  "schema": 3,
+	  "schema": 4,
 	  "issuer": "https://token.example.com",
 	  "trust": {
 	    "provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/release.yml"}
@@ -179,16 +180,23 @@ func TestLoadRefusals(t *testing.T) {
 		want string
 	}{
 		{"not json at all", valid, "not json", "decode"},
-		{"unknown field", `"schema": 3`, `"schema": 3, "surprise": true`, wantUnknownField},
-		{"schema absent", `"schema": 3,`, ``, "schema is absent"},
-		{"schema newer", `"schema": 3`, `"schema": 4`, "not the implemented schema"},
+		{"unknown field", `"schema": 4`, `"schema": 4, "surprise": true`, wantUnknownField},
+		{"schema absent", `"schema": 4,`, ``, "schema is absent"},
+		// The newer value is DERIVED from the implemented constant, so
+		// an epoch-bump sweep over `"schema": N` literals can never
+		// rewrite this row into agreement with the document it must
+		// refuse (the guard carries no second copy of the number).
+		{
+			"schema newer", `"schema": 4`,
+			fmt.Sprintf(`"schema": %d`, policy.Schema+1), "not the implemented schema",
+		},
 		// The gate fires FIRST (stele#107): a schema-1 document
 		// carrying the pre-#84 vocabulary this decoder no longer knows
 		// must refuse as a VERSION mismatch, never incidentally as an
 		// unknown field — that is the whole reason the gate exists.
 		{
 			"old schema with old vocabulary is a version error",
-			`"schema": 3`,
+			`"schema": 4`,
 			`"schema": 1, "storeVsaFromCanon": true`,
 			"not the implemented schema",
 		},
