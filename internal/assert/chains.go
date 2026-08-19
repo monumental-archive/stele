@@ -90,7 +90,8 @@ func Chains(
 
 	pop2 := report.PopulationFromListing(len(repos), "repositories in the population")
 
-	return report.Seal("assert chains", pop.Subject(), pop2, w.findings, exceptions, report.NoCanary(), facts...), nil
+	return report.Seal("assert chains", pop.Subject(), pop2, w.findings, exceptions,
+		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 
 type chainsWalk struct {

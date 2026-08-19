@@ -355,10 +355,10 @@ different params, or different classes — is legs disagreeing about
 what was built: refused, never last-writer-wins.
 
 `stele assert plans --policy <assert-policy> --classes <declared>
---machinery-version <riding> <plan files...>` judges the plans
-against the planned obligations pre-publish, in the publish guard.
-The judgment is bidirectional, and the two directions deliberately
-ask two different questions (stele#143):
+--machinery-version <riding> [--out <path>] <plan files...>` judges
+the plans against the planned obligations pre-publish, in the publish
+guard. The judgment is bidirectional, and the two directions
+deliberately ask two different questions (stele#143):
 
 - **owed** — for each requested class's planned prefixes owed at the
   riding machinery version (the same policy and the same `owedFrom`
@@ -377,6 +377,31 @@ ask two different questions (stele#143):
   outside the judgment, not refused by it; a plan naming a class the
   release does not declare is drift (a leg ran for an undeclared
   class).
+
+### The judged set is what consumers iterate
+
+The judgment emits the entry set it judged: collapsed, validated,
+params canonicalised, ordered by document, and independent of the
+order the plan files were named. It rides in the report document as
+`judged` ([report-schema.md](report-schema.md)), and `--out <path>`
+writes those same bytes as one JSON array — the plan format again,
+merged. The derivation leg that produces the documents iterates THAT
+file.
+
+This is the rule, not a convenience (stele#151): a consumer must
+never re-derive the plan set from the same raw files. Before this,
+the publish guard judged the collapsed set while the loop beside it
+re-collapsed the plans with `jq -s 'add | unique'` — two derivations
+of one set from one set of bytes, agreeing until the day their
+notions of "identical entry" parted. One rendering reaches the
+report and the file, so a second reading of what was planned is
+unrepresentable.
+
+The file is written on `PASS` alone: the set exists to be iterated,
+and one that failed judgment must not be there to iterate. The exit
+code is one guard; a workflow that reads the file regardless finds
+nothing rather than a plan the guard refused. A set that cannot be
+placed is an output failure (exit 3), never a silent green.
 
 Verdicts and exit codes are the assert verb's usual three
 ([report-schema.md](report-schema.md)); an unreadable plan path is a

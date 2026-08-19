@@ -82,7 +82,8 @@ func Tags(
 
 	pop2 := report.PopulationFromListing(w.checked, "release tags")
 
-	return report.Seal("assert tags", pop.Subject(), pop2, w.findings, nil, report.NoCanary(), facts...), nil
+	return report.Seal("assert tags", pop.Subject(), pop2, w.findings, nil,
+		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 
 type tagsWalk struct {

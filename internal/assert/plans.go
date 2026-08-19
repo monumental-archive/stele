@@ -45,6 +45,7 @@ const (
 	assertPlanOrphan   = "plan-orphan"
 	assertPlanDrift    = "plan-drift"
 	assertPlanClass    = "class"
+	assertPlanSet      = "plan-set"
 )
 
 // The plans originate on build legs that execute caller code, so
@@ -101,6 +102,12 @@ type PlanFile struct {
 // returns a sealed report and no error: every input is already in
 // hand, so there is no "could not look" — a plan that will not parse
 // is a defective build leg, which is a finding, not blindness.
+//
+// The report carries the collapsed, validated entry set the judgment
+// judged (stele#151). A consuming leg iterates THAT — the set that
+// passed judgment — instead of re-reading the same plan files with a
+// second collapse of its own; two derivations of one set agree until
+// the day they do not.
 func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanFile, log Logf) *report.Report {
 	findings, entries := parsePlans(files)
 
@@ -142,20 +149,45 @@ func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanF
 
 	findings = append(findings, vocabularyFindings(pol, entries, seen)...)
 
+	judged, rerr := jsonx.Marshal(entries)
+	if rerr != nil {
+		// Shadowed by canonicalParams, which re-rendered every entry's
+		// only free-form half before the entry was kept: nothing in a
+		// kept entry can fail to render here. Kept fail-closed anyway
+		// — a run that cannot state what it judged must not report a
+		// set nobody can read.
+		findings = append(findings, report.Finding{
+			Subject: "plans", Assertion: assertPlanSet,
+			Detail: fmt.Sprintf("the judged set did not render: %v", rerr),
+		})
+
+		judged = nil
+	}
+
+	log("assert: plans: %d planned document(s) judged", len(entries))
+
 	pop := report.PopulationFromEvidence(subjects, "requested evidence classes")
 
-	return report.Seal("assert plans", strings.Join(sortedSet(seen), ","), pop, findings, nil, report.NoCanary())
+	return report.Seal("assert plans", strings.Join(sortedSet(seen), ","), pop, findings, nil,
+		report.NoCanary(), report.Judged(judged))
 }
 
 // parsePlans decodes and merges every plan file: identical entries
 // collapse (matrix legs restate the same mapping), and one document
 // claimed by two DIFFERENT entries is legs disagreeing about what
 // was built — a finding, never last-writer-wins.
+//
+// The kept entries are the ones the judgment goes on to reason about
+// AND the ones it emits, canonicalised by validate and ordered by
+// document — a set is not a sequence, so its rendering must not
+// depend on the order a caller happened to name the plan files. The
+// slice starts empty rather than nil: a release that planned nothing
+// renders as an empty set, and a consumer iterating `null` is a
+// caller crashing on a judgment that passed.
 func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
-	var (
-		findings []report.Finding
-		entries  []PlanEntry
-	)
+	var findings []report.Finding
+
+	entries := []PlanEntry{}
 
 	byDoc := map[string]string{}
 	kept := map[string]bool{}
@@ -203,6 +235,10 @@ func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
 		}
 	}
 
+	// One document is claimed by at most one kept entry, so the
+	// document name is a total order over the set.
+	sort.Slice(entries, func(i, j int) bool { return *entries[i].Doc < *entries[j].Doc })
+
 	return findings, entries
 }
 
@@ -210,7 +246,10 @@ func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
 // values step outside the declared vocabulary, and returns the
 // entry's canonical rendering, so "identical restatement" and
 // "different claim on one document" are decided by comparison, never
-// by field-by-field folklore.
+// by field-by-field folklore. It canonicalises the entry in place as
+// it goes: the entry the judgment keeps — and emits — is the very one
+// it compared, so what a consumer iterates cannot be a second reading
+// of the source bytes.
 func (e *PlanEntry) validate() (string, error) {
 	switch {
 	case e.Class == nil || *e.Class == "":
@@ -230,6 +269,8 @@ func (e *PlanEntry) validate() (string, error) {
 		return "", err
 	}
 
+	e.Params = params
+
 	artifact := ""
 	if e.Artifact != nil {
 		artifact = *e.Artifact
@@ -243,30 +284,30 @@ func (e *PlanEntry) validate() (string, error) {
 // matrix legs restating one closure compare equal whatever their
 // emitters' whitespace, and no value can smuggle a shell
 // metacharacter toward the downstream leg's command line.
-func (e *PlanEntry) canonicalParams() (string, error) {
+func (e *PlanEntry) canonicalParams() (jsonx.Raw, error) {
 	if len(e.Params) == 0 {
-		return "", nil
+		return nil, nil
 	}
 
 	v, err := jsonx.Value(e.Params)
 	if err != nil {
-		return "", fmt.Errorf("params do not decode: %w", err)
+		return nil, fmt.Errorf("params do not decode: %w", err)
 	}
 
 	if _, ok := v.(map[string]any); !ok {
-		return "", errors.New("params is not an object — the closure description is key-value by definition")
+		return nil, errors.New("params is not an object — the closure description is key-value by definition")
 	}
 
 	if gerr := guardParams(v); gerr != nil {
-		return "", gerr
+		return nil, gerr
 	}
 
 	canon, err := jsonx.Marshal(v)
 	if err != nil {
-		return "", fmt.Errorf("params do not re-render: %w", err)
+		return nil, fmt.Errorf("params do not re-render: %w", err)
 	}
 
-	return string(canon), nil
+	return canon, nil
 }
 
 // guardParams walks the params value: every key and every string leaf

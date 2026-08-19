@@ -20,7 +20,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -132,33 +131,14 @@ func levelCmd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if la.shieldPath != "" {
-		if code := writeShield(la.shieldPath, assessment); code != exitOK {
+		// Rendered beside the report from the same seal, so no copy of
+		// the level can drift from another.
+		if code := writeDoc(la.shieldPath, assessment.Shield().Encode); code != exitOK {
 			return code
 		}
 	}
 
 	return emitReport(assessment.Report(), la.jsonOut, stdout, stderr)
-}
-
-// writeShield renders the endpoint document beside the report, from
-// the same seal.
-func writeShield(path string, a *level.Assessment) int {
-	f, err := os.Create(path) //nolint:gosec // the shield path is operator-supplied by design
-	if err != nil {
-		return exitIO
-	}
-
-	if err := a.Shield().Encode(f); err != nil {
-		_ = f.Close() //nolint:errcheck // the encode error is the one that matters
-
-		return exitIO
-	}
-
-	if err := f.Close(); err != nil {
-		return exitIO
-	}
-
-	return exitOK
 }
 
 // parseLevelArgs parses flags. Only --repo is required, and it names

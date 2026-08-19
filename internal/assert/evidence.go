@@ -138,7 +138,8 @@ func Evidence(
 
 	covered := report.PopulationFromListing(w.checked, "subjects with a declared evidence contract")
 
-	return report.Seal("assert evidence", w.subject, covered, w.findings, exceptions, report.NoCanary(), facts...), nil
+	return report.Seal("assert evidence", w.subject, covered, w.findings, exceptions,
+		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 
 type evidenceWalk struct {
