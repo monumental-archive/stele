@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 // Snapshot file modes: a snapshot is shareable evidence, owner-writable.
@@ -46,6 +47,18 @@ type Snapshot struct {
 
 // seg escapes one path segment for the filesystem.
 func seg(s string) string { return url.PathEscape(s) }
+
+// unseg reverses seg, so a name that survived capture survives
+// replay. A segment that will not unescape is returned as it was
+// read: the file is there either way, and inventing a name for it
+// would be worse than reporting the one on disk.
+func unseg(s string) string {
+	if decoded, err := url.PathUnescape(s); err == nil {
+		return decoded
+	}
+
+	return s
+}
 
 // decodeInto adapts the generic decode to a pointer target.
 func decodeInto(raw jsonx.Raw, into any) error {
@@ -225,8 +238,8 @@ func (s Snapshot) PackageVersionDigest(org, pkg, tag string) (string, error) {
 	return out, nil
 }
 
-// WorkflowContents implements Forge.
-func (s Snapshot) WorkflowContents(owner, repo string) ([][]byte, error) {
+// Workflows implements Forge.
+func (s Snapshot) Workflows(owner, repo string) ([]workflow.File, error) {
 	dir := filepath.Join(s.Dir, seg(owner), seg(repo), "workflows")
 
 	entries, err := os.ReadDir(dir)
@@ -238,7 +251,7 @@ func (s Snapshot) WorkflowContents(owner, repo string) ([][]byte, error) {
 		return nil, fmt.Errorf("gh: snapshot workflows of %s/%s: %w", owner, repo, err)
 	}
 
-	var out [][]byte
+	var out []workflow.File
 
 	for _, e := range entries {
 		b, rerr := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // the snapshot dir is operator-supplied
@@ -246,7 +259,7 @@ func (s Snapshot) WorkflowContents(owner, repo string) ([][]byte, error) {
 			return nil, fmt.Errorf("gh: snapshot workflow %s: %w", e.Name(), rerr)
 		}
 
-		out = append(out, b)
+		out = append(out, workflow.File{Name: unseg(e.Name()), Content: b})
 	}
 
 	return out, nil
@@ -411,16 +424,19 @@ func (c Capture) PackageVersionDigest(org, pkg, tag string) (string, error) {
 	return out, nil
 }
 
-// WorkflowContents implements Forge.
-func (c Capture) WorkflowContents(owner, repo string) ([][]byte, error) {
-	out, err := c.Live.WorkflowContents(owner, repo)
+// Workflows implements Forge.
+func (c Capture) Workflows(owner, repo string) ([]workflow.File, error) {
+	out, err := c.Live.Workflows(owner, repo)
 	if err != nil {
 		return nil, err
 	}
 
-	for i, b := range out {
-		name := fmt.Sprintf("%03d.yml", i)
-		if werr := c.writeFile(filepath.Join(seg(owner), seg(repo), "workflows", name), b); werr != nil {
+	// Captured under the name the repository knows, not a positional
+	// one: the name IS the workflow's identity, so a snapshot that
+	// numbers its files replays a tree in which no call can be
+	// resolved.
+	for _, f := range out {
+		if werr := c.writeFile(filepath.Join(seg(owner), seg(repo), "workflows", seg(f.Name)), f.Content); werr != nil {
 			return nil, werr
 		}
 	}

@@ -562,3 +562,76 @@ API — no clone); a founded chain that fails to verify is a finding
 that **no exception can excuse** — declared exceptions carry the
 `unactivated` assertion alone, so an opt-out excuses absence,
 structurally never a defect. A zero population seals CANNOT_JUDGE.
+
+## The permissions section
+
+The caller/callee permissions join (stele#148). The platform makes
+`permissions:` caller-owned — a reusable workflow inherits its
+caller's grant and can only narrow it — so a callee that gains a
+capability is a breaking change to every caller, enforced at run time
+as a startup failure with no jobs and no log. The requirement is
+nevertheless statically computable: the union of the callee's job
+grants is exactly what a caller must hold. Declaring the section
+declares the obligation.
+
+Everything here is a convention, and every convention is declared:
+
+```json
+"permissions": {
+  "reusable": {"repo": "example-org/.github", "dir": ".github/workflows"},
+  "callerDirs": [".github/workflows", "workflow-templates"]
+}
+```
+
+- `reusable` — the shared-workflow tree this org publishes: `repo` is
+  the `owner/name` a caller spells in `uses:`, and `dir` is that
+  repository's own directory holding the workflows, which is also
+  where the run reads them under `--tree`. Both halves are needed and
+  neither implies the other: the reference is how callers NAME the
+  tree, the directory is where a run can READ it. The whole object is
+  optional — an adopter whose reusable workflows all live beside their
+  callers declares none, and the join then covers local (`./…`) calls
+  alone.
+- `callerDirs` — the checkout-relative directories whose workflow
+  files are read as callers, at least one. More than one because a
+  tree may hold callers it does not run: an org's workflow templates
+  are stubs destined for other repositories, and a stub's grant is
+  exactly as breakable as a live caller's. A declared directory the
+  checkout does not carry is an answer, not a defect — an org declares
+  the directories its trees MAY use. Directories are checkout-relative
+  and may not climb out of it; a policy that could is refused at load.
+
+The join (`stele assert permissions --policy`, with `--tree` for the
+reusable checkout and either `--callers` for a checkout or
+`--org`/`--repo` for a population walked through the forge):
+
+- a job's `uses:` is read through the platform's own grammar. A
+  **local** reference resolves in the CALLER's own file set — a
+  repository calling its own reusable workflow is judged against that
+  workflow, never against the shared tree. A **remote** reference
+  matching `reusable.repo` resolves in the declared tree. Anything
+  else is another repository's workflow, which this run holds no tree
+  for: outside the declared scope, counted in the
+  `callsOutsideDeclaredTrees` fact rather than silently invisible.
+- the requirement is the union of every job's effective grant — its
+  own `permissions:` block, or the workflow-level default when it
+  declares none. `uses:` jobs count too: a nested callee's ask chains
+  up through the workflow to its caller.
+- a **blanket** ask (`read-all`, `write-all`) is answered by a blanket
+  grant alone. Proving an enumerated caller sufficient would need the
+  platform's full scope vocabulary, and a vocabulary hardcoded in the
+  tool goes stale the next time the platform adds a scope — silently,
+  in the direction that under-reports. The join says so instead of
+  guessing.
+- every degraded shape is a finding, never a skip: a workflow file
+  that will not parse (`workflow-shape`), a call the grammar cannot
+  read (`call-shape`), a callee absent from the tree
+  (`callee-absent`), present but unparsable (`callee-unreadable`), or
+  present and declaring no `workflow_call` trigger
+  (`callee-not-callable`). An unchecked grant reporting green is the
+  failure class the join exists to remove.
+- a run that examined no workflow file at all seals CANNOT_JUDGE: a
+  wrong path, an empty checkout and a narrowed credential all look
+  identical from inside, and none of them may exit like a pass. A
+  declared reusable tree the run holds no file from is refused for the
+  same reason.

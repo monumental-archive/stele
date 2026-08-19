@@ -16,6 +16,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 // scriptedForge is the "live" side for capture tests.
@@ -77,8 +78,8 @@ func (f scriptedForge) PackageVersionDigest(_, _, _ string) (string, error) {
 	return "sha256:" + strings.Repeat("a", 64), nil
 }
 
-func (scriptedForge) WorkflowContents(_, _ string) ([][]byte, error) {
-	return [][]byte{[]byte("jobs: {}\n")}, nil
+func (scriptedForge) Workflows(_, _ string) ([]workflow.File, error) {
+	return []workflow.File{{Name: "ci.yml", Content: []byte("jobs: {}\n")}}, nil
 }
 
 func (scriptedForge) FailedRuns(_, _, _ string) ([]string, error) { return []string{"publish"}, nil }
@@ -104,7 +105,7 @@ func TestCaptureThenReplay(t *testing.T) {
 		func() error { _, err := rec.Attestations("acme", "widget", "bb"); return err },
 		func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err },
 		func() error { _, err := rec.PackageVersionDigest("acme", "widget", "latest"); return err },
-		func() error { _, err := rec.WorkflowContents("acme", "widget"); return err },
+		func() error { _, err := rec.Workflows("acme", "widget"); return err },
 		func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err },
 	} {
 		if err := call(); err != nil {
@@ -155,12 +156,12 @@ func TestCaptureThenReplay(t *testing.T) {
 		t.Fatalf("uncaptured tag = %q, %v — a recorded absence", absent, aerr)
 	}
 
-	wf, err := snap.WorkflowContents("acme", "widget")
+	wf, err := snap.Workflows("acme", "widget")
 	if err != nil || len(wf) != 1 {
-		t.Fatalf("WorkflowContents = %v, %v", wf, err)
+		t.Fatalf("Workflows = %v, %v", wf, err)
 	}
 
-	if none, werr := snap.WorkflowContents("acme", "ghost"); werr != nil || none != nil {
+	if none, werr := snap.Workflows("acme", "ghost"); werr != nil || none != nil {
 		t.Fatalf("uncaptured workflows = %v, %v — a recorded absence", none, werr)
 	}
 
@@ -281,8 +282,8 @@ func TestCaptureUnwritableDir(t *testing.T) {
 		t.Fatal("PackageVersionDigest capture did not refuse")
 	}
 
-	if _, err := rec.WorkflowContents("acme", "widget"); err == nil {
-		t.Fatal("WorkflowContents capture did not refuse")
+	if _, err := rec.Workflows("acme", "widget"); err == nil {
+		t.Fatal("Workflows capture did not refuse")
 	}
 
 	if _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); err == nil {
@@ -375,7 +376,7 @@ func (o onlyForge) PackageVersionDigest(a, b, c string) (string, error) {
 	return o.f.PackageVersionDigest(a, b, c)
 }
 
-func (o onlyForge) WorkflowContents(a, b string) ([][]byte, error) { return o.f.WorkflowContents(a, b) }
+func (o onlyForge) Workflows(a, b string) ([]workflow.File, error) { return o.f.Workflows(a, b) }
 func (o onlyForge) FailedRuns(a, b, c string) ([]string, error)    { return o.f.FailedRuns(a, b, c) }
 
 // TestSnapshotTagReadsMissing: a tag read whose file the capture
@@ -625,12 +626,12 @@ func TestSnapshotUnreadablePaths(t *testing.T) {
 		t.Errorf("FileAt = %v, %v — a directory is not a recorded file", ok, err)
 	}
 
-	if _, err := snap.WorkflowContents("acme", "widget"); err == nil {
-		t.Error("WorkflowContents read a file as a directory")
+	if _, err := snap.Workflows("acme", "widget"); err == nil {
+		t.Error("Workflows read a file as a directory")
 	}
 
-	if _, err := snap.WorkflowContents("acme", "gadget"); err == nil {
-		t.Error("WorkflowContents read a directory as a workflow")
+	if _, err := snap.Workflows("acme", "gadget"); err == nil {
+		t.Error("Workflows read a directory as a workflow")
 	}
 }
 
@@ -655,7 +656,7 @@ func (failingForge) Attestations(_, _, _ string) ([]jsonx.Raw, error) { return n
 func (failingForge) PackageVersionDigest(_, _, _ string) (string, error) {
 	return "", errForgeDown
 }
-func (failingForge) WorkflowContents(_, _ string) ([][]byte, error) { return nil, errForgeDown }
+func (failingForge) Workflows(_, _ string) ([]workflow.File, error) { return nil, errForgeDown }
 func (failingForge) FailedRuns(_, _, _ string) ([]string, error)    { return nil, errForgeDown }
 
 // TestCaptureRecordsNoFailures pins the documented stance: a snapshot
@@ -684,7 +685,7 @@ func TestCaptureRecordsNoFailures(t *testing.T) {
 
 			return err
 		}},
-		{"WorkflowContents", func() error { _, err := rec.WorkflowContents("acme", "widget"); return err }},
+		{"Workflows", func() error { _, err := rec.Workflows("acme", "widget"); return err }},
 		{"FailedRuns", func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err }},
 	}
 

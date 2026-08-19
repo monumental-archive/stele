@@ -65,7 +65,7 @@ func Chains(
 		return nil, errors.New("assert: chains needs the source notes ref and at least one protected branch")
 	}
 
-	org, repos, err := pop.resolve(forge)
+	org, repos, err := pop.Resolve(forge)
 	if err != nil {
 		return nil, err
 	}

@@ -79,8 +79,8 @@ func everyRead() []read {
 
 			return out != "", err
 		}},
-		{name: "WorkflowContents", absentIsAnswer: true, decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.WorkflowContents("acme", "widget")
+		{name: "Workflows", absentIsAnswer: true, decodes: true, call: func(c *gh.Client) (bool, error) {
+			out, err := c.Workflows("acme", "widget")
 
 			return len(out) > 0, err
 		}},
@@ -529,9 +529,9 @@ func TestHalfAnsweredReads(t *testing.T) {
 	t.Run("a listed workflow the credential cannot read", func(t *testing.T) {
 		t.Parallel()
 
-		out, err := c.WorkflowContents("acme", "widget")
+		out, err := c.Workflows("acme", "widget")
 		if !errors.Is(err, gh.ErrForbidden) {
-			t.Fatalf("WorkflowContents = %v, %v — an unreadable member is not a shorter list", out, err)
+			t.Fatalf("Workflows = %v, %v — an unreadable member is not a shorter list", out, err)
 		}
 	})
 }

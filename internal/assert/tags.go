@@ -58,7 +58,7 @@ func Tags(
 		return nil, errors.New("assert: the policy declares no tags section")
 	}
 
-	org, repos, err := pop.resolve(forge)
+	org, repos, err := pop.Resolve(forge)
 	if err != nil {
 		return nil, err
 	}

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 // ErrForbidden reports a read the credential could not make. Distinct
@@ -84,10 +85,13 @@ type Forge interface {
 	// such version — a rolling tag that points at nothing is an
 	// answer, not an error.
 	PackageVersionDigest(org, pkg, tag string) (string, error)
-	// WorkflowContents returns every workflow file's bytes at the
-	// repository's default branch — the tree the expected signer pins
-	// are DERIVED from, never a literal.
-	WorkflowContents(owner, repo string) ([][]byte, error)
+	// Workflows returns every workflow file at the repository's default
+	// branch, each with the name its repository knows it by. The names
+	// travel with the bytes because a repository's workflows are a flat
+	// namespace keyed by file name, which is how one workflow's call on
+	// another is spelled — and a finding that cannot name the file it
+	// is about is a finding nobody can act on.
+	Workflows(owner, repo string) ([]workflow.File, error)
 	// FailedRuns reports the names of the workflow runs on one branch
 	// (a tag name, for release runs) that concluded in failure. Names,
 	// not a count: whether a failure is the PUBLISHING one decides
@@ -432,10 +436,16 @@ type dirEntry struct {
 	Type string `json:"type"`
 }
 
-// WorkflowContents implements Forge.
-func (c *Client) WorkflowContents(owner, repo string) ([][]byte, error) {
+// WorkflowDir is where the platform keeps a repository's workflows.
+// A forge fact rather than an org convention: the platform reads
+// workflows from this directory and nowhere else, so a caller
+// resolving a workflow path resolves it here.
+const WorkflowDir = ".github/workflows"
+
+// Workflows implements Forge.
+func (c *Client) Workflows(owner, repo string) ([]workflow.File, error) {
 	body, ok, err := c.get(
-		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/.github/workflows",
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/"+WorkflowDir,
 		"application/vnd.github+json")
 	if err != nil || !ok {
 		return nil, err
@@ -446,20 +456,20 @@ func (c *Client) WorkflowContents(owner, repo string) ([][]byte, error) {
 		return nil, fmt.Errorf("gh: workflows of %s/%s: %w", owner, repo, err)
 	}
 
-	var out [][]byte
+	var out []workflow.File
 
 	for _, e := range *entries {
 		if e.Type != "file" {
 			continue
 		}
 
-		content, found, ferr := c.FileAt(owner, repo, ".github/workflows/"+e.Name, "HEAD")
+		content, found, ferr := c.FileAt(owner, repo, WorkflowDir+"/"+e.Name, "HEAD")
 		if ferr != nil {
 			return nil, ferr
 		}
 
 		if found {
-			out = append(out, content)
+			out = append(out, workflow.File{Name: e.Name, Content: content})
 		}
 	}
 

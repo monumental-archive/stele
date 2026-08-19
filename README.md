@@ -34,7 +34,7 @@ Four verbs and a judge:
 | Command | Owns |
 | --- | --- |
 | `derive` | versions and changelogs from conventional commits, version-mirror bumps, per-artifact SBOMs (SPDX), VEX from triage decisions, OCI image facts, control claims from the forge's live enforcement state |
-| `assert` | evidence against a declaration, over an org or one repo: image facts, evidence-bundle completeness, advisory blast radius against VEX, release tags, chain coverage of the whole population, and pre-publish inventory plans against the same obligations the post-publish walk reads — exit 0 pass, 1 fail, 4 could-not-judge |
+| `assert` | evidence against a declaration, over an org or one repo: image facts, evidence-bundle completeness, advisory blast radius against VEX, release tags, chain coverage of the whole population, pre-publish inventory plans against the same obligations the post-publish walk reads, and the caller/callee `permissions:` join across a workflow tree — exit 0 pass, 1 fail, 4 could-not-judge |
 | `emit` | source-chain links, VSA predicates, the release evidence manifest — the JSON that gets signed |
 | `verify` | every attestation against a pinned signer identity, the published verdict, the source-chain walk, and the reproducibility rebuild's typed verdict |
 | `level` | what a repository's live, publicly fetchable evidence actually supports, per SLSA track — no clone, no policy, no trusted root, no declaration taken |

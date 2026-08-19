@@ -54,11 +54,15 @@ func (p Population) Subject() string {
 	return p.Org
 }
 
-// resolve turns the population into the owner and its repositories —
-// a listing for an org, the one named repository otherwise.
+// Resolve turns the population into the owner and its repositories —
+// a listing for an org, the one named repository otherwise. Exported
+// because a mode that builds its own per-repository inputs before the
+// walk must enumerate through this, not beside it: a second
+// enumeration is a second population, and the two would disagree in
+// exactly the degraded states the population rule exists to catch.
 //
 //nolint:gocritic // unnamedResult: the doc line names the results
-func (p Population) resolve(forge gh.Forge) (string, []string, error) {
+func (p Population) Resolve(forge gh.Forge) (string, []string, error) {
 	if p.Repo == "" {
 		repos, err := forge.Repos(p.Org)
 		if err != nil {
@@ -95,7 +99,7 @@ func Evidence(
 			"assert: expectedRepos is declared but the population is one repository — the declaration cannot apply")
 	}
 
-	org, repos, err := pop.resolve(forge)
+	org, repos, err := pop.Resolve(forge)
 	if err != nil {
 		return nil, err
 	}

@@ -62,7 +62,7 @@ func TestEvidenceForgeTears(t *testing.T) {
 func TestEvidenceContractSourceTears(t *testing.T) {
 	t.Parallel()
 
-	for _, read := range []string{"ReleaseAssets", "Asset", "WorkflowContents", "FileAt"} {
+	for _, read := range []string{"ReleaseAssets", "Asset", "Workflows", "FileAt"} {
 		t.Run(read, func(t *testing.T) {
 			t.Parallel()
 
@@ -228,7 +228,7 @@ func TestContinuousHalfTears(t *testing.T) {
 	}{
 		{"the stub cannot be read", "FileAt", "continuous stub"},
 		{"the registry cannot be read", "PackageVersionDigest", "package versions"},
-		{"the workflows cannot be read", "WorkflowContents", "workflows of"},
+		{"the workflows cannot be read", "Workflows", "workflows of"},
 	}
 
 	for _, tc := range tests {

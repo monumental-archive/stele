@@ -147,6 +147,14 @@ Stated honestly rather than discovered:
   adopter can run it with `--repo`, and mostly doesn't want it on
   day one.
 
+  The exception is **`assert permissions`**, which needs neither a
+  forge nor a release: pointed at a checkout it reads workflow files
+  off disk and holds every caller to what the workflow it calls asks
+  for. A repository whose reusable workflows sit beside their callers
+  declares no shared tree at all and gets the join over its own
+  calls — see the `permissions` section in
+  [assert-policy-schema.md](assert-policy-schema.md).
+
 ## What you can skip
 
 - **All of `assert`**, until you have a corpus worth auditing.
