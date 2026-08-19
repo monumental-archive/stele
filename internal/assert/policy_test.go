@@ -3,6 +3,7 @@
 package assert_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -18,7 +19,16 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 4`, `"schema": 5`, 1), "schema"},
+		// The wrong value is DERIVED from the implemented constant, so
+		// an epoch-bump sweep over `"schema": N` literals can never
+		// rewrite this row into agreement with the document it must
+		// refuse (the guard carries no second copy of the number).
+		{
+			"wrong schema",
+			strings.Replace(testPolicyJSON, `"schema": 4`,
+				fmt.Sprintf(`"schema": %d`, assert.PolicySchema+1), 1),
+			"schema",
+		},
 		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 4`, `"schema": 4, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",

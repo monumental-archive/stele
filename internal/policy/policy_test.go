@@ -1,6 +1,7 @@
 package policy_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -181,7 +182,14 @@ func TestLoadRefusals(t *testing.T) {
 		{"not json at all", valid, "not json", "decode"},
 		{"unknown field", `"schema": 4`, `"schema": 4, "surprise": true`, wantUnknownField},
 		{"schema absent", `"schema": 4,`, ``, "schema is absent"},
-		{"schema newer", `"schema": 4`, `"schema": 5`, "not the implemented schema"},
+		// The newer value is DERIVED from the implemented constant, so
+		// an epoch-bump sweep over `"schema": N` literals can never
+		// rewrite this row into agreement with the document it must
+		// refuse (the guard carries no second copy of the number).
+		{
+			"schema newer", `"schema": 4`,
+			fmt.Sprintf(`"schema": %d`, policy.Schema+1), "not the implemented schema",
+		},
 		// The gate fires FIRST (stele#107): a schema-1 document
 		// carrying the pre-#84 vocabulary this decoder no longer knows
 		// must refuse as a VERSION mismatch, never incidentally as an
