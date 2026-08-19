@@ -245,21 +245,21 @@ func TestAssertStreamGuards(t *testing.T) {
 	})
 
 	t.Run("plans passing", func(t *testing.T) {
-		policy, plan := writePlansFixtures(t, `[{"doc": "sbom-npm-lab-wasm", "cargoPackage": "lab-wasm"}]`)
+		policy, plan := writePlansFixtures(t, `[{"class": "wasm-npm", "doc": "sbom-npm-lab-wasm"}]`)
 		sweepWriteFailures(t, []string{
 			"assert", "plans", "--policy", policy, "--classes", "wasm-npm", "--machinery-version", "1.43.0", plan,
 		})
 	})
 
 	t.Run("plans drifted", func(t *testing.T) {
-		policy, plan := writePlansFixtures(t, `[{"doc": "sbom-cargo-lab-wasm", "cargoPackage": "lab-wasm"}]`)
+		policy, plan := writePlansFixtures(t, `[{"class": "wasm-npm", "doc": "sbom-cargo-lab-wasm"}]`)
 		sweepWriteFailures(t, []string{
 			"assert", "plans", "--policy", policy, "--classes", "wasm-npm", "--machinery-version", "1.43.0", plan,
 		})
 	})
 
 	t.Run("plans drifted as json", func(t *testing.T) {
-		policy, plan := writePlansFixtures(t, `[{"doc": "sbom-cargo-lab-wasm", "cargoPackage": "lab-wasm"}]`)
+		policy, plan := writePlansFixtures(t, `[{"class": "wasm-npm", "doc": "sbom-cargo-lab-wasm"}]`)
 		sweepWriteFailures(t, []string{
 			"assert", "plans", "--json", "--policy", policy,
 			"--classes", "wasm-npm", "--machinery-version", "1.43.0", plan,

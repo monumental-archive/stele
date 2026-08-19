@@ -50,8 +50,8 @@ func writePlansFixtures(t *testing.T, plan string) (string, string) {
 }
 
 func TestAssertPlansExitCodes(t *testing.T) {
-	goodPlan := `[{"doc": "sbom-npm-lab-wasm", "cargoPackage": "lab-wasm"}]`
-	badPlan := `[{"doc": "sbom-cargo-lab-wasm", "cargoPackage": "lab-wasm"}]`
+	goodPlan := `[{"class": "wasm-npm", "doc": "sbom-npm-lab-wasm"}]`
+	badPlan := `[{"class": "wasm-npm", "doc": "sbom-cargo-lab-wasm"}]`
 
 	tests := []struct {
 		name string
@@ -141,7 +141,7 @@ func TestAssertPlansUsageRefusals(t *testing.T) {
 // stdout, progress on stderr, the verdict mapped to the exit code.
 func TestAssertPlansJSON(t *testing.T) {
 	policyPath, planPath := writePlansFixtures(t,
-		`[{"doc": "sbom-npm-lab-wasm", "cargoPackage": "lab-wasm"}]`)
+		`[{"class": "wasm-npm", "doc": "sbom-npm-lab-wasm"}]`)
 
 	var stdout, stderr bytes.Buffer
 

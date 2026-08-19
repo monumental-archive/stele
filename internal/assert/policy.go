@@ -558,6 +558,24 @@ func (c *ClassPolicy) owedPlannedPrefixes(machineryVersion string) []string {
 	return out
 }
 
+// plannedPrefixes returns every plan-fulfilled prefix this class
+// DECLARES, with no epoch in sight — the class's plan vocabulary.
+// Vocabulary membership is a naming question, not a time question
+// (stele#143): a prefix owed only from some future machinery version
+// is still a name the class could owe, so a pre-epoch plan under it
+// is correct, never an orphan.
+func (c *ClassPolicy) plannedPrefixes() []string {
+	var out []string
+
+	for _, ob := range c.AssetPrefixes {
+		if ob.Planned {
+			out = append(out, *ob.Prefix)
+		}
+	}
+
+	return out
+}
+
 // owedPrefixes returns the prefix obligations a release under the
 // given machinery version owes from this class — each entry judged
 // through the one owedFrom semantics (stele#128). Judged here rather
