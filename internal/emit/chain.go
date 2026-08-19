@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/dsse"
 	"github.com/monumental-archive/stele/internal/intoto"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -50,7 +51,7 @@ type ChainInputs struct {
 	ActorID      string
 	MachineryRef string // the commit the policy tree is pinned at
 	PolicyURI    string // where a stranger reads the policy at that pin
-	Claims       *Claims
+	Claims       *claims.Payload
 }
 
 // Chain runs one emission: discovery, per-revision link assembly and

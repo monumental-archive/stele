@@ -17,6 +17,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/gitrepo"
+	"github.com/monumental-archive/stele/internal/policy"
 )
 
 const emitRev = "1111111111111111111111111111111111111111"
@@ -496,5 +497,146 @@ func TestEmitGitPreflightAdapters(t *testing.T) {
 
 	if err := g.DryRunPushNotes("0000000000000000000000000000000000000000"); err == nil {
 		t.Fatal("a repository with no notes ref proved a push")
+	}
+}
+
+// policyNamingNotesRef is a policy whose source section names one
+// ledger — the value --clone must derive its fetch refspec from.
+func policyNamingNotesRef(ref string) *policy.Policy {
+	return &policy.Policy{Source: &policy.Source{NotesRef: &ref}}
+}
+
+// --clone: the refs a scratch tree needs come from the POLICY that
+// names them, not from a refspec the caller restates.
+//
+// That coupling is the whole reason the preparation moved in. A
+// caller hardcoding `refs/notes/commits` while the policy names
+// something else leaves the emitter looking for a ledger nobody
+// fetched — and founding a new chain instead of extending one, which
+// is the failure this makes unspellable.
+func TestEmitClonePreparesTheRefsThePolicyNames(t *testing.T) {
+	var got struct {
+		dir, notesRef, remote, branch, name, email string
+		called                                     bool
+	}
+
+	previous := cloneEmitGit
+	cloneEmitGit = func(dir, notesRef, remote, _, branch, name, email string) (emit.Git, error) {
+		got.dir, got.notesRef, got.remote = dir, notesRef, remote
+		got.branch, got.name, got.email = branch, name, email
+		got.called = true
+
+		return nil, errors.New("stop here: the wiring is what this row proves")
+	}
+
+	t.Cleanup(func() { cloneEmitGit = previous })
+
+	ea := &emitArgs{
+		gitDir:    "/scratch",
+		clone:     "https://example.test/acme/widget.git",
+		ref:       "refs/heads/main",
+		committer: "source-attest <attest@example.test>",
+		p:         policyNamingNotesRef("refs/notes/ledger"),
+	}
+
+	if _, err := emitRepo(ea, "tok"); err == nil {
+		t.Fatal("emitRepo = nil error, want the stub's")
+	}
+
+	if !got.called {
+		t.Fatal("--clone did not prepare the tree")
+	}
+
+	if got.notesRef != "refs/notes/ledger" {
+		t.Errorf("fetched %q, want the ref the POLICY names", got.notesRef)
+	}
+
+	if got.branch != "refs/heads/main" {
+		t.Errorf("fetched branch %q, want the ref under attestation", got.branch)
+	}
+
+	if got.remote != "https://example.test/acme/widget.git" || got.dir != "/scratch" {
+		t.Errorf("clone = %q into %q", got.remote, got.dir)
+	}
+
+	if got.name != "source-attest" || got.email != "attest@example.test" {
+		t.Errorf("committer = %q <%q>", got.name, got.email)
+	}
+}
+
+// Without --clone nothing networks before the push: the tree must
+// already exist, which keeps the no-network default a property rather
+// than a habit.
+func TestEmitWithoutCloneDoesNotNetwork(t *testing.T) {
+	cloned := false
+	previousClone := cloneEmitGit
+	cloneEmitGit = func(string, string, string, string, string, string, string) (emit.Git, error) {
+		cloned = true
+
+		return nil, errors.New("must not be called")
+	}
+
+	opened := false
+	previousOpen := openEmitGit
+	openEmitGit = func(string, string, string, string) (emit.Git, error) {
+		opened = true
+
+		return nil, errors.New("stop here")
+	}
+
+	t.Cleanup(func() { cloneEmitGit, openEmitGit = previousClone, previousOpen })
+
+	ea := &emitArgs{gitDir: "/existing", p: policyNamingNotesRef("refs/notes/commits")}
+	if _, err := emitRepo(ea, ""); err == nil {
+		t.Fatal("emitRepo = nil error, want the stub's")
+	}
+
+	if cloned {
+		t.Error("a run without --clone reached the network")
+	}
+
+	if !opened {
+		t.Error("a run without --clone did not open the existing tree")
+	}
+}
+
+func TestEmitCloneRefusals(t *testing.T) {
+	tests := []struct {
+		name string
+		args emitArgs
+		want string
+	}{
+		{
+			name: "a clone with no branch to fetch",
+			args: emitArgs{clone: "u", committer: "n <e>"},
+			want: "--clone needs --ref",
+		},
+		{
+			name: "a committer that is not Name <email>",
+			args: emitArgs{clone: "u", ref: "refs/heads/main", committer: "nobody"},
+			want: "is not `Name <email>`",
+		},
+		{
+			name: "a committer naming no author",
+			args: emitArgs{clone: "u", ref: "refs/heads/main", committer: " <e>"},
+			want: "names no author",
+		},
+		{
+			name: "a clone with no committer at all",
+			args: emitArgs{clone: "u", ref: "refs/heads/main"},
+			want: "is not `Name <email>`",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ea := tt.args
+			ea.p = policyNamingNotesRef("refs/notes/commits")
+
+			_, err := emitRepo(&ea, "")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("emitRepo = %v, want it to mention %q", err, tt.want)
+			}
+		})
 	}
 }

@@ -71,9 +71,24 @@ over whole, and only then does the next open. State and next step:
    emit residue moved into the engine: preflight and the
    reserved-identity guard, which refuses an absent workflow ref
    (#74).
-5. **derive, the remainder — open as #40, the last leg**: claims,
-   VEX, OCI facts (SBOM landed with #46). With it goes the clone
-   prep, the last logic in the source-attest action.
+5. **derive, the remainder — MECHANISMS BUILT (#40), cutover
+   pending**: claims, OCI facts, VEX and the per-artifact SBOM
+   inventories all have engines and command surfaces; the clone prep
+   moved into `emit chain --clone`, which fetches the refs the policy
+   names rather than the ones a caller restated. Claims is
+   shadow-proven live against the rules API (identical property set
+   and continuity horizon, with the bash's tag-immutability evidence
+   measured to omit `bypass_actors`). Facts and VEX are not yet
+   shadow-proven: both want a release to point at, so they batch with
+   the cutover.
+
+   The canon cutover is deliberately NOT per-leg. One batched
+   handover after #40/#5/#94/#96, and inside it the stele pin bump
+   lands BEFORE the policy edit — inverted from the canon's usual
+   policy-then-pin, because `jsonx` disallows unknown fields and
+   `policy.Load` version-gates before strict decode, so a policy
+   declaring a new section against an older pinned stele fails
+   belt-wide with a correct cause and a useless message.
 
 Each handover also moves that mechanism's documentation: the canon doc
 that used to specify the behavior shrinks to org narrative plus a
@@ -163,7 +178,14 @@ The canon speaks for the org; stele speaks for the mechanism.
   sequencing decision (#392): `generate-pgrx-upgrade.sh` is proven SQL
   text derivation whose oracle a byte-diff cannot capture; it moves
   only after everything else is authoritative, with a lab pgrx release
-  as its proof.
+  as its proof. Not to be confused with the pgrx-extension SBOM
+  closure, which #40 built: one derives upgrade SQL, the other an
+  inventory, and they share only a word.
+- **Badge derivation stays canon — won't-do, recorded at #40.**
+  `mise/derive-badges.sh` derives a RENDERING (a README block) whose
+  oracle is a text diff; nothing attests it and no verifier consumes
+  it. The correct split once `stele level` (#5) lands is that stele
+  computes the honest level and the canon renders the badge.
 - Commits: conventional, imperative, lowercase, 72-column, DCO
   sign-off; scopes in `committed.toml`. PRs squash-merge through the
   org gate (`ci / ci`).

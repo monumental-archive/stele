@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -46,6 +47,23 @@ var (
 	openEmitGit = func(dir, notesRef, remote, token string) (emit.Git, error) {
 		r, err := gitrepo.Open(dir, notesRef)
 		if err != nil {
+			return nil, err
+		}
+
+		return emitGit{Repo: r, remote: remote, token: token}, nil
+	}
+
+	// cloneEmitGit prepares a scratch tree and fetches exactly the refs
+	// the run needs — the branch under attestation and the ledger the
+	// POLICY names. Separate seam from openEmitGit because it is the
+	// one that networks, and a run that does not ask for it does not.
+	cloneEmitGit = func(dir, notesRef, remote, token, branch, name, email string) (emit.Git, error) {
+		r, err := gitrepo.Clone(dir, remote, token, name, email, branch, notesRef)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := r.SetNotesRef(notesRef); err != nil {
 			return nil, err
 		}
 
@@ -127,6 +145,8 @@ type emitArgs struct {
 	actor        string
 	actorID      string
 	remote       string
+	clone        string
+	committer    string
 	genesis      bool
 	policyURI    string
 	machineryPin string
@@ -143,13 +163,13 @@ type emitArgs struct {
 	subjectList []verify.Subject
 	sbomList    []verify.Subject
 	bv          verify.BundleVerifier
-	claimsDoc   *emit.Claims
+	claimsDoc   *claims.Payload
 }
 
 // emitCmd dispatches `stele emit <mode>`.
 func emitCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain or vsa"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain, vsa or manifest"); err != nil {
 			return exitIO
 		}
 
@@ -159,8 +179,11 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 	mode := args[0]
 	switch mode {
 	case emitChain, emitVSA:
+	case emitManifest:
+		// Its own path: it shares none of the chain/vsa flag surface.
+		return emitManifestCmd(args[1:], stdout, stderr)
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa, manifest)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -216,6 +239,12 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.actor, "actor", "", "login of the actor who triggered the run (required)")
 		fs.StringVar(&ea.actorID, "actor-id", "", "id of the actor who triggered the run (required)")
 		fs.StringVar(&ea.remote, "remote", "origin", "remote the notes ref is fetched from and pushed to")
+		fs.StringVar(&ea.clone, "clone", "",
+			"clone URL to prepare --git-dir from, fetching the branch under attestation and the ledger "+
+				"this policy names. Omitted, the tree must already exist and nothing networks before the push")
+		fs.StringVar(&ea.committer, "committer", "",
+			"name <email> every note this run writes is authored by; required with --clone, since a scratch "+
+				"tree has no identity to inherit and the author lands in a permanent ledger")
 		fs.BoolVar(&ea.genesis, "genesis", false,
 			"found the chain: refused when any link already exists on the walked history")
 	case emitVSA:
@@ -301,7 +330,7 @@ func (ea *emitArgs) loadChain(fail func(error) int) int {
 		return fail(err)
 	}
 
-	ea.claimsDoc, err = jsonx.DecodeBytes[emit.Claims](claimsJSON)
+	ea.claimsDoc, err = jsonx.DecodeBytes[claims.Payload](claimsJSON)
 	if err != nil {
 		return fail(fmt.Errorf("claims payload: %w", err))
 	}
@@ -358,7 +387,7 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 		token = os.Getenv("GH_TOKEN")
 	}
 
-	g, err := openEmitGit(ea.gitDir, *ea.p.Source.NotesRef, ea.remote, token)
+	g, err := emitRepo(ea, token)
 	if err != nil {
 		return err
 	}
@@ -422,4 +451,54 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 	out.logf("emit: vsa predicate for %s@%s written to %s", ea.coords.Slug(), ea.coords.Tag, ea.out)
 
 	return nil
+}
+
+// emitRepo opens the tree, preparing it first when the caller asked
+// for a clone.
+//
+// The refs a clone fetches come from the policy this run already
+// loaded, which is the point of moving the preparation in: the caller
+// used to restate the ledger's ref in a fetch refspec, so a policy
+// that named a different one left the emitter looking for a ledger
+// nobody brought down — and founding a new chain rather than
+// extending one.
+//
+//nolint:ireturn // the git seam is the point
+func emitRepo(ea *emitArgs, token string) (emit.Git, error) {
+	notesRef := *ea.p.Source.NotesRef
+	if ea.clone == "" {
+		return openEmitGit(ea.gitDir, notesRef, ea.remote, token)
+	}
+
+	name, email, err := splitCommitter(ea.committer)
+	if err != nil {
+		return nil, err
+	}
+
+	branch := ea.ref
+	if branch == "" {
+		return nil, errors.New("emit: --clone needs --ref: the branch under attestation is what it fetches")
+	}
+
+	return cloneEmitGit(ea.gitDir, notesRef, ea.clone, token, branch, name, email)
+}
+
+// splitCommitter reads a `Name <email>` identity, returning the name,
+// the address, and any refusal.
+//
+//nolint:gocritic // unnamedResult: named results are refused by nonamedreturns
+func splitCommitter(spec string) (string, string, error) {
+	open := strings.LastIndex(spec, "<")
+	if open < 0 || !strings.HasSuffix(strings.TrimSpace(spec), ">") {
+		return "", "", fmt.Errorf("emit: --committer %q is not `Name <email>`", spec)
+	}
+
+	name := strings.TrimSpace(spec[:open])
+	email := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(spec)[open+1:], ">"))
+
+	if name == "" || email == "" {
+		return "", "", fmt.Errorf("emit: --committer %q names no author", spec)
+	}
+
+	return name, email, nil
 }

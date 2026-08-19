@@ -100,9 +100,24 @@ usage:
               internal path-dependency constraints, CITATION.cff),
               parsed and re-read, never pattern-matched; --check
               instead asserts the mirrors carry the released version
-    sbom      the release SBOM, read from the shipped binaries'
-              embedded module lists (SPDX 2.3, one union document
-              over every platform leg)
+    sbom      an artifact's inventory (SPDX 2.3), from one of three
+              sources: the shipped binaries' embedded module lists,
+              a Cargo package's own resolved closure scoped to the
+              target it was built for, or an aggregation of
+              per-artifact documents into the release view — which is
+              folded from them, never derived a second time
+    facts     the OCI image metadata one release asserts on its
+              images: provenance from the released commit and the
+              forge, editorial with derived defaults, licence
+              validated as an SPDX expression and shipped canonical
+    vex       this release's coverage document: every shipped
+              inventory scanned, every finding joined to the recorded
+              decisions by exact (advisory, package, version), and a
+              refusal when a gate-class finding has no decision
+    claims    the control claims for one branch, matched by RULE
+              CONTENT against the forge's live enforcement state
+              through the policy's declared table; a lapsed control
+              is absent, an unreadable one refuses
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge:
@@ -130,8 +145,17 @@ usage:
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
 
-derive sbom flags: [--out --expect-version] <binary>...; the other
-derive modes take --git-dir [--ref --tag-prefix --paths --minor-types
+derive sbom flags: [--out --expect-version] <binary>..., or
+--cargo-package --tree --created [--target --features
+--no-default-features --all-features], or --union --union-name
+--created; derive claims
+takes --policy --repo --branch [--canon-root --canon-digest --out
+--snapshot|--capture]; derive facts takes --archetype --repo --git-dir --server-url
+[--version --rev --tree --title --description]; derive vex
+takes --subjects --vex --author --id --released [--base-ecosystems
+--out]; the other
+derive modes take --git-dir [--ref
+--tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
 --date --changelog]; bump adds [--check --date].
@@ -145,7 +169,7 @@ verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain/level add
 --git-dir [--ref]. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
---genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
+--clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]. GITHUB_TOKEN/GH_TOKEN authenticates store reads and the
 notes push.
 `

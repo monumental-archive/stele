@@ -18,10 +18,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Masterminds/semver/v3"
-
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
-	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
@@ -75,15 +73,6 @@ type ContractSource interface {
 	Contract(owner, repo, tag string) (c *Contract, ok bool, err error)
 }
 
-// manifestDoc is the release evidence manifest — stele's own format,
-// decoded strictly (docs/assert-policy-schema.md).
-type manifestDoc struct {
-	Schema           *int     `json:"schema"`
-	Classes          []string `json:"classes"`
-	StoreVSA         *bool    `json:"storeVsa"`
-	MachineryVersion *string  `json:"machineryVersion"`
-}
-
 // ManifestSource reads the release's own evidence manifest asset.
 // The policy supplies the obligation epochs: the manifest declares
 // facts (classes, layout, the machinery version that published it),
@@ -113,21 +102,13 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, fmt.Errorf("assert: manifest of %s/%s@%s: %w", owner, repo, tag, err)
 	}
 
-	doc, err := jsonx.DecodeBytes[manifestDoc](raw)
+	// Decoded through the ONE manifest definition — the same package
+	// the writer renders through, so a manifest the writer can produce
+	// and a manifest this reader admits cannot drift apart
+	// (internal/evidence).
+	doc, err := evidence.Parse(raw)
 	if err != nil {
 		return nil, false, fmt.Errorf("assert: manifest of %s/%s@%s: %w", owner, repo, tag, err)
-	}
-
-	if doc.Schema == nil || *doc.Schema != 1 || len(doc.Classes) == 0 || doc.StoreVSA == nil ||
-		doc.MachineryVersion == nil {
-		return nil, false, fmt.Errorf(
-			"assert: manifest of %s/%s@%s: schema, classes, storeVsa and machineryVersion are all required",
-			owner, repo, tag)
-	}
-
-	if _, err := semver.NewVersion(*doc.MachineryVersion); err != nil {
-		return nil, false, fmt.Errorf(
-			"assert: manifest of %s/%s@%s: machineryVersion: %w", owner, repo, tag, err)
 	}
 
 	// The declared machinery version is the attested spelling of the

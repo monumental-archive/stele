@@ -16,13 +16,12 @@
 package emit
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/trust"
 )
@@ -78,80 +77,6 @@ type BlobVerifier interface {
 // Logf receives progress lines; the caller owns the stream.
 type Logf func(format string, args ...any)
 
-// Claims is the claims-stage payload: when enforcement was read, when
-// each contributing ruleset last changed (epochs, the continuity
-// horizon), and the derived control claims. Slices are pointers so an
-// absent array and an empty one stay different facts — a payload with
-// zero controls is an honest lapse; one MISSING the key is malformed.
-type Claims struct {
-	RulesReadAt       *string          `json:"rulesReadAt"`
-	RulesetsUpdatedAt *[]int64         `json:"rulesetsUpdatedAt"`
-	Controls          *[]chain.Control `json:"controls"`
-}
-
-// Validate refuses a claims payload whose shape could not have come
-// from an honest claims stage.
-func (c *Claims) Validate() error {
-	if c.RulesReadAt == nil {
-		return errors.New("emit: claims.rulesReadAt is absent")
-	}
-
-	if _, err := time.Parse(time.RFC3339, *c.RulesReadAt); err != nil {
-		return fmt.Errorf("emit: claims.rulesReadAt: %w", err)
-	}
-
-	if c.RulesetsUpdatedAt == nil {
-		return errors.New("emit: claims.rulesetsUpdatedAt is absent — absent and empty are different facts")
-	}
-
-	if c.Controls == nil {
-		return errors.New("emit: claims.controls is absent — absent and an honest empty claim set are different facts")
-	}
-
-	for i, ctl := range *c.Controls {
-		if ctl.Property == nil || *ctl.Property == "" {
-			return fmt.Errorf("emit: claims.controls[%d].property is absent or empty", i)
-		}
-
-		if len(ctl.Evidence) == 0 {
-			return fmt.Errorf("emit: claims.controls[%d] carries no evidence", i)
-		}
-	}
-
-	return nil
-}
-
-// horizon is the newest moment any contributing ruleset changed, or
-// absent when no change times were readable — and absent under-claims.
-func (c *Claims) horizon() (int64, bool) {
-	epochs := *c.RulesetsUpdatedAt
-	if len(epochs) == 0 {
-		return 0, false
-	}
-
-	maxE := epochs[0]
-	for _, e := range epochs[1:] {
-		if e > maxE {
-			maxE = e
-		}
-	}
-
-	return maxE, true
-}
-
-// properties reports the claimed property set.
-func (c *Claims) properties() map[string]bool {
-	out := make(map[string]bool, len(*c.Controls))
-
-	for _, ctl := range *c.Controls {
-		if ctl.Property != nil {
-			out[*ctl.Property] = true
-		}
-	}
-
-	return out
-}
-
 // serverURL is the host every GitHub identity and repository URI
 // lives under — buildType semantics, so code, not policy.
 const serverURL = "https://github.com"
@@ -179,10 +104,10 @@ func expand(tmpl, owner, repo string) string {
 // changed at or after the commit). A guard that cannot prove
 // under-claims; it never guesses.
 func level(
-	p *policy.Policy, pb *policy.ProtectedBranch, claims *Claims,
+	p *policy.Policy, pb *policy.ProtectedBranch, payload *claims.Payload,
 	commitTime time.Time, healed bool, log Logf,
 ) (string, error) {
-	present := claims.properties()
+	present := payload.Properties()
 
 	for _, rp := range pb.RequiredProperties {
 		since, err := time.Parse(time.RFC3339, *rp.Since)
@@ -208,7 +133,7 @@ func level(
 			return *p.Source.UnderclaimLevel, nil
 		}
 
-		if maxE, ok := claims.horizon(); !ok || maxE >= commitTime.Unix() {
+		if maxE, ok := payload.Horizon(); !ok || maxE >= commitTime.Unix() {
 			log("emit: healed link and ruleset continuity across the gap is unprovable — under-claiming %s",
 				*p.Source.UnderclaimLevel)
 

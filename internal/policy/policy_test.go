@@ -560,6 +560,97 @@ func TestEnrichmentSection(t *testing.T) {
 	}
 }
 
+// The claims table is an obligation like every other section: absent
+// means the org does not derive claims with this tool. Declared, it
+// is validated, and the cross-check that gives the section its reason
+// to exist fires — a property a branch REQUIRES but the table cannot
+// derive is unclaimable, so that branch could never reach its target
+// level. Today that is a silent permanent under-claim spread across a
+// policy file, an org doc and a shell script; here it refuses at
+// load.
+func TestLoadClaimsTable(t *testing.T) {
+	t.Parallel()
+
+	const declared = `"protectedBranches": [`
+
+	// withClaims splices a claims table beside the branch that
+	// requires ACME_SOURCE_GATED.
+	withClaims := func(t *testing.T, table string) string {
+		t.Helper()
+
+		return mutate(t, declared, `"claims": `+table+`,
+    `+declared)
+	}
+
+	gatedMatcher := `{"properties": [{"name": "ACME_SOURCE_GATED", "scope": "branchRules",
+	  "match": {"$contains": [{"type": "required_status_checks"}]}}]}`
+
+	t.Run("a table deriving every required property loads", func(t *testing.T) {
+		t.Parallel()
+
+		p, err := policy.Load(strings.NewReader(withClaims(t, gatedMatcher)))
+		if err != nil {
+			t.Fatalf("Load = %v", err)
+		}
+
+		if p.Source.Claims == nil || !p.Source.Claims.Declares("ACME_SOURCE_GATED") {
+			t.Fatal("the claims table did not survive the load")
+		}
+	})
+
+	t.Run("an absent table is an undeclared obligation, not an error", func(t *testing.T) {
+		t.Parallel()
+
+		p, err := policy.Load(strings.NewReader(valid))
+		if err != nil {
+			t.Fatalf("Load = %v", err)
+		}
+
+		if p.Source.Claims != nil {
+			t.Fatal("a table appeared from nowhere")
+		}
+	})
+
+	tests := []struct {
+		name  string
+		table string
+		want  string
+	}{
+		{
+			"a required property the table cannot derive",
+			`{"properties": [{"name": "ACME_SOURCE_OTHER", "scope": "branchRules",
+			  "match": {"$contains": [{"type": "deletion"}]}}]}`,
+			"could never reach SLSA_SOURCE_LEVEL_3",
+		},
+		{
+			"the table's own validation runs at load",
+			`{"properties": [{"name": "ACME_SOURCE_GATED", "scope": "branchRules"}]}`,
+			"declares no match",
+		},
+		{
+			"a matcher outside the language",
+			`{"properties": [{"name": "ACME_SOURCE_GATED", "scope": "branchRules",
+			  "match": {"$regex": "ci"}}]}`,
+			"reserved operator namespace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := policy.Load(strings.NewReader(withClaims(t, tt.table)))
+			if err == nil {
+				t.Fatalf("Load = nil error, want %q", tt.want)
+			}
+
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // An absent section is no obligation at all — the declared-obligation
 // principle, which a minimal adopter depends on.
 func TestEnrichmentAbsent(t *testing.T) {

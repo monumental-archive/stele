@@ -584,14 +584,8 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 //
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
 func loadVEX(dir string, stderr io.Writer) (*vexjoin.Decisions, int) {
-	decisions := &vexjoin.Decisions{}
-
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return decisions, exitOK
-	}
-
-	fail := func(err error) (*vexjoin.Decisions, int) {
+	decisions, err := readVEXDir(dir)
+	if err != nil {
 		if _, werr := fmt.Fprintf(stderr, "stele assert blast-radius: %v\n", err); werr != nil {
 			return nil, exitIO
 		}
@@ -599,8 +593,23 @@ func loadVEX(dir string, stderr io.Writer) (*vexjoin.Decisions, int) {
 		return nil, exitUsage
 	}
 
+	return decisions, exitOK
+}
+
+// readVEXDir is the shared load: it carries the cause as an error so
+// each verb reports the refusal in its own name — a shared loader that
+// baked one verb's prefix into the message would misattribute the
+// other's failures.
+func readVEXDir(dir string) (*vexjoin.Decisions, error) {
+	decisions := &vexjoin.Decisions{}
+
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return decisions, nil
+	}
+
 	if err != nil {
-		return fail(err)
+		return nil, fmt.Errorf("vex decisions: %w", err)
 	}
 
 	for _, e := range entries {
@@ -610,15 +619,15 @@ func loadVEX(dir string, stderr io.Writer) (*vexjoin.Decisions, int) {
 
 		doc, rerr := os.ReadFile(dir + "/" + e.Name()) //nolint:gosec // the vex dir is operator-supplied by design
 		if rerr != nil {
-			return fail(rerr)
+			return nil, fmt.Errorf("vex decisions: %w", rerr)
 		}
 
 		if perr := vexjoin.Parse(decisions, doc, e.Name()); perr != nil {
-			return fail(perr)
+			return nil, perr
 		}
 	}
 
-	return decisions, exitOK
+	return decisions, nil
 }
 
 // assertTags runs the tag audit (stele#83): policy loaded, the tag

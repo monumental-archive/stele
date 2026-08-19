@@ -148,3 +148,32 @@ func Encode(w io.Writer, v any) error {
 
 	return nil
 }
+
+// Value decodes one arbitrary JSON value — the entry point for data
+// whose shape is not known to any Go type: a policy-declared matcher
+// tree and the forge response it runs against. Objects land as
+// map[string]any, arrays as []any, and numbers as json.Number rather
+// than float64: an equality test between an id read from policy and
+// the same id read from an API must not depend on whether both
+// survived a round trip through a binary float.
+//
+// Unknown fields have no meaning here (there is no schema to be
+// unknown to), but trailing data is still an error.
+func Value(b []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, fmt.Errorf("jsonx: value: %w", err)
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, ErrTrailingData
+	}
+
+	return v, nil
+}
+
+// Number is a JSON number in its source spelling — see Value.
+type Number = json.Number

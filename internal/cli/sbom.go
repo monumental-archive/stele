@@ -12,8 +12,12 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
+	"time"
 
+	"github.com/monumental-archive/stele/internal/cargo"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/npm"
 	"github.com/monumental-archive/stele/internal/sbom"
 )
 
@@ -32,6 +36,19 @@ type sbomArgs struct {
 	binaries      []string
 	out           string
 	expectVersion string
+
+	// The Cargo path: an artifact's own closure, scoped to the package
+	// that ships it (.github#492).
+	cargoRoot         string
+	npmDir            string
+	tree              string
+	target            string
+	features          string
+	noDefaultFeatures bool
+	allFeatures       bool
+	created           string
+	unionOf           string
+	unionName         string
 }
 
 // parseSBOMArgs reads the flag surface. The binaries are positional:
@@ -48,12 +65,38 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	fs.StringVar(&sa.expectVersion, "expect-version", "",
 		"version the pipeline believes it is releasing; refused unless the binaries agree. "+
 			"A bare number is read as its v-prefixed tag")
+	fs.StringVar(&sa.cargoRoot, "cargo-package", "",
+		"derive from this Cargo package's own resolved closure rather than from binaries — "+
+			"the inventory of one artifact, not of the workspace that built it")
+	fs.StringVar(&sa.npmDir, "npm-dir", "",
+		"derive from the npm package rooted at this directory: its production closure, resolved from the "+
+			"lockfile alone — nothing is installed to answer")
+	fs.StringVar(&sa.tree, "tree", "", "workspace root to resolve in (with --cargo-package)")
+	fs.StringVar(&sa.target, "target", "",
+		"target triple the artifact was built for; empty resolves without platform filtering")
+	fs.StringVar(&sa.features, "features", "",
+		"comma-separated cargo features the artifact was built with. One crate built once per feature set "+
+			"ships SEPARATE artifacts whose dependency graphs differ; resolving them alike would assert "+
+			"they are identical")
+	fs.BoolVar(&sa.noDefaultFeatures, "no-default-features", false,
+		"the artifact was built with default features off")
+	fs.BoolVar(&sa.allFeatures, "all-features", false, "the artifact was built with every feature on")
+	fs.StringVar(&sa.created, "created", "",
+		"the artifact's own instant, RFC 3339, never a clock reading (with --cargo-package or --union)")
+	fs.StringVar(&sa.unionOf, "union", "",
+		"comma-separated per-artifact documents to aggregate into the release view; "+
+			"the view is folded from them, never derived a second time")
+	fs.StringVar(&sa.unionName, "union-name", "", "the release the aggregated view describes (with --union)")
 
 	if err := fs.Parse(args); err != nil {
 		return sa, exitUsage
 	}
 
 	sa.binaries = fs.Args()
+	if sa.cargoRoot != "" || sa.npmDir != "" || sa.unionOf != "" {
+		return sa, exitOK
+	}
+
 	if len(sa.binaries) == 0 {
 		if _, err := fmt.Fprintln(stderr, "stele derive sbom: at least one binary path is required"); err != nil {
 			return sa, exitIO
@@ -65,9 +108,47 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	return sa, exitOK
 }
 
-// runDeriveSBOM reads every leg, derives the union document, and
-// writes it where asked.
-func runDeriveSBOM(sa *sbomArgs, out *latch) error {
+// runDeriveSBOM dispatches the four sources: an artifact's Cargo or
+// npm closure, an aggregation of per-artifact documents, or the
+// shipped binaries' embedded module lists.
+func runDeriveSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	sources := 0
+	for _, set := range []bool{sa.cargoRoot != "", sa.npmDir != "", sa.unionOf != ""} {
+		if set {
+			sources++
+		}
+	}
+
+	switch {
+	case sources > 1:
+		return errors.New("derive sbom: --cargo-package, --npm-dir and --union are exclusive:" +
+			" one artifact, one source")
+	case sources == 1:
+		// Every one of these stamps --created into an attested document,
+		// so a spelling the format does not admit is refused here rather
+		// than published for every later consumer to choke on.
+		if sa.created != "" {
+			if _, err := time.Parse(time.RFC3339, sa.created); err != nil {
+				return fmt.Errorf("derive sbom: --created %q is not RFC 3339: %w", sa.created, err)
+			}
+		}
+
+		switch {
+		case sa.cargoRoot != "":
+			return runDeriveCargoSBOM(sa, doc, out)
+		case sa.npmDir != "":
+			return runDeriveNpmSBOM(sa, doc, out)
+		}
+
+		return runDeriveUnion(sa, doc, out)
+	}
+
+	return runDeriveBinarySBOM(sa, doc, out)
+}
+
+// runDeriveBinarySBOM reads every leg, unions the platform legs, and
+// writes the document where asked.
+func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	bins := make([]sbom.Binary, 0, len(sa.binaries))
 
 	for _, path := range sa.binaries {
@@ -79,12 +160,12 @@ func runDeriveSBOM(sa *sbomArgs, out *latch) error {
 		bins = append(bins, sbom.Binary{Name: path, Info: info})
 	}
 
-	doc, err := sbom.Derive(bins, "stele-"+selfVersion())
+	document, err := sbom.Derive(bins, "stele-"+selfVersion())
 	if err != nil {
 		return err
 	}
 
-	root := doc.Packages[0]
+	root := document.Packages[0]
 
 	// The cross-check, not the source: the version in the document came
 	// from the artifact, and the pipeline's belief is only allowed to
@@ -101,39 +182,11 @@ func runDeriveSBOM(sa *sbomArgs, out *latch) error {
 		}
 	}
 
-	if err := writeDoc(sa.out, doc, out); err != nil {
+	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
 		return err
 	}
 
-	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(doc.Packages), len(bins))
-
-	return nil
-}
-
-// writeDoc places the document: a named file, or the latch's stream
-// when unnamed — through the latch, so a failed stdout write is the
-// same exitIO every other stream failure is.
-func writeDoc(path string, doc *sbom.Document, out *latch) error {
-	if path == "" {
-		if out.err == nil {
-			out.err = jsonx.Encode(out.w, doc)
-		}
-
-		return nil
-	}
-
-	f, err := os.Create(path) //nolint:gosec // the path is the --out flag; writing where asked is the feature
-	if err != nil {
-		return fmt.Errorf("derive sbom: %w", err)
-	}
-
-	if err := jsonx.Encode(f, doc); err != nil {
-		return errors.Join(err, f.Close())
-	}
-
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("derive sbom: %w", err)
-	}
+	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(document.Packages), len(bins))
 
 	return nil
 }
@@ -146,4 +199,152 @@ func selfVersion() string {
 	}
 
 	return develVersion
+}
+
+// The Cargo resolver seam, swapped only by tests: resolving for real
+// needs a workspace and a toolchain, which would test cargo rather
+// than this wiring.
+//
+//nolint:gochecknoglobals // test seam, written only by test setup
+var newCargoResolver = func() cargo.Resolver { return cargo.Runner{} }
+
+// runDeriveCargoSBOM derives one artifact's inventory from its own
+// resolved closure — the .github#492 rule that the unit of description
+// is the artifact, because the artifact is the unit of consumption.
+func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	switch {
+	case sa.tree == "":
+		return errors.New("derive sbom: --tree is required with --cargo-package")
+	case sa.created == "":
+		return errors.New("derive sbom: --created is required — an artifact's inventory is dated by the" +
+			" artifact, never by the run that described it")
+	}
+
+	selection, err := cargo.Select(sa.target, splitTypes(sa.features), sa.noDefaultFeatures, sa.allFeatures)
+	if err != nil {
+		return err
+	}
+
+	metadata, err := newCargoResolver().Metadata(sa.tree, selection)
+	if err != nil {
+		return err
+	}
+
+	root, closure, err := cargo.Closure(metadata, sa.cargoRoot)
+	if err != nil {
+		return err
+	}
+
+	deps := make([]sbom.Package, 0, len(closure))
+	for _, pkg := range closure {
+		deps = append(deps, sbom.CargoPackage(pkg.Name, pkg.Version))
+	}
+
+	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
+		sbom.CargoPackage(root.Name, root.Version), deps)
+	if err != nil {
+		return err
+	}
+
+	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s: %d packages", document.Name, len(document.Packages))
+
+	return nil
+}
+
+// The npm resolver seam, swapped only by tests, for the reason the
+// cargo one is: resolving for real needs a lockfile and a toolchain,
+// which would test npm rather than this wiring.
+//
+//nolint:gochecknoglobals // test seam, written only by test setup
+var newNpmResolver = func() npm.Resolver { return npm.Runner{} }
+
+// runDeriveNpmSBOM derives one npm artifact's inventory from its own
+// resolved production closure — the wasm-npm class's JS half
+// (.github#492 item 2), under the same rule as the Cargo leg: the
+// unit of description is the artifact, because the artifact is the
+// unit of consumption.
+func runDeriveNpmSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	if sa.created == "" {
+		return errors.New("derive sbom: --created is required — an artifact's inventory is dated by the" +
+			" artifact, never by the run that described it")
+	}
+
+	tree, err := newNpmResolver().Tree(sa.npmDir)
+	if err != nil {
+		return err
+	}
+
+	root, closure, err := npm.Closure(tree)
+	if err != nil {
+		return err
+	}
+
+	deps := make([]sbom.Package, 0, len(closure))
+	for _, pkg := range closure {
+		deps = append(deps, sbom.NpmPackage(pkg.Name, pkg.Version))
+	}
+
+	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
+		sbom.NpmPackage(root.Name, root.Version), deps)
+	if err != nil {
+		return err
+	}
+
+	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s: %d packages", document.Name, len(document.Packages))
+
+	return nil
+}
+
+// runDeriveUnion folds per-artifact documents into the release view.
+// Its input is documents and nothing else, so the view cannot be
+// derived a second time from a tree.
+func runDeriveUnion(sa *sbomArgs, doc io.Writer, out *latch) error {
+	switch {
+	case sa.unionName == "":
+		return errors.New("derive sbom: --union-name is required — the view must name the release it describes")
+	case sa.created == "":
+		return errors.New("derive sbom: --created is required, and it is the release's own instant")
+	}
+
+	var docs []*sbom.Document
+
+	for path := range strings.SplitSeq(sa.unionOf, ",") {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+
+		body, err := os.ReadFile(path) //nolint:gosec // the caller names the documents to aggregate
+		if err != nil {
+			return fmt.Errorf("derive sbom: %w", err)
+		}
+
+		parsed, err := jsonx.DecodeForeign[sbom.Document](body)
+		if err != nil {
+			return fmt.Errorf("derive sbom: %s: %w", path, err)
+		}
+
+		docs = append(docs, parsed)
+	}
+
+	view, err := sbom.Union(sa.unionName, sa.created, "stele-"+selfVersion(), docs)
+	if err != nil {
+		return err
+	}
+
+	if err := writeJSONDoc(sa.out, view, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s: %d packages aggregated from %d artifact(s)", view.Name, len(view.Packages)-1, len(docs))
+
+	return nil
 }

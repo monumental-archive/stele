@@ -46,11 +46,29 @@ const (
 	settingModified = "vcs.modified"
 )
 
+// The SPDX literals both renderers share. Spec, not policy: these are
+// what the format calls the document element, the not-asserted value,
+// the version this writes and its data licence.
+const (
+	documentID     = "SPDXRef-DOCUMENT"
+	rootPackageID  = "SPDXRef-Package-0"
+	purposeApp     = "APPLICATION"
+	purposeLibrary = "LIBRARY"
+	relDescribes   = "DESCRIBES"
+	relDependsOn   = "DEPENDS_ON"
+	noAssertion    = "NOASSERTION"
+	spdxVersion    = "SPDX-2.3"
+	spdxDataLicHse = "CC0-1.0"
+)
+
 // ErrNoBinaries reports a derivation asked to describe nothing.
 var ErrNoBinaries = errors.New("sbom: no binaries given")
 
-// Document is the SPDX 2.3 document this package renders. Encode side
-// only: nothing here is ever decoded, so plain fields, not pointers.
+// Document is the SPDX 2.3 document this package renders. Written
+// with plain fields, not pointers: the union leg does decode foreign
+// per-artifact documents into it, but leniently and never to
+// distinguish absent from empty — validation there is structural (the
+// DESCRIBES walk), not field-presence.
 type Document struct {
 	SPDXVersion       string         `json:"spdxVersion"`
 	DataLicense       string         `json:"dataLicense"`
@@ -342,28 +360,28 @@ func render(f *facts, tool string, inv *inventory) *Document {
 	name := f.mainPath + "@" + f.mainVersion
 
 	doc := &Document{
-		SPDXVersion:       "SPDX-2.3",
-		DataLicense:       "CC0-1.0",
-		SPDXID:            "SPDXRef-DOCUMENT",
+		SPDXVersion:       spdxVersion,
+		DataLicense:       spdxDataLicHse,
+		SPDXID:            documentID,
 		Name:              name,
 		DocumentNamespace: "https://spdx.org/spdxdocs/" + strings.ReplaceAll(name, "/", "-") + "-" + f.revision,
 		CreationInfo:      CreationInfo{Created: f.created, Creators: []string{"Tool: " + tool}},
 	}
 
 	root := Package{
-		SPDXID:           "SPDXRef-Package-0",
+		SPDXID:           rootPackageID,
 		Name:             f.mainPath,
 		VersionInfo:      f.mainVersion,
-		DownloadLocation: "NOASSERTION",
-		PrimaryPurpose:   "APPLICATION",
+		DownloadLocation: noAssertion,
+		PrimaryPurpose:   purposeApp,
 		ExternalRefs:     []ExternalRef{purlRef(f.mainPath, f.mainVersion)},
 	}
 
 	doc.Packages = append(doc.Packages, root)
 	doc.Relationships = append(doc.Relationships, Relationship{
-		SPDXElementID:      "SPDXRef-DOCUMENT",
+		SPDXElementID:      documentID,
 		RelatedSPDXElement: root.SPDXID,
-		RelationshipType:   "DESCRIBES",
+		RelationshipType:   relDescribes,
 	})
 
 	for i, m := range deps {
@@ -371,8 +389,8 @@ func render(f *facts, tool string, inv *inventory) *Document {
 			SPDXID:           fmt.Sprintf("SPDXRef-Package-%d", i+1),
 			Name:             m.path,
 			VersionInfo:      m.version,
-			DownloadLocation: "NOASSERTION",
-			PrimaryPurpose:   "LIBRARY",
+			DownloadLocation: noAssertion,
+			PrimaryPurpose:   purposeLibrary,
 			SourceInfo:       linkedInto(m.platforms, inv.platforms),
 			ExternalRefs:     []ExternalRef{purlRef(m.path, m.version)},
 		}
@@ -381,7 +399,7 @@ func render(f *facts, tool string, inv *inventory) *Document {
 		doc.Relationships = append(doc.Relationships, Relationship{
 			SPDXElementID:      root.SPDXID,
 			RelatedSPDXElement: pkg.SPDXID,
-			RelationshipType:   "DEPENDS_ON",
+			RelationshipType:   relDependsOn,
 		})
 	}
 

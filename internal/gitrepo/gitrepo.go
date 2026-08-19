@@ -317,6 +317,84 @@ func (r *Repo) PushNotes(remote, token string) error {
 	return nil
 }
 
+// Clone prepares a scratch working tree at dir and fetches exactly
+// the refs named, from remote, under the committer identity given.
+//
+// This exists so the refs a run needs are derived from the POLICY
+// that names them rather than restated by whoever prepared the tree.
+// A caller that hardcodes a notes ref in a fetch refspec has written
+// a second copy of a value the engine already reads, and the two go
+// out of step silently: the emitter looks for a ledger the fetch
+// never brought down, and founds a new chain instead of extending
+// one.
+//
+// The identity is a parameter for the same reason it is not a
+// default. Every note this run writes lands in a world-readable
+// ledger permanently, so who authored it is a decision, and a
+// scratch tree has no ambient identity to inherit.
+//
+// Networking is never implicit: this is the one entry point that
+// reaches a remote, and a run that does not call it does not network.
+func Clone(dir, remote, token, name, email string, refs ...string) (*Repo, error) {
+	switch {
+	case remote == "":
+		return nil, errors.New("gitrepo: a remote is required to clone")
+	case name == "" || email == "":
+		return nil, errors.New("gitrepo: a committer name and email are required — every note this writes" +
+			" carries its author into a permanent ledger")
+	case len(refs) == 0:
+		return nil, errors.New("gitrepo: no refs to fetch — a clone that brings nothing down is not a clone")
+	}
+
+	r := &Repo{dir: dir}
+	if _, err := r.git("init", "-q", dir); err != nil {
+		return nil, fmt.Errorf("gitrepo: init %s: %w", dir, err)
+	}
+
+	for _, cfg := range [][2]string{{"user.name", name}, {"user.email", email}} {
+		if _, err := r.git("config", cfg[0], cfg[1]); err != nil {
+			return nil, fmt.Errorf("gitrepo: config %s: %w", cfg[0], err)
+		}
+	}
+
+	// Forced refspecs: the scratch tree is disposable, so a fetch that
+	// would not fast-forward is not a conflict to resolve but a stale
+	// local ref to overwrite.
+	// fetch, -q and the remote precede one refspec per ref.
+	const fetchArgc = 3
+
+	spec := make([]string, 0, len(refs)+fetchArgc)
+	spec = append(spec, "fetch", "-q", remote)
+
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref, "refs/") {
+			return nil, fmt.Errorf("gitrepo: fetch ref %q is not fully qualified", ref)
+		}
+
+		spec = append(spec, "+"+ref+":"+ref)
+	}
+
+	if _, err := r.gitAuth(token, spec...); err != nil {
+		return nil, fmt.Errorf("gitrepo: fetching %v from %s: %w", refs, remote, err)
+	}
+
+	return r, nil
+}
+
+// SetNotesRef binds a prepared repository to the ledger it will read
+// and write. Separate from Clone because the fetch is orchestration
+// and the ledger is policy; a caller that fetched by hand still names
+// the ref once.
+func (r *Repo) SetNotesRef(notesRef string) error {
+	if !strings.HasPrefix(notesRef, "refs/") {
+		return fmt.Errorf("gitrepo: notes ref %q is not fully qualified", notesRef)
+	}
+
+	r.notesRef = notesRef
+
+	return nil
+}
+
 // gitAuth runs one network subcommand, attaching the token as a basic
 // auth header when one is given — the same header shape GitHub's own
 // checkout uses; anonymous when empty (file-protocol remotes, tests).

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -102,9 +103,31 @@ type Client struct {
 
 // New builds a live client against the public GitHub API.
 func New(token string) *Client {
+	return NewForServer("https://github.com", token)
+}
+
+// NewForServer builds a live client against the forge a caller NAMED.
+// The REST endpoint is derived from the server URL by the forge's own
+// convention — api.github.com for github.com, <server>/api/v3 for a
+// GitHub Enterprise host, the same mapping Actions publishes as
+// github.api_url beside github.server_url.
+//
+// Derived, not a second flag, because the two are one fact: a caller
+// that names one forge in its signed output while this client reads
+// another would fold a stranger's repository metadata into evidence
+// about its own — the exact silent divergence a required --server-url
+// exists to prevent.
+func NewForServer(serverURL, token string) *Client {
+	server := strings.TrimSuffix(serverURL, "/")
+
+	base := server + "/api/v3"
+	if server == "https://github.com" {
+		base = "https://api.github.com"
+	}
+
 	return &Client{
-		Base:     "https://api.github.com",
-		Download: "https://github.com",
+		Base:     base,
+		Download: server,
 		Token:    token,
 		HTTP:     &http.Client{Timeout: httpTimeout},
 	}
@@ -563,19 +586,41 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 
 // paged reads every page of a listing endpoint (per_page=100), up to
 // a sane page bound. path carries no query of its own — the
-// pagination parameters ARE the query string, which is true of every
-// listing endpoint this client reads; a caller that needs a filter
-// adds it here deliberately rather than through a separator branch no
-// call site ever takes.
-func (c *Client) paged(path string) ([][]byte, error) {
+// pagination parameters ARE the query string — and a caller needing a
+// filter passes it here rather than pre-formatting it into the path.
+//
+// That is a parameter and not a separator branch on purpose (#106,
+// which deleted the branch and wrote this contract in its place). A
+// path that pre-formatted its own filter would produce
+// "?a=1?per_page=100", which the forge reads as one opaque parameter
+// name: the filter is dropped and the listing answers as though it
+// were never asked for. The rules listing is the first call site that
+// needs a filter, and it must ask for inherited rulesets — where
+// org-level controls live — so getting this wrong would under-claim
+// silently.
+//
+// Enforced rather than documented, because a comment is not a guard
+// and silently-wrong is this codebase's worst failure mode: a path
+// carrying a query refuses by name.
+func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 	const maxPages = 50
 	// emptyPageLen is the API's empty array literal, the last page.
 	const emptyPageLen = 2
 
+	if strings.Contains(path, "?") {
+		return nil, fmt.Errorf("gh: %s: the path carries its own query; pass filters as arguments so"+
+			" pagination owns the query string", path)
+	}
+
 	var pages [][]byte
 
 	for page := 1; page <= maxPages; page++ {
-		body, ok, err := c.get(fmt.Sprintf("%s?per_page=100&page=%d", path, page), "application/vnd.github+json")
+		query := fmt.Sprintf("%s?per_page=100&page=%d", path, page)
+		if len(filters) > 0 {
+			query += "&" + strings.Join(filters, "&")
+		}
+
+		body, ok, err := c.get(query, "application/vnd.github+json")
 		if err != nil {
 			return nil, err
 		}

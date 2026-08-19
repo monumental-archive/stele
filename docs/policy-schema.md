@@ -27,6 +27,11 @@ where the convention is per-repository (the source-attest identity)
 or per-release (the resourceUri); a literal is used where the org
 states one value (the signer workflow).
 
+The example below elides one key, `source.claims`: it is the largest
+section in the document and it is shown in full under its own
+heading rather than copied into two places in one file, which is the
+drift this schema exists to refuse.
+
 ```json
 {
   "schema": 3,
@@ -396,6 +401,201 @@ the org's one source-track policy. Until then the shadow diff
 asserts the two agree — agreement is the proof bar, never the
 steady state.
 
+### `source.claims`
+
+Where the frozen control table lives, and the reason this section
+exists: until now the property *names* lived here (in
+`protectedBranches[].requiredProperties`) while the rules that decide
+whether each one is live lived in the canon's `claims.sh` and in
+prose in `docs/source-track.md`. One vocabulary, three places,
+coupled only by a human reading all three. Declaring the matchers
+beside the requirement makes them one document, and the load-time
+cross-check below makes disagreement refuse rather than under-claim
+silently.
+
+An org convention throughout — every property name, every rule
+parameter and every actor id below is the org's, and none of it is
+in code.
+
+The section is an obligation like every other: absent means the org
+does not derive claims with this tool. Declared means each property
+carries a scope and a matcher, validated strictly.
+
+```json
+"claims": {
+  "properties": [
+    {
+      "name": "ORG_SOURCE_HISTORY_PROTECTED",
+      "scope": "branchRules",
+      "match": { "$contains": [
+        { "type": "deletion" },
+        { "type": "non_fast_forward" },
+        { "type": "required_linear_history" }
+      ] }
+    },
+    {
+      "name": "ORG_SOURCE_SIGNED",
+      "scope": "branchRules",
+      "match": { "$contains": [ { "type": "required_signatures" } ] }
+    },
+    {
+      "name": "ORG_SOURCE_GATED",
+      "scope": "branchRules",
+      "match": { "$contains": [ {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": true,
+          "required_status_checks": { "$contains": [
+            { "context": "ci / ci", "integration_id": 15368 }
+          ] }
+        }
+      } ] }
+    },
+    {
+      "name": "ORG_SOURCE_REVIEWED_THREADS",
+      "scope": "branchRules",
+      "match": { "$contains": [ {
+        "type": "pull_request",
+        "parameters": {
+          "required_review_thread_resolution": true,
+          "allowed_merge_methods": ["squash"]
+        }
+      } ] }
+    },
+    {
+      "name": "ORG_SOURCE_TAG_IMMUTABLE",
+      "scope": "tagRulesets",
+      "match": { "$contains": [ {
+        "conditions": { "ref_name": { "include": ["~ALL"], "exclude": [] } },
+        "rules": { "$contains": [
+          { "type": "update" }, { "type": "deletion" }, { "type": "non_fast_forward" }
+        ] },
+        "bypass_actors": []
+      } ] }
+    },
+    {
+      "name": "ORG_SOURCE_RELEASE_TAG_MINTED",
+      "scope": "tagRulesets",
+      "match": { "$contains": [ {
+        "conditions": { "ref_name": { "include": ["refs/tags/v*"] } },
+        "rules": { "$contains": [ { "type": "creation" } ] },
+        "bypass_actors": [
+          { "actor_id": 4534781, "actor_type": "Integration", "bypass_mode": "always" }
+        ]
+      } ] }
+    },
+    {
+      "name": "ORG_SOURCE_DCO",
+      "scope": "gatedTask",
+      "requiresProperty": "ORG_SOURCE_GATED",
+      "file": "mise/config.toml",
+      "tablePath": ["tasks", "lint:dco"]
+    },
+    {
+      "name": "ORG_SOURCE_CAPABILITY_BOUNDARY",
+      "scope": "gatedTask",
+      "requiresProperty": "ORG_SOURCE_GATED",
+      "file": "mise/config.toml",
+      "tablePath": ["tasks", "lint:capability-boundary"]
+    }
+  ]
+}
+```
+
+#### Matching by content, never by name
+
+Ground truth is the forge's rules API at emission time, never
+configuration intent, and every property is matched by the
+parameters that make the control what it is. A renamed ruleset still
+enforces; a gutted one still carries the name. No matcher may
+reference a ruleset's name or id, and the schema gives it nowhere to
+put one.
+
+#### The match language
+
+A matcher is a JSON value, matched against a candidate value by four
+rules and nothing else:
+
+- **object** — the candidate must be an object, and every key in the
+  matcher must be present in it and match recursively. A *subset*:
+  fields the matcher does not name are not examined.
+- **array** — the candidate must be an array of the same length,
+  matched elementwise in order. *Exact*. This is where two of the
+  controls actually live: `"bypass_actors": []` means **nobody
+  bypasses**, and `"allowed_merge_methods": ["squash"]` means
+  **squash and nothing else**. A subset reading of those would claim
+  a control the org does not have.
+- **scalar** — equality on the decoded JSON value.
+- **`{"$contains": [...]}`** — the one escape: the candidate must be
+  an array, and for *each* matcher in the list some element of it
+  must match. This is "at least these", and it is what every
+  property's top-level matcher uses, since a property asks whether
+  the rules the org requires are among the rules that are live.
+
+`$contains` is reserved vocabulary: an object carrying it may carry
+nothing else, refused at load otherwise. A forge that one day serves
+a field literally named `$contains` would be unmatchable; the
+alternative is a general query language, and this is the
+`build.buildTypes.externalParameterKeys` trade made again —
+expressive enough for the table the org froze, too small to express
+nonsense.
+
+#### Scopes
+
+- **`branchRules`** — the effective rules for the branch being
+  claimed, as the forge computes them (all contributing rulesets
+  already merged). The matcher runs against that whole array.
+- **`tagRulesets`** — each active tag ruleset, fetched in full.
+  Effective per-ref rules exist only for branches, so tag properties
+  are matched against ruleset *content*: conditions, rules and
+  bypass actors together.
+- **`gatedTask`** — a control the org enforces inside its own gate
+  rather than through a forge rule. Claimable exactly when the named
+  property is claimed (`requiresProperty`, which must name a
+  rules-scoped property in this same table — one level, no chains,
+  validated at load) and the declared TOML table path exists in the
+  declared file of the canon tree this run resolved. `tablePath` is
+  a path, not a pattern: the file is parsed, never grepped, so a
+  legitimately different spelling of the same table cannot
+  under-claim.
+
+#### Evidence is the matcher's witness
+
+Each claim carries evidence, and the engine derives it: the matched
+elements restricted to exactly the paths the matcher examined,
+recorded as it traverses. Nothing that decided the claim is omitted
+and nothing that did not is carried. A policy-declared projection
+would be a second place to be wrong about what the claim rests on —
+and one that omitted a deciding field would turn the evidence into
+decoration. Evidence is therefore not in the schema at all.
+
+#### Absence, blindness and failure are three outcomes
+
+A property whose rule is not live is simply absent from the claim
+set, which is how a lapse under-claims and resets its own clock by
+construction. That is the *only* thing absence may mean, so the two
+ways of not-knowing are refusals, and the second one derives from
+this section rather than from any fact about a particular org:
+
+- **failure** — the read errored, or a listed ruleset's detail was
+  unreadable. Refused: claiming from a blind read asserts controls
+  nobody checked.
+- **blindness** — a scope some declared property matches against
+  came back empty. Declaring a property against a scope *is* the
+  statement that the scope is populated, so an empty read there is
+  the credential proving its own incapability, not an absent
+  control. Refused. A scope no property names is never read at all.
+
+#### Load-time cross-check
+
+Every `requiredProperties[].name` in `protectedBranches` must be
+declared here. A required property with no matcher can never be
+claimed, so the branch could never reach its target level — today
+that is a silent permanent under-claim discoverable only by reading
+two files and a shell script; here it refuses at load. The converse
+is allowed: a property may be claimed without being required, since
+claiming more than the target needs is honest.
+
 ### `source.healedContinuity`
 
 The org's documented deviation handling: a healed (late) link may
@@ -468,3 +668,44 @@ code).
    this schema's `source.protectedBranches` say the same thing. This
    file is the successor; the cutover deletes the other, and until
    then the shadow diff asserts they agree.
+
+Items 4 to 7 come from the claims port (stele#40) and are recorded
+under the same law: the bash is a reference, never an oracle, and
+every divergence is written down rather than smoothed.
+
+4. **Evidence was a hand-written projection.** `claims.sh` records
+   matched tag rulesets as `{id, rules, conditions}` and belt-carried
+   claims as `{via: "ci / ci", canon: <ref>}`. Both are written
+   beside the matcher and can therefore omit a field that decided the
+   claim — `bypass_actors` is absent from the immutability
+   projection, and it is half of what that control *is*. The witness
+   derivation carries exactly the examined paths, so the omission is
+   unrepresentable.
+
+   Measured, not predicted: run side by side against one recording of
+   the live rules API for `monumental-archive/.github` (2026-08-18),
+   both legs derive the same eight properties and the same continuity
+   horizon, and the bash's `ORG_SOURCE_TAG_IMMUTABLE` evidence answers
+   `has("bypass_actors") == false` where the witness answers `true`.
+   Every published chain link carrying that property therefore records
+   evidence that omits the field the claim rests on. Nothing consumes
+   `controls[].evidence` programmatically — the emit and verify legs
+   read `property` and require evidence to be non-empty — so this is a
+   defect in what the ledger tells a reader, not in what it decided.
+5. **Belt-carried controls were detected by grep.**
+   `grep -q '^\[tasks."lint:dco"\]'` reads one legal spelling of a
+   TOML table. Any other — different quoting, a dotted or inline
+   table — under-claims. Fail-safe, still a defect, and the org
+   already holds the opposing rule elsewhere (`resolve-oci-facts.sh`
+   reads Cargo.toml with a parser, "the only reader that gets every
+   form right").
+6. **The blindness guard cited an org fact.** The bash refuses an
+   empty tag read because *the org's* tag rulesets are known to
+   exist. True, and unusable by anyone else. Declaring a property
+   against a scope is the same statement in universal form, so the
+   guard now derives from the policy and holds for every adopter.
+7. **Continuity offsets were arithmetic in jq.** `updated_at`
+   arrives with arbitrary UTC offsets and jq's date built-ins are
+   UTC-only, so the bash applies the offset by hand from captured
+   substrings. RFC 3339 parsing is a library call; the defect class
+   goes with it.
