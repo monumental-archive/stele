@@ -9,8 +9,8 @@ know without being told: which evidence classes exist, what assets
 each requires, when verdicts moved into the attestation store, where
 the humans keep their written-down debt.
 
-Three formats are defined here: the policy file, the release
-evidence manifest, and the debt file. A change to any is a reviewed
+Four formats are defined here: the policy file, the release
+evidence manifest, the debt file, and the inventory plan. A change to any is a reviewed
 edit to this document first.
 
 `schema` is the refusal boundary: current **4**, the one epoch shared
@@ -69,6 +69,16 @@ version mismatch, never as an unknown-field error.
   is measured at cutover: the first machinery version that publishes
   the asset. Prefixes within a class form a set; an empty prefix or
   an unparsable `owedFrom` refuses at load.
+- `classes.<name>.assetPrefixes[].planned` — declares that one
+  obligation's fulfillment channel: the document is derived from a
+  build-leg inventory plan, so `assert plans` demands, BEFORE
+  anything ships, that some plan names a document under this prefix
+  (see [The inventory plan](#the-inventory-plan)). Declared, never
+  inferred from the prefix's spelling — which obligations plans
+  fulfil is an org fact, and one class can owe both a planned
+  inventory and an unplanned attestation asset (the `pgrx-extension`
+  shape). Absent means the obligation is judged only by the
+  post-publish evidence walk.
 - `classes.<name>.enrichment` — dependency names a release declaring
   this class owes its build-enrichment claim ON TOP of the verify
   policy's universal `required` set (stele#122): a `pgrx-extension`
@@ -289,6 +299,60 @@ history by the walk itself, excuse only `vsa:` findings on the
 affected tag, and (with `publishWorkflows` declared) only when the
 failure was a PUBLISHING run. The asymmetry is the point: what a human may assert
 and what only evidence may assert are different types.
+
+## The inventory plan
+
+The pre-publish half of the planned obligations (.github#544). A
+build leg that ships an artifact emits its inventory plan — the
+artifact-to-package mapping as data, stated exactly once, where and
+when it is certain: in the job that built the artifact. The publish
+leg derives the per-artifact SBOM documents from the plans; nothing
+restates the mapping, so nothing can drift from it. A plan document
+is one JSON array of entries, strict-decoded (an unknown field is
+version skew, refused):
+
+```json
+[
+  {
+    "doc": "sbom-npm-lab-wasm",
+    "cargoPackage": "lab-wasm",
+    "features": ["pg16"],
+    "noDefaultFeatures": true,
+    "artifact": "lab-wasm.tgz"
+  }
+]
+```
+
+- `doc` (required) — the release document's name, version- and
+  suffix-less: the published asset becomes
+  `<doc>-<version><sbomSuffix>`, so the policy's planned prefixes
+  match `doc` directly. The prefix names what the artifact IS; the
+  closure fields name what it is MADE OF — the two disagreeing
+  silently is exactly the .github#544 defect.
+- `cargoPackage` (required) — the cargo package whose closure the
+  document inventories. `features` and `noDefaultFeatures` narrow
+  the closure to what was compiled; `artifact` names the shipped
+  file the document describes.
+
+Every field is charset-guarded before any value reaches a command
+line, because plans originate on build legs that execute caller
+code. Identical entries from matrix legs collapse; one `doc` claimed
+by two DIFFERENT entries is legs disagreeing about what was built —
+refused, never last-writer-wins.
+
+`stele assert plans --policy <assert-policy> --classes <declared>
+--machinery-version <riding> <plan files...>` judges the plans
+against the planned obligations pre-publish, in the publish guard,
+through the same policy and the same `owedFrom` semantics the
+evidence walk reads — one obligation list, two moments of looking.
+The judgment is bidirectional: an owed planned prefix no plan
+satisfies is a release that would publish green and red on the walk;
+a plan document no owed planned prefix claims is an orphan — a
+misnamed obligation-bearer or an undeclared obligation, drift either
+way. Verdicts and exit codes are the assert verb's usual three
+([report-schema.md](report-schema.md)); an unreadable plan path is a
+usage refusal (a broken invocation), while a plan that will not
+parse is a FAIL finding (a defective build leg).
 
 ## Verification depth
 

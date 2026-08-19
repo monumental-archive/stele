@@ -51,6 +51,7 @@ const (
 	targetBlastRadius = "blast-radius"
 	targetTags        = "tags"
 	targetChains      = "chains"
+	targetPlans       = "plans"
 )
 
 // The effect seams, swapped only by tests.
@@ -79,7 +80,7 @@ var (
 func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele assert: a target is required: image-facts, evidence, blast-radius, tags or chains"); err != nil {
+			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains or plans"); err != nil {
 			return exitIO
 		}
 
@@ -97,9 +98,12 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertTags(args[1:], stdout, stderr)
 	case targetChains:
 		return assertChains(args[1:], stdout, stderr)
+	case targetPlans:
+		return assertPlans(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags, chains)\n", args[0]); err != nil {
+			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags, chains, plans)\n",
+			args[0]); err != nil {
 			return exitIO
 		}
 
@@ -351,6 +355,87 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
 		}
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// assertPlans runs the pre-publish plans judgment (.github#544's
+// structural half): the build legs' inventory plans against the
+// policy's planned obligations, judged BEFORE anything ships —
+// through the same policy and the same owedFrom semantics the
+// post-publish evidence walk reads, so the two legs cannot disagree
+// about what a release owes.
+func assertPlans(args []string, stdout, stderr io.Writer) int {
+	var (
+		jsonOut                     bool
+		policyPath, classes, machin string
+	)
+
+	flags := flag.NewFlagSet("stele assert plans", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	flags.StringVar(&classes, "classes", "",
+		"comma-separated evidence classes this release declares (required)")
+	flags.StringVar(&machin, "machinery-version", "",
+		"machinery version the release rides — the owedFrom epochs are judged against it (required)")
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	usageFail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele assert plans: %s\n", msg); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	switch {
+	case policyPath == "":
+		return usageFail("--policy is required")
+	case strings.Trim(classes, ",") == "":
+		return usageFail("--classes is required — a judgment over no classes judges nothing")
+	case machin == "":
+		return usageFail("--machinery-version is required — the owedFrom epochs need it")
+	}
+
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return usageFail(err.Error())
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	// The plan paths are operator-supplied; a path that will not read
+	// is a broken invocation, not a defective build leg, so it refuses
+	// as usage rather than judging blind.
+	files := make([]assert.PlanFile, 0, flags.NArg())
+
+	for _, path := range flags.Args() {
+		content, rerr := os.ReadFile(path) //nolint:gosec // the plan paths are operator-supplied by design
+		if rerr != nil {
+			return usageFail(rerr.Error())
+		}
+
+		files = append(files, assert.PlanFile{Name: path, Content: content})
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	rep := assert.Plans(pol, strings.Split(classes, ","), machin, files, out.logf)
+	if out.err != nil {
+		return exitIO
 	}
 
 	return emitReport(rep, jsonOut, stdout, stderr)
