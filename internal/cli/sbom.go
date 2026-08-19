@@ -41,6 +41,7 @@ type sbomArgs struct {
 	// that ships it (.github#492).
 	cargoRoot         string
 	npmDir            string
+	artifact          string
 	tree              string
 	target            string
 	features          string
@@ -71,6 +72,10 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	fs.StringVar(&sa.npmDir, "npm-dir", "",
 		"derive from the npm package rooted at this directory: its production closure, resolved from the "+
 			"lockfile alone — nothing is installed to answer")
+	fs.StringVar(&sa.artifact, "artifact", "",
+		"display name for the derived artifact (with --cargo-package or --npm-dir); the purl keeps the "+
+			"package's real identity. Required when one package builds several artifacts — feature variants "+
+			"share a package name, and two inventories claiming to describe one artifact refuse at the union")
 	fs.StringVar(&sa.tree, "tree", "", "workspace root to resolve in (with --cargo-package)")
 	fs.StringVar(&sa.target, "target", "",
 		"target triple the artifact was built for; empty resolves without platform filtering")
@@ -241,7 +246,7 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	}
 
 	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
-		sbom.CargoPackage(root.Name, root.Version), deps)
+		displayAs(sbom.CargoPackage(root.Name, root.Version), sa.artifact), deps)
 	if err != nil {
 		return err
 	}
@@ -289,7 +294,7 @@ func runDeriveNpmSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	}
 
 	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
-		sbom.NpmPackage(root.Name, root.Version), deps)
+		displayAs(sbom.NpmPackage(root.Name, root.Version), sa.artifact), deps)
 	if err != nil {
 		return err
 	}
@@ -301,6 +306,24 @@ func runDeriveNpmSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	out.logf("%s: %d packages", document.Name, len(document.Packages))
 
 	return nil
+}
+
+// displayAs renames the root for display when the caller declared an
+// artifact name (stele#126): one package built once per feature set
+// ships several artifacts sharing a package name, and two inventories
+// claiming to describe one artifact refuse at the union — the display
+// name is what tells them apart. The purl is already rendered from
+// the package's real identity, so advisory matching never sees the
+// display name; the rename touches what the document CALLS the
+// artifact, never what it IS.
+//
+//nolint:gocritic // hugeParam: the copy is the point — the caller's root is renamed for display, never mutated
+func displayAs(root sbom.Package, artifact string) sbom.Package {
+	if artifact != "" {
+		root.Name = artifact
+	}
+
+	return root
 }
 
 // runDeriveUnion folds per-artifact documents into the release view.
