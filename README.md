@@ -65,15 +65,17 @@ suite executes.
 
 ## Status
 
-The port from the canon's bash
-([.github#392](https://github.com/monumental-archive/.github/issues/392))
-is **complete**: all four verbs plus `level` shipped verb by verb
-under one bar — shadow mode against real artifacts before authority —
-and every evidence-judging audit in the org now runs this binary. The
-formats are pre-v1: correctness wins every tie, and schemas change to
-the correct shape without compatibility shims. The gate, lint canon
-(`golangci-lint` at `default: all`), coverage ratchet and hermetic
-build have been live since the first commit.
+stele began as the port of ~8,000 lines of release and audit bash in
+its first consumer's org
+([.github#392](https://github.com/monumental-archive/.github/issues/392)).
+The port is **complete**: all four verbs plus `level` shipped verb by
+verb under one bar — shadow mode against real artifacts before
+authority — and every release and evidence-judging audit there now
+runs this binary. The formats are pre-v1: correctness wins every tie,
+and schemas change to the correct shape without compatibility shims.
+The gate, the lint canon (`golangci-lint` at `default: all`),
+coverage ratchet and hermetic build have been live since the first
+commit.
 
 ## Documentation
 

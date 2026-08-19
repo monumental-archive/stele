@@ -6,8 +6,8 @@ choice is single-valued, and why this repository commits no root of
 its own.
 
 Before stele#85 the document was a required file argument, which
-meant every caller produced one out of band — in the canon, four
-copies of
+meant every caller produced one out of band — in the first
+consumer's org, four copies of
 
 ```bash
 gh attestation trusted-root > "${root}.all"
@@ -118,9 +118,10 @@ law) or standing up a fake TUF repository, which would prove the fake.
 `TestMain` refuses the TUF origin, so a test that reaches it fails
 loudly instead of depending on the instance.
 
-It is proven where a network boundary honestly can be: **in shadow
-mode against the live instance before cutover**, at each of the four
-canon call sites. The criterion is deliberately *not* byte equality
+It was proven where a network boundary honestly can be: **in shadow
+mode against the live instance before the cutover**, at each of the
+four call sites the file argument used to have. The criterion is
+deliberately *not* byte equality
 with `gh attestation trusted-root | head -1`. If TUF and `gh`
 legitimately serve different-but-both-valid roots at a given instant,
 byte-matching would be transliterating `gh`'s quirks — the

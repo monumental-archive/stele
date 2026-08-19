@@ -1,8 +1,8 @@
 # The report document: the shared verdict shape
 
-The JSON document every judging verb emits — `stele verify --json`
-today, `assert` and `level` too, and `assert` will also
-consume it. One shape for producer and consumer is the single-binary
+The JSON document every judging verb emits — `verify`, `assert` and
+`level` alike — and that `assert` also consumes.
+One shape for producer and consumer is the single-binary
 argument (.github#392 §7) applied to output: the verb that asserts
 "this verifies" reads the same document the verifier wrote.
 
