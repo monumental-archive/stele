@@ -17,6 +17,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/cargo"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/npm"
 	"github.com/monumental-archive/stele/internal/sbom"
 )
 
@@ -39,6 +40,7 @@ type sbomArgs struct {
 	// The Cargo path: an artifact's own closure, scoped to the package
 	// that ships it (.github#492).
 	cargoRoot         string
+	npmDir            string
 	tree              string
 	target            string
 	features          string
@@ -66,6 +68,9 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	fs.StringVar(&sa.cargoRoot, "cargo-package", "",
 		"derive from this Cargo package's own resolved closure rather than from binaries — "+
 			"the inventory of one artifact, not of the workspace that built it")
+	fs.StringVar(&sa.npmDir, "npm-dir", "",
+		"derive from the npm package rooted at this directory: its production closure, resolved from the "+
+			"lockfile alone — nothing is installed to answer")
 	fs.StringVar(&sa.tree, "tree", "", "workspace root to resolve in (with --cargo-package)")
 	fs.StringVar(&sa.target, "target", "",
 		"target triple the artifact was built for; empty resolves without platform filtering")
@@ -88,7 +93,7 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	}
 
 	sa.binaries = fs.Args()
-	if sa.cargoRoot != "" || sa.unionOf != "" {
+	if sa.cargoRoot != "" || sa.npmDir != "" || sa.unionOf != "" {
 		return sa, exitOK
 	}
 
@@ -103,16 +108,24 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	return sa, exitOK
 }
 
-// runDeriveSBOM dispatches the three sources: an artifact's Cargo
-// closure, an aggregation of per-artifact documents, or the shipped
-// binaries' embedded module lists.
+// runDeriveSBOM dispatches the four sources: an artifact's Cargo or
+// npm closure, an aggregation of per-artifact documents, or the
+// shipped binaries' embedded module lists.
 func runDeriveSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	sources := 0
+	for _, set := range []bool{sa.cargoRoot != "", sa.npmDir != "", sa.unionOf != ""} {
+		if set {
+			sources++
+		}
+	}
+
 	switch {
-	case sa.cargoRoot != "" && sa.unionOf != "":
-		return errors.New("derive sbom: --cargo-package and --union are exclusive: one derives, one aggregates")
-	case sa.cargoRoot != "" || sa.unionOf != "":
-		// Both sources stamp --created into an attested document, so a
-		// spelling the format does not admit is refused here rather
+	case sources > 1:
+		return errors.New("derive sbom: --cargo-package, --npm-dir and --union are exclusive:" +
+			" one artifact, one source")
+	case sources == 1:
+		// Every one of these stamps --created into an attested document,
+		// so a spelling the format does not admit is refused here rather
 		// than published for every later consumer to choke on.
 		if sa.created != "" {
 			if _, err := time.Parse(time.RFC3339, sa.created); err != nil {
@@ -120,8 +133,11 @@ func runDeriveSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 			}
 		}
 
-		if sa.cargoRoot != "" {
+		switch {
+		case sa.cargoRoot != "":
 			return runDeriveCargoSBOM(sa, doc, out)
+		case sa.npmDir != "":
+			return runDeriveNpmSBOM(sa, doc, out)
 		}
 
 		return runDeriveUnion(sa, doc, out)
@@ -226,6 +242,54 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 
 	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
 		sbom.CargoPackage(root.Name, root.Version), deps)
+	if err != nil {
+		return err
+	}
+
+	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s: %d packages", document.Name, len(document.Packages))
+
+	return nil
+}
+
+// The npm resolver seam, swapped only by tests, for the reason the
+// cargo one is: resolving for real needs a lockfile and a toolchain,
+// which would test npm rather than this wiring.
+//
+//nolint:gochecknoglobals // test seam, written only by test setup
+var newNpmResolver = func() npm.Resolver { return npm.Runner{} }
+
+// runDeriveNpmSBOM derives one npm artifact's inventory from its own
+// resolved production closure — the wasm-npm class's JS half
+// (.github#492 item 2), under the same rule as the Cargo leg: the
+// unit of description is the artifact, because the artifact is the
+// unit of consumption.
+func runDeriveNpmSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	if sa.created == "" {
+		return errors.New("derive sbom: --created is required — an artifact's inventory is dated by the" +
+			" artifact, never by the run that described it")
+	}
+
+	tree, err := newNpmResolver().Tree(sa.npmDir)
+	if err != nil {
+		return err
+	}
+
+	root, closure, err := npm.Closure(tree)
+	if err != nil {
+		return err
+	}
+
+	deps := make([]sbom.Package, 0, len(closure))
+	for _, pkg := range closure {
+		deps = append(deps, sbom.NpmPackage(pkg.Name, pkg.Version))
+	}
+
+	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
+		sbom.NpmPackage(root.Name, root.Version), deps)
 	if err != nil {
 		return err
 	}

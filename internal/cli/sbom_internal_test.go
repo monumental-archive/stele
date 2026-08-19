@@ -11,6 +11,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/cargo"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/npm"
 )
 
 // releaseInfo is one release-shaped leg, as the toolchain would stamp
@@ -445,5 +446,93 @@ func TestDeriveSBOMRefusesContradictoryFeatures(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), "exclusive") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// stubNpmResolver returns recorded npm ls output.
+type stubNpmResolver struct {
+	tree []byte
+	dir  string
+}
+
+func (s *stubNpmResolver) Tree(dir string) ([]byte, error) {
+	s.dir = dir
+
+	return s.tree, nil
+}
+
+func withNpmResolver(t *testing.T, r npm.Resolver) {
+	t.Helper()
+
+	previous := newNpmResolver
+	newNpmResolver = func() npm.Resolver { return r }
+
+	t.Cleanup(func() { newNpmResolver = previous })
+}
+
+// The npm leg renders the artifact's own production closure, with
+// scoped purls percent-encoded the way the purl spec demands — a
+// `pkg:npm/@scope/...` spelling matches no advisory in a conforming
+// scanner.
+func TestDeriveSBOMNpmClosure(t *testing.T) {
+	resolver := &stubNpmResolver{tree: []byte(`{
+	  "name": "@acme/widget-wasm", "version": "1.2.0",
+	  "dependencies": {"zlib-shim": {"version": "3.0.0"}}}`)}
+	withNpmResolver(t, resolver)
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"sbom", "--npm-dir", "/w/pkg", "--created", "2026-08-18T12:00:00Z"}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		`"name":"@acme/widget-wasm@1.2.0"`,
+		`"pkg:npm/%40acme/widget-wasm@1.2.0"`,
+		`"pkg:npm/zlib-shim@3.0.0"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("document lacks %s:\n%s", want, out)
+		}
+	}
+
+	if resolver.dir != "/w/pkg" {
+		t.Errorf("resolved in %q, want the named package dir", resolver.dir)
+	}
+}
+
+// The npm leg is dated by the artifact like every other source.
+func TestDeriveSBOMNpmRefusals(t *testing.T) {
+	withNpmResolver(t, &stubNpmResolver{tree: []byte(`{"name": "w", "version": "1.0.0"}`)})
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			"dated by nothing",
+			[]string{"sbom", "--npm-dir", "/w"},
+			"--created is required",
+		},
+		{
+			"two artifact sources at once",
+			[]string{"sbom", "--npm-dir", "/w", "--cargo-package", "a", "--created", "2026-08-18T12:00:00Z"},
+			"exclusive",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			if got := deriveCmd(tc.args, &stdout, &stderr); got != exitRefused {
+				t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
+			}
+
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tc.want)
+			}
+		})
 	}
 }

@@ -340,6 +340,25 @@ func CargoPackage(name, version string) Package {
 	}
 }
 
+// NpmPackage renders one resolved npm package as an SPDX package.
+// The purl spec (purl-spec, npm type) requires the scope's @ to be
+// percent-encoded — `pkg:npm/%40angular/animation@1.0.0` — and a purl
+// spelled `pkg:npm/@angular/...` matches no advisory in a
+// spec-conforming scanner, which is the same silent invisibility a
+// versionless purl has.
+func NpmPackage(name, version string) Package {
+	locator := name
+	if strings.HasPrefix(locator, "@") {
+		locator = "%40" + locator[1:]
+	}
+
+	return Package{
+		Name:         name,
+		VersionInfo:  version,
+		ExternalRefs: []ExternalRef{purlRef2("npm", locator, version)},
+	}
+}
+
 // purlRef2 renders a versioned PURL for one ecosystem.
 func purlRef2(ecosystem, name, version string) ExternalRef {
 	return ExternalRef{
