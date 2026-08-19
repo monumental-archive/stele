@@ -33,6 +33,7 @@ const (
 	modeRelease = "release"
 	modeVSA     = "vsa"
 	modeChain   = "chain"
+	modeRepro   = "repro"
 )
 
 // The effect seams, swapped only by tests: building the
@@ -198,7 +199,7 @@ type verifyArgs struct {
 // verifyCmd dispatches `stele verify <mode>`.
 func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele verify: a mode is required: release, vsa or chain"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele verify: a mode is required: release, vsa, chain or repro"); err != nil {
 			return exitIO
 		}
 
@@ -207,9 +208,14 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
+	case modeRepro:
+		// Repro is a pure comparison: no policy, no trust material, no
+		// store — its argument surface shares nothing with the three
+		// cryptographic modes, so it parses its own.
+		return verifyRepro(args[1:], stdout, stderr)
 	case modeRelease, modeVSA, modeChain:
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele verify: unknown mode %q (release, vsa, chain)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele verify: unknown mode %q (release, vsa, chain, repro)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -248,6 +254,96 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return exitOK
+}
+
+// verifyRepro runs the reproducibility comparison (stele#96): the
+// release's checksum manifest against the digests an independent
+// rebuild produced. The rebuild itself is orchestration and stays
+// with the caller; only the judgment lives here, and it speaks the
+// report's tri-state — an empty released manifest is a population of
+// zero, which seals CANNOT_JUDGE, never PASS.
+func verifyRepro(args []string, stdout, stderr io.Writer) int {
+	var (
+		repo, tag, subjects, rebuilt string
+		jsonOut                      bool
+	)
+
+	fs := flag.NewFlagSet("stele verify repro", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&repo, "repo", "", "owner/repo whose release is under rebuild (required)")
+	fs.StringVar(&tag, "tag", "", "release tag under rebuild (required)")
+	fs.StringVar(&subjects, "subjects", "", "sha256sum manifest of the RELEASED artifacts (required)")
+	fs.StringVar(&rebuilt, "rebuilt", "", "sha256sum manifest of the REBUILT artifacts (required)")
+	fs.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	fail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele verify repro: %s\n", msg); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	switch {
+	case repo == "" || !strings.Contains(repo, "/"):
+		return fail("--repo must be owner/repo")
+	case tag == "":
+		return fail("--tag is required")
+	case subjects == "":
+		return fail("--subjects is required")
+	case rebuilt == "":
+		return fail("--rebuilt is required")
+	}
+
+	released, err := reproManifest(subjects)
+	if err != nil {
+		return fail("subjects: " + err.Error())
+	}
+
+	built, err := reproManifest(rebuilt)
+	if err != nil {
+		return fail("rebuilt: " + err.Error())
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	divergences := verify.Repro(released, built, out.logf)
+	if out.err != nil {
+		return exitIO
+	}
+
+	findings := make([]report.Finding, 0, len(divergences))
+	for _, d := range divergences {
+		findings = append(findings, report.Finding{
+			Subject: d.Name, Assertion: "repro/" + d.Kind, Expected: d.Released, Actual: d.Rebuilt,
+			Detail: "the rebuild did not reproduce the release",
+		})
+	}
+
+	rep := report.Seal("verify repro", repo+"@"+tag,
+		report.PopulationFromEvidence(len(released), "released artifacts under rebuild"),
+		findings, nil, report.NoCanary(),
+		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))})
+
+	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// reproManifest reads one sha256sum manifest from disk.
+func reproManifest(path string) ([]verify.Subject, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the manifest path is operator-supplied by design
+	if err != nil {
+		return nil, err //nolint:wrapcheck // reported under the flag's own name by the caller
+	}
+
+	return parseManifest(string(raw))
 }
 
 // verifyOutcome carries what a completed mode proved, for the report:
