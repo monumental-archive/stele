@@ -115,8 +115,20 @@ track's requirements this build can establish.
 
 Refuted outranks undetermined when folding a level: evidence that
 contradicts a requirement settles it, while evidence merely missing
-does not. A level that lost sight seals `CANNOT_JUDGE`, never a
-confident lower answer.
+does not.
+
+**A level is an at-least claim.** Blindness above an established rung
+does not unseat the answer: level 2 with level 3 unreadable IS level 2,
+and the report carries a `boundary` fact saying the level is a floor.
+Only a ladder that lost sight before any rung held determines nothing —
+there the report seals `CANNOT_JUDGE`, because a level-zero answer must
+mean "measured, and no level holds", never "nobody could look".
+
+A refuted requirement above the level is **not a finding** — with no
+declaration in sight, nothing has diverged. It is the boundary
+explanation, recorded in the facts with the specification's own words.
+Findings are reserved for a declared level the evidence disagrees
+with.
 
 ## What the certificate proves
 
@@ -278,6 +290,13 @@ says which requirement failed.
 `--shield <path>` writes a shields.io endpoint document from the same
 seal as the report, so no copy of the level exists that could drift
 from the other.
+
+The badge is information, not a judgment: **one badge per track,
+showing the established level, in green** — it moves up and down as the
+evidence does, and a measured L0 is an answer like any other. The
+message marks draft tracks (`L2 (draft)`). Grey exists for exactly one
+case: the measurement could not establish any level (`unmeasured`),
+because a badge that cannot see must not pick a number.
 
 ## What this verb does not do
 

@@ -312,15 +312,25 @@ func Seal(t Track, lad *Ladder, in *Inputs) *Assessment {
 	facts = optionalFact(facts, "weakest", in.Weakest)
 	facts = append(facts, in.ExtraFacts...)
 
-	// A ladder that lost sight at its boundary has determined nothing,
-	// whatever its legs managed to read. The population detail every
-	// leg writes says "with a determinable ladder", and this is where
-	// that phrase is made true: applied here rather than in each leg,
-	// so a leg CANNOT forget to surface its own blindness and seal a
-	// green report over it. It is the charter's partial-sight rule
-	// spent in one place.
+	// A level is an at-least claim. Blindness ABOVE an established
+	// rung is recorded (the boundary fact and the ladder both say so)
+	// but does not unseat the answer: level 2 with level 3 unreadable
+	// is level 2. Only a ladder that lost sight before any rung held
+	// has determined nothing — level zero must mean "measured, and no
+	// level holds", never "nobody could look". Applied here rather
+	// than in each leg, so a leg CANNOT forget its own blindness and
+	// seal a measurement over it.
+	established := scalar > 0 || !blind
+
+	if blind && scalar > 0 {
+		facts = append(facts, report.Fact{
+			Name:  "boundary",
+			Value: fmt.Sprintf("sight ends above level %d; the level is a floor, not a ceiling", scalar),
+		})
+	}
+
 	determined := in.Determined
-	if blind {
+	if !established {
 		determined = 0
 	}
 
@@ -331,7 +341,7 @@ func Seal(t Track, lad *Ladder, in *Inputs) *Assessment {
 	return &Assessment{
 		rungs: lad.Rungs(),
 		track: t, level: computed, ladder: renderLadder(lad),
-		rep: rep, shield: shieldFor(t, rep.Verdict(), scalar),
+		rep: rep, shield: shieldFor(t, established, scalar),
 	}
 }
 
@@ -428,33 +438,30 @@ type Shield struct {
 	Color         string `json:"color"`
 }
 
-// The shields.io colours, one per verdict. Grey is the honest colour
-// for CANNOT_JUDGE: a badge that cannot see must not look green, and
-// must not look like a failure either.
+// The shields.io colours. The badge is information, not a judgment:
+// an established level renders green whatever the number is, because
+// the level IS the message — it moves up and down as the evidence
+// does. Grey exists for exactly one honest case: the measurement
+// could not establish any level at all, and a badge that cannot see
+// must not pick a number.
 const (
-	colorPass  = "brightgreen"
-	colorFail  = "red"
+	colorLevel = "brightgreen"
 	colorBlind = "lightgrey"
 )
 
 // shieldFor renders one judgment as an endpoint document. A draft
 // track says so in the message, where a reader sees it, rather than
 // in a field only a machine reads.
-func shieldFor(t Track, v report.Verdict, scalar int) Shield {
+func shieldFor(t Track, established bool, scalar int) Shield {
 	message := "L" + strconv.Itoa(scalar)
-	if t.draft {
-		message += " (draft)"
+	color := colorLevel
+
+	if !established {
+		message, color = "unmeasured", colorBlind
 	}
 
-	color := colorBlind
-
-	switch v {
-	case report.VerdictPass:
-		color = colorPass
-	case report.VerdictFail:
-		color = colorFail
-	case report.VerdictCannotJudge:
-		color = colorBlind
+	if t.draft {
+		message += " (draft)"
 	}
 
 	return Shield{SchemaVersion: 1, Label: t.label, Message: message, Color: color}
