@@ -388,6 +388,51 @@ func TestCloneMaterializesTheScratchTree(t *testing.T) {
 	}
 }
 
+// TestCloneOfAnUnfoundedChain pins the genesis half of the fetch
+// split: a remote WITHOUT the ledger ref is a repository whose chain
+// has not been founded yet — data the engine judges, never a fetch
+// failure. A strict fetch over both refs hard-fails here, which
+// would make genesis-with---clone impossible on every fresh repo.
+func TestCloneOfAnUnfoundedChain(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+	remoteDir := t.TempDir()
+	remote := gitCmd(t, remoteDir)
+	remote("init", "-q", "--bare")
+
+	local := gitCmd(t, fx.dir)
+	local("remote", "add", "origin", remoteDir)
+	local("push", "-q", "origin", "main")
+	// Deliberately NO notes push: the ledger does not exist yet.
+
+	scratch := filepath.Join(t.TempDir(), "repo")
+
+	r, err := gitrepo.Clone(scratch, remoteDir, "",
+		"source-attest", "source-attest@example.invalid",
+		"refs/heads/main", notesRef)
+	if err != nil {
+		t.Fatalf("Clone of an unfounded chain = %v, want the empty-ledger success", err)
+	}
+
+	if serr := r.SetNotesRef(notesRef); serr != nil {
+		t.Fatalf("SetNotesRef = %v", serr)
+	}
+
+	noted, nerr := r.Noted()
+	if nerr != nil || noted != nil {
+		t.Fatalf("Noted = %v, %v — want the empty ledger", noted, nerr)
+	}
+
+	// The branch fetch stays strict: a branch the remote does not
+	// have is an error in its own right, never an empty anything.
+	if _, err := gitrepo.Clone(filepath.Join(t.TempDir(), "repo"), remoteDir, "",
+		"source-attest", "source-attest@example.invalid",
+		"refs/heads/absent", notesRef); err == nil {
+		t.Fatal("Clone fetched a branch the remote does not have")
+	}
+}
+
 // TestCloneRefusals: every argument guard, one row each — a clone
 // that cannot say who it writes as or what it brings down is refused
 // before anything touches the filesystem.
@@ -395,21 +440,19 @@ func TestCloneRefusals(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name, remote, committer, email string
-		refs                           []string
-		want                           string
+		name, remote, committer, email, branch, notes, want string
 	}{
-		{"no remote", "", "n", "e", []string{"refs/heads/main"}, "a remote is required"},
-		{"no committer", "r", "", "e", []string{"refs/heads/main"}, "committer name and email"},
-		{"no email", "r", "n", "", []string{"refs/heads/main"}, "committer name and email"},
-		{"no refs", "r", "n", "e", nil, "no refs to fetch"},
-		{"unqualified ref", "r", "n", "e", []string{"main"}, "not fully qualified"},
+		{"no remote", "", "n", "e", "refs/heads/main", "refs/notes/x", "a remote is required"},
+		{"no committer", "r", "", "e", "refs/heads/main", "refs/notes/x", "committer name and email"},
+		{"no email", "r", "n", "", "refs/heads/main", "refs/notes/x", "committer name and email"},
+		{"unqualified branch", "r", "n", "e", "main", "refs/notes/x", "not fully qualified"},
+		{"unqualified notes ref", "r", "n", "e", "refs/heads/main", "commits", "not fully qualified"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			_, err := gitrepo.Clone(filepath.Join(t.TempDir(), "repo"),
-				tc.remote, "", tc.committer, tc.email, tc.refs...)
+				tc.remote, "", tc.committer, tc.email, tc.branch, tc.notes)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Clone = %v, want %q", err, tc.want)
 			}

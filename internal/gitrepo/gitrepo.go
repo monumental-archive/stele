@@ -317,8 +317,9 @@ func (r *Repo) PushNotes(remote, token string) error {
 	return nil
 }
 
-// Clone prepares a scratch repository at dir and fetches exactly
-// the refs named, from remote, under the committer identity given.
+// Clone prepares a scratch repository at dir and fetches the branch
+// under attestation and the ledger the policy names, from remote,
+// under the committer identity given.
 //
 // This exists so the refs a run needs are derived from the POLICY
 // that names them rather than restated by whoever prepared the tree.
@@ -328,6 +329,14 @@ func (r *Repo) PushNotes(remote, token string) error {
 // never brought down, and founds a new chain instead of extending
 // one.
 //
+// The two refs are separate parameters because their absence means
+// different things, and a strict fetch of both conflates them: the
+// branch must exist — attesting a branch the remote does not have is
+// an error — but a remote WITHOUT the ledger ref is a repository
+// whose chain has not been founded yet (the genesis run), which is
+// data the engine judges, never a fetch failure. One fetch refspec
+// over both refs hard-fails genesis on every fresh repository.
+//
 // The identity is a parameter for the same reason it is not a
 // default. Every note this run writes lands in a world-readable
 // ledger permanently, so who authored it is a decision, and a
@@ -335,15 +344,17 @@ func (r *Repo) PushNotes(remote, token string) error {
 //
 // Networking is never implicit: this is the one entry point that
 // reaches a remote, and a run that does not call it does not network.
-func Clone(dir, remote, token, name, email string, refs ...string) (*Repo, error) {
+func Clone(dir, remote, token, name, email, branch, notesRef string) (*Repo, error) {
 	switch {
 	case remote == "":
 		return nil, errors.New("gitrepo: a remote is required to clone")
 	case name == "" || email == "":
 		return nil, errors.New("gitrepo: a committer name and email are required — every note this writes" +
 			" carries its author into a permanent ledger")
-	case len(refs) == 0:
-		return nil, errors.New("gitrepo: no refs to fetch — a clone that brings nothing down is not a clone")
+	case !strings.HasPrefix(branch, "refs/"):
+		return nil, fmt.Errorf("gitrepo: branch %q is not fully qualified", branch)
+	case !strings.HasPrefix(notesRef, "refs/"):
+		return nil, fmt.Errorf("gitrepo: notes ref %q is not fully qualified", notesRef)
 	}
 
 	// The scratch repository is the engine's to materialize: every
@@ -375,23 +386,26 @@ func Clone(dir, remote, token, name, email string, refs ...string) (*Repo, error
 
 	// Forced refspecs: the scratch tree is disposable, so a fetch that
 	// would not fast-forward is not a conflict to resolve but a stale
-	// local ref to overwrite.
-	// fetch, -q and the remote precede one refspec per ref.
-	const fetchArgc = 3
-
-	spec := make([]string, 0, len(refs)+fetchArgc)
-	spec = append(spec, "fetch", "-q", remote)
-
-	for _, ref := range refs {
-		if !strings.HasPrefix(ref, "refs/") {
-			return nil, fmt.Errorf("gitrepo: fetch ref %q is not fully qualified", ref)
-		}
-
-		spec = append(spec, "+"+ref+":"+ref)
+	// local ref to overwrite. The branch fetch is strict — a branch
+	// the remote does not have is an error in its own right.
+	if _, err := r.gitAuth(token, "fetch", "-q", remote, "+"+branch+":"+branch); err != nil {
+		return nil, fmt.Errorf("gitrepo: fetching %s from %s: %w", branch, remote, err)
 	}
 
-	if _, err := r.gitAuth(token, spec...); err != nil {
-		return nil, fmt.Errorf("gitrepo: fetching %v from %s: %w", refs, remote, err)
+	// The ledger is fetched only if the remote has it: absence is the
+	// unfounded chain the genesis run exists to found, judged by the
+	// engine — never a fetch failure. The probe is ls-remote, asked
+	// deterministically (empty output IS the answer), not a parse of
+	// the strict fetch's error text.
+	hasLedger, err := r.remoteHasRef(remote, token, notesRef)
+	if err != nil {
+		return nil, err
+	}
+
+	if hasLedger {
+		if _, err := r.gitAuth(token, "fetch", "-q", remote, "+"+notesRef+":"+notesRef); err != nil {
+			return nil, fmt.Errorf("gitrepo: fetching %s from %s: %w", notesRef, remote, err)
+		}
 	}
 
 	return r, nil
@@ -409,6 +423,17 @@ func (r *Repo) SetNotesRef(notesRef string) error {
 	r.notesRef = notesRef
 
 	return nil
+}
+
+// remoteHasRef reports whether the remote currently has the exact
+// ref, via ls-remote — zero matching lines means absent.
+func (r *Repo) remoteHasRef(remote, token, ref string) (bool, error) {
+	out, err := r.gitAuth(token, "ls-remote", "--refs", remote, ref)
+	if err != nil {
+		return false, fmt.Errorf("gitrepo: probing %s on %s: %w", ref, remote, err)
+	}
+
+	return strings.TrimSpace(string(out)) != "", nil
 }
 
 // gitAuth runs one network subcommand, attaching the token as a basic
