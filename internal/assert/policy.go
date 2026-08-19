@@ -297,6 +297,14 @@ type AssetObligation struct {
 	// any one asset's vocabulary. Absent means always owed, which
 	// stays correct for fresh adopters.
 	OwedFrom *string `json:"owedFrom,omitempty"`
+	// Planned declares this asset's fulfillment channel: the document
+	// is derived from a build-leg inventory plan, so the pre-publish
+	// plans judgment (`assert plans`) demands a plan naming a document
+	// under this prefix before anything ships. Declared, never
+	// inferred from the prefix's spelling: which obligations plans
+	// fulfil is an org fact, and one class can owe both a planned
+	// inventory and an unplanned attestation asset.
+	Planned bool `json:"planned,omitempty"`
 }
 
 // ClassPolicy is one evidence class's asset obligations.
@@ -530,6 +538,42 @@ func (e *EvidencePolicy) decision(machineryVersion string) bool {
 // consumes the answer lands with #86.
 func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
 	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
+}
+
+// owedPlannedPrefixes returns the plan-fulfilled prefix obligations a
+// release under the given machinery version owes from this class —
+// the subset of owedPrefixes the pre-publish plans judgment demands
+// of the build legs' plans. One filter over the one obligation list:
+// the pre-publish and post-publish legs cannot disagree about what is
+// owed, only about when they look.
+func (c *ClassPolicy) owedPlannedPrefixes(machineryVersion string) []string {
+	var out []string
+
+	for _, ob := range c.AssetPrefixes {
+		if ob.Planned && owedFrom(ob.OwedFrom, machineryVersion) {
+			out = append(out, *ob.Prefix)
+		}
+	}
+
+	return out
+}
+
+// plannedPrefixes returns every plan-fulfilled prefix this class
+// DECLARES, with no epoch in sight — the class's plan vocabulary.
+// Vocabulary membership is a naming question, not a time question
+// (stele#143): a prefix owed only from some future machinery version
+// is still a name the class could owe, so a pre-epoch plan under it
+// is correct, never an orphan.
+func (c *ClassPolicy) plannedPrefixes() []string {
+	var out []string
+
+	for _, ob := range c.AssetPrefixes {
+		if ob.Planned {
+			out = append(out, *ob.Prefix)
+		}
+	}
+
+	return out
 }
 
 // owedPrefixes returns the prefix obligations a release under the

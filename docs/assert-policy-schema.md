@@ -9,8 +9,8 @@ know without being told: which evidence classes exist, what assets
 each requires, when verdicts moved into the attestation store, where
 the humans keep their written-down debt.
 
-Three formats are defined here: the policy file, the release
-evidence manifest, and the debt file. A change to any is a reviewed
+Four formats are defined here: the policy file, the release
+evidence manifest, the debt file, and the inventory plan. A change to any is a reviewed
 edit to this document first.
 
 `schema` is the refusal boundary: current **4**, the one epoch shared
@@ -69,6 +69,16 @@ version mismatch, never as an unknown-field error.
   is measured at cutover: the first machinery version that publishes
   the asset. Prefixes within a class form a set; an empty prefix or
   an unparsable `owedFrom` refuses at load.
+- `classes.<name>.assetPrefixes[].planned` — declares that one
+  obligation's fulfillment channel: the document is derived from a
+  build-leg inventory plan, so `assert plans` demands, BEFORE
+  anything ships, that some plan names a document under this prefix
+  (see [The inventory plan](#the-inventory-plan)). Declared, never
+  inferred from the prefix's spelling — which obligations plans
+  fulfil is an org fact, and one class can owe both a planned
+  inventory and an unplanned attestation asset (the `pgrx-extension`
+  shape). Absent means the obligation is judged only by the
+  post-publish evidence walk.
 - `classes.<name>.enrichment` — dependency names a release declaring
   this class owes its build-enrichment claim ON TOP of the verify
   policy's universal `required` set (stele#122): a `pgrx-extension`
@@ -289,6 +299,88 @@ history by the walk itself, excuse only `vsa:` findings on the
 affected tag, and (with `publishWorkflows` declared) only when the
 failure was a PUBLISHING run. The asymmetry is the point: what a human may assert
 and what only evidence may assert are different types.
+
+## The inventory plan
+
+The pre-publish half of the planned obligations (.github#544). A
+build leg that ships an artifact emits its inventory plan — the
+artifact-to-document mapping as data, stated exactly once, where and
+when it is certain: in the job that built the artifact. The publish
+leg derives the per-artifact SBOM documents from the plans; nothing
+restates the mapping, so nothing can drift from it. A plan document
+is one JSON array of entries, strict-decoded (an unknown field is
+version skew, refused):
+
+```json
+[
+  {
+    "class": "wasm-npm",
+    "doc": "sbom-npm-lab-wasm",
+    "artifact": "lab-wasm.tgz",
+    "params": {
+      "cargoPackage": "lab-wasm",
+      "features": ["pg16"],
+      "noDefaultFeatures": true
+    }
+  }
+]
+```
+
+- `class` (required) — the evidence class whose build leg emitted
+  the entry, stated where it is certain: the leg IS the class. It is
+  the judgment's join key (stele#143): the entry is judged against
+  this one class's declared vocabulary and satisfies this one
+  class's obligations, never another's by prefix coincidence.
+- `doc` (required) — the release document's name, version- and
+  suffix-less: the published asset becomes
+  `<doc>-<version><sbomSuffix>`, so the policy's planned prefixes
+  match `doc` directly. The prefix names what the artifact IS; the
+  params name what it is MADE OF — the two disagreeing silently is
+  exactly the .github#544 defect.
+- `artifact` (optional) — the shipped file the document describes.
+- `params` (optional) — the ecosystem-specific closure description:
+  which package, which features, whatever the class's deriver
+  needs. One JSON object, opaque to the judgment by design — which
+  ecosystems exist is each adopter's fact, not this tool's, so
+  stele guards the charset of every key and string value and
+  canonicalises the object for comparison, and only the downstream
+  leg that derives the document reads the content.
+
+Every value is charset-guarded before it can reach a command line,
+because plans originate on build legs that execute caller code.
+Entries restating one identical mapping collapse by canonical
+content (matrix legs); one `doc` claimed by two DIFFERENT entries —
+different params, or different classes — is legs disagreeing about
+what was built: refused, never last-writer-wins.
+
+`stele assert plans --policy <assert-policy> --classes <declared>
+--machinery-version <riding> <plan files...>` judges the plans
+against the planned obligations pre-publish, in the publish guard.
+The judgment is bidirectional, and the two directions deliberately
+ask two different questions (stele#143):
+
+- **owed** — for each requested class's planned prefixes owed at the
+  riding machinery version (the same policy and the same `owedFrom`
+  semantics the evidence walk reads — one obligation list, two
+  moments of looking): is there a plan OF THAT CLASS naming a
+  document under the prefix? An unsatisfied owed prefix is a release
+  that would publish green and red on the walk.
+- **vocabulary** — for each plan entry: does its own class declare
+  some planned prefix claiming the document, at ANY epoch? Whether a
+  document is one a class could ever owe is a naming question, not a
+  time question, so `owedFrom` never enters — a pre-epoch release
+  emitting a correct plan is silent by construction. A document
+  outside its class's vocabulary is an orphan (a misnamed
+  obligation-bearer or an undeclared obligation); a class declaring
+  no planned prefixes has declared no vocabulary, so its plans are
+  outside the judgment, not refused by it; a plan naming a class the
+  release does not declare is drift (a leg ran for an undeclared
+  class).
+
+Verdicts and exit codes are the assert verb's usual three
+([report-schema.md](report-schema.md)); an unreadable plan path is a
+usage refusal (a broken invocation), while a plan that will not
+parse is a FAIL finding (a defective build leg).
 
 ## Verification depth
 
