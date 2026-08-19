@@ -810,6 +810,7 @@ func (la *levelArgs) gatherSources(
 	ev *level.Evidence, forge gh.Forge, tag string, assets []string, out *latch,
 ) {
 	sources := map[string]bool{}
+	unrecognised := map[string]bool{}
 	own := strings.ToLower(la.owner + "/" + la.name)
 
 	for _, name := range inventoryAssets(assets) {
@@ -824,8 +825,19 @@ func (la *levelArgs) gatherSources(
 		}
 
 		for _, pkg := range doc.Packages {
-			where := pkg.DownloadLocation
-			if where == "" || where == "NOASSERTION" || where == "NONE" || where == "git+." {
+			// A package URL answers this on its own. The purl
+			// specification says an absent repository_url qualifier
+			// means the ecosystem's DEFAULT public registry — so a bare
+			// pkg:golang/… or pkg:cargo/… records a dependency taken
+			// straight from upstream, and one carrying repository_url
+			// records where the producer actually took it from.
+			//
+			// That is why this reads purls rather than SPDX download
+			// locations: the spec asks where the build fetched from, not
+			// that an inventory carry a particular field, and most
+			// inventories carry no download location at all.
+			where := pkg.source()
+			if where == "" {
 				continue
 			}
 
@@ -839,11 +851,24 @@ func (la *levelArgs) gatherSources(
 				continue
 			}
 
-			sources[where] = producerControls(where, la.owner, la.name)
+			switch owns := producerControls(where, la.owner, la.name); owns {
+			case ownedByProducer:
+				sources[where] = true
+			case upstreamDefault:
+				sources[where] = false
+			case unknownHost:
+				unrecognised[where] = true
+			}
 		}
 	}
 
-	if len(sources) == 0 {
+	for where := range unrecognised {
+		ev.UnrecognisedSources = append(ev.UnrecognisedSources, where)
+	}
+
+	sort.Strings(ev.UnrecognisedSources)
+
+	if len(sources) == 0 && len(unrecognised) == 0 {
 		out.logf("level: release %s: the inventory records no third-party dependency source", tag)
 
 		return
@@ -873,6 +898,37 @@ type inventoryPackage struct {
 	} `json:"externalRefs"`
 }
 
+// source names where this package was fetched from, or empty when the
+// inventory records nothing that says.
+func (p inventoryPackage) source() string {
+	for _, ref := range p.ExternalRefs {
+		purl := ref.ReferenceLocator
+		if !strings.HasPrefix(purl, "pkg:") {
+			continue
+		}
+
+		if _, qualifiers, found := strings.Cut(purl, "?"); found {
+			for q := range strings.SplitSeq(qualifiers, "&") {
+				if repo, ok := strings.CutPrefix(q, "repository_url="); ok && repo != "" {
+					return repo
+				}
+			}
+		}
+
+		// No qualifier: the ecosystem's default public registry, named
+		// by the purl's type so a report says which one.
+		if ecosystem, _, ok := strings.Cut(strings.TrimPrefix(purl, "pkg:"), "/"); ok && ecosystem != "" {
+			return "the default " + ecosystem + " registry"
+		}
+	}
+
+	if loc := p.DownloadLocation; loc != "" && loc != "NOASSERTION" && loc != "NONE" && loc != "git+." {
+		return loc
+	}
+
+	return ""
+}
+
 // namesModule reports whether this package IS the artifact rather than
 // one of its dependencies.
 func (p inventoryPackage) namesModule(own string) bool {
@@ -892,12 +948,35 @@ func (p inventoryPackage) namesModule(own string) bool {
 // producerControls reports whether a download location is one the
 // producer serves. Their own repository host and namespace are theirs;
 // a public ecosystem proxy is not.
-func producerControls(location, owner, repo string) bool {
+func producerControls(location, owner, repo string) ownership {
 	lower := strings.ToLower(location)
 
-	return strings.Contains(lower, strings.ToLower(owner+"/"+repo)) ||
-		strings.Contains(lower, strings.ToLower("/"+owner+"/"))
+	// An ecosystem's default registry is upstream by definition: that
+	// is what "default" means in the package URL specification.
+	if strings.HasPrefix(lower, "the default ") {
+		return upstreamDefault
+	}
+
+	if strings.Contains(lower, strings.ToLower(owner+"/"+repo)) ||
+		strings.Contains(lower, strings.ToLower("/"+owner+"/")) {
+		return ownedByProducer
+	}
+
+	// Some other host. Whose it is cannot be derived from a repository
+	// coordinate: a producer's private mirror and a stranger's server
+	// look identical from here, and guessing either way would answer
+	// the requirement with an assumption.
+	return unknownHost
 }
+
+// ownership is what a run could establish about a dependency source.
+type ownership int
+
+const (
+	unknownHost ownership = iota
+	ownedByProducer
+	upstreamDefault
+)
 
 // inventoryAssets names the release assets that are inventories.
 func inventoryAssets(assets []string) []string {

@@ -147,6 +147,12 @@ type Evidence struct {
 	// release records to whether the producer controls that location.
 	// nil means the sources were not read.
 	DependencySources map[string]bool
+	// UnrecognisedSources are locations whose ownership this run could
+	// not establish — a host that is neither an ecosystem's default
+	// registry nor inside the producer's own forge namespace. Refuting
+	// on one would call a genuine private mirror upstream; holding on
+	// one would take a stranger's host for the producer's.
+	UnrecognisedSources []string
 
 	Now time.Time
 }

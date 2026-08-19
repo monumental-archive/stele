@@ -147,7 +147,7 @@ func TestLevelDependencyFromAScriptedRelease(t *testing.T) {
 	const (
 		artifact = "widget_linux_amd64"
 		digest   = "1111111111111111111111111111111111111111111111111111111111111111"
-		purl     = "pkg:golang/example.com/dep@v1.0.0"
+		purl     = "pkg:golang/example.com/dep@v1.0.0?repository_url=https://github.com/acme/mirror"
 	)
 
 	released := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)

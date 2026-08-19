@@ -157,6 +157,12 @@ func (producerControlled) Detect(ev *Evidence) Outcome {
 			len(upstream), upstream)
 	}
 
+	if len(ev.UnrecognisedSources) > 0 {
+		return Unevaluated("%d dependency source(s) belong to a host this run cannot place — neither an"+
+			" ecosystem's default registry nor inside the producer's own forge namespace: %v",
+			len(ev.UnrecognisedSources), ev.UnrecognisedSources)
+	}
+
 	return Established("all %d resolved dependency source(s) are locations the producer controls",
 		len(ev.DependencySources))
 }
