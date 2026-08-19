@@ -20,14 +20,15 @@ layout, completeness policy) in a committed policy file the tool
 consumes. [monumental-archive](https://github.com/monumental-archive)
 is its first conforming consumer, not a hardcoded name.
 
-Four verbs:
+Four verbs and a judge:
 
-| Verb | Owns |
+| Command | Owns |
 | --- | --- |
-| `derive` | versions from conventional commits, SBOM assembly, VEX from triage decisions, image facts |
-| `assert` | image facts against claims, evidence-bundle completeness, settings drift against a baseline |
-| `emit` | source-chain links, VSA predicates, evidence bundles — the JSON that gets signed |
-| `verify` | every attestation against a pinned signer identity, the chain walk, the verdict — and `level`, the honest current level computed from live evidence |
+| `derive` | versions and changelogs from conventional commits, version-mirror bumps, per-artifact SBOMs (SPDX), VEX from triage decisions, OCI image facts, control claims from the forge's live enforcement state |
+| `assert` | published evidence against a declaration, over an org or one repo: image facts, evidence-bundle completeness, advisory blast radius against VEX, release tags, and chain coverage of the whole population — exit 0 pass, 1 fail, 4 could-not-judge |
+| `emit` | source-chain links, VSA predicates, the release evidence manifest — the JSON that gets signed |
+| `verify` | every attestation against a pinned signer identity, the published verdict, the source-chain walk, and the reproducibility rebuild's typed verdict |
+| `level` | what a repository's live, publicly fetchable evidence actually supports, per SLSA track — no clone, no policy, no trusted root, no declaration taken |
 
 Workflows orchestrate, the platform signs, **stele computes and
 checks**. It holds no key, mints no certificate, and never runs caller
@@ -35,27 +36,48 @@ code: the capability boundary lives strictly above it.
 
 ## Why a stranger would run it
 
-`stele verify` is the org's verification recipe as an executable:
-point it at a release and a policy, and it checks what the
-documentation says a stranger can check — fail-closed, byte-for-byte
-the same data model the emitter used, because verifier and emitter
-are one binary sharing one set of types.
+Day one is one flag:
+
+```bash
+stele level --repo you/yours
+```
+
+It measures and reports; it gates nothing. From there, `stele verify`
+is the verification recipe as an executable: point it at a release
+and a policy, and it checks what the documentation says a stranger
+can check — fail-closed, byte-for-byte the same data model the
+emitter used, because verifier and emitter are one binary sharing one
+set of types. Adopting it in a repository with no org behind it is
+[docs/adoption.md](docs/adoption.md), whose minimal policies the test
+suite executes.
 
 ## Status
 
-`verify` is authoritative
-([#3](https://github.com/monumental-archive/stele/issues/3), closed at
-[.github#436](https://github.com/monumental-archive/.github/pull/436)):
-release, vsa, chain and level modes shadow-proven against every
-published class and both identity worlds, and the canon's source-track
-audit runs this binary — the bash walk it replaced is deleted. The
-port from the canon's bash
+The port from the canon's bash
 ([.github#392](https://github.com/monumental-archive/.github/issues/392))
-continues verb by verb under the same bar — shadow mode against real
-artifacts before authority — with `emit` next
-([#21](https://github.com/monumental-archive/stele/issues/21)). The
-gate, lint canon (`golangci-lint` at `default: all`), coverage ratchet
-and hermetic build have been live since the first commit.
+is **complete**: all four verbs plus `level` shipped verb by verb
+under one bar — shadow mode against real artifacts before authority —
+and every evidence-judging audit in the org now runs this binary. The
+formats are pre-v1: correctness wins every tie, and schemas change to
+the correct shape without compatibility shims. The gate, lint canon
+(`golangci-lint` at `default: all`), coverage ratchet and hermetic
+build have been live since the first commit.
+
+## Documentation
+
+[docs/adoption.md](docs/adoption.md) is the front door for anyone who
+is not us — day one, the delivery layer, the policy floors (executed
+by the test suite), the real couplings, what to skip. The rest of
+[docs/](docs/) specifies mechanisms: the
+[verify policy](docs/policy-schema.md) and
+[assert policy](docs/assert-policy-schema.md) schemas, the
+[chain note format](docs/chain-format.md), the
+[report document](docs/report-schema.md) every judging verb speaks,
+[how `level` judges](docs/level.md), the
+[trust anchor stance](docs/trusted-root.md),
+[versioning](docs/versioning.md) and the
+[binary SBOM design](docs/binary-sbom.md). `stele help` carries the
+full flag reference.
 
 ## Building
 

@@ -91,6 +91,9 @@ usage:
               comparisons, subject coverage, the release decision
     vsa       the published verdict, as the spec's consumer procedure
     chain     the source chain: coverage tip→genesis and the ledger
+    repro     the reproducibility rebuild: the release's checksum
+              manifest against the rebuild's, one typed finding per
+              artifact that failed to reproduce
 
   stele derive <mode>    turn facts into claims; modes:
     version   the release this history's conventional commits call
@@ -139,6 +142,11 @@ usage:
                  natively, no gitsign binary), target carries a
                  source chain link (--org|--repo --policy
                  [--snapshot|--capture])
+    chains       every repository in the population: a founded source
+                 chain verifies end to end over every protected
+                 branch, or the repository is a declared exception —
+                 cloneless, over the forge's own API (--org|--repo
+                 --policy --verify-policy [--snapshot|--capture])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,
@@ -163,6 +171,9 @@ usage:
               to the notes ledger with a compare-and-swap push
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
+    manifest  the release evidence manifest — the declared contract a
+              stranger reads at the tag; every value a stated fact,
+              read back through the assert reader before it leaves
 
 derive sbom flags: [--out --expect-version] <binary>..., or
 --cargo-package --tree --created [--target --features
@@ -186,7 +197,9 @@ in this binary.
 
 verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain adds
---git-dir [--ref]. level takes --repo|--org [--ref --notes-ref --tag --json
+--git-dir [--ref]; repro takes --repo --tag --subjects --rebuilt
+[--json] and no trust material — a digest comparison signs nothing.
+level takes --repo|--org [--ref --notes-ref --tag --json
 --shield <path>], where --shield writes a shields.io endpoint document
 from the same seal as the report. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
