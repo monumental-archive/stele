@@ -352,3 +352,40 @@ is never consulted: it cannot judge x509-in-the-PGP-slot), and the
 tag's target carries a source chain link. The legacy bound is derived
 from the chain itself: a target that does not descend from the chain
 genesis predates the machinery and owes nothing, reported by name.
+
+## The chains section
+
+The chain-coverage audit (stele#94): for every repository in the
+population, either a founded source chain verifies end to end over
+every protected branch, or the repository is a declared exception.
+Declaring the section declares the obligation; the only content here
+is the exception list, because where the ledger lives and which
+branches it covers already live in the verify policy's `source`
+section — one declaration, never restated:
+
+```json
+"chains": {
+  "exceptions": [
+    {"repo": "widget-lab", "reason": "lab-first activation, tracked in example-org/widget-lab#1"}
+  ]
+}
+```
+
+- `exceptions` — the declared opt-outs: repository names within the
+  population's owner, each with a written reason. The list may be
+  empty. An entry whose repository has since founded its chain is
+  reported as a **stale exception** by the report engine — the
+  remove-the-line-when-activated contract, made structural.
+
+The walk (`stele assert chains --org|--repo`, with `--verify-policy`
+and `--trusted-root`): the population is the org listing or the one
+named repository — enumerated, never the enrolled set. A repository
+with no link-shaped note on the declared notes ref is **unactivated**:
+a finding unless a declared exception names it, because an
+unactivated repository is silent by construction (#266). A founded
+chain is walked and cryptographically verified through the verify
+engine (`verify chain`, per protected branch, over the forge's own
+API — no clone); a founded chain that fails to verify is a finding
+that **no exception can excuse** — declared exceptions carry the
+`unactivated` assertion alone, so an opt-out excuses absence,
+structurally never a defect. A zero population seals CANNOT_JUDGE.

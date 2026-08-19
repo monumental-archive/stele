@@ -39,6 +39,52 @@ type Policy struct {
 	Evidence    *EvidencePolicy    `json:"evidence"`
 	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
 	Tags        *TagsPolicy        `json:"tags,omitempty"`
+	Chains      *ChainsPolicy      `json:"chains,omitempty"`
+}
+
+// ChainsPolicy parameterises the chain-coverage audit (stele#94).
+// Where the ledger lives and which branches it covers come from the
+// verify policy's source section — the one declaration — so the only
+// content here is the exception list. The section's PRESENCE is the
+// declared obligation: an org that declares it audits every
+// population member.
+type ChainsPolicy struct {
+	// Exceptions are the declared opt-outs: repositories the walk may
+	// report unactivated without going red, each with a written
+	// reason. The list may be empty — an org with every repository
+	// activated excuses nothing — and an entry whose repository has
+	// since founded its chain is reported stale by the report engine,
+	// which is the removal condition made structural.
+	Exceptions []ChainException `json:"exceptions,omitempty"`
+}
+
+// ChainException is one declared opt-out: the repository name within
+// the population's owner, and the reason a human wrote down.
+type ChainException struct {
+	Repo   *string `json:"repo"`
+	Reason *string `json:"reason"`
+}
+
+func (cp *ChainsPolicy) validate() error {
+	seen := map[string]bool{}
+
+	for i, e := range cp.Exceptions {
+		if e.Repo == nil || *e.Repo == "" {
+			return fmt.Errorf("chains.exceptions[%d].repo is absent or empty", i)
+		}
+
+		if seen[*e.Repo] {
+			return fmt.Errorf("chains.exceptions[%d] names %s twice — one repository, one excuse", i, *e.Repo)
+		}
+
+		seen[*e.Repo] = true
+
+		if e.Reason == nil || *e.Reason == "" {
+			return fmt.Errorf("chains.exceptions[%d].reason is absent or empty — a silent exception is silence", i)
+		}
+	}
+
+	return nil
 }
 
 // EpochPending is the declared-unsigned epoch value: the repository
@@ -394,6 +440,12 @@ func (p *Policy) validate() error {
 
 	if p.BlastRadius != nil {
 		if err := p.BlastRadius.validate(); err != nil {
+			return err
+		}
+	}
+
+	if p.Chains != nil {
+		if err := p.Chains.validate(); err != nil {
 			return err
 		}
 	}

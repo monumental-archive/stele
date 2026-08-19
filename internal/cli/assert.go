@@ -26,6 +26,7 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
+	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
@@ -49,6 +50,7 @@ const (
 	targetEvidence    = "evidence"
 	targetBlastRadius = "blast-radius"
 	targetTags        = "tags"
+	targetChains      = "chains"
 )
 
 // The effect seams, swapped only by tests.
@@ -92,9 +94,11 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertBlastRadius(args[1:], stdout, stderr)
 	case targetTags:
 		return assertTags(args[1:], stdout, stderr)
+	case targetChains:
+		return assertChains(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags)\n", args[0]); err != nil {
+			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags, chains)\n", args[0]); err != nil {
 			return exitIO
 		}
 
@@ -740,6 +744,182 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// assertChains runs the chain-coverage audit (stele#94): the last
+// evidence-audit bash's walk, cloneless. The assert policy carries
+// the declared exceptions; the verify policy carries where the
+// ledger lives and which branches it covers — one declaration, read
+// here rather than restated.
+func assertChains(args []string, stdout, stderr io.Writer) int {
+	var (
+		jsonOut                 bool
+		org, repo, policyPath   string
+		verifyPolicyPath        string
+		root                    rootFlags
+		snapshotDir, captureDir string
+	)
+
+	flags := flag.NewFlagSet("stele assert chains", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&org, "org", "", "organisation whose chains are audited (this or --repo)")
+	flags.StringVar(&repo, "repo", "",
+		"owner/name whose chain is audited — the single-repository population (this or --org)")
+	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	flags.StringVar(&verifyPolicyPath, "verify-policy", "",
+		"path to the committed verify policy (required: it names the ledger, the branches and the identities)")
+	root.register(flags)
+	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
+	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	usageFail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele assert chains: %s\n", msg); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	switch {
+	case org == "" && repo == "":
+		return usageFail("--org or --repo is required")
+	case org != "" && repo != "":
+		return usageFail("--org and --repo are exclusive: one population, named once")
+	case repo != "" && !strings.Contains(repo, "/"):
+		return usageFail("--repo must be owner/name")
+	case policyPath == "":
+		return usageFail("--policy is required")
+	case verifyPolicyPath == "":
+		return usageFail("--verify-policy is required")
+	case snapshotDir != "" && captureDir != "":
+		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
+	}
+
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return usageFail(err.Error())
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	if pol.Chains == nil {
+		return usageFail("the policy declares no chains section")
+	}
+
+	vpol, notesRef, refs, verr := loadChainAuthority(verifyPolicyPath)
+	if verr != nil {
+		return usageFail(verr.Error())
+	}
+
+	rootJSON, err := root.resolve()
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	bv, err := newBundleVerifier(rootJSON)
+	if err != nil {
+		return usageFail(err.Error())
+	}
+
+	forge := newForge()
+	if snapshotDir != "" {
+		forge = gh.Snapshot{Dir: snapshotDir}
+	} else if captureDir != "" {
+		forge = gh.Capture{Live: forge, Dir: captureDir}
+	}
+
+	tags, ok := forge.(gh.TagReader)
+	if !ok {
+		return usageFail("this forge cannot read chain notes")
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	cv := chainWalker{vpol: vpol, tags: tags, bv: bv, log: out.logf}
+	pop := assert.Population{Org: org, Repo: repo}
+
+	rep, err := assert.Chains(pol, pop, forge, tags, cv, notesRef, refs, out.logf, root.facts()...)
+	if out.err != nil {
+		return exitIO
+	}
+
+	if err != nil {
+		rep = report.Seal("assert "+targetChains, pop.Subject(),
+			report.PopulationFromListing(0, "walk incomplete"),
+			[]report.Finding{{Subject: pop.Subject(), Assertion: targetChains, Detail: err.Error()}},
+			nil, report.NoCanary())
+
+		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+			return exitIO
+		}
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// loadChainAuthority loads the verify policy and derives what the
+// chain audit walks from its source section: the notes ref and one
+// fully qualified ref per protected branch.
+//
+//nolint:gocritic // unnamedResult: the policy, the notes ref, then the branch refs
+func loadChainAuthority(path string) (*policy.Policy, string, []string, error) {
+	vf, err := os.Open(path) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("verify policy: %w", err)
+	}
+	defer vf.Close() //nolint:errcheck // read-only close
+
+	vpol, err := policy.Load(vf)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	if vpol.Source == nil {
+		return nil, "", nil, errors.New("the verify policy declares no source section — the chain audit needs one")
+	}
+
+	refs := make([]string, 0, len(vpol.Source.ProtectedBranches))
+	for _, b := range vpol.Source.ProtectedBranches {
+		refs = append(refs, "refs/heads/"+*b.Name)
+	}
+
+	return vpol, *vpol.Source.NotesRef, refs, nil
+}
+
+// chainWalker binds the audit's verification seam to the real chain
+// engine over the forge-backed history — the single-binary payoff
+// again: the audit asserting "this chain verifies" and the verifier
+// deciding what verifying MEANS are one implementation.
+type chainWalker struct {
+	vpol *policy.Policy
+	tags gh.TagReader
+	bv   verify.BundleVerifier
+	log  verify.Logf
+}
+
+// Verify implements assert.ChainVerifier.
+func (c chainWalker) Verify(owner, repo, ref string) (int, error) {
+	h := &gh.History{Reader: c.tags, Owner: owner, Repo: repo, NotesRef: *c.vpol.Source.NotesRef}
+
+	verdict, err := verify.Chain(c.vpol, verify.Coords{Owner: owner, Repo: repo}, ref, h, c.bv, c.log)
+	if err != nil {
+		return 0, err
+	}
+
+	return verdict.Links(), nil
 }
 
 // loadTagVerifier binds the tag audit's trust boundary. Signing
