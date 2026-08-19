@@ -10,6 +10,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.13.0](https://github.com/monumental-archive/stele/compare/v0.12.0...v0.13.0) - 2026-08-19
+
+### Added
+
+- resolve the trusted root through TUF from a pinned anchor ([#108](https://github.com/monumental-archive/stele/pull/108))
+- read the enrichment claim as a declared obligation ([#111](https://github.com/monumental-archive/stele/pull/111))
+- demand class-keyed enrichment names through one seam ([#123](https://github.com/monumental-archive/stele/pull/123))
+- claims, image facts, VEX and per-artifact inventories ([#124](https://github.com/monumental-archive/stele/pull/124))
+
 ## [0.12.0](https://github.com/monumental-archive/stele/compare/v0.11.0...v0.12.0) - 2026-08-18
 
 ### Added
