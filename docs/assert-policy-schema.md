@@ -211,9 +211,12 @@ NOTHING, never everything.
 ## The release evidence manifest
 
 The declared contract, going forward: a release asset (named by the
-policy's `manifestAsset`) the publish machinery writes and attests,
-so the contract is immutable at the tag and readable by a stranger
-with no knowledge of the publisher's CI:
+policy's `manifestAsset`) the publish machinery writes with
+`stele emit manifest` and attests, so the contract is immutable at
+the tag and readable by a stranger with no knowledge of the
+publisher's CI. Writer and reader share one definition
+(`internal/evidence`) — a manifest the writer can produce and one
+this reader admits cannot drift apart:
 
 ```json
 { "schema": 1, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
