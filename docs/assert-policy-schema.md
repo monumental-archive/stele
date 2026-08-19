@@ -245,26 +245,71 @@ publisher's CI. Writer and reader share one definition
 this reader admits cannot drift apart:
 
 ```json
-{ "schema": 1, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
-  "machineryVersion": "1.40.0" }
+{ "schema": 2, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+  "machineryVersion": "1.40.0",
+  "entries": [
+    { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject" },
+    { "name": "attestations-image.intoto.jsonl", "sha256": "2222…", "type": "evidence" }
+  ] }
 ```
 
-All four fields are required. The manifest declares **facts** —
-classes, verdict layout, and the version of the publish machinery
-that produced the release — never obligations: whether the release
-owes a decision or an enrichment claim is always *derived* from the
-policy's `*FromVersion` epochs against `machineryVersion`, through
-the same epoch semantics the workflow adapter uses. An adopter with
-no history declares no epochs, and every obligation simply always
-holds. `machineryVersion` is the attested spelling of the fact the
-workflow adapter regexes out of a pin comment; a manifest that omits
-it, or carries an unparsable one, refuses — a declaration that
-cannot answer the epochs excuses nothing silently.
+All five fields are required. The manifest declares **facts** —
+classes, verdict layout, the version of the publish machinery that
+produced the release, and what the release published — never
+obligations: whether the release owes a decision or an enrichment
+claim is always *derived* from the policy's `*FromVersion` epochs
+against `machineryVersion`, through the same epoch semantics the
+workflow adapter uses. An adopter with no history declares no epochs,
+and every obligation simply always holds. `machineryVersion` is the
+attested spelling of the fact the workflow adapter regexes out of a
+pin comment; a manifest that omits it, or carries an unparsable one,
+refuses — a declaration that cannot answer the epochs excuses nothing
+silently.
+
+### Typed entries
+
+`entries` pins every asset the release published and says what each
+one **is**. The two types carry opposite obligations, which is the
+whole reason the distinction is worth a field:
+
+- `build-subject` — an artifact *of* the build. It must rebuild
+  bit-for-bit.
+- `evidence` — a document *about* the release: an attestation bundle,
+  an inventory, a triage decision, a digest manifest. It **cannot**
+  rebuild bit-for-bit, because a Sigstore signature embeds a fresh
+  timestamp and certificate on every signing, and that
+  non-reproducibility is a security property, not a defect.
+
+The vocabulary is closed: an entry that is neither refuses the
+manifest, because unknown defaulting into either population is the
+failure this typing exists to prevent. So does an entry with no
+digest, or the same asset twice.
+
+The type is stamped by `stele emit manifest`, from the vocabulary
+this policy already declares — `checksums`, `manifestAsset`,
+`umbrellaBundle`, `sbomSuffix`, `evidenceSuffixes`, and each class's
+`bundles`, `legacyVsaBundles` and `assetPrefixes`. That is the ONE
+definition of the question (`internal/assert`'s `Classify`), and
+emission is the one moment the knowledge exists natively. Every walk
+downstream **reads** the answer: `stele verify repro` takes the
+released manifest whole and judges its `build-subject` entries, and a
+walk that re-derived the typing would be the second answer this field
+exists to retire. The classifier's other job is a manifest that
+arrives untyped — a legacy release, or a foreign one this org never
+wrote — where it classifies a plain sha256sum manifest instead.
+
+A manifest cannot pin itself: a document carrying its own digest is
+not a document. The entries are therefore the assets published
+*beside* it, and nothing is lost — the manifest is an evidence
+document, and so is the checksum manifest that pins it.
 
 The manifest's `schema` is its own number, outside the live-document
 epoch ([versioning.md](versioning.md)): manifests are published
 release assets, immutable once shipped, so the number moves only
 when this format's own key set changes against documents that exist.
+It moved to `2` when entries gained their type. Pre-v1 there is no
+dual-version reader — a schema-1 manifest is refused, and the
+manifests already published re-emit typed at the canon train.
 
 Releases without a manifest fall back to the workflow adapter — the
 quarantined read of the first consumer's publish-workflow convention

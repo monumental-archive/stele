@@ -44,11 +44,18 @@ func TestManifestSource(t *testing.T) {
 	// machineryVersion rows are the stele#109 point: without it the
 	// obligations cannot be derived, and deriving is the only mode.
 	for name, doc := range map[string]string{
-		"empty manifest":           `{"schema": 1}`,
-		"missing machineryVersion": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true}`,
-		"unparsable machineryVersion": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "not-a-version"}`,
-		"wrong schema": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+		"empty manifest":           `{"schema": 2}`,
+		"missing machineryVersion": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true}`,
+		"unparsable machineryVersion": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "not-a-version", "entries": [` + manifestEntry("a.tar.gz", "build-subject") + `]}`,
+		"no entries": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0"}`,
+		"an entry typed outside the vocabulary": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "artefact") + `]}`,
+		// Pre-v1 there is no dual-version reader: the manifests
+		// published under schema 1 re-emit typed at the canon train,
+		// and this reader refuses them until they do (stele#156).
+		"the retired schema": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true, ` +
 			`"machineryVersion": "1.0.0"}`,
 	} {
 		f3 := completeRelease()
@@ -95,8 +102,9 @@ func TestManifestSourceEpochs(t *testing.T) {
 			pol.Evidence.EnrichmentFromVersion = tt.enrichmentFrom
 
 			f := completeRelease()
-			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 1, ` +
-				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `"}`
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 2, ` +
+				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `", ` +
+				`"entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject") + `]}`
 
 			c, ok, err := (assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
 				Contract("acme", "widget", "v1.0.0")

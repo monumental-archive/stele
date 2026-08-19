@@ -113,13 +113,20 @@ never null.
 ## What `verify repro` puts in it
 
 The reproducibility comparison (stele#96) seals one report: subject
-`owner/repo@tag`, population sized by the RELEASED manifest (an empty
-release under rebuild is `CANNOT_JUDGE` by law 1, never a pass), and
-one finding per artifact that failed to reproduce, typed in the
+`owner/repo@tag`, population sized by the released manifest's BUILD
+SUBJECTS (an empty subject population is `CANNOT_JUDGE` by law 1,
+never a pass — a repro claim over nothing is not a proof), and one
+finding per artifact that failed to reproduce, typed in the
 assertion — `repro/diverged` (both digests carried in
 `expected`/`actual`), `repro/absent-from-rebuild`, and
 `repro/extra-in-rebuild` (the artifact SET diverged, a different
-defect from a byte difference). `rebuiltArtifacts` rides as a fact.
+defect from a byte difference). `rebuiltArtifacts` rides as a fact,
+beside `subjectTyping`: `manifest` where the released manifest typed
+its own entries, `policy` where an untyped one was classified through
+the org's declared evidence vocabulary (stele#156). The release's
+evidence documents are never in the population — a Sigstore bundle
+cannot rebuild bit-for-bit, and that is a security property.
+
 The rebuild itself is orchestration and stays with the caller; SLSA
 v1.2 names verified reproducibility only as a future-directions
 candidate, so this verdict is information — it claims no level and

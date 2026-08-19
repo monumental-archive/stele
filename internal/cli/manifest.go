@@ -6,9 +6,18 @@
 // then on `assert evidence` derives the release's obligations from it
 // rather than from the caller's workflow at the tag. Every value here
 // is a declared fact the caller states — which classes shipped, the
-// verdict layout, its own version — and none is derived, because this
-// verb runs inside the machinery being described and a derivation
-// would be the machinery grading itself.
+// verdict layout, its own version, which assets it published — and
+// none is derived from the machinery's own state, because this verb
+// runs inside the machinery being described and that derivation would
+// be the machinery grading itself.
+//
+// The one thing this command computes is each asset's TYPE
+// (stele#156), and it computes it from the org's committed policy
+// rather than from the run: which names mark a document ABOUT the
+// release is a declared org fact, and stamping it HERE is the whole
+// point — this is the only moment the knowledge exists natively, and
+// every walk downstream reads the answer instead of deriving a second
+// one.
 //
 // What leaves this command is proven readable, not assumed: the
 // rendered bytes are read back through the same internal/evidence
@@ -22,8 +31,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/evidence"
 )
 
@@ -35,6 +46,7 @@ type manifestArgs struct {
 	classes          []string
 	storeVSA         bool
 	machineryVersion string
+	entries          []evidence.Entry
 	out              string
 }
 
@@ -44,7 +56,7 @@ type manifestArgs struct {
 func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	ma := &manifestArgs{}
 
-	var classes, storeVSA string
+	var classes, storeVSA, assets, policyPath string
 
 	flags := flag.NewFlagSet("stele emit manifest", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -56,6 +68,13 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	flags.StringVar(&ma.machineryVersion, "machinery-version", "",
 		"version of the publish machinery producing this release (required) — the attested spelling of "+
 			"the fact the policy epochs derive obligations from")
+	flags.StringVar(&assets, "assets", "",
+		"sha256sum manifest of the assets this release publishes beside the manifest (required) — each "+
+			"entry is pinned and typed, and a manifest cannot pin itself")
+	flags.StringVar(&policyPath, "assert-policy", "",
+		"assert policy whose evidence vocabulary types each asset (required) — which names mark a "+
+			"document ABOUT the release is a declared org fact, never this tool's knowledge. Named for "+
+			"the document it takes: --policy is the VERIFY policy in this verb's other modes")
 	flags.StringVar(&ma.out, "out", "", "file to write the manifest to; empty prints to stdout")
 
 	if err := flags.Parse(args); err != nil {
@@ -78,6 +97,12 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	case ma.machineryVersion == "":
 		return ma, usageFail("--machinery-version is required — obligations are derived from it through the" +
 			" policy epochs, and a manifest without it cannot answer them")
+	case assets == "":
+		return ma, usageFail("--assets is required — a manifest that lists nothing says nothing about what" +
+			" the release published")
+	case policyPath == "":
+		return ma, usageFail("--assert-policy is required: the asset types come from the org's declared" +
+			" evidence vocabulary, and this tool holds no names of its own")
 	}
 
 	layout, err := strconv.ParseBool(storeVSA)
@@ -85,15 +110,62 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 		return ma, usageFail(fmt.Sprintf("--store-vsa %q is not true or false", storeVSA))
 	}
 
+	entries, err := typedEntries(assets, policyPath)
+	if err != nil {
+		return ma, usageFail(err.Error())
+	}
+
 	ma.storeVSA = layout
+	ma.entries = entries
 	ma.classes = splitTypes(classes)
 
 	return ma, exitOK
 }
 
+// typedEntries reads the release's asset manifest and stamps each
+// asset with what it IS, through the policy's declared vocabulary.
+//
+// The classification is the engine's (internal/assert), never a
+// caller's: the flag it replaced asked callers for "the RELEASED
+// artifacts", a set only this tool's private knowledge could draw, so
+// every caller that honoured it reimplemented the tool in workflow
+// bash (stele#156).
+func typedEntries(assets, policyPath string) ([]evidence.Entry, error) {
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, err := os.ReadFile(assets) //nolint:gosec // the manifest path is operator-supplied by design
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+	}
+
+	// One reader for the sha256sum format, shared with every other leg
+	// that takes one: two parsers of one format drift into a writer
+	// whose output the reader refuses.
+	listed, err := parseManifest(string(raw))
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]evidence.Entry, 0, len(listed))
+	for _, a := range listed {
+		entries = append(entries, evidence.NewEntry(a.Name, a.SHA256, pol.Evidence.Classify(a.Name)))
+	}
+
+	return entries, nil
+}
+
 // runEmitManifest builds, proves, and writes the manifest.
 func runEmitManifest(ma *manifestArgs, doc io.Writer, out *latch) error {
-	manifest, err := evidence.New(ma.classes, ma.storeVSA, ma.machineryVersion)
+	manifest, err := evidence.New(ma.classes, ma.storeVSA, ma.machineryVersion, ma.entries)
 	if err != nil {
 		return fmt.Errorf("emit manifest: %w", err)
 	}
@@ -114,16 +186,17 @@ func runEmitManifest(ma *manifestArgs, doc io.Writer, out *latch) error {
 		return err
 	}
 
-	out.logf("manifest: %d class(es), storeVsa=%t, machinery %s",
-		len(ma.classes), ma.storeVSA, ma.machineryVersion)
+	out.logf("manifest: %d class(es), %d entr(ies) of which %d build subject(s), storeVsa=%t, machinery %s",
+		len(ma.classes), len(ma.entries), len(manifest.Subjects()), ma.storeVSA, ma.machineryVersion)
 
 	return nil
 }
 
 // emitManifestCmd runs the manifest mode — its own path through
 // emitCmd, because it shares none of the chain/vsa flag surface: it
-// signs nothing, walks nothing, and needs no policy to render a
-// declaration. Wired through the document-mode seam, so the document
+// signs nothing and walks nothing, and the policy it does read is the
+// assert vocabulary that types the assets, not the verify policy the
+// other modes carry. Wired through the document-mode seam, so the document
 // owns stdout and progress moves to stderr when no --out is given —
 // a progress line spliced into a JSON document is a corruption that
 // only surfaces in production.
