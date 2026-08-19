@@ -235,6 +235,24 @@ func (b *BaseImagesPolicy) validate() error {
 	return nil
 }
 
+// AssetObligation is one non-bundle asset a class requires, matched
+// by prefix on the release's asset names.
+type AssetObligation struct {
+	// Prefix matches the required asset by name prefix.
+	Prefix *string `json:"prefix"`
+	// OwedFrom, when set, is the machinery version (inclusive) from
+	// which the obligation holds — the shared owedFrom semantics
+	// (stele#128). Class obligations apply to every release of the
+	// class, and an asset the machinery only began publishing at some
+	// release would otherwise red all of history — the exact failure
+	// the top-level epochs exist to prevent. The epoch rides on the
+	// entry, not beside the class map, because each obligation comes
+	// online at its own machinery release and the field stays free of
+	// any one asset's vocabulary. Absent means always owed, which
+	// stays correct for fresh adopters.
+	OwedFrom *string `json:"owedFrom,omitempty"`
+}
+
 // ClassPolicy is one evidence class's asset obligations.
 type ClassPolicy struct {
 	// Bundles are the attestation bundle assets the class requires.
@@ -242,8 +260,9 @@ type ClassPolicy struct {
 	// LegacyVSABundles are additionally required BEFORE the store-VSA
 	// epoch.
 	LegacyVSABundles []string `json:"legacyVsaBundles,omitempty"`
-	// AssetPrefixes are non-bundle assets required by prefix match.
-	AssetPrefixes []string `json:"assetPrefixes,omitempty"`
+	// AssetPrefixes are non-bundle assets required by prefix match,
+	// each obligation carrying its own epoch.
+	AssetPrefixes []AssetObligation `json:"assetPrefixes,omitempty"`
 	// Enrichment names the dependency claims a release declaring this
 	// class owes ON TOP of the verify policy's universal required set
 	// (stele#122). Names must live inside that policy's required ∪
@@ -265,6 +284,30 @@ func validateClasses(classes map[string]ClassPolicy) error {
 	for name, c := range classes {
 		if len(c.Bundles) == 0 && len(c.AssetPrefixes) == 0 {
 			return fmt.Errorf("evidence.classes.%s requires nothing — an empty class asserts nothing", name)
+		}
+
+		prefixes := map[string]bool{}
+
+		for _, ob := range c.AssetPrefixes {
+			switch {
+			case ob.Prefix == nil || *ob.Prefix == "":
+				return fmt.Errorf("evidence.classes.%s.assetPrefixes carries an entry with no prefix — "+
+					"an obligation that matches everything obliges nothing", name)
+			case prefixes[*ob.Prefix]:
+				return fmt.Errorf("evidence.classes.%s.assetPrefixes names %q twice — obligations are a set",
+					name, *ob.Prefix)
+			}
+
+			prefixes[*ob.Prefix] = true
+
+			// Refused at load for the same reason as validateEpochs:
+			// the epoch feeds MustParse at judgment time, so an
+			// unparsable one must never reach the walk.
+			if ob.OwedFrom != nil {
+				if _, err := semver.NewVersion(*ob.OwedFrom); err != nil {
+					return fmt.Errorf("evidence.classes.%s.assetPrefixes[%s].owedFrom: %w", name, *ob.Prefix, err)
+				}
+			}
 		}
 
 		seen := map[string]bool{}
@@ -435,4 +478,21 @@ func (e *EvidencePolicy) decision(machineryVersion string) bool {
 // consumes the answer lands with #86.
 func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
 	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
+}
+
+// owedPrefixes returns the prefix obligations a release under the
+// given machinery version owes from this class — each entry judged
+// through the one owedFrom semantics (stele#128). Judged here rather
+// than precomputed onto the contract because the obligations are
+// per-class, and the class list joins the policy only in the walk.
+func (c *ClassPolicy) owedPrefixes(machineryVersion string) []string {
+	var out []string
+
+	for _, ob := range c.AssetPrefixes {
+		if owedFrom(ob.OwedFrom, machineryVersion) {
+			out = append(out, *ob.Prefix)
+		}
+	}
+
+	return out
 }

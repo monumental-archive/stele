@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "issuer": "https://token.actions.githubusercontent.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",
@@ -25,7 +25,7 @@
       },
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
-        "assetPrefixes": ["attestations-extimg-pg"]
+        "assetPrefixes": [{ "prefix": "attestations-extimg-pg" }]
       }
     },
     "continuous": {

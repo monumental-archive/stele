@@ -34,7 +34,7 @@ drift this schema exists to refuse.
 
 ```json
 {
-  "schema": 3,
+  "schema": 4,
 
   "issuer": "https://token.actions.githubusercontent.com",
 
@@ -145,7 +145,7 @@ implement refuses; it never best-efforts a newer schema — and it
 refuses with a **version error from the gate**, which runs before
 strict decoding, never incidentally with an unknown-field error
 (stele#107). When the number moves is governed by
-[docs/versioning.md](versioning.md). Current: **3** — ONE epoch
+[docs/versioning.md](versioning.md). Current: **4** — ONE epoch
 shared by the verify policy, the assert policy and the report, so a
 bump cannot land on one document and miss another (the drift #107
 found). Identifiers written into history — the chain note version,

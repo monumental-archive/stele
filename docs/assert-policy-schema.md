@@ -13,7 +13,7 @@ Three formats are defined here: the policy file, the release
 evidence manifest, and the debt file. A change to any is a reviewed
 edit to this document first.
 
-`schema` is the refusal boundary: current **3**, the one epoch shared
+`schema` is the refusal boundary: current **4**, the one epoch shared
 by this policy, the verify policy and the report, so a bump cannot
 land on one document and miss another ([docs/versioning.md](versioning.md)).
 The gate fires before strict decoding, so another schema refuses as a
@@ -23,7 +23,7 @@ version mismatch, never as an unknown-field error.
 
 ```json
 {
-  "schema": 3,
+  "schema": 4,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -41,7 +41,10 @@ version mismatch, never as an unknown-field error.
       "oci-image": { "bundles": ["attestations-image.intoto.jsonl"] },
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
-        "assetPrefixes": ["attestations-extimg-pg"],
+        "assetPrefixes": [
+          { "prefix": "attestations-extimg-pg" },
+          { "prefix": "sbom-pgrx-", "owedFrom": "1.42.0" }
+        ],
         "enrichment": ["pgrx-base-images", "pgrx-base"]
       }
     }
@@ -52,8 +55,20 @@ version mismatch, never as an unknown-field error.
 - `classes` — each class the org publishes, with the bundle assets it
   requires. `legacyVsaBundles` are additionally required only BEFORE
   the store-VSA epoch; `assetPrefixes` are non-bundle assets required
-  by prefix. An empty class is a validation error: it would assert
-  nothing.
+  by prefix match on the release's asset names. An empty class is a
+  validation error: it would assert nothing.
+- `classes.<name>.assetPrefixes[].owedFrom` — the machinery version
+  (inclusive) from which that one obligation holds, through the same
+  shared epoch semantics as every top-level `*FromVersion` field
+  (stele#128). Class obligations apply to every release of the class,
+  and an asset the machinery only began publishing at some release
+  (the per-artifact SBOM inventories, .github#529) would otherwise
+  red all of history. The epoch rides on the entry because each
+  obligation comes online at its own machinery release. Absent means
+  always owed — the correct default for fresh adopters. Declared, it
+  is measured at cutover: the first machinery version that publishes
+  the asset. Prefixes within a class form a set; an empty prefix or
+  an unparsable `owedFrom` refuses at load.
 - `classes.<name>.enrichment` — dependency names a release declaring
   this class owes its build-enrichment claim ON TOP of the verify
   policy's universal `required` set (stele#122): a `pgrx-extension`

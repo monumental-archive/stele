@@ -176,8 +176,12 @@ func (w *evidenceWalk) evidenceDocument(name string) bool {
 			return true
 		}
 
-		for _, prefix := range cp.AssetPrefixes {
-			if strings.HasPrefix(name, prefix) {
+		// Deliberately epoch-free: whether an obligation is OWED is a
+		// per-release question, but a shipped document is a document —
+		// a pre-epoch release that published the asset anyway must not
+		// have it counted as a build subject.
+		for _, ob := range cp.AssetPrefixes {
+			if strings.HasPrefix(name, *ob.Prefix) {
 				return true
 			}
 		}

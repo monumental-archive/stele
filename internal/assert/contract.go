@@ -38,6 +38,12 @@ type Contract struct {
 	// claim — same epoch semantics as Decision (stele#109). Carried on
 	// the contract for the deep walk's verify leg (#86) to consume.
 	Enrichment bool
+	// MachineryVersion is the version every epoch above was judged
+	// against, carried so obligations that live per-class rather than
+	// top-level (assetPrefixes' owedFrom, stele#128) can be judged
+	// where the class list joins the policy — the semantics stay in
+	// the one owedFrom definition, never a second reading here.
+	MachineryVersion string
 	// Origin names where the contract was read from, for the report.
 	Origin string
 }
@@ -119,11 +125,12 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	// for any epoch still in the future, which is exactly the class
 	// of defect the epochs exist to remove (stele#109).
 	return &Contract{
-		Classes:    doc.Classes,
-		StoreVSA:   *doc.StoreVSA,
-		Decision:   m.Policy.decision(*doc.MachineryVersion),
-		Enrichment: m.Policy.enrichment(*doc.MachineryVersion),
-		Origin:     "manifest " + m.Asset,
+		Classes:          doc.Classes,
+		StoreVSA:         *doc.StoreVSA,
+		Decision:         m.Policy.decision(*doc.MachineryVersion),
+		Enrichment:       m.Policy.enrichment(*doc.MachineryVersion),
+		MachineryVersion: *doc.MachineryVersion,
+		Origin:           "manifest " + m.Asset,
 	}, true, nil
 }
 
@@ -187,11 +194,12 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	}
 
 	return &Contract{
-		Classes:    classes,
-		StoreVSA:   w.Policy.storeVSA(machineryVersion),
-		Decision:   w.Policy.decision(machineryVersion),
-		Enrichment: w.Policy.enrichment(machineryVersion),
-		Origin:     "publish workflow at " + tag,
+		Classes:          classes,
+		StoreVSA:         w.Policy.storeVSA(machineryVersion),
+		Decision:         w.Policy.decision(machineryVersion),
+		Enrichment:       w.Policy.enrichment(machineryVersion),
+		MachineryVersion: machineryVersion,
+		Origin:           "publish workflow at " + tag,
 	}, true, nil
 }
 

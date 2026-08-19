@@ -354,7 +354,11 @@ func Clone(dir, remote, token, name, email string, refs ...string) (*Repo, error
 	// plumbing against the object store — and with no checked-out
 	// branch, git's refusal to fetch into the current branch has
 	// nothing to collide with, whatever the policy names.
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	// Group-traversable, world-closed — the same posture as every
+	// directory this module creates.
+	const scratchDirPerm = 0o750
+
+	if err := os.MkdirAll(dir, scratchDirPerm); err != nil {
 		return nil, fmt.Errorf("gitrepo: creating scratch dir %s: %w", dir, err)
 	}
 
