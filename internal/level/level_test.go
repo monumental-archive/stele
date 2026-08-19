@@ -285,10 +285,28 @@ func TestShield(t *testing.T) {
 			done:  1, label: "SLSA Source", message: "L3", color: "brightgreen",
 		},
 		{
-			name:  "a judgment that could not see is grey, never green",
+			name:  "a judgment that could not see is grey and picks no number",
 			track: level.TrackSource,
 			build: func(l *level.Ladder) { l.Blind(1, "r") },
-			done:  0, label: "SLSA Source", message: "L0", color: "lightgrey",
+			done:  0, label: "SLSA Source", message: "unmeasured", color: "lightgrey",
+		},
+		{
+			// The badge is information, not a judgment: a measured zero
+			// is an answer, and the level moves down as the evidence
+			// does — in green, because green means "this is the level".
+			name:  "a measured zero is an answer, in green",
+			track: level.TrackSource,
+			build: func(l *level.Ladder) { l.Refute(1, "r") },
+			done:  1, label: "SLSA Source", message: "L0", color: "brightgreen",
+		},
+		{
+			// Blindness ABOVE an established rung does not grey the
+			// badge: a level is an at-least claim, and the floor is the
+			// truth.
+			name:  "sight lost above an established level stays green at the floor",
+			track: level.TrackSource,
+			build: func(l *level.Ladder) { l.Hold(1, "r"); l.Hold(2, "r"); l.Blind(3, "r") },
+			done:  1, label: "SLSA Source", message: "L2", color: "brightgreen",
 		},
 		{
 			name:  "a draft track carries its status in the message",

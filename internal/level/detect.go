@@ -274,10 +274,7 @@ func Coverage(t Track) (int, int) {
 func Assess(t Track, ev *Evidence) *Assessment {
 	lad := NewLadder(t)
 
-	var (
-		findings []report.Finding
-		reasons  []report.Fact
-	)
+	var reasons []report.Fact
 
 	for lvl := 1; lvl <= t.ceiling; lvl++ {
 		reqs := RequirementsAt(t, lvl)
@@ -289,23 +286,25 @@ func Assess(t Track, ev *Evidence) *Assessment {
 
 		held, outcomes := judgeLevel(reqs, ev)
 
+		// A refuted requirement is NOT a finding. A level is an
+		// at-least claim, and with no declaration in sight nothing has
+		// diverged: the refutation is the boundary explanation — why
+		// the next rung does not hold — and it belongs in the facts,
+		// carrying the specification's words, which a reader is owed
+		// wherever a level is not established. Findings are reserved
+		// for a declared level the evidence disagrees with (Seal).
 		for _, o := range outcomes {
 			class := string(o.out.Determination)
 			if o.out.Attested {
 				class = "HELD (attested)"
 			}
 
-			reasons = append(reasons, report.Fact{Name: o.id, Value: class + ": " + o.out.Reason})
-
+			value := class + ": " + o.out.Reason
 			if o.out.Determination == Refuted {
-				findings = append(findings, report.Finding{
-					Subject:   ev.Owner + "/" + ev.Repo,
-					Assertion: o.id,
-					Expected:  o.text,
-					Actual:    o.out.Reason,
-					Detail:    fmt.Sprintf("level %d of the %s track is not established", lvl, t.Name()),
-				})
+				value += " — the specification requires: " + o.text
 			}
+
+			reasons = append(reasons, report.Fact{Name: o.id, Value: value})
 		}
 
 		switch held {
@@ -318,12 +317,13 @@ func Assess(t Track, ev *Evidence) *Assessment {
 		}
 	}
 
-	// Sight is lost only at the BOUNDARY. A level left undetermined
-	// above one already refuted changes nothing: no level above a
-	// refuted one can hold, so failing to evaluate it costs no
-	// certainty. Ladder.Scalar reports exactly that — whether the
-	// first non-holding rung was undetermined rather than refuted.
-	_, blind := lad.Scalar()
+	// A level is an at-least claim, so blindness above an established
+	// rung does not unseat the answer: "level 2, and level 3 was not
+	// visible" determines level 2. The measurement is undetermined only
+	// when sight was lost before ANY rung held — there the honest
+	// answer is no answer, because a level-zero verdict would read as
+	// "measured and found nothing" when nobody could look.
+	scalar, blind := lad.Scalar()
 	detected, total := Coverage(t)
 
 	in := &Inputs{
@@ -332,12 +332,11 @@ func Assess(t Track, ev *Evidence) *Assessment {
 		Determined:       1,
 		PopulationDetail: "repository with a determinable ladder",
 		Now:              ev.Now,
-		Findings:         findings,
 		ExtraFacts: append(reasons,
 			report.Fact{Name: "requirementCoverage", Value: fmt.Sprintf("%d/%d", detected, total)}),
 	}
 
-	if blind {
+	if blind && scalar == 0 {
 		in.Determined = 0
 	}
 

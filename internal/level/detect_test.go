@@ -160,36 +160,49 @@ func TestBuildTrackFromPlatformClaims(t *testing.T) {
 	}
 }
 
-// TestBuildTrackCannotSeeWithoutEvidence: absent evidence never
-// becomes a pass, and never becomes a failure either.
-func TestBuildTrackCannotSeeWithoutEvidence(t *testing.T) {
+// TestBuildTrackBlindnessIsAFloor: absent evidence never becomes a
+// pass at the blind rung, and never a refutation either. A level is an
+// at-least claim, so sight lost ABOVE an established rung leaves the
+// floor as the answer; only sight lost before any rung held is no
+// answer at all.
+func TestBuildTrackBlindnessIsAFloor(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
 		name    string
 		breakIt func(*level.Evidence)
+		verdict report.Verdict
+		level   string
 	}{
 		{
-			name:    "no artifacts reached",
+			name:    "no artifacts reached is no answer at all",
 			breakIt: func(ev *level.Evidence) { ev.Subjects = nil },
+			verdict: report.VerdictCannotJudge,
+			level:   "SLSA_BUILD_LEVEL_0",
 		},
 		{
-			name: "the certificate carries no runner claim",
+			name: "the certificate carries no runner claim, so level one is the floor",
 			breakIt: func(ev *level.Evidence) {
 				ev.Subjects[0].Cert.RunnerEnvironment = ""
 			},
+			verdict: report.VerdictPass,
+			level:   "SLSA_BUILD_LEVEL_1",
 		},
 		{
-			name: "the signing workflow could not be read",
+			name: "the signing workflow could not be read, so level two is the floor",
 			breakIt: func(ev *level.Evidence) {
 				ev.SignerRunsTenantCode = func(string, string) (bool, error) {
 					return false, errors.New("the forge refused")
 				}
 			},
+			verdict: report.VerdictPass,
+			level:   "SLSA_BUILD_LEVEL_2",
 		},
 		{
-			name:    "no capability-boundary check was possible",
+			name:    "no capability-boundary check was possible, so level two is the floor",
 			breakIt: func(ev *level.Evidence) { ev.SignerRunsTenantCode = nil },
+			verdict: report.VerdictPass,
+			level:   "SLSA_BUILD_LEVEL_2",
 		},
 		{
 			// A runner vocabulary this build does not know is a platform
@@ -199,14 +212,20 @@ func TestBuildTrackCannotSeeWithoutEvidence(t *testing.T) {
 			breakIt: func(ev *level.Evidence) {
 				ev.Subjects[0].Cert.RunnerEnvironment = "quantum-hosted-v2"
 			},
+			verdict: report.VerdictPass,
+			level:   "SLSA_BUILD_LEVEL_1",
 		},
 	} {
 		ev := buildEvidence()
 		tt.breakIt(ev)
 
 		a := level.Assess(level.TrackBuild, ev)
-		if got := a.Report().Verdict(); got != report.VerdictCannotJudge {
-			t.Errorf("%s: verdict = %q, want CANNOT_JUDGE\n%s", tt.name, got, a.Ladder())
+		if got := a.Report().Verdict(); got != tt.verdict {
+			t.Errorf("%s: verdict = %q, want %q\n%s", tt.name, got, tt.verdict, a.Ladder())
+		}
+
+		if got := a.Level(); got != tt.level {
+			t.Errorf("%s: level = %q, want %q\n%s", tt.name, got, tt.level, a.Ladder())
 		}
 	}
 }
@@ -353,8 +372,15 @@ func TestSourceTrackWithoutAChain(t *testing.T) {
 			t.Errorf("level = %q, want level zero — the spec says a revision with no source VSA has it", got)
 		}
 
-		if got := a.Report().Verdict(); got != report.VerdictFail {
-			t.Errorf("verdict = %q, want FAIL: the tool looked and the requirement does not hold", got)
+		// Level zero is an ANSWER — the tool looked, and no level holds.
+		// With no declaration in sight nothing has diverged, so the
+		// measurement passes and the badge says L0.
+		if got := a.Report().Verdict(); got != report.VerdictPass {
+			t.Errorf("verdict = %q, want PASS: a measured zero is an answer, not a divergence", got)
+		}
+
+		if got := a.Shield(); got.Message != "L0" || got.Color != "brightgreen" {
+			t.Errorf("shield = %+v, want a green L0 — the level moves down as the evidence does", got)
 		}
 	})
 

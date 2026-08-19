@@ -179,8 +179,8 @@ func TestLevelDependencyFromAScriptedRelease(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{"level", "dependency", "--repo", "acme/widget", "--json"}, &stdout, &stderr)
-	if code != exitBlind {
-		t.Fatalf("Run = %d, want could-not-judge — level four's boundary is honest blindness\n"+
+	if code != exitOK {
+		t.Fatalf("Run = %d — level three is established, and blindness above a floor is not a refusal\n"+
 			"stdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
@@ -315,9 +315,10 @@ func TestLevelDependencyDegradedReads(t *testing.T) {
 				},
 			},
 			// An artifact with no inventory beside it is a confident
-			// failure at level one, not a blindness: the tool looked.
+			// level zero, not a blindness: the tool looked, and a
+			// measured zero is an answer.
 			want: "publication date unreadable",
-			code: exitRefused,
+			code: exitOK,
 		},
 	} {
 		swapLevelSeams(t, tt.forge, nil)
