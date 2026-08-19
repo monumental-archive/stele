@@ -10,6 +10,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.15.0](https://github.com/monumental-archive/stele/compare/v0.14.0...v0.15.0) - 2026-08-19
+
+### Added
+
+- measure slsa levels from evidence, taking no declaration ([#125](https://github.com/monumental-archive/stele/pull/125))
+- walk every population chain, the last evidence-audit bash ([#137](https://github.com/monumental-archive/stele/pull/137))
+- judge the reproducibility rebuild with typed verdicts ([#138](https://github.com/monumental-archive/stele/pull/138))
+- judge inventory plans against planned obligations ([#142](https://github.com/monumental-archive/stele/pull/142))
+
+### Fixed
+
+- render the level as information, never a judgment ([#135](https://github.com/monumental-archive/stele/pull/135))
+
+### Documentation
+
+- adopter guide with policy floors the test suite executes ([#139](https://github.com/monumental-archive/stele/pull/139))
+- bring the repo's front door up to the finished port ([#141](https://github.com/monumental-archive/stele/pull/141))
+- say the tool drives releases, not only judges them ([#144](https://github.com/monumental-archive/stele/pull/144))
+- restore SLSA to the headline, beside the release engine ([#145](https://github.com/monumental-archive/stele/pull/145))
+
 ## [0.14.0](https://github.com/monumental-archive/stele/compare/v0.13.0...v0.14.0) - 2026-08-19
 
 ### Added
