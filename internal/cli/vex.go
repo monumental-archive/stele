@@ -149,9 +149,9 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 		return fmt.Errorf("derive vex: --released %q is not RFC 3339: %w", va.released, err)
 	}
 
-	decisions, code := loadVEX(va.vexDir, io.Discard)
-	if code != exitOK {
-		return fmt.Errorf("derive vex: reading decisions from %s", va.vexDir)
+	decisions, err := readVEXDir(va.vexDir)
+	if err != nil {
+		return fmt.Errorf("derive vex: reading decisions from %s: %w", va.vexDir, err)
 	}
 
 	pol := &triage.Policy{BaseEcosystems: splitTypes(va.ecosystems)}

@@ -68,6 +68,16 @@ func (d *Decisions) Has(k Key) bool {
 	return ok
 }
 
+// Get returns the decision covering one key, and whether one does.
+// The pair is the whole point: a lookup that answered a miss with a
+// zero Decision would hand the caller a fabricated judgment — a
+// decision nobody made, carrying no status and no moment.
+func (d *Decisions) Get(k Key) (Decision, bool) {
+	dec, ok := d.byKey[k]
+
+	return dec, ok
+}
+
 // All returns every decision, for stale-decision derivation.
 func (d *Decisions) All() []Decision {
 	if d == nil {

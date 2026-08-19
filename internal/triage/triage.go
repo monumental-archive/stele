@@ -191,9 +191,15 @@ func Join(findings []Finding, decisions *vexjoin.Decisions) Split {
 	for i := range findings {
 		f := findings[i]
 
+		// One lookup answering presence and content together: a
+		// separate Has-then-recover pair needs a "covered but not
+		// found" fallback, and the only thing such a branch can return
+		// is a decision nobody made.
+		decision, decided := decisions.Get(f.Key)
+
 		switch {
-		case decisions.Has(f.Key):
-			split.Decided = append(split.Decided, Decided{Finding: f, Decision: decisionFor(decisions, f.Key)})
+		case decided:
+			split.Decided = append(split.Decided, Decided{Finding: f, Decision: decision})
 		case f.Class == ClassRebuild:
 			split.Rebuild = append(split.Rebuild, f)
 		default:
@@ -202,18 +208,6 @@ func Join(findings []Finding, decisions *vexjoin.Decisions) Split {
 	}
 
 	return split
-}
-
-// decisionFor recovers the decision covering one key.
-func decisionFor(decisions *vexjoin.Decisions, key vexjoin.Key) vexjoin.Decision {
-	all := decisions.All()
-	for i := range all {
-		if all[i].Key == key {
-			return all[i]
-		}
-	}
-
-	return vexjoin.Decision{Key: key}
 }
 
 // Stale lists decisions that matched nothing in this inventory —
