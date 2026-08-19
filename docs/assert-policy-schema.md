@@ -126,11 +126,11 @@ version mismatch, never as an unknown-field error.
   whether HISTORY owes an obligation is the corpus walk's question,
   and the corpus walk is assert's — which already derives the
   machinery version this field is compared against. Absent means
-  always; declare it before the canon declares `build.enrichment`,
-  or the Monday walk turns red on every release that predates the
-  mechanism.
+  always; declare it before declaring `build.enrichment` in the
+  verify policy, or the corpus walk turns red on every release that
+  predates the mechanism.
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
-  entry as an evidence DOCUMENT rather than an artifact (the org's
+  entry as an evidence DOCUMENT rather than an artifact (an org's
   per-release VEX documents, for one). Documents are excluded from
   the full-depth provenance subject set — a document about the
   release is not a subject of its build; a bundle cannot vouch for
@@ -220,7 +220,8 @@ Optional; required to run `stele assert blast-radius`:
   An unfixed finding there is the rebuild cadence's input — reported
   as a derived exception, never red; a finding WITH a shipped fix
   means the image lags a fix and gates like everything else.
-  Ecosystem findings (the org's own code surface) always gate.
+  Ecosystem findings (the repository's own code surface) always
+  gate.
 - `canary` — the pinned release that must yield its known advisory,
   or the scanner cannot see and the walk refuses to judge.
 

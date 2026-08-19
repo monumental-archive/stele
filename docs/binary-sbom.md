@@ -19,7 +19,7 @@ the source-tree scan plus version-stamping stopgap
   source — the stopgap's defect (stamping every module root with the
   release version, wrong for any multi-module repo with independent
   tags) is unrepresentable here.
-- **Same evidence shape the org already trusts** for Rust images via
+- **The same evidence shape already trusted** for Rust binaries via
   cargo-auditable's `.dep-v0` section.
 
 ## One document, many legs

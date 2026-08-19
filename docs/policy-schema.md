@@ -30,7 +30,9 @@ states one value (the signer workflow).
 The example below elides one key, `source.claims`: it is the largest
 section in the document and it is shown in full under its own
 heading rather than copied into two places in one file, which is the
-drift this schema exists to refuse.
+drift this schema exists to refuse. Its values are drawn from the
+first conforming consumer's committed policy — a worked example,
+never vocabulary: nothing in this schema knows those names.
 
 ```json
 {
@@ -161,11 +163,11 @@ top level and applies to all roots until a root needs its own.
 
 ### `trust.provenance`
 
-The org's first root of trust: build provenance and producer
+The first root of trust: build provenance and producer
 evidence verify against this workflow identity (the certificate's
 signer workflow). **The commit-level pin is deliberately NOT in
-this file.** The org convention (the #314 lesson, restated in the
-canon runbook) is that the trusted signer digest is derived at run
+this file.** The rule (the #314 lesson) is that the trusted signer
+digest is derived at run
 time from the consuming tree's own `uses:` pins — a literal digest
 in a config drifts from the pin the certificate actually carries.
 `stele verify` therefore takes the pinned tree (or an explicit
@@ -178,25 +180,26 @@ The second root of trust: VSAs verify against the verifier's own
 workflow identity — `verifier.id` is the certificate subject, a
 tautology rather than a field taken on faith.
 
-`legacyVerdicts` handles the org's history — verdicts on releases
-cut before canon v1.14.0 were signed by the org signer instead —
-the same way `source.legacyLeaves` handles the chain fork: as a
+`legacyVerdicts` handles an adopter's frozen history — verdicts
+signed under an earlier identity before the current one existed —
+the same way `source.legacyLeaves` handles a chain fork: as a
 named, enumerated exception list, one entry per grandfathered
 release (repository, tag, the root it verifies under), frozen at
 cutover. The set is closed forever, so it earns no live machinery:
-an epoch rule keyed on "which canon version cut this release" was
-considered and rejected because deciding it requires deriving the
-canon pin from each tag's tree — permanent derivation, a network
-dependency and a new refusal surface in every verification, in
-service of a finite frozen list. A try-each identity fallback is
+an epoch rule keyed on "which machinery version cut this release"
+was considered and rejected because deciding it requires deriving
+the machinery pin from each tag's tree — permanent derivation, a
+network dependency and a new refusal surface in every verification,
+in service of a finite frozen list. A try-each identity fallback is
 forbidden outright: a verifier that accepts whichever root happens
 to verify has no boundary at all. A release absent from this list
 verifies under the current root or refuses, loudly.
 
-The enumeration happened at the verify cutover (stele#3 /
+In the first conforming consumer, the enumeration happened at the
+verify cutover (stele#3 /
 .github#436) and closed at exactly two entries — `.github v1.13.0`
 and `release-lab v0.20.1` — each verified against its published
-bytes as it was added; the committed list lives in the canon's
+bytes as it was added; the committed list lives in that org's
 `slsa/verify-policy.json`. The epoch's shape, settled by that
 shadow: a grandfathered verdict is SIGNED by the entry's
 `signerWorkflow` but its predicate CLAIMS the current
@@ -245,7 +248,7 @@ release coordinates, and any mismatch is a refusal.
 
 The second of verifying-artifacts' four comparisons — the canonical
 source repository, guarding against an unofficial fork building
-under the right identity. A template because the org convention is
+under the right identity. A template because the common case is
 that a release's canonical source IS the repository under
 verification; making it a policy field rather than an implicit
 derivation keeps the comparison visible and lets an org whose
@@ -438,32 +441,31 @@ cannot make an undocumented note format verifiable.
 
 ### `source.protectedBranches`
 
-Carried over from the canon's `source-policies/default.json` with
-the same semantics: the target level is claimed only when every
+The target level is claimed only when every
 required property appears in the link's `controls[].property`;
 otherwise the link under-claims `underclaimLevel`. `since` times
 are continuity starts and only move backwards with evidence.
-This section is the successor of that file, not a sibling: at
-cutover `source-policies/default.json` is deleted and this file is
-the org's one source-track policy. Until then the shadow diff
-asserts the two agree — agreement is the proof bar, never the
-steady state.
+The section descends from the first consumer's
+`source-policies/default.json` and superseded it whole at the
+cutover: the shadow diff asserted the two agreed, then the old file
+was deleted — agreement was the proof bar, never the steady state.
 
 ### `source.claims`
 
 Where the frozen control table lives, and the reason this section
-exists: until now the property *names* lived here (in
+exists: before this section, the property *names* lived here (in
 `protectedBranches[].requiredProperties`) while the rules that decide
-whether each one is live lived in the canon's `claims.sh` and in
-prose in `docs/source-track.md`. One vocabulary, three places,
+whether each one is live lived in the first consumer's `claims.sh`
+script and in prose in its source-track document. One vocabulary,
+three places,
 coupled only by a human reading all three. Declaring the matchers
 beside the requirement makes them one document, and the load-time
 cross-check below makes disagreement refuse rather than under-claim
 silently.
 
 An org convention throughout — every property name, every rule
-parameter and every actor id below is the org's, and none of it is
-in code.
+parameter and every actor id below is the declaring org's own, and
+none of it is in code.
 
 The section is an obligation like every other: absent means the org
 does not derive claims with this tool. Declared means each property
@@ -602,7 +604,8 @@ nonsense.
   property is claimed (`requiresProperty`, which must name a
   rules-scoped property in this same table — one level, no chains,
   validated at load) and the declared TOML table path exists in the
-  declared file of the canon tree this run resolved. `tablePath` is
+  declared file of the machinery tree this run resolved. `tablePath`
+  is
   a path, not a pattern: the file is parsed, never grepped, so a
   legitimately different spelling of the same table cannot
   under-claim.
@@ -735,10 +738,11 @@ code).
    verification, `refs/tags/{tag}`) is the spec-shaped equivalent
    and must agree with the bash on every real release. Any
    divergence is a finding, not a smoothing.
-3. **Two policy files today.** `source-policies/default.json` and
-   this schema's `source.protectedBranches` say the same thing. This
-   file is the successor; the cutover deletes the other, and until
-   then the shadow diff asserts they agree.
+3. **Two policy files, briefly.** The first consumer's
+   `source-policies/default.json` and this schema's
+   `source.protectedBranches` said the same thing. This file was the
+   successor; the shadow diff asserted they agreed, and the cutover
+   deleted the other.
 
 Items 4 to 7 come from the claims port (stele#40) and are recorded
 under the same law: the bash is a reference, never an oracle, and
