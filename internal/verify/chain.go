@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/dsse"
@@ -23,6 +22,15 @@ import (
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/vsa"
 )
+
+// ErrNoChain reports that the walk completed and found no chain
+// founded on this branch. A sentinel rather than a message because
+// the level judge must tell it apart from every other refusal: the
+// spec is explicit that a revision with no source VSA is Source Level
+// 0, which is a JUDGMENT, while a walk that could not run at all is
+// an absence of sight. Conflating them would turn "we have no source
+// track" into "we could not check", or worse, the reverse.
+var ErrNoChain = errors.New("no chain founded on this branch")
 
 // History is the git-side surface the walk reads: a branch tip, the
 // first-parent relation, and raw note blob bytes — raw because the
@@ -47,20 +55,69 @@ type ChainVerdict struct {
 	links       int
 	ledgerSteps int
 	ledgerTotal int
-	tip         *linkFacts
+	tip         *TipFacts
 }
 
 // Links reports how many chain links coverage verified.
 func (v *ChainVerdict) Links() int { return v.links }
 
-// linkFacts carries the tip link's verified content onward for the
-// level computation — read only from verified statements.
-type linkFacts struct {
+// TipFacts carries the tip link's verified content onward for the
+// level computation — read only from verified statements. Fields stay
+// unexported and there is no constructor outside this walk: the #208
+// law applied to facts, so internal/level cannot hold a tip the walk
+// never proved.
+type TipFacts struct {
 	revision   string
 	commitTime string
 	properties map[string]bool
 	repaired   bool
 	vsaLevels  []string
+}
+
+// Revision is the tip link's revision.
+func (f *TipFacts) Revision() string { return f.revision }
+
+// CommitTime is the revision's commit time, as the link recorded it.
+func (f *TipFacts) CommitTime() string { return f.commitTime }
+
+// HasProperty reports whether the link's controls claim one property.
+func (f *TipFacts) HasProperty(name string) bool { return f.properties[name] }
+
+// Properties lists the control properties the link claims, sorted so
+// a report reads the same way twice.
+func (f *TipFacts) Properties() []string {
+	out := make([]string, 0, len(f.properties))
+	for name := range f.properties {
+		out = append(out, name)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// Repaired reports whether the link carries the healed-continuity
+// marker.
+func (f *TipFacts) Repaired() bool { return f.repaired }
+
+// VSALevels lists the levels the link's own summary half claimed —
+// track levels and the org property values that ride beside them.
+func (f *TipFacts) VSALevels() []string {
+	out := make([]string, len(f.vsaLevels))
+	copy(out, f.vsaLevels)
+
+	return out
+}
+
+// Tip returns the verified tip link's facts. ok=false means the walk
+// retained no tip, which is not a level of zero but an absence of
+// sight — the caller must distinguish them.
+func (v *ChainVerdict) Tip() (*TipFacts, bool) {
+	if v.tip == nil {
+		return nil, false
+	}
+
+	return v.tip, true
 }
 
 // Chain verifies one repository branch's source chain. Every link's
@@ -168,8 +225,7 @@ func (w *walker) coverage(ref string, h History, log Logf) (*ChainVerdict, error
 	}
 
 	if verdict.links == 0 {
-		return nil, errors.New(
-			"verify: no chain founded on this branch — an unactivated repository is silent by construction")
+		return nil, fmt.Errorf("verify: %w — an unactivated repository is silent by construction", ErrNoChain)
 	}
 
 	return nil, errors.New("verify: the walk ended before a genesis link — the chain does not reach its founding")
@@ -211,7 +267,7 @@ func decodeLink(note []byte) (*chain.Note, bool) {
 // statement bytes, the provenance statement's subject naming this
 // revision, predicate types, the source resource — and returns the
 // ledger interpretation and the facts the level computation reads.
-func (w *walker) verifyLink(rev string, link *chain.Note) (*linkFacts, bool, error) {
+func (w *walker) verifyLink(rev string, link *chain.Note) (*TipFacts, bool, error) {
 	provStmt, err := w.verifyHalf(rev, "provenance", link.Provenance)
 	if err != nil {
 		return nil, false, err
@@ -246,7 +302,7 @@ func (w *walker) verifyLink(rev string, link *chain.Note) (*linkFacts, bool, err
 		return nil, false, fmt.Errorf("verify: link at %s: %w", rev, err)
 	}
 
-	facts := &linkFacts{
+	facts := &TipFacts{
 		revision:   rev,
 		properties: map[string]bool{},
 		repaired:   pred.Repaired != nil,
@@ -498,77 +554,4 @@ func (w *walker) enumeratedLeaf(rev string) bool {
 	}
 
 	return false
-}
-
-// SourceLevel computes the branch's honest source level from the tip
-// link's verified evidence: the policy's required properties (those
-// whose continuity start predates the commit) against the link's
-// controls, the healed-continuity stance, and agreement with the
-// level the link's own VSA claimed — an overclaiming link is a
-// refusal, not a rounding.
-func (v *ChainVerdict) SourceLevel(p *policy.Policy, branch string) (string, error) {
-	if v.tip == nil {
-		return "", errors.New("verify: the walk retained no tip link — nothing to compute a level from")
-	}
-
-	var pb *policy.ProtectedBranch
-
-	for i := range p.Source.ProtectedBranches {
-		if *p.Source.ProtectedBranches[i].Name == branch {
-			pb = &p.Source.ProtectedBranches[i]
-
-			break
-		}
-	}
-
-	if pb == nil {
-		return "", fmt.Errorf("verify: branch %q is not a protected branch in the policy", branch)
-	}
-
-	commitTime, err := time.Parse(time.RFC3339, v.tip.commitTime)
-	if err != nil {
-		return "", fmt.Errorf("verify: tip link commitTime: %w", err)
-	}
-
-	level := *pb.TargetLevel
-
-	for _, rp := range pb.RequiredProperties {
-		since, err := time.Parse(time.RFC3339, *rp.Since)
-		if err != nil {
-			return "", fmt.Errorf("verify: policy since for %s: %w", *rp.Name, err)
-		}
-
-		if since.After(commitTime) {
-			continue // the property was not yet required when this commit landed
-		}
-
-		if !v.tip.properties[*rp.Name] {
-			level = *p.Source.UnderclaimLevel
-
-			break
-		}
-	}
-
-	if v.tip.repaired && !*p.Source.HealedContinuity {
-		level = *p.Source.UnderclaimLevel
-	}
-
-	if err := agreeWithClaim(v.tip.vsaLevels, level); err != nil {
-		return "", err
-	}
-
-	return level, nil
-}
-
-// agreeWithClaim compares the computed level with what the tip
-// link's VSA claimed for the SOURCE track. Disagreement in either
-// direction is a finding: an overclaim is dishonest evidence, an
-// underclaim means the policy and the emitter have diverged.
-func agreeWithClaim(claimed []string, computed string) error {
-	if slices.Contains(claimed, computed) {
-		return nil
-	}
-
-	return fmt.Errorf("verify: the tip link claims %v but the policy computes %s — the emitter and the policy disagree",
-		claimed, computed)
 }

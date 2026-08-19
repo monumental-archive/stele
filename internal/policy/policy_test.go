@@ -47,9 +47,9 @@ const valid = `{
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
+        "levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
           {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
-        ]
+        ]}]
       }
     ],
     "healedContinuity": true,
@@ -89,7 +89,7 @@ func TestLoadValid(t *testing.T) {
 		t.Errorf("signerWorkflow = %q", got)
 	}
 
-	if got := len(p.Source.ProtectedBranches[0].RequiredProperties); got != 1 {
+	if got := len(p.Source.ProtectedBranches[0].Levels[0].RequiredProperties); got != 1 {
 		t.Errorf("requiredProperties length = %d, want 1", got)
 	}
 }
@@ -170,6 +170,16 @@ func TestLoadTemplatedIdentities(t *testing.T) {
 	}
 }
 
+// schemaPlusOne renders the epoch this build does NOT implement. A
+// guard must not carry a second hand-maintained copy of the number it
+// guards: written as a literal, an epoch bump can sweep both sides of
+// the mutation to the same value, and the row then asserts a refusal
+// against a perfectly valid document (stele#107's lesson applied to
+// its own tests).
+func schemaPlusOne() string {
+	return fmt.Sprintf(`"schema": %d`, policy.Schema+1)
+}
+
 func TestLoadRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -182,14 +192,7 @@ func TestLoadRefusals(t *testing.T) {
 		{"not json at all", valid, "not json", "decode"},
 		{"unknown field", `"schema": 4`, `"schema": 4, "surprise": true`, wantUnknownField},
 		{"schema absent", `"schema": 4,`, ``, "schema is absent"},
-		// The newer value is DERIVED from the implemented constant, so
-		// an epoch-bump sweep over `"schema": N` literals can never
-		// rewrite this row into agreement with the document it must
-		// refuse (the guard carries no second copy of the number).
-		{
-			"schema newer", `"schema": 4`,
-			fmt.Sprintf(`"schema": %d`, policy.Schema+1), "not the implemented schema",
-		},
+		{"schema newer", `"schema": 4`, schemaPlusOne(), "not the implemented schema"},
 		// The gate fires FIRST (stele#107): a schema-1 document
 		// carrying the pre-#84 vocabulary this decoder no longer knows
 		// must refuse as a VERSION mismatch, never incidentally as an
@@ -348,9 +351,9 @@ func TestLoadRefusals(t *testing.T) {
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
+        "levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
           {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
-        ]
+        ]}]
       }
     ]`, `"protectedBranches": []`, "source.protectedBranches is absent or empty"},
 		{"branch name empty", `"name": "main"`, `"name": ""`, "protectedBranches[0].name"},
@@ -362,10 +365,10 @@ func TestLoadRefusals(t *testing.T) {
 		},
 		{
 			"required properties empty",
-			`"requiredProperties": [
+			`"levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
           {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
-        ]`,
-			`"requiredProperties": []`,
+        ]}]`,
+			`"levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": []}]`,
 			"requiredProperties is absent or empty",
 		},
 		{

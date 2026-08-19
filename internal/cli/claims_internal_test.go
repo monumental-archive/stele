@@ -41,7 +41,9 @@ const claimsPolicy = `{
     ]},
     "protectedBranches": [
       {"name": "main", "targetLevel": "SLSA_SOURCE_LEVEL_3",
-       "requiredProperties": [{"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}]}
+       "levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
+         {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
+       ]}]}
     ],
     "healedContinuity": true,
     "underclaimLevel": "SLSA_SOURCE_LEVEL_2"

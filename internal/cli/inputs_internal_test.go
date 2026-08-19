@@ -390,30 +390,6 @@ func TestChainWalkAcceptsWhatTheEmitterWrote(t *testing.T) {
 		}
 	})
 
-	t.Run("level adds the computed source level", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-
-		code := Run([]string{
-			"verify", "level", "--json",
-			"--policy", px.policy, "--trusted-root", px.root,
-			"--repo", "acme/widget", "--git-dir", "ignored-by-the-seam",
-		}, &stdout, &stderr)
-		if code != exitOK {
-			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
-		}
-
-		doc := decodeReport(t, &stdout)
-
-		level := factOf(doc, "sourceLevel")
-		if !strings.HasPrefix(level, "SLSA_SOURCE_LEVEL_") {
-			t.Fatalf("sourceLevel = %q, want a computed source level", level)
-		}
-
-		if !strings.Contains(stderr.String(), "SOURCE "+level) {
-			t.Errorf("stderr = %q, want the level line naming %s", stderr.String(), level)
-		}
-	})
-
 	t.Run("chain mode reports no level", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 
@@ -480,35 +456,6 @@ func TestVerifyWalkRefusesAfterOpening(t *testing.T) {
 // TestVerifyLevelRefusesAnUndeclaredBranch: the policy names which
 // branches carry a level, and level mode over any other ref has
 // nothing to compute against — the refusal is the honest answer, never
-// a default level.
-func TestVerifyLevelRefusesAnUndeclaredBranch(t *testing.T) {
-	swap(t, scriptedBV{}, scriptedStore{})
-
-	g := &fakeEmitGit{notes: map[string][]byte{}}
-	swapEmit(t, g, nil)
-
-	px, claims := emitFiles(t)
-
-	var emitOut, emitErr bytes.Buffer
-
-	if code := Run(chainArgs(px, claims), &emitOut, &emitErr); code != exitOK {
-		t.Fatalf("emitting the genesis link = %d, stderr: %s", code, emitErr.String())
-	}
-
-	swapHistory(t, g)
-
-	var stdout, stderr bytes.Buffer
-
-	code := Run([]string{
-		"verify", "level",
-		"--policy", px.policy, "--trusted-root", px.root,
-		"--repo", "acme/widget", "--git-dir", "ignored-by-the-seam",
-		"--ref", "refs/heads/other",
-	}, &stdout, &stderr)
-	if code != exitRefused {
-		t.Fatalf("Run = %d, want %d\nstderr: %s", code, exitRefused, stderr.String())
-	}
-}
 
 // TestEmitVSARefusesAnUnnameablePolicy: the VSA must name where a
 // stranger reads the policy it was judged against, so a run that

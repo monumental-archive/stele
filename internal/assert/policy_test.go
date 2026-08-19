@@ -11,6 +11,14 @@ import (
 	"github.com/monumental-archive/stele/internal/assert"
 )
 
+// schemaPlusOne renders the epoch this build does NOT implement —
+// derived, never written, so an epoch bump cannot sweep both sides of
+// the mutation to the same value and leave the row asserting a
+// refusal against a valid document.
+func schemaPlusOne() string {
+	return fmt.Sprintf(`"schema": %d`, assert.PolicySchema+1)
+}
+
 func TestLoadPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -19,16 +27,7 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		// The wrong value is DERIVED from the implemented constant, so
-		// an epoch-bump sweep over `"schema": N` literals can never
-		// rewrite this row into agreement with the document it must
-		// refuse (the guard carries no second copy of the number).
-		{
-			"wrong schema",
-			strings.Replace(testPolicyJSON, `"schema": 4`,
-				fmt.Sprintf(`"schema": %d`, assert.PolicySchema+1), 1),
-			"schema",
-		},
+		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 4`, schemaPlusOne(), 1), "schema"},
 		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 4`, `"schema": 4, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",

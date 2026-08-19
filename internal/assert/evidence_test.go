@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -110,6 +111,10 @@ func (f *fakeForge) Repos(string) ([]string, error) {
 
 func (f *fakeForge) ReleaseTags(_, repo string) ([]string, error) {
 	return f.tags[repo], f.tear("ReleaseTags")
+}
+
+func (f *fakeForge) ReleaseDate(_, _, _ string) (time.Time, error) {
+	return time.Time{}, errors.New("this fixture serves no release date")
 }
 
 func (f *fakeForge) ReleaseAssets(_, repo, tag string) ([]string, error) {

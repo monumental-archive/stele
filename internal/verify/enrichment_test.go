@@ -135,6 +135,14 @@ func (w *enrichWorld) runDemand(t *testing.T, d *verify.EnrichmentDemand) (*veri
 	return verify.VSA(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog, d)
 }
 
+// runLevels is the proving half alone — the entry point `stele level`
+// uses, which must prove everything `run` proves.
+func (w *enrichWorld) runLevels(t *testing.T, d *verify.EnrichmentDemand) ([]verify.SubjectLevels, string, error) {
+	t.Helper()
+
+	return verify.VSALevels(w.policy, coords, w.subjects, pins, w.store(t), fakeBV{}, discardLog, d)
+}
+
 // runVerdictOnly is the corpus entry point: the same world judged by
 // the verdict half alone, via the nil demand.
 func (w *enrichWorld) runVerdictOnly(t *testing.T) (*verify.VSAVerdict, error) {
@@ -539,6 +547,86 @@ func TestClassDemand(t *testing.T) {
 		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}})
 		if err == nil || !strings.Contains(err.Error(), "no build.enrichment") {
 			t.Fatalf("VSA = %v, want the undeclared-obligation refusal", err)
+		}
+	})
+}
+
+// TestVSALevelsProvesTheSameObligation is the guard on the split's
+// invariant, in a test rather than only in a doc comment.
+//
+// `VSALevels` exists so `stele level` can compute an underclaim
+// instead of refusing on one — it drops the spec's step 7 and
+// NOTHING else. If a future split moved a proving obligation to the
+// demand half, `level` would become a cheaper proving path, and a
+// cheaper proving path is a declinable obligation: exactly how the
+// enrichment claim became decoration before #86 put it inside the
+// engine and #122 made its names class-keyed.
+//
+// So every row here asserts the same world through both entry
+// points and requires them to AGREE about the proof.
+func TestVSALevelsProvesTheSameObligation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an absent claim refuses on both sides of the split", func(t *testing.T) {
+		t.Parallel()
+
+		w := newEnrichWorld(t)
+		w.copies = 0
+
+		if _, _, err := w.runLevels(t, &verify.EnrichmentDemand{}); err == nil {
+			t.Fatal("VSALevels accepted a release with no enrichment claim while the policy declares one" +
+				" — the proving half must prove what VSA proves")
+		}
+
+		if _, err := w.run(t); err == nil {
+			t.Fatal("VSA accepted the same world — the fixture no longer tests the invariant")
+		}
+	})
+
+	t.Run("a broken claim refuses on both sides of the split", func(t *testing.T) {
+		t.Parallel()
+
+		w := newEnrichWorld(t)
+		w.pred()["resolvedDependencies"] = []any{}
+
+		if _, _, err := w.runLevels(t, &verify.EnrichmentDemand{}); err == nil {
+			t.Fatal("VSALevels accepted an enrichment resolving nothing")
+		}
+	})
+
+	t.Run("the withheld obligation is withheld on both sides too", func(t *testing.T) {
+		t.Parallel()
+
+		// The nil demand is pre-epoch history: a release that owes no
+		// claim is not held to one by either entry point. The split
+		// must not turn "not owed" into "owed" any more than it turns
+		// "owed" into "optional".
+		w := newEnrichWorld(t)
+		w.copies = 0
+
+		if _, _, err := w.runLevels(t, nil); err != nil {
+			t.Fatalf("VSALevels = %v — a release that owes no claim must not be held to one", err)
+		}
+	})
+
+	t.Run("a proved claim yields the same source revision through both", func(t *testing.T) {
+		t.Parallel()
+
+		w := newEnrichWorld(t)
+
+		verdict, err := w.run(t)
+		if err != nil {
+			t.Fatalf("VSA = %v", err)
+		}
+
+		_, revision, err := w.runLevels(t, &verify.EnrichmentDemand{})
+		if err != nil {
+			t.Fatalf("VSALevels = %v", err)
+		}
+
+		if revision != verdict.SourceRevision() || revision == "" {
+			t.Errorf("VSALevels revision = %q, VSA revision = %q — one proof, one answer",
+				revision, verdict.SourceRevision())
 		}
 	})
 }

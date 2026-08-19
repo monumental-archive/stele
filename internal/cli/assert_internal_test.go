@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/chain"
@@ -465,8 +466,14 @@ type storeForge struct {
 func (s *storeForge) Attestations(_, _, _ string) ([]jsonx.Raw, error) { return s.bundles, s.err }
 func (s *storeForge) Repos(string) ([]string, error)                   { return nil, nil }
 func (s *storeForge) ReleaseTags(_, _ string) ([]string, error)        { return nil, nil }
-func (s *storeForge) ReleaseAssets(_, _, _ string) ([]string, error)   { return nil, nil }
-func (s *storeForge) Asset(_, _, _, _ string) ([]byte, error)          { return nil, nil }
+
+var errNoReleaseDate = errors.New("this fixture serves no release date")
+
+func (s *storeForge) ReleaseAssets(_, _, _ string) ([]string, error) { return nil, nil }
+func (s *storeForge) ReleaseDate(_, _, _ string) (time.Time, error) {
+	return time.Time{}, errNoReleaseDate
+}
+func (s *storeForge) Asset(_, _, _, _ string) ([]byte, error) { return nil, nil }
 
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (s *storeForge) FileAt(_, _, _, _ string) ([]byte, bool, error)      { return nil, false, nil }

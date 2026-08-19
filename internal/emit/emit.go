@@ -103,13 +103,31 @@ func expand(tmpl, owner, repo string) string {
 // across its gap (no readable change times, or a contributing ruleset
 // changed at or after the commit). A guard that cannot prove
 // under-claims; it never guesses.
+// requiredAt returns the properties the policy declares for one
+// level of one branch, or none when it claims nothing there.
+func requiredAt(pb *policy.ProtectedBranch, want string) []policy.RequiredProperty {
+	for i := range pb.Levels {
+		if *pb.Levels[i].Level == want {
+			return pb.Levels[i].RequiredProperties
+		}
+	}
+
+	return nil
+}
+
 func level(
 	p *policy.Policy, pb *policy.ProtectedBranch, payload *claims.Payload,
 	commitTime time.Time, healed bool, log Logf,
 ) (string, error) {
 	present := payload.Properties()
 
-	for _, rp := range pb.RequiredProperties {
+	// The properties that establish the level being claimed. The
+	// policy declares them per level (docs/policy-schema.md), and the
+	// emitter reads the entry for the level it is about to claim —
+	// the same entry the judge reads when it checks this link back,
+	// so emitter and verifier cannot disagree about what the claim
+	// required.
+	for _, rp := range requiredAt(pb, *pb.TargetLevel) {
 		since, err := time.Parse(time.RFC3339, *rp.Since)
 		if err != nil {
 			return "", fmt.Errorf("emit: policy since for %s: %w", *rp.Name, err)

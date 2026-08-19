@@ -174,3 +174,76 @@ func TestParseRefusesADuplicateDecision(t *testing.T) {
 		}
 	}
 }
+
+// TestProductNamesKeepTheirNamespace is the regression for a join that
+// silently missed.
+//
+// The purl name is namespace AND name. Keying on the last path segment
+// alone made pkg:golang/example.com/dep decide as "dep", so a decision
+// written for a Go module never matched the finding the scanner
+// reported for it — every advisory in a Go dependency read as
+// undecided, and a blast-radius run would have gone red with no
+// explanation a reader could act on. Single-segment ecosystems were
+// unaffected, which is why it survived: the org's own decisions are
+// Cargo purls, and those key the same either way.
+func TestProductNamesKeepTheirNamespace(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		purl    string
+		pkg     string
+		version string
+		joins   bool
+	}{
+		{
+			purl: "pkg:golang/example.com/dep@v1.0.0",
+			pkg:  "example.com/dep", version: "v1.0.0", joins: true,
+		},
+		{
+			purl: "pkg:golang/github.com/Masterminds/semver/v3@v3.5.0",
+			pkg:  "github.com/Masterminds/semver/v3", version: "v3.5.0", joins: true,
+		},
+		{
+			// The shape the org's own decisions use: one segment, so
+			// the narrower reading gave the same answer.
+			purl: "pkg:cargo/serde_cbor@0.11.2",
+			pkg:  "serde_cbor", version: "0.11.2", joins: true,
+		},
+		{
+			// An npm scoped name opens with @, so cutting at the FIRST
+			// one would split the name in half.
+			purl: "pkg:npm/%40scope/pkg@1.0.0",
+			pkg:  "@scope/pkg", version: "1.0.0", joins: true,
+		},
+		{
+			// Qualifiers and subpath are not part of the identity.
+			purl: "pkg:golang/example.com/dep@v1.0.0?type=module#sub",
+			pkg:  "example.com/dep", version: "v1.0.0", joins: true,
+		},
+		{purl: "pkg:golang/example.com/dep", joins: false},
+		{purl: "example.com/dep@v1.0.0", joins: false},
+		{purl: "pkg:golang/@v1.0.0", joins: false},
+	} {
+		d := &vexjoin.Decisions{}
+
+		// #124 made a decision carry its timestamp and justification;
+		// this document is the shape that parse now demands.
+		doc := `{"@context":"https://openvex.dev/ns/v0.2.0","timestamp":"2026-08-12T00:00:00Z",` +
+			`"statements":[{"vulnerability":{"name":"GHSA-xxxx"},` +
+			`"products":[{"@id":"` + tt.purl + `"}],"status":"not_affected",` +
+			`"justification":"vulnerable_code_not_present"}]}`
+
+		if err := vexjoin.Parse(d, []byte(doc), "decisions.openvex.json"); err != nil {
+			t.Fatalf("%s: Parse = %v", tt.purl, err)
+		}
+
+		got := d.Has(vexjoin.Key{Advisory: "GHSA-xxxx", Package: tt.pkg, Version: tt.version})
+		if got != tt.joins {
+			t.Errorf("%s: decided(%q, %q) = %v, want %v", tt.purl, tt.pkg, tt.version, got, tt.joins)
+		}
+
+		if !tt.joins && d.Len() != 0 {
+			t.Errorf("%s: an unjoinable product decided something: %d", tt.purl, d.Len())
+		}
+	}
+}

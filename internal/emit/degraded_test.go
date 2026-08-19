@@ -256,7 +256,7 @@ func TestLevelRefusesAnUnreadablePolicySince(t *testing.T) {
 	w.in.Rev = rev1
 
 	bad := "yesterday"
-	w.p.Source.ProtectedBranches[0].RequiredProperties[0].Since = &bad
+	w.p.Source.ProtectedBranches[0].Levels[0].RequiredProperties[0].Since = &bad
 
 	if err := w.emit(t); err == nil || !strings.Contains(err.Error(), "policy since") {
 		t.Fatalf("Chain = %v, want the since refusal", err)

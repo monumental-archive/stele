@@ -113,6 +113,30 @@ The canon speaks for the org; stele speaks for the mechanism.
 
 ## Rules
 
+- **Nothing this org happens to claim may be unclaimable by
+  construction.** The judge implements the SPEC; the org declares
+  what it claims; the two meet in the policy file and NOWHERE else.
+  The test is one question, asked of every level, track, requirement
+  and property: *could a stranger's repo — different shape, different
+  controls, a brand-new org with a minimal policy — express its own
+  claim without editing this tool?* If the answer is "they would have
+  to change the code", the layout is wrong, and it is wrong in the
+  same way a reach-shaped lint exception is wrong.
+
+  "Our org does not do two-party review" / "we are L0 there" / "we
+  refused vendoring" are POLICY facts. Written into code they become
+  "nobody does this", which is the tool asserting a fact about the
+  world from one repository's configuration. Recorded defects of this
+  class: a source ladder whose level 4 no policy could declare, a
+  dependency track whose upper levels the judge called unknowable
+  because this org has no evidence for them, and a rung-to-requirement
+  mapping fixed in code because our controls happen to sit there.
+  Every one of them read as a reasonable comment at the time.
+
+  A track or level this tool does not YET judge is absent, not
+  refused: say so plainly and leave the vocabulary open. Never
+  editorialise in a spec document about what this org claims — the
+  canon speaks for the org, stele speaks for the mechanism.
 - **A disabled rule needs a reason about the rule. If the reason is
   about reach, the layout is wrong.** "Wrong for this domain" is
   legitimate and permanent; "the tool cannot see this code" is a defect

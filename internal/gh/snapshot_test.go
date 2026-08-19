@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -36,6 +37,10 @@ func (scriptedForge) ReleaseTags(_, repo string) ([]string, error) {
 
 func (scriptedForge) ReleaseAssets(_, _, _ string) ([]string, error) {
 	return []string{"checksums.txt"}, nil
+}
+
+func (scriptedForge) ReleaseDate(_, _, _ string) (time.Time, error) {
+	return time.Unix(0, 0).UTC(), nil
 }
 
 func (scriptedForge) Asset(_, _, _, _ string) ([]byte, error) { return []byte("digest  name\n"), nil }
@@ -342,6 +347,10 @@ type onlyForge struct{ f gh.Forge }
 
 func (o onlyForge) Repos(org string) ([]string, error) { return o.f.Repos(org) }
 
+func (o onlyForge) ReleaseDate(a, b, c string) (time.Time, error) {
+	return o.f.ReleaseDate(a, b, c)
+}
+
 func (o onlyForge) ReleaseTags(a, b string) ([]string, error) {
 	return o.f.ReleaseTags(a, b)
 }
@@ -634,7 +643,10 @@ func (failingForge) Repos(string) ([]string, error)                 { return nil
 func (failingForge) ReleaseTags(_, _ string) ([]string, error)      { return nil, errForgeDown }
 func (failingForge) ReleaseAssets(_, _, _ string) ([]string, error) { return nil, errForgeDown }
 func (failingForge) Asset(_, _, _, _ string) ([]byte, error)        { return nil, errForgeDown }
-func (failingForge) TagCommit(_, _, _ string) (string, error)       { return "", errForgeDown }
+func (failingForge) ReleaseDate(_, _, _ string) (time.Time, error) {
+	return time.Time{}, errForgeDown
+}
+func (failingForge) TagCommit(_, _, _ string) (string, error) { return "", errForgeDown }
 
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (failingForge) FileAt(_, _, _, _ string) ([]byte, bool, error) { return nil, false, errForgeDown }

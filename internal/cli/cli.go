@@ -16,6 +16,7 @@ const (
 	verbEmit   = "emit"
 	verbDerive = "derive"
 	verbAssert = "assert"
+	verbLevel  = "level"
 )
 
 // cmdVersion reports the binary's own build version — distinct from the
@@ -66,6 +67,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return deriveCmd(args[1:], stdout, stderr)
 	case verbAssert:
 		return assertCmd(args[1:], stdout, stderr)
+	case verbLevel:
+		return levelCmd(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr, "stele: unknown command %q (run `stele help`)\n", args[0]); err != nil {
 			return exitIO
@@ -88,7 +91,6 @@ usage:
               comparisons, subject coverage, the release decision
     vsa       the published verdict, as the spec's consumer procedure
     chain     the source chain: coverage tip→genesis and the ledger
-    level     chain, then the honest computed source level
 
   stele derive <mode>    turn facts into claims; modes:
     version   the release this history's conventional commits call
@@ -138,6 +140,23 @@ usage:
                  source chain link (--org|--repo --policy
                  [--snapshot|--capture])
 
+  stele level <track>    what the evidence supports, per track, from
+                         SLSA's own requirements; exit 0 pass, 1 fail,
+                         4 could-not-judge. Takes --repo or --org and
+                         nothing else: no clone, no policy, no trusted
+                         root. An --org population is the forge's own
+                         listing, folded to its weakest member:
+    build       provenance, its authenticity, and the platform's own
+                certificate claims about the runner and the workflow
+                that held the signing capability
+    source      the source chain measured with no expected identity:
+                the summary attestation, continuity, history, the
+                controls each link records, and two-party review
+    dependency  the DRAFT dependency track (not part of SLSA v1.2,
+                and marked draft in every output): an inventory per
+                shipped artifact, findings triaged, and where the
+                build fetched its dependencies from
+
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
               holes earlier lapses left, signed via cosign, appended
@@ -166,8 +185,10 @@ instance; naming none resolves one through TUF from the anchor pinned
 in this binary.
 
 verify flags: --policy --repo; release/vsa add
---tag --subjects --signer-digest --machinery-digest; chain/level add
---git-dir [--ref]. emit adds --machinery-digest --policy-uri; emit chain
+--tag --subjects --signer-digest --machinery-digest; chain adds
+--git-dir [--ref]. level takes --repo|--org [--ref --notes-ref --tag --json
+--shield <path>], where --shield writes a shields.io endpoint document
+from the same seal as the report. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]. GITHUB_TOKEN/GH_TOKEN authenticates store reads and the

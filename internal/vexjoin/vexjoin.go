@@ -13,7 +13,9 @@ package vexjoin
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -101,9 +103,51 @@ func (d *Decisions) Len() int {
 	return len(d.byKey)
 }
 
-// purlRE captures name@version from a product purl, in the dialect
-// the scanner reports — no epoch, no encoding.
-var purlRE = regexp.MustCompile(`^pkg:.*/([^/@]+)@(.+)$`)
+// purlPrefixRE strips a package URL's scheme and type, leaving the
+// namespace, name and version a decision joins on.
+var purlPrefixRE = regexp.MustCompile(`^pkg:[A-Za-z0-9.+-]+/`)
+
+// parsePurl splits a product package URL into the package name and
+// version a scanner finding is keyed by.
+//
+// The name is the NAMESPACE AND NAME TOGETHER, not the last path
+// segment. A purl's namespace is part of the package's identity —
+// pkg:golang/example.com/dep names the module example.com/dep, and
+// keying it as "dep" would decide a vulnerability in some other
+// package that happens to end the same way, while failing to decide
+// the one the statement was written for. Scanners report the joined
+// form (a Go module path, an npm scoped name), so this is also the
+// spelling a finding arrives in.
+//
+// Single-segment ecosystems are unaffected: pkg:cargo/serde_cbor
+// names serde_cbor either way, which is why the narrower reading
+// survived until a Go module needed a decision.
+//
+//nolint:gocritic // unnamedResult: name, version, ok — the stdlib shape
+func parsePurl(purl string) (string, string, bool) {
+	rest := purlPrefixRE.ReplaceAllString(purl, "")
+	if rest == purl {
+		return "", "", false // no scheme and type: not a package URL
+	}
+
+	// Qualifiers and subpath are not part of the identity.
+	rest, _, _ = strings.Cut(rest, "?")
+	rest, _, _ = strings.Cut(rest, "#")
+
+	// The LAST @ separates the version: an npm scoped name opens with
+	// one, so cutting at the first would split the name in half.
+	at := strings.LastIndex(rest, "@")
+	if at <= 0 || at == len(rest)-1 {
+		return "", "", false // unversioned products cannot join
+	}
+
+	name, err := url.PathUnescape(rest[:at])
+	if err != nil {
+		return "", "", false
+	}
+
+	return name, rest[at+1:], true
+}
 
 // openVEX is the OpenVEX shape this parse reads — a foreign format
 // with a spec, decoded leniently, but statements missing what the
@@ -162,12 +206,12 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 				continue
 			}
 
-			m := purlRE.FindStringSubmatch(*p.ID)
-			if m == nil {
+			name, version, ok := parsePurl(*p.ID)
+			if !ok {
 				continue // a product that is not a versioned purl cannot join
 			}
 
-			k := Key{Advisory: *stmt.Vulnerability.Name, Package: m[1], Version: m[2]}
+			k := Key{Advisory: *stmt.Vulnerability.Name, Package: name, Version: version}
 
 			// Two decisions for one triple is a contradiction to
 			// surface, never a race the parse order settles: the files

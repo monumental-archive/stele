@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
@@ -140,6 +141,22 @@ func (s Snapshot) ReleaseAssets(owner, repo, tag string) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// ReleaseDate implements Forge.
+func (s Snapshot) ReleaseDate(owner, repo, tag string) (time.Time, error) {
+	var stamped string
+	if err := s.readJSON(filepath.Join(seg(owner), seg(repo), "releases", seg(tag), "published.json"),
+		&stamped); err != nil {
+		return time.Time{}, err
+	}
+
+	when, err := time.Parse(time.RFC3339, stamped)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("gh: snapshot release %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	return when, nil
 }
 
 // Asset implements Forge.
@@ -296,6 +313,21 @@ func (c Capture) ReleaseAssets(owner, repo, tag string) ([]string, error) {
 
 	if err := c.writeJSON(filepath.Join(seg(owner), seg(repo), "releases", seg(tag), "assets.json"), out); err != nil {
 		return nil, err
+	}
+
+	return out, nil
+}
+
+// ReleaseDate implements Forge.
+func (c Capture) ReleaseDate(owner, repo, tag string) (time.Time, error) {
+	out, err := c.Live.ReleaseDate(owner, repo, tag)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	if err := c.writeJSON(filepath.Join(seg(owner), seg(repo), "releases", seg(tag), "published.json"),
+		out.Format(time.RFC3339)); err != nil {
+		return time.Time{}, err
 	}
 
 	return out, nil

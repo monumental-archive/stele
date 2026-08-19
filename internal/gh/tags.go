@@ -51,6 +51,10 @@ type ChainNote struct {
 type CommitMeta struct {
 	Parents     []string
 	CommitEpoch int64
+	// Subject is the first line of the commit message — what a
+	// history-shape evaluator judges. Read here rather than in a
+	// second call: the commit object already carries it.
+	Subject string
 }
 
 // TagReader is the read surface the tag audit judges through.
@@ -180,7 +184,8 @@ func (c *Client) ChainNotes(owner, repo, notesRef string) ([]ChainNote, error) {
 }
 
 type commitEntry struct {
-	Tree *struct {
+	Message *string `json:"message"`
+	Tree    *struct {
 		SHA *string `json:"sha"`
 	} `json:"tree"`
 	Parents []struct {
@@ -287,6 +292,10 @@ func (c *Client) CommitMeta(owner, repo, rev string) (*CommitMeta, error) {
 		if p.SHA != nil {
 			out.Parents = append(out.Parents, *p.SHA)
 		}
+	}
+
+	if entry.Message != nil {
+		out.Subject, _, _ = strings.Cut(*entry.Message, "\n")
 	}
 
 	if entry.Committer != nil && entry.Committer.Date != nil {

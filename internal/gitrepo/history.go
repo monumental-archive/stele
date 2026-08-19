@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // The reads a version derivation needs: which releases exist, which
@@ -166,4 +167,82 @@ func (r *Repo) Commits(from, to string, paths ...string) ([]string, error) {
 	}
 
 	return revs, nil
+}
+
+// Revision is one revision as a property evaluator reads it: enough
+// to judge the SHAPE of a history and nothing about its contents.
+type Revision struct {
+	// ID is the full revision identifier.
+	ID string
+	// Subject is the first line of the commit message.
+	Subject string
+	// Parents is how many parents the revision has — one for a
+	// squashed or rebased commit, two or more for a merge.
+	Parents int
+	// Time is the commit time.
+	Time time.Time
+}
+
+// Revisions lists ref's revisions from the tip back to the oldest one
+// at or after since, newest first.
+//
+// The walk is first-parent, which is the branch's own line of
+// development, but the PARENT COUNT is read from the full parent list:
+// a merge commit must be visible AS a merge here, and a first-parent
+// walk that also reported one parent per commit would hide exactly the
+// property an evaluator is looking for.
+func (r *Repo) Revisions(ref string, since time.Time) ([]Revision, error) {
+	if err := r.requireFullHistory(); err != nil {
+		return nil, err
+	}
+
+	const sep = "\x1f"
+
+	out, err := r.git("log", "--first-parent", "--format=%H"+sep+"%P"+sep+"%cI"+sep+"%s", ref)
+	if err != nil {
+		return nil, fmt.Errorf("gitrepo: reading revisions of %s: %w", ref, err)
+	}
+
+	var revs []Revision
+
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+
+		rev, perr := parseRevision(line, sep)
+		if perr != nil {
+			return nil, perr
+		}
+
+		// The log is newest first, so the first revision older than the
+		// continuity start ends the window — everything beyond it is
+		// outside the claim.
+		if rev.Time.Before(since) {
+			break
+		}
+
+		revs = append(revs, rev)
+	}
+
+	return revs, nil
+}
+
+// parseRevision reads one log line into a Revision.
+func parseRevision(line, sep string) (Revision, error) {
+	const fields = 4
+
+	parts := strings.SplitN(line, sep, fields)
+	if len(parts) != fields {
+		return Revision{}, fmt.Errorf("gitrepo: revision line %q is not the requested format", line)
+	}
+
+	when, err := time.Parse(time.RFC3339, parts[2])
+	if err != nil {
+		return Revision{}, fmt.Errorf("gitrepo: revision %.12s commit time: %w", parts[0], err)
+	}
+
+	// A root commit has no parents, so the field is empty and Fields
+	// reports zero — which is the true count, not a parse failure.
+	return Revision{ID: parts[0], Subject: parts[3], Parents: len(strings.Fields(parts[1])), Time: when}, nil
 }

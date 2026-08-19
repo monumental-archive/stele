@@ -68,10 +68,10 @@ const policyJSON = `{
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
+        "levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
           {"name": "ORG_SOURCE_GATED", "since": "2020-01-01T00:00:00Z"},
           {"name": "ORG_SOURCE_FUTURE", "since": "2099-01-01T00:00:00Z"}
-        ]
+        ]}]
       }
     ],
     "healedContinuity": true,
@@ -457,13 +457,8 @@ func TestChainEmitAndWalk(t *testing.T) {
 		t.Errorf("verified links = %d, want 4", verdict.Links())
 	}
 
-	lvl, err := verdict.SourceLevel(w.p, "main")
-	if err != nil {
-		t.Fatalf("SourceLevel = %v", err)
-	}
-
-	if lvl != "SLSA_SOURCE_LEVEL_3" {
-		t.Errorf("SourceLevel = %s, want the target — emitter and verifier must agree", lvl)
+	if _, ok := verdict.Tip(); !ok {
+		t.Error("the walk retained no tip — the emitter's own link must read back")
 	}
 }
 
@@ -495,9 +490,10 @@ func TestChainHeals(t *testing.T) {
 
 	// Continuity provable (epochs long before the commits), so healed
 	// links keep the target level.
-	lvl, err := w.walk(t).SourceLevel(w.p, "main")
-	if err != nil || lvl != "SLSA_SOURCE_LEVEL_3" {
-		t.Errorf("SourceLevel = %s, %v — healed links with proven continuity keep the target", lvl, err)
+	// The tip is rev4, emitted normally: the healed markers sit on the
+	// links that filled the lapse, which the table above just checked.
+	if tip, ok := w.walk(t).Tip(); !ok || tip.Repaired() {
+		t.Error("the tip must read back, and it must not carry a repaired marker of its own")
 	}
 }
 
