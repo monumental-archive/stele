@@ -172,8 +172,9 @@ usage:
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs
     manifest  the release evidence manifest — the declared contract a
-              stranger reads at the tag; every value a stated fact,
-              read back through the assert reader before it leaves
+              stranger reads at the tag; every value a stated fact and
+              every published asset pinned and typed, read back
+              through the assert reader before it leaves
 
 derive sbom flags: [--out --expect-version] <binary>..., or
 --cargo-package --tree --created [--target --features
@@ -197,15 +198,18 @@ in this binary.
 
 verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain adds
---git-dir [--ref]; repro takes --repo --tag --subjects --rebuilt
-[--json] and no trust material — a digest comparison signs nothing.
+--git-dir [--ref]; repro takes --repo --tag --released --rebuilt
+[--assert-policy --json] and no trust material — a digest comparison
+signs nothing; --assert-policy types an UNTYPED released manifest.
 level takes --repo|--org [--ref --notes-ref --tag --json
 --shield <path>], where --shield writes a shields.io endpoint document
 from the same seal as the report. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
-[--out]. GITHUB_TOKEN/GH_TOKEN authenticates store reads and the
-notes push.
+[--out]; emit manifest takes --classes --store-vsa
+--machinery-version --assets --assert-policy [--out] and none of the
+above.
+GITHUB_TOKEN/GH_TOKEN authenticates store reads and the notes push.
 `
 
 	if _, err := io.WriteString(w, text); err != nil {

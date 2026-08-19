@@ -151,8 +151,9 @@ strict decoding, never incidentally with an unknown-field error
 shared by the verify policy, the assert policy and the report, so a
 bump cannot land on one document and miss another (the drift #107
 found). Identifiers written into history — the chain note version,
-the evidence-manifest schema — keep their own numbers, because they
-cannot be re-emitted on demand.
+the evidence-manifest schema — keep their own numbers, because the
+documents carrying them already exist and moving a number orphans
+every one of them until it is re-emitted.
 
 ### `issuer`
 

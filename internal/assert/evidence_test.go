@@ -64,14 +64,21 @@ func bundleJSONL(predicateType string) string {
 	return `{"dsseEnvelope": {"payload": "` + base64.StdEncoding.EncodeToString([]byte(stmt)) + `"}}`
 }
 
+// manifestEntry renders one typed entry — the fixtures carry the
+// typing the format requires (stele#156), so a manifest a test builds
+// is one the writer could have written.
+func manifestEntry(name, entryType string) string {
+	return `{"name": "` + name + `", "sha256": "` + strings.Repeat("a", 64) + `", "type": "` + entryType + `"}`
+}
+
 func manifestAsset(classes []string, storeVSA bool) string {
 	sv := "false"
 	if storeVSA {
 		sv = "true"
 	}
 
-	return `{"schema": 1, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": ` + sv +
-		`, "machineryVersion": "9.9.9"}`
+	return `{"schema": 2, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": ` + sv +
+		`, "machineryVersion": "9.9.9", "entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject") + `]}`
 }
 
 // fakeForge scripts the whole forge for one org.
