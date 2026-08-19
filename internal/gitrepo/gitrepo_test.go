@@ -346,6 +346,77 @@ func TestAddNoteStoresStripspaced(t *testing.T) {
 	}
 }
 
+// TestCloneMaterializesTheScratchTree pins the fix for the org-wide
+// source-attest outage at the canon v1.41.0 cutover: --clone owns the
+// whole scratch-tree lifecycle, so Clone must create the directory
+// itself — every command here runs `git -C dir`, which chdirs before
+// init could create anything, and the caller pre-creating the path is
+// exactly the restated preparation --clone removed from the action.
+func TestCloneMaterializesTheScratchTree(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+	remoteDir := t.TempDir()
+	remote := gitCmd(t, remoteDir)
+	remote("init", "-q", "--bare")
+
+	local := gitCmd(t, fx.dir)
+	local("remote", "add", "origin", remoteDir)
+	local("push", "-q", "origin", "main")
+	local("notes", "add", "-f", "-m", `{"seed":"note"}`, "HEAD")
+	local("push", "-q", "origin", notesRef+":"+notesRef)
+
+	// The scratch path does not exist — not even its parent.
+	scratch := filepath.Join(t.TempDir(), "work", "repo")
+
+	r, err := gitrepo.Clone(scratch, remoteDir, "",
+		"source-attest", "source-attest@example.invalid",
+		"refs/heads/main", notesRef)
+	if err != nil {
+		t.Fatalf("Clone into a nonexistent path = %v", err)
+	}
+
+	git := gitCmd(t, scratch)
+	for _, ref := range []string{"refs/heads/main", notesRef} {
+		if got := git("rev-parse", "--verify", ref); got == "" {
+			t.Errorf("Clone did not fetch %s", ref)
+		}
+	}
+
+	if err := r.SetNotesRef(notesRef); err != nil {
+		t.Fatalf("SetNotesRef = %v", err)
+	}
+}
+
+// TestCloneRefusals: every argument guard, one row each — a clone
+// that cannot say who it writes as or what it brings down is refused
+// before anything touches the filesystem.
+func TestCloneRefusals(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, remote, committer, email string
+		refs                           []string
+		want                           string
+	}{
+		{"no remote", "", "n", "e", []string{"refs/heads/main"}, "a remote is required"},
+		{"no committer", "r", "", "e", []string{"refs/heads/main"}, "committer name and email"},
+		{"no email", "r", "n", "", []string{"refs/heads/main"}, "committer name and email"},
+		{"no refs", "r", "n", "e", nil, "no refs to fetch"},
+		{"unqualified ref", "r", "n", "e", []string{"main"}, "not fully qualified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := gitrepo.Clone(filepath.Join(t.TempDir(), "repo"),
+				tc.remote, "", tc.committer, tc.email, tc.refs...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Clone = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestNotesPushAndFetch(t *testing.T) {
 	t.Parallel()
 

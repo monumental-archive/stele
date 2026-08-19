@@ -317,7 +317,7 @@ func (r *Repo) PushNotes(remote, token string) error {
 	return nil
 }
 
-// Clone prepares a scratch working tree at dir and fetches exactly
+// Clone prepares a scratch repository at dir and fetches exactly
 // the refs named, from remote, under the committer identity given.
 //
 // This exists so the refs a run needs are derived from the POLICY
@@ -346,8 +346,20 @@ func Clone(dir, remote, token, name, email string, refs ...string) (*Repo, error
 		return nil, errors.New("gitrepo: no refs to fetch — a clone that brings nothing down is not a clone")
 	}
 
+	// The scratch repository is the engine's to materialize: every
+	// command this package runs is `git -C dir`, which chdirs before
+	// init could create anything, and a caller-made directory would be
+	// the same restated preparation --clone exists to remove. It is
+	// BARE because nothing here reads a checkout — every read is
+	// plumbing against the object store — and with no checked-out
+	// branch, git's refusal to fetch into the current branch has
+	// nothing to collide with, whatever the policy names.
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, fmt.Errorf("gitrepo: creating scratch dir %s: %w", dir, err)
+	}
+
 	r := &Repo{dir: dir}
-	if _, err := r.git("init", "-q", dir); err != nil {
+	if _, err := r.git("init", "-q", "--bare", dir); err != nil {
 		return nil, fmt.Errorf("gitrepo: init %s: %w", dir, err)
 	}
 
