@@ -67,12 +67,23 @@ func Union(name, created, tool string, docs []*Document) (*Document, error) {
 	}
 
 	arts := make([]artifact, 0, len(docs))
+	seen := make(map[string]bool, len(docs))
 
 	for i, doc := range docs {
 		art, err := describedArtifact(doc)
 		if err != nil {
 			return nil, fmt.Errorf("sbom: document %d: %w", i, err)
 		}
+
+		// One artifact, one document: a second input describing the
+		// same artifact would fold its packages in twice, and the
+		// shipped-in dedup downstream would quietly hide the double
+		// counting instead of surfacing the wiring mistake it is.
+		if seen[art.name] {
+			return nil, fmt.Errorf("sbom: two documents describe %s — one artifact, one inventory", art.name)
+		}
+
+		seen[art.name] = true
 
 		arts = append(arts, art)
 	}

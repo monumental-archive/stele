@@ -6,6 +6,7 @@
 package vexjoin_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/vexjoin"
@@ -148,5 +149,28 @@ func TestParseSkipsProductsWithoutID(t *testing.T) {
 
 	if n := d.Len(); n != 1 {
 		t.Fatalf("Len = %d, want 1 — the id-less product joined nothing", n)
+	}
+}
+
+// Two decisions for one triple would let directory order pick which
+// judgment enters signed evidence; the parse refuses and names both
+// origins so a human retires one.
+func TestParseRefusesADuplicateDecision(t *testing.T) {
+	t.Parallel()
+
+	d := &vexjoin.Decisions{}
+	if err := vexjoin.Parse(d, []byte(vexDoc), "first.openvex.json"); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	err := vexjoin.Parse(d, []byte(vexDoc), "second.openvex.json")
+	if err == nil {
+		t.Fatal("a second decision for the same triple was silently accepted")
+	}
+
+	for _, want := range []string{"first.openvex.json", "second.openvex.json", "one finding, one decision"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

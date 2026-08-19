@@ -375,6 +375,16 @@ func TestDeriveSBOMSourceRefusals(t *testing.T) {
 			[]string{"sbom", "--union", "x", "--union-name", "w"},
 			"--created is required",
 		},
+		{
+			"a closure dated by a spelling the format does not admit",
+			[]string{"sbom", "--cargo-package", "a", "--tree", "/w", "--created", "yesterday"},
+			"not RFC 3339",
+		},
+		{
+			"a view dated by a spelling the format does not admit",
+			[]string{"sbom", "--union", "x", "--union-name", "w", "--created", "18 Aug 2026"},
+			"not RFC 3339",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

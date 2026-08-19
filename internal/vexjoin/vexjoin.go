@@ -168,6 +168,17 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 			}
 
 			k := Key{Advisory: *stmt.Vulnerability.Name, Package: m[1], Version: m[2]}
+
+			// Two decisions for one triple is a contradiction to
+			// surface, never a race the parse order settles: the files
+			// arrive in directory order, so "last one wins" would let
+			// a filename decide which judgment enters signed evidence.
+			// The human retires one; this code picks neither.
+			if prior, dup := d.byKey[k]; dup {
+				return fmt.Errorf("vexjoin: %s and %s both decide %s on %s@%s — one finding, one decision;"+
+					" retire one", prior.Origin, origin, k.Advisory, k.Package, k.Version)
+			}
+
 			d.byKey[k] = Decision{
 				Key: k, Origin: origin, Purl: *p.ID,
 				Status:          *stmt.Status,

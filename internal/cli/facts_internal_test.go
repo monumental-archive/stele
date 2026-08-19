@@ -143,6 +143,10 @@ func TestDeriveFactsUsage(t *testing.T) {
 			"facts", "--archetype", "continuous", "--repo", "widget", "--git-dir", ".",
 		}},
 		{"no released checkout", []string{"facts", "--archetype", "continuous", "--repo", "acme/widget"}},
+		{"a description declared and refused at once", []string{
+			"facts", "--archetype", "continuous", "--repo", "acme/widget",
+			"--server-url", forge, "--git-dir", ".", "--description", "a widget", "--no-description",
+		}},
 		{"unknown flag", []string{"facts", "--nope"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -412,5 +416,37 @@ func TestDeriveFactsNoDerivableLicence(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), "no derivable licence") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// --no-description is the air-gapped spelling: the annotation is
+// omitted and the forge is never asked. The seam fails the test if
+// touched, so "never" is proven rather than assumed.
+func TestDeriveFactsNoDescriptionNeverAsksTheForge(t *testing.T) {
+	withFactsHistory(t, goodFactsStub(), nil)
+
+	previous := newMetaClient
+	newMetaClient = func(string) *gh.Client {
+		t.Error("the forge was asked for a description the caller refused")
+
+		return gh.NewForServer(forge, "")
+	}
+
+	t.Cleanup(func() { newMetaClient = previous })
+
+	tree := cargoTree(t, "[package]\nlicense = \"MIT\"\n")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", tree, "--no-description",
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	if strings.Contains(stdout.String(), "image.description") {
+		t.Errorf("a refused description was rendered:\n%s", stdout.String())
 	}
 }

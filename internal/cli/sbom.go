@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/cargo"
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -109,9 +110,20 @@ func runDeriveSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	switch {
 	case sa.cargoRoot != "" && sa.unionOf != "":
 		return errors.New("derive sbom: --cargo-package and --union are exclusive: one derives, one aggregates")
-	case sa.cargoRoot != "":
-		return runDeriveCargoSBOM(sa, doc, out)
-	case sa.unionOf != "":
+	case sa.cargoRoot != "" || sa.unionOf != "":
+		// Both sources stamp --created into an attested document, so a
+		// spelling the format does not admit is refused here rather
+		// than published for every later consumer to choke on.
+		if sa.created != "" {
+			if _, err := time.Parse(time.RFC3339, sa.created); err != nil {
+				return fmt.Errorf("derive sbom: --created %q is not RFC 3339: %w", sa.created, err)
+			}
+		}
+
+		if sa.cargoRoot != "" {
+			return runDeriveCargoSBOM(sa, doc, out)
+		}
+
 		return runDeriveUnion(sa, doc, out)
 	}
 

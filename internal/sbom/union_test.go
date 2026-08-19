@@ -251,6 +251,11 @@ func TestUnionRefusals(t *testing.T) {
 		{"nothing to aggregate", released, nil, "no documents"},
 		{"no release instant", "", []*sbom.Document{doc("a")}, "release instant"},
 		{"a nil document", released, []*sbom.Document{nil}, "describes nothing"},
+		{
+			"two documents describing one artifact", released,
+			[]*sbom.Document{doc("twin", [2]string{"a", "1"}), doc("twin", [2]string{"b", "2"})},
+			"two documents describe twin",
+		},
 		{"a document with no packages", released, []*sbom.Document{{}}, "describes nothing"},
 		{
 			"a document with no DESCRIBES", released,

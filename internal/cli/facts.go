@@ -72,15 +72,16 @@ var openFactsGit = func(dir string) (factsHistory, error) {
 
 // factsArgs is everything `derive facts` reads.
 type factsArgs struct {
-	archetype   string
-	version     string
-	repo        string
-	serverURL   string
-	gitDir      string
-	rev         string
-	tree        string
-	title       string
-	description string
+	archetype     string
+	version       string
+	repo          string
+	serverURL     string
+	gitDir        string
+	rev           string
+	tree          string
+	title         string
+	description   string
+	noDescription bool
 }
 
 // parseFactsArgs reads the flag surface.
@@ -108,6 +109,9 @@ func parseFactsArgs(args []string, stderr io.Writer) (*factsArgs, int) {
 	flags.StringVar(&fa.title, "title", "", "editorial title; defaults to the repository's own name")
 	flags.StringVar(&fa.description, "description", "",
 		"editorial description; defaults to the forge's, omitted when there is none")
+	flags.BoolVar(&fa.noDescription, "no-description", false,
+		"omit the description annotation without asking the forge — the honest spelling for a release "+
+			"with none, and the only one an air-gapped run can make")
 
 	if err := flags.Parse(args); err != nil {
 		return fa, exitUsage
@@ -136,6 +140,8 @@ func parseFactsArgs(args []string, stderr io.Writer) (*factsArgs, int) {
 		return fa, usageFail("--git-dir is required — the released commit dates the release")
 	case fa.serverURL == "":
 		return fa, usageFail("--server-url is required — the forge is named, never assumed")
+	case fa.noDescription && fa.description != "":
+		return fa, usageFail("--no-description and --description contradict each other")
 	}
 
 	if fa.tree == "" {
@@ -183,7 +189,7 @@ func runDeriveFacts(fa *factsArgs, out *latch) error {
 	}
 
 	editorial := imagefacts.Editorial{Title: fa.title, Description: fa.description}
-	if editorial.Description == "" {
+	if editorial.Description == "" && !fa.noDescription {
 		editorial.Description, err = newMetaClient(fa.serverURL).Description(owner, repo)
 		if err != nil {
 			return fmt.Errorf("derive facts: %w", err)
