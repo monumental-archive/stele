@@ -34,7 +34,18 @@ drift this schema exists to refuse. Its values are drawn from the
 first conforming consumer's committed policy — a worked example,
 never vocabulary: nothing in this schema knows those names.
 
-```json
+Every fenced example here is EXECUTED: the test suite splices the
+`json policy-fragment` fences into the `json policy` document at the
+object each names and runs the result through `policy.Load`
+(`internal/policy/schema_doc_test.go`). A shape this file teaches
+and the loader refuses is a red build, and so is a document whose
+examples stop composing — the load-time cross-check below reads the
+property names and the claims table together. This file went on
+teaching the pre-#125 branch shape until stele#150 because nothing
+executed it, and the canon's own migration was written against the
+loader's error message rather than against the doc.
+
+```json policy
 {
   "schema": 4,
 
@@ -84,15 +95,20 @@ never vocabulary: nothing in this schema knows those names.
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
-          { "name": "ORG_SOURCE_GATED", "since": "2026-08-10T21:41:46+01:00" },
-          { "name": "ORG_SOURCE_DCO", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_CAPABILITY_BOUNDARY", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_HISTORY_PROTECTED", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_SIGNED", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_REVIEWED_THREADS", "since": "2026-08-10T21:41:46+01:00" },
-          { "name": "ORG_SOURCE_TAG_IMMUTABLE", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_RELEASE_TAG_MINTED", "since": "2026-08-09T16:29:06+01:00" }
+        "levels": [
+          {
+            "level": "SLSA_SOURCE_LEVEL_3",
+            "requiredProperties": [
+              { "name": "ORG_SOURCE_GATED", "since": "2026-08-10T21:41:46+01:00" },
+              { "name": "ORG_SOURCE_DCO", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_CAPABILITY_BOUNDARY", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_HISTORY_PROTECTED", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_SIGNED", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_REVIEWED_THREADS", "since": "2026-08-10T21:41:46+01:00" },
+              { "name": "ORG_SOURCE_TAG_IMMUTABLE", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_RELEASE_TAG_MINTED", "since": "2026-08-09T16:29:06+01:00" }
+            ]
+          }
         ]
       }
     ],
@@ -285,7 +301,7 @@ step 1 says the same for the source track. A level is therefore
 never derived from an artifact, and this section is where the org
 says how far it vouches for each attester.
 
-```json
+```json policy-fragment
 "slsaRootsOfTrust": [
   {
     "attesterId": "https://github.com/acme/.github/.github/workflows/verify-release.yml",
@@ -442,6 +458,18 @@ cannot make an undocumented note format verifiable.
 
 ### `source.protectedBranches`
 
+Each branch names itself, the level it targets, and — under
+`levels[]` — what establishes each level it claims: one entry per
+level, carrying that level's `requiredProperties`. The claims hang
+off the level rather than off the branch (#125) because WHICH level
+an organization's controls establish is that organization's claim;
+a tool that fixed requirements to rungs in code would make every
+other shape unclaimable. A level the spec makes structurally
+judgeable from evidence stele already holds needs no entry, and a
+level with neither an entry nor a structural judgment is UNCLAIMED
+— the policy said nothing, which is not the judge deciding nobody
+could.
+
 The target level is claimed only when every
 required property appears in the link's `controls[].property`;
 otherwise the link under-claims `underclaimLevel`. `since` times
@@ -454,8 +482,9 @@ was deleted — agreement was the proof bar, never the steady state.
 ### `source.claims`
 
 Where the frozen control table lives, and the reason this section
-exists: before this section, the property *names* lived here (in
-`protectedBranches[].requiredProperties`) while the rules that decide
+exists: before this section, the property *names* lived here (on the
+branch itself, before #125 moved them under `levels[]`) while the
+rules that decide
 whether each one is live lived in the first consumer's `claims.sh`
 script and in prose in its source-track document. One vocabulary,
 three places,
@@ -472,7 +501,7 @@ The section is an obligation like every other: absent means the org
 does not derive claims with this tool. Declared means each property
 carries a scope and a matcher, validated strictly.
 
-```json
+```json policy-fragment source
 "claims": {
   "properties": [
     {
@@ -640,7 +669,7 @@ this section rather than from any fact about a particular org:
 
 #### Load-time cross-check
 
-Every `requiredProperties[].name` in `protectedBranches` must be
+Every `protectedBranches[].levels[].requiredProperties[].name` must be
 declared here. A required property with no matcher can never be
 claimed, so the branch could never reach its target level — today
 that is a silent permanent under-claim discoverable only by reading
