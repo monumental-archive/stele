@@ -147,3 +147,38 @@ func TestDescriptionRefusesGarbage(t *testing.T) {
 		t.Fatalf("Description = %v, want a decode failure", err)
 	}
 }
+
+// The REST endpoint is derived from the server URL a caller names —
+// api.github.com for github.com, <server>/api/v3 for an enterprise
+// host — so the client can never read one forge while the caller's
+// signed output names another.
+func TestNewForServerDerivesTheAPIBase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		server       string
+		wantBase     string
+		wantDownload string
+	}{
+		{"the public forge", "https://github.com", "https://api.github.com", "https://github.com"},
+		{"a trailing slash", "https://github.com/", "https://api.github.com", "https://github.com"},
+		{"an enterprise host", "https://ghes.example", "https://ghes.example/api/v3", "https://ghes.example"},
+		{
+			"an enterprise host with a trailing slash",
+			"https://ghes.example/", "https://ghes.example/api/v3", "https://ghes.example",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := gh.NewForServer(tt.server, "tok")
+			if c.Base != tt.wantBase || c.Download != tt.wantDownload {
+				t.Errorf("NewForServer(%q) = base %q, download %q; want %q, %q",
+					tt.server, c.Base, c.Download, tt.wantBase, tt.wantDownload)
+			}
+		})
+	}
+}

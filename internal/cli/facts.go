@@ -38,16 +38,20 @@ const (
 	archetypeContinuous = "continuous"
 )
 
-// The metadata-reading seam, swapped only by tests.
+// The metadata-reading seam, swapped only by tests. It takes the
+// server URL the caller named so the fallback reads go to the SAME
+// forge the facts describe: a client pinned to github.com under a
+// --server-url naming an enterprise host would fold a stranger's
+// licence and description into this release's signed annotations.
 //
 //nolint:gochecknoglobals // test seam, written only by test setup
-var newMetaClient = func() *gh.Client {
+var newMetaClient = func(serverURL string) *gh.Client {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		token = os.Getenv("GH_TOKEN")
 	}
 
-	return gh.New(token)
+	return gh.NewForServer(serverURL, token)
 }
 
 // factsHistory is the released checkout, read for exactly two facts:
@@ -95,7 +99,7 @@ func parseFactsArgs(args []string, stderr io.Writer) (*factsArgs, int) {
 	flags.StringVar(&fa.serverURL, "server-url", "",
 		"the forge these facts name, e.g. https://github.com (required). Not defaulted: the source URL "+
 			"ships in a signed annotation, and a tool that guessed the host would be asserting where the "+
-			"code came from")
+			"code came from. The licence and description fallbacks read the same forge's API")
 	flags.StringVar(&fa.gitDir, "git-dir", "",
 		"the RELEASED checkout, whose commit dates the release (required)")
 	flags.StringVar(&fa.rev, "rev", "HEAD", "the revision being released")
@@ -180,7 +184,7 @@ func runDeriveFacts(fa *factsArgs, out *latch) error {
 
 	editorial := imagefacts.Editorial{Title: fa.title, Description: fa.description}
 	if editorial.Description == "" {
-		editorial.Description, err = newMetaClient().Description(owner, repo)
+		editorial.Description, err = newMetaClient(fa.serverURL).Description(owner, repo)
 		if err != nil {
 			return fmt.Errorf("derive facts: %w", err)
 		}
@@ -260,7 +264,7 @@ func readDeclarations(fa *factsArgs, prov *imagefacts.Provenance, out *latch) er
 // one fact, so a mismatch would mean nothing — unlike the repository
 // URL, which is checked precisely because it IS one.
 func licenceFromForge(owner, repo string, prov *imagefacts.Provenance, out *latch) error {
-	id, ok, err := newMetaClient().Licence(owner, repo, prov.Revision)
+	id, ok, err := newMetaClient(prov.ServerURL).Licence(owner, repo, prov.Revision)
 	if err != nil {
 		return fmt.Errorf("derive facts: %w", err)
 	}

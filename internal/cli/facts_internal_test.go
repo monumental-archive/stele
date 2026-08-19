@@ -99,7 +99,7 @@ func withMeta(t *testing.T, licence, description string) {
 	t.Cleanup(srv.Close)
 
 	previous := newMetaClient
-	newMetaClient = func() *gh.Client {
+	newMetaClient = func(string) *gh.Client {
 		return &gh.Client{Base: srv.URL, Download: srv.URL, HTTP: srv.Client()}
 	}
 

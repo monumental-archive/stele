@@ -103,9 +103,31 @@ type Client struct {
 
 // New builds a live client against the public GitHub API.
 func New(token string) *Client {
+	return NewForServer("https://github.com", token)
+}
+
+// NewForServer builds a live client against the forge a caller NAMED.
+// The REST endpoint is derived from the server URL by the forge's own
+// convention — api.github.com for github.com, <server>/api/v3 for a
+// GitHub Enterprise host, the same mapping Actions publishes as
+// github.api_url beside github.server_url.
+//
+// Derived, not a second flag, because the two are one fact: a caller
+// that names one forge in its signed output while this client reads
+// another would fold a stranger's repository metadata into evidence
+// about its own — the exact silent divergence a required --server-url
+// exists to prevent.
+func NewForServer(serverURL, token string) *Client {
+	server := strings.TrimSuffix(serverURL, "/")
+
+	base := server + "/api/v3"
+	if server == "https://github.com" {
+		base = "https://api.github.com"
+	}
+
 	return &Client{
-		Base:     "https://api.github.com",
-		Download: "https://github.com",
+		Base:     base,
+		Download: server,
 		Token:    token,
 		HTTP:     &http.Client{Timeout: httpTimeout},
 	}
