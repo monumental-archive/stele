@@ -43,13 +43,6 @@ type Package struct {
 	Source  string
 }
 
-// Purl renders the package identifier advisory matching runs on.
-// Registry packages are crates.io by convention of the ecosystem; a
-// workspace member has no registry and is rendered without one.
-func (p Package) Purl() string {
-	return "pkg:cargo/" + p.Name + "@" + p.Version
-}
-
 // Selection is how an artifact was built. Cargo resolves a different
 // dependency graph per selection, so an inventory derived under the
 // wrong one describes an artifact nobody shipped.
@@ -190,8 +183,16 @@ type metadataDoc struct {
 // answered, but not with the thing a closure needs.
 var ErrNoResolution = errors.New("cargo: metadata carries no resolved dependency graph")
 
-// Closure returns the packages reachable from the named root, the
-// root included, ordered.
+// Closure returns the named root and the packages reachable from it,
+// the dependencies ordered.
+//
+// The root travels as its own return value, never as a position in
+// the list. The dependency list is SORTED — the same inputs must
+// render the same inventory — and under sorting "the root is first"
+// is true exactly when the root's name happens to sort first, which
+// is the kind of coincidence a fixture satisfies and a real workspace
+// does not. A caller that cannot ask for the root by position cannot
+// build a document that describes the wrong artifact.
 //
 // Only NORMAL dependency edges are followed. A dev-dependency is used
 // to test the package and a build-dependency to build it; neither ends
@@ -199,14 +200,16 @@ var ErrNoResolution = errors.New("cargo: metadata carries no resolved dependency
 // describe the machine that produced the artifact rather than the
 // artifact itself — and would put advisories a consumer cannot be
 // exposed to into their triage surface.
-func Closure(metadata []byte, root string) ([]Package, error) {
+//
+//nolint:gocritic // unnamedResult: the root, its dependencies, and any error
+func Closure(metadata []byte, root string) (Package, []Package, error) {
 	doc, err := jsonx.DecodeForeign[metadataDoc](metadata)
 	if err != nil {
-		return nil, fmt.Errorf("cargo: metadata: %w", err)
+		return Package{}, nil, fmt.Errorf("cargo: metadata: %w", err)
 	}
 
 	if doc.Resolve == nil || len(doc.Resolve.Nodes) == 0 {
-		return nil, ErrNoResolution
+		return Package{}, nil, ErrNoResolution
 	}
 
 	byID := make(map[string]Package, len(doc.Packages))
@@ -221,13 +224,13 @@ func Closure(metadata []byte, root string) ([]Package, error) {
 
 	switch len(rootIDs) {
 	case 0:
-		return nil, fmt.Errorf("cargo: %q is not a package in this workspace", root)
+		return Package{}, nil, fmt.Errorf("cargo: %q is not a package in this workspace", root)
 	case 1:
 	default:
 		// One name resolving to several packages means the closure has
 		// no single starting point, and guessing would describe an
 		// artifact nobody built.
-		return nil, fmt.Errorf("cargo: %q names %d packages in this workspace", root, len(rootIDs))
+		return Package{}, nil, fmt.Errorf("cargo: %q names %d packages in this workspace", root, len(rootIDs))
 	}
 
 	edges := make(map[string][]string, len(doc.Resolve.Nodes))
@@ -240,7 +243,7 @@ func Closure(metadata []byte, root string) ([]Package, error) {
 		}
 	}
 
-	return walk(rootIDs[0], edges, byID), nil
+	return byID[rootIDs[0]], walk(rootIDs[0], edges, byID), nil
 }
 
 // normalEdge reports whether this dependency ends up in the artifact.
@@ -263,7 +266,9 @@ func normalEdge(kinds []struct {
 	return false
 }
 
-// walk collects everything reachable from the root.
+// walk collects everything reachable from the root, the root itself
+// excluded — it is the artifact the closure describes, not one of its
+// dependencies, and it already travels on its own.
 func walk(root string, edges map[string][]string, byID map[string]Package) []Package {
 	seen := map[string]bool{root: true}
 	queue := []string{root}
@@ -274,7 +279,7 @@ func walk(root string, edges map[string][]string, byID map[string]Package) []Pac
 		id := queue[0]
 		queue = queue[1:]
 
-		if pkg, ok := byID[id]; ok {
+		if pkg, ok := byID[id]; ok && id != root {
 			out = append(out, pkg)
 		}
 

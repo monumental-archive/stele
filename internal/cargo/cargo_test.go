@@ -74,21 +74,28 @@ func names(pkgs []cargo.Package) []string {
 func TestClosureIsScopedToTheArtifact(t *testing.T) {
 	t.Parallel()
 
-	cli, err := cargo.Closure([]byte(workspace), "lab-cli")
+	cliRoot, cli, err := cargo.Closure([]byte(workspace), "lab-cli")
 	if err != nil {
 		t.Fatalf("Closure(lab-cli) = %v", err)
 	}
 
-	wasm, err := cargo.Closure([]byte(workspace), "lab-wasm")
+	wasmRoot, wasm, err := cargo.Closure([]byte(workspace), "lab-wasm")
 	if err != nil {
 		t.Fatalf("Closure(lab-wasm) = %v", err)
 	}
 
-	if got := strings.Join(names(cli), ","); got != "lab-cli,lab-core,mimalloc,serde" {
+	// The root arrives on its own, never as a position: "lab-wasm"
+	// sorts AFTER lab-core, so a positional reading would promote a
+	// dependency to artifact here.
+	if cliRoot.Name != "lab-cli" || wasmRoot.Name != "lab-wasm" {
+		t.Errorf("roots = %q, %q", cliRoot.Name, wasmRoot.Name)
+	}
+
+	if got := strings.Join(names(cli), ","); got != "lab-core,mimalloc,serde" {
 		t.Errorf("lab-cli closure = %s", got)
 	}
 
-	if got := strings.Join(names(wasm), ","); got != "lab-core,lab-wasm,serde,wasm-bindgen" {
+	if got := strings.Join(names(wasm), ","); got != "lab-core,serde,wasm-bindgen" {
 		t.Errorf("lab-wasm closure = %s", got)
 	}
 
@@ -111,7 +118,7 @@ func TestClosureIsScopedToTheArtifact(t *testing.T) {
 func TestClosureFollowsOnlyNormalEdges(t *testing.T) {
 	t.Parallel()
 
-	cli, err := cargo.Closure([]byte(workspace), "lab-cli")
+	_, cli, err := cargo.Closure([]byte(workspace), "lab-cli")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,23 +143,27 @@ func TestClosureTreatsAnUnkindedEdgeAsNormal(t *testing.T) {
 	  {"id": "a 1.0.0 (path+file:///a)", "deps": [{"pkg": "b 2.0.0 (registry+x)"}]},
 	  {"id": "b 2.0.0 (registry+x)", "deps": []}]}}`
 
-	got, err := cargo.Closure([]byte(legacy), "a")
+	root, got, err := cargo.Closure([]byte(legacy), "a")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if strings.Join(names(got), ",") != "a,b" {
+	if root.Name != "a" {
+		t.Errorf("root = %q", root.Name)
+	}
+
+	if strings.Join(names(got), ",") != "b" {
 		t.Fatalf("closure = %v, want the unkinded edge followed", names(got))
 	}
 }
 
-// The root is in its own closure, and a workspace member is told from
-// a registry package by its empty source — which is what decides
-// whether a purl points anywhere a consumer can fetch.
+// A workspace member is told from a registry package by its empty
+// source — which is what decides whether a purl points anywhere a
+// consumer can fetch.
 func TestClosureCarriesProvenance(t *testing.T) {
 	t.Parallel()
 
-	got, err := cargo.Closure([]byte(workspace), "lab-cli")
+	root, got, err := cargo.Closure([]byte(workspace), "lab-cli")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,16 +173,12 @@ func TestClosureCarriesProvenance(t *testing.T) {
 		bySource[p.Name] = p.Source
 	}
 
-	if bySource["lab-cli"] != "" || bySource["lab-core"] != "" {
+	if root.Source != "" || bySource["lab-core"] != "" {
 		t.Error("a workspace member carries a registry source")
 	}
 
 	if !strings.HasPrefix(bySource["serde"], "registry+") {
 		t.Errorf("serde source = %q, want a registry", bySource["serde"])
-	}
-
-	if got[0].Purl() != "pkg:cargo/lab-cli@0.1.0" {
-		t.Errorf("purl = %q", got[0].Purl())
 	}
 }
 
@@ -187,13 +194,13 @@ func TestClosureTerminatesOnACycle(t *testing.T) {
 	  {"id": "a 1.0.0 (path+file:///a)", "deps": [{"pkg": "b 1.0.0 (path+file:///b)", "dep_kinds": [{"kind": ""}]}]},
 	  {"id": "b 1.0.0 (path+file:///b)", "deps": [{"pkg": "a 1.0.0 (path+file:///a)", "dep_kinds": [{"kind": ""}]}]}]}}`
 
-	got, err := cargo.Closure([]byte(cyclic), "a")
+	root, got, err := cargo.Closure([]byte(cyclic), "a")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(got) != 2 {
-		t.Fatalf("closure = %v, want both once", names(got))
+	if root.Name != "a" || len(got) != 1 || got[0].Name != "b" {
+		t.Fatalf("closure = %s + %v, want the root and b once", root.Name, names(got))
 	}
 }
 
@@ -227,7 +234,7 @@ func TestClosureRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := cargo.Closure([]byte(tt.metadata), tt.root)
+			_, _, err := cargo.Closure([]byte(tt.metadata), tt.root)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Closure = %v, want it to mention %q", err, tt.want)
 			}

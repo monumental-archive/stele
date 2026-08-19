@@ -69,14 +69,70 @@ func Union(name, created, tool string, docs []*Document) (*Document, error) {
 	arts := make([]artifact, 0, len(docs))
 
 	for i, doc := range docs {
-		if doc == nil || len(doc.Packages) == 0 {
-			return nil, fmt.Errorf("sbom: document %d describes nothing", i)
+		art, err := describedArtifact(doc)
+		if err != nil {
+			return nil, fmt.Errorf("sbom: document %d: %w", i, err)
 		}
 
-		arts = append(arts, artifact{name: doc.Packages[0].Name, packages: doc.Packages[1:]})
+		arts = append(arts, art)
 	}
 
 	return renderUnion(name, created, tool, arts), nil
+}
+
+// describedArtifact reads one input document's root through its own
+// DESCRIBES relationship — the SPDX statement of which package IS the
+// artifact — never through a position in the package list. SPDX does
+// not order packages, and the inputs here are foreign documents: this
+// tool's own emitters happen to write the root first, but a document
+// from any other generator, or one whose packages were re-sorted in
+// transit, would silently promote a dependency to artifact under a
+// positional read. A document that does not say what it describes, or
+// says it twice, is refused rather than guessed at.
+func describedArtifact(doc *Document) (artifact, error) {
+	if doc == nil || len(doc.Packages) == 0 {
+		return artifact{}, errors.New("describes nothing")
+	}
+
+	rootID := ""
+
+	for _, rel := range doc.Relationships {
+		if rel.RelationshipType != relDescribes || rel.SPDXElementID != doc.SPDXID {
+			continue
+		}
+
+		if rootID != "" {
+			return artifact{}, errors.New("carries more than one DESCRIBES relationship —" +
+				" a per-artifact inventory describes exactly one artifact")
+		}
+
+		rootID = rel.RelatedSPDXElement
+	}
+
+	if rootID == "" {
+		return artifact{}, errors.New("carries no DESCRIBES relationship, so it does not say which" +
+			" package is the artifact")
+	}
+
+	art := artifact{}
+	found := false
+
+	for _, pkg := range doc.Packages {
+		if pkg.SPDXID == rootID {
+			art.name = pkg.Name
+			found = true
+
+			continue
+		}
+
+		art.packages = append(art.packages, pkg)
+	}
+
+	if !found {
+		return artifact{}, fmt.Errorf("DESCRIBES names %s, which is not among its packages", rootID)
+	}
+
+	return art, nil
 }
 
 // renderUnion builds the view. Packages are keyed by (name, version),
@@ -200,19 +256,30 @@ func dedupe(values []string) []string {
 // FromPackages renders one artifact's inventory from a resolved
 // closure: the artifact itself as the root, its dependencies beneath.
 //
+// The root is its own parameter, never a position in the dependency
+// list. The list is sorted for reproducibility, so "the root is
+// first" holds exactly when the root's name sorts first — a
+// coincidence a fixture satisfies and a real workspace does not, and
+// a document rooted at the wrong package would describe an artifact
+// nobody shipped. The document's name is derived from the root here,
+// not restated by the caller: two spellings of one identity is the
+// drift the shared-definition rule exists to prevent.
+//
 // The closure is computed by whoever owns the ecosystem's resolver
 // (internal/cargo for Cargo), so this function does no resolution of
 // its own — it is the SPDX rendering and nothing else. Keeping the two
 // apart is what lets a second ecosystem arrive without touching either.
-func FromPackages(artifact, created, tool string, deps []Package) (*Document, error) {
+//
+//nolint:gocritic // hugeParam: root is mutated into the document's root entry; a pointer would edit the caller's copy
+func FromPackages(created, tool string, root Package, deps []Package) (*Document, error) {
 	switch {
-	case artifact == "":
-		return nil, errors.New("sbom: the artifact must be named")
+	case root.Name == "" || root.VersionInfo == "":
+		return nil, errors.New("sbom: the root artifact must carry a name and a version")
 	case created == "":
 		return nil, errors.New("sbom: the artifact's own instant is required, never a clock reading")
-	case len(deps) == 0:
-		return nil, errors.New("sbom: an inventory of nothing asserts nothing")
 	}
+
+	artifact := root.Name + "@" + root.VersionInfo
 
 	doc := &Document{
 		SPDXVersion:       spdxVersion,
@@ -223,7 +290,6 @@ func FromPackages(artifact, created, tool string, deps []Package) (*Document, er
 		CreationInfo:      CreationInfo{Created: created, Creators: []string{"Tool: " + tool}},
 	}
 
-	root := deps[0]
 	root.SPDXID = rootPackageID
 	root.PrimaryPurpose = purposeApp
 	root.DownloadLocation = noAssertion
@@ -235,7 +301,7 @@ func FromPackages(artifact, created, tool string, deps []Package) (*Document, er
 		RelationshipType:   relDescribes,
 	})
 
-	for i, dep := range deps[1:] {
+	for i, dep := range deps {
 		dep.SPDXID = fmt.Sprintf("SPDXRef-Package-%d", i+1)
 		dep.PrimaryPurpose = purposeLibrary
 		dep.DownloadLocation = noAssertion

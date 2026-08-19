@@ -202,7 +202,7 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 		return err
 	}
 
-	closure, err := cargo.Closure(metadata, sa.cargoRoot)
+	root, closure, err := cargo.Closure(metadata, sa.cargoRoot)
 	if err != nil {
 		return err
 	}
@@ -212,8 +212,8 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 		deps = append(deps, sbom.CargoPackage(pkg.Name, pkg.Version))
 	}
 
-	document, err := sbom.FromPackages(deps[0].Name+"@"+deps[0].VersionInfo, sa.created,
-		"stele-"+selfVersion(), deps)
+	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
+		sbom.CargoPackage(root.Name, root.Version), deps)
 	if err != nil {
 		return err
 	}

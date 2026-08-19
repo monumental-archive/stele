@@ -64,8 +64,11 @@ const (
 // ErrNoBinaries reports a derivation asked to describe nothing.
 var ErrNoBinaries = errors.New("sbom: no binaries given")
 
-// Document is the SPDX 2.3 document this package renders. Encode side
-// only: nothing here is ever decoded, so plain fields, not pointers.
+// Document is the SPDX 2.3 document this package renders. Written
+// with plain fields, not pointers: the union leg does decode foreign
+// per-artifact documents into it, but leniently and never to
+// distinguish absent from empty — validation there is structural (the
+// DESCRIBES walk), not field-presence.
 type Document struct {
 	SPDXVersion       string         `json:"spdxVersion"`
 	DataLicense       string         `json:"dataLicense"`

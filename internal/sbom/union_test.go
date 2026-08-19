@@ -17,10 +17,17 @@ import (
 )
 
 // doc builds a per-artifact document: a root naming the artifact,
-// then its packages.
+// declared through a DESCRIBES relationship the way SPDX says which
+// package IS the artifact, then its packages.
 func doc(artifact string, deps ...[2]string) *sbom.Document {
 	d := &sbom.Document{
+		SPDXID:   "SPDXRef-DOCUMENT",
 		Packages: []sbom.Package{{SPDXID: "SPDXRef-Package-0", Name: artifact, PrimaryPurpose: "APPLICATION"}},
+		Relationships: []sbom.Relationship{{
+			SPDXElementID:      "SPDXRef-DOCUMENT",
+			RelatedSPDXElement: "SPDXRef-Package-0",
+			RelationshipType:   "DESCRIBES",
+		}},
 	}
 
 	for i, dep := range deps {
@@ -89,6 +96,31 @@ func TestUnionAggregates(t *testing.T) {
 
 	if s := sourceInfoFor(got, "only-cli", "2.0.0"); s != "shipped in: widget-cli" {
 		t.Errorf("only-cli sourceInfo = %q", s)
+	}
+}
+
+// The root is whatever the document's DESCRIBES relationship names,
+// wherever it sits in the package list. SPDX does not order packages,
+// and a foreign generator (or a re-sort in transit) can put the root
+// anywhere; a positional read here would silently promote a
+// dependency to artifact.
+func TestUnionFindsTheRootByDescribesNotPosition(t *testing.T) {
+	t.Parallel()
+
+	d := doc("widget-cli", [2]string{"aardvark", "1.0.0"})
+	d.Packages[0], d.Packages[1] = d.Packages[1], d.Packages[0]
+
+	got, err := sbom.Union("w", released, "t", []*sbom.Document{d})
+	if err != nil {
+		t.Fatalf("Union = %v", err)
+	}
+
+	if s := sourceInfoFor(got, "aardvark", "1.0.0"); s != "" {
+		t.Errorf("aardvark was qualified as %q — the root was misread from position", s)
+	}
+
+	if !strings.Contains(got.Packages[0].SourceInfo, "aggregated from widget-cli") {
+		t.Errorf("the view does not name widget-cli as the artifact: %q", got.Packages[0].SourceInfo)
 	}
 }
 
@@ -219,7 +251,35 @@ func TestUnionRefusals(t *testing.T) {
 		{"nothing to aggregate", released, nil, "no documents"},
 		{"no release instant", "", []*sbom.Document{doc("a")}, "release instant"},
 		{"a nil document", released, []*sbom.Document{nil}, "describes nothing"},
-		{"a document with no root", released, []*sbom.Document{{}}, "describes nothing"},
+		{"a document with no packages", released, []*sbom.Document{{}}, "describes nothing"},
+		{
+			"a document with no DESCRIBES", released,
+			[]*sbom.Document{{Packages: []sbom.Package{{SPDXID: "SPDXRef-Package-0", Name: "a"}}}},
+			"no DESCRIBES relationship",
+		},
+		{
+			"a document describing two artifacts", released,
+			[]*sbom.Document{func() *sbom.Document {
+				d := doc("a", [2]string{"b", "1"})
+				d.Relationships = append(d.Relationships, sbom.Relationship{
+					SPDXElementID: "SPDXRef-DOCUMENT", RelatedSPDXElement: "SPDXRef-Package-1",
+					RelationshipType: "DESCRIBES",
+				})
+
+				return d
+			}()},
+			"more than one DESCRIBES",
+		},
+		{
+			"a DESCRIBES naming a package that is not there", released,
+			[]*sbom.Document{func() *sbom.Document {
+				d := doc("a")
+				d.Relationships[0].RelatedSPDXElement = "SPDXRef-Package-99"
+
+				return d
+			}()},
+			"not among its packages",
+		},
 	}
 
 	for _, tt := range tests {

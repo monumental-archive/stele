@@ -306,12 +306,16 @@ func TestDeriveSBOMUnionAggregates(t *testing.T) {
 		return path
 	}
 
-	a := write("a.spdx.json", `{"packages": [
+	a := write("a.spdx.json", `{"SPDXID": "SPDXRef-DOCUMENT", "packages": [
 	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-cli"},
-	  {"SPDXID": "SPDXRef-Package-1", "name": "shared", "versionInfo": "1.0.0"}]}`)
-	b := write("b.spdx.json", `{"packages": [
+	  {"SPDXID": "SPDXRef-Package-1", "name": "shared", "versionInfo": "1.0.0"}],
+	 "relationships": [{"spdxElementId": "SPDXRef-DOCUMENT",
+	  "relatedSpdxElement": "SPDXRef-Package-0", "relationshipType": "DESCRIBES"}]}`)
+	b := write("b.spdx.json", `{"SPDXID": "SPDXRef-DOCUMENT", "packages": [
 	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-npm"},
-	  {"SPDXID": "SPDXRef-Package-1", "name": "only-npm", "versionInfo": "3.0.0"}]}`)
+	  {"SPDXID": "SPDXRef-Package-1", "name": "only-npm", "versionInfo": "3.0.0"}],
+	 "relationships": [{"spdxElementId": "SPDXRef-DOCUMENT",
+	  "relatedSpdxElement": "SPDXRef-Package-0", "relationshipType": "DESCRIBES"}]}`)
 
 	var stdout, stderr bytes.Buffer
 
