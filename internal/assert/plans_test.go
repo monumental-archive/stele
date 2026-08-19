@@ -327,3 +327,72 @@ func TestPlansEntryShapeRefusals(t *testing.T) {
 		})
 	}
 }
+
+// TestPlansEmitsTheJudgedSet pins stele#151: the judgment carries the
+// set it judged, so a consuming leg iterates that instead of
+// re-collapsing the same plan files with a derivation of its own.
+// Every row states what the emitted set must be, against inputs
+// whose raw bytes say something different — restated matrix legs,
+// params spelled two ways, files named in an order a caller chose.
+func TestPlansEmitsTheJudgedSet(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []assert.PlanFile
+		want  string
+	}{
+		{
+			"a release planning nothing emits an empty set, never null",
+			nil,
+			`[]`,
+		},
+		{
+			"the entries are the ones judged, params canonical",
+			[]assert.PlanFile{{Name: "a", Content: []byte(
+				`[{"class": "wasm-npm", "doc": "sbom-npm-x", "artifact": "x.tgz", "params": {"b": "two", "a": 1}}]`)}},
+			`[{"class":"wasm-npm","doc":"sbom-npm-x","artifact":"x.tgz","params":{"a":1,"b":"two"}}]`,
+		},
+		{
+			"matrix legs restating one mapping collapse to one entry",
+			[]assert.PlanFile{
+				{Name: "a", Content: []byte(`[{"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"a": 1}}]`)},
+				{Name: "b", Content: []byte(`[{"class":"wasm-npm","doc":"sbom-npm-x","params":{ "a" : 1 }}]`)},
+			},
+			`[{"class":"wasm-npm","doc":"sbom-npm-x","params":{"a":1}}]`,
+		},
+		{
+			"the set is ordered by document, not by the order the files were named",
+			[]assert.PlanFile{
+				{Name: "z", Content: []byte(`[{"class": "wasm-npm", "doc": "sbom-npm-z"}]`)},
+				{Name: "a", Content: []byte(`[{"class": "wasm-npm", "doc": "sbom-npm-a"}]`)},
+			},
+			`[{"class":"wasm-npm","doc":"sbom-npm-a"},{"class":"wasm-npm","doc":"sbom-npm-z"}]`,
+		},
+		{
+			"a refused entry is judged and dropped, never emitted",
+			[]assert.PlanFile{{Name: "a", Content: []byte(
+				`[{"class": "wasm-npm", "doc": "sbom-npm-x"},` +
+					`{"class": "wasm-npm", "doc": "sbom-npm-y", "params": {"cargoPackage": "a; rm -rf"}}]`)}},
+			`[{"class":"wasm-npm","doc":"sbom-npm-x"}]`,
+		},
+		{
+			"a document two legs disagree about is refused, and the first claim stands alone",
+			[]assert.PlanFile{
+				{Name: "a", Content: []byte(`[{"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"a": 1}}]`)},
+				{Name: "b", Content: []byte(`[{"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"a": 2}}]`)},
+			},
+			`[{"class":"wasm-npm","doc":"sbom-npm-x","params":{"a":1}}]`,
+		},
+	}
+
+	pol := loadPlansPolicy(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rep := assert.Plans(pol, []string{"wasm-npm"}, "1.41.0", tt.files, discard)
+
+			if got := string(rep.Judged()); got != tt.want {
+				t.Fatalf("judged set = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

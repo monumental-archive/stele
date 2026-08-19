@@ -150,7 +150,7 @@ func TestSealVerdicts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			r := report.Seal("test", "acme/widget", tt.pop, tt.findings, tt.exceptions, tt.canary)
+			r := report.Seal("test", "acme/widget", tt.pop, tt.findings, tt.exceptions, tt.canary, report.NoJudgedSet())
 			if got := r.Verdict(); got != tt.want {
 				t.Fatalf("verdict = %s, want %s", got, tt.want)
 			}
@@ -176,6 +176,7 @@ func TestSealStaleExceptions(t *testing.T) {
 			report.Declared("gone", "", "debt.txt:9"),
 		},
 		report.NoCanary(),
+		report.NoJudgedSet(),
 	)
 
 	if got := r.Verdict(); got != report.VerdictPass {
@@ -212,7 +213,8 @@ type encodedDoc struct {
 		Finding   report.Finding `json:"finding"`
 		Exception encodedExc     `json:"exception"`
 	} `json:"excused"`
-	Stale []encodedExc `json:"staleExceptions"`
+	Stale  []encodedExc `json:"staleExceptions"`
+	Judged jsonx.Raw    `json:"judged"`
 }
 
 type encodedPop struct {
@@ -256,6 +258,7 @@ func TestEncodeShape(t *testing.T) {
 		[]report.Finding{{Subject: "a", Assertion: "digest", Expected: "aa", Actual: "bb", Detail: "drift"}},
 		nil,
 		report.CanaryMissed("known-bug"),
+		report.Judged(jsonx.Raw(`[{"doc":"sbom-npm-x"}]`)),
 		report.Fact{Name: "levels", Value: "SLSA_BUILD_LEVEL_3"},
 	)
 
@@ -291,6 +294,49 @@ func TestEncodeShape(t *testing.T) {
 		t.Fatalf("facts = %+v", doc.Facts)
 	case len(doc.Findings) != 1 || doc.Findings[0].Expected != "aa":
 		t.Fatalf("findings = %+v", doc.Findings)
+	case string(doc.Judged) != `[{"doc":"sbom-npm-x"}]`:
+		t.Fatalf("judged = %s, want the engine's own rendering, carried verbatim", doc.Judged)
+	}
+}
+
+// TestJudgedSet pins the carrier's two halves: a run that declares no
+// set encodes none and hands back none, and a run that declares one
+// hands back a COPY of the same bytes the document carries — the file
+// a caller writes beside the report and the report itself are one
+// rendering, so they cannot disagree about what was judged
+// (stele#151).
+func TestJudgedSet(t *testing.T) {
+	t.Parallel()
+
+	none := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil,
+		report.NoCanary(), report.NoJudgedSet())
+	if got := none.Judged(); len(got) != 0 {
+		t.Fatalf("Judged() = %s, want nothing — the run declared no set", got)
+	}
+
+	var buf bytes.Buffer
+	if err := none.Encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "judged") {
+		t.Fatalf("document = %s, want no judged field for a run that declared none", buf.String())
+	}
+
+	set := `[{"class":"wasm-npm","doc":"sbom-npm-x"}]`
+
+	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil,
+		report.NoCanary(), report.Judged(jsonx.Raw(set)))
+
+	got := r.Judged()
+	if string(got) != set {
+		t.Fatalf("Judged() = %s, want %s", got, set)
+	}
+
+	got[0] = 'X'
+
+	if again := r.Judged(); string(again) != set {
+		t.Fatalf("Judged() = %s after a caller mutated the copy — the sealed report moved", again)
 	}
 }
 
@@ -322,7 +368,7 @@ func (*writeError) Error() string { return "write refused" }
 func TestEncodeWriteFailure(t *testing.T) {
 	t.Parallel()
 
-	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil, report.NoCanary())
+	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil, report.NoCanary(), report.NoJudgedSet())
 	if err := r.Encode(failWriter{}); err == nil {
 		t.Fatal("a failed write did not surface")
 	}
@@ -340,6 +386,7 @@ func TestFindingsAreTheUnexcusedOnes(t *testing.T) {
 		[]report.Finding{finding("a", "unexcused"), finding("b", "excused")},
 		[]report.Exception{report.Declared("b", "excused", "debt.txt:1")},
 		report.NoCanary(),
+		report.NoJudgedSet(),
 	)
 
 	got := r.Findings()
@@ -351,5 +398,20 @@ func TestFindingsAreTheUnexcusedOnes(t *testing.T) {
 
 	if again := r.Findings(); again[0].Subject != "a" {
 		t.Fatalf("Findings = %+v after a caller mutated the copy — the sealed report moved", again)
+	}
+}
+
+// TestJudgedSetAbsentEncodesAsNoValue pins the nil contract: a report
+// with no set hands back nothing that a caller could re-encode into
+// bytes that are not a JSON value — the trap an empty-but-present
+// slice would set for the leg writing the set beside the report.
+func TestJudgedSetAbsentEncodesAsNoValue(t *testing.T) {
+	t.Parallel()
+
+	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil,
+		report.NoCanary(), report.NoJudgedSet())
+
+	if got := r.Judged(); got != nil {
+		t.Fatalf("Judged() = %#v, want nil for a run that declared no set", got)
 	}
 }

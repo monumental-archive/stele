@@ -330,7 +330,7 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 
 	rep := report.Seal("verify repro", repo+"@"+tag,
 		report.PopulationFromEvidence(len(released), "released artifacts under rebuild"),
-		findings, nil, report.NoCanary(),
+		findings, nil, report.NoCanary(), report.NoJudgedSet(),
 		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))})
 
 	return emitReport(rep, jsonOut, stdout, stderr)
@@ -374,13 +374,14 @@ func sealVerifyReport(va *verifyArgs, outcome *verifyOutcome, err error) *report
 	trusted := va.root.facts()
 
 	if err == nil {
-		return report.Seal(target, subject, outcome.pop, nil, nil, report.NoCanary(),
+		return report.Seal(target, subject, outcome.pop, nil, nil, report.NoCanary(), report.NoJudgedSet(),
 			append(trusted, outcome.facts...)...)
 	}
 
 	findings := []report.Finding{{Subject: subject, Assertion: va.mode, Detail: err.Error()}}
 
-	return report.Seal(target, subject, declaredPop(va), findings, nil, report.NoCanary(), trusted...)
+	return report.Seal(target, subject, declaredPop(va), findings, nil,
+		report.NoCanary(), report.NoJudgedSet(), trusted...)
 }
 
 // declaredPop reports what a refused run HAD under test: the subject

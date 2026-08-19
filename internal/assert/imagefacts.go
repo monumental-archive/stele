@@ -119,7 +119,7 @@ func ImageFacts(image, digest string, factsJSON []byte, r oci.Reader, log Logf) 
 
 	pop := report.PopulationFromEvidence(len(children), "platform manifests in the index")
 
-	return report.Seal("assert image-facts", subject, pop, findings, nil, report.NoCanary()), nil
+	return report.Seal("assert image-facts", subject, pop, findings, nil, report.NoCanary(), report.NoJudgedSet()), nil
 }
 
 // hygieneFindings re-checks every fact value: non-empty, no control

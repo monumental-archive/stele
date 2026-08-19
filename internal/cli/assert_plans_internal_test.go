@@ -157,3 +157,105 @@ func TestAssertPlansJSON(t *testing.T) {
 		t.Fatalf("stdout = %q, want a PASS document", stdout.String())
 	}
 }
+
+// TestAssertPlansOutSet pins stele#151's contract at the surface: the
+// file the derivation leg iterates carries the judged set VERBATIM as
+// the report document carries it. One rendering reaches both, so the
+// canon's `jq -s 'add | unique'` — a second derivation of the same
+// bytes — has nothing left to disagree with.
+func TestAssertPlansOutSet(t *testing.T) {
+	policyPath, planPath := writePlansFixtures(t,
+		`[{"class": "wasm-npm", "doc": "sbom-npm-lab-wasm", "params": {"b": 2, "a": 1}}]`)
+	setPath := filepath.Join(t.TempDir(), "plan-set.json")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"assert", "plans", "--json", "--policy", policyPath, "--out", setPath,
+		"--classes", "wasm-npm", "--machinery-version", "1.43.0", planPath,
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d, want %d\nstderr: %s", code, exitOK, stderr.String())
+	}
+
+	written, err := os.ReadFile(setPath) //nolint:gosec // a path this test named in its own temp dir
+	if err != nil {
+		t.Fatalf("the judged set was not written: %v", err)
+	}
+
+	set := strings.TrimSuffix(string(written), "\n")
+
+	const want = `[{"class":"wasm-npm","doc":"sbom-npm-lab-wasm","params":{"a":1,"b":2}}]`
+	if set != want {
+		t.Fatalf("judged set = %s, want %s", set, want)
+	}
+
+	if !strings.Contains(stdout.String(), `"judged":`+set) {
+		t.Fatalf("the report does not carry the written set verbatim\nreport: %s", stdout.String())
+	}
+}
+
+// TestAssertPlansOutRefusedVerdict pins the other half: a set that
+// failed judgment is not there to iterate. A workflow that reads the
+// file regardless of the exit code must find nothing rather than a
+// plan the guard refused.
+func TestAssertPlansOutRefusedVerdict(t *testing.T) {
+	policyPath, planPath := writePlansFixtures(t, `[{"class": "wasm-npm", "doc": "sbom-cargo-lab-wasm"}]`)
+	setPath := filepath.Join(t.TempDir(), "plan-set.json")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"assert", "plans", "--policy", policyPath, "--out", setPath,
+		"--classes", "wasm-npm", "--machinery-version", "1.43.0", planPath,
+	}, &stdout, &stderr)
+	if code != exitRefused {
+		t.Fatalf("Run = %d, want %d\nstderr: %s", code, exitRefused, stderr.String())
+	}
+
+	if _, err := os.Stat(setPath); !os.IsNotExist(err) {
+		t.Fatalf("a refused judgment left a set to iterate: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "the judged set is not emitted") {
+		t.Fatalf("the refusal did not say the set was withheld\nstdout: %s", stdout.String())
+	}
+}
+
+// TestAssertPlansOutWriteFailure sweeps the placement guard: every
+// way the file cannot be placed exits exitIO. A guard job that
+// reported PASS after failing to write the set the next job reads
+// would hand that job a stale file or none at all — the failing-writer
+// law applied to a document instead of a stream.
+func TestAssertPlansOutWriteFailure(t *testing.T) {
+	policyPath, planPath := writePlansFixtures(t,
+		`[{"class": "wasm-npm", "doc": "sbom-npm-lab-wasm"}]`)
+
+	dir := t.TempDir()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"a path under a directory that does not exist", filepath.Join(dir, "no-such-dir", "set.json")},
+		{"a path that is itself a directory", dir},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"assert", "plans", "--policy", policyPath, "--out", tt.path,
+				"--classes", "wasm-npm", "--machinery-version", "1.43.0", planPath,
+			}, &stdout, &stderr)
+			if code != exitIO {
+				t.Fatalf("Run = %d, want %d — an unwritable set is an output failure", code, exitIO)
+			}
+
+			if strings.Contains(stdout.String(), "assert: PASS") {
+				t.Fatalf("the run reported PASS after failing to write the set\nstdout: %s", stdout.String())
+			}
+		})
+	}
+}

@@ -350,7 +350,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		rep = report.Seal("assert "+targetEvidence, pop.Subject(),
 			report.PopulationFromListing(0, "walk incomplete"),
 			[]report.Finding{{Subject: pop.Subject(), Assertion: targetEvidence, Detail: err.Error()}},
-			nil, report.NoCanary())
+			nil, report.NoCanary(), report.NoJudgedSet())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -368,8 +368,8 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 // about what a release owes.
 func assertPlans(args []string, stdout, stderr io.Writer) int {
 	var (
-		jsonOut                     bool
-		policyPath, classes, machin string
+		jsonOut                              bool
+		policyPath, classes, machin, setPath string
 	)
 
 	flags := flag.NewFlagSet("stele assert plans", flag.ContinueOnError)
@@ -379,6 +379,8 @@ func assertPlans(args []string, stdout, stderr io.Writer) int {
 		"comma-separated evidence classes this release declares (required)")
 	flags.StringVar(&machin, "machinery-version", "",
 		"machinery version the release rides — the owedFrom epochs are judged against it (required)")
+	flags.StringVar(&setPath, "out", "",
+		"write the judged plan set here for the derivation leg to iterate; written only on PASS")
 	flags.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -434,6 +436,13 @@ func assertPlans(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rep := assert.Plans(pol, strings.Split(classes, ","), machin, files, out.logf)
+
+	if setPath != "" {
+		if code := emitJudgedSet(setPath, rep, out); code != exitOK {
+			return code
+		}
+	}
+
 	if out.err != nil {
 		return exitIO
 	}
@@ -513,7 +522,7 @@ func assertImageFacts(args []string, stdout, stderr io.Writer) int {
 		rep = report.Seal("assert "+targetImageFacts, image+"@"+digest,
 			report.PopulationFromEvidence(0, "registry read incomplete"),
 			[]report.Finding{{Subject: image + "@" + digest, Assertion: targetImageFacts, Detail: err.Error()}},
-			nil, report.NoCanary())
+			nil, report.NoCanary(), report.NoJudgedSet())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -565,6 +574,50 @@ func emitReport(rep *report.Report, jsonOut bool, stdout, stderr io.Writer) int 
 	}
 
 	return exitBlind
+}
+
+// emitJudgedSet places the collapsed entry set the judgment judged,
+// for the derivation leg to iterate — the same bytes the report
+// carries, read back off the seal rather than rendered a second time
+// (stele#151).
+//
+// Only a PASS emits: the set exists to be iterated, and one that
+// failed judgment must not be there to iterate. The exit code is one
+// guard; a workflow that reads the file regardless must find nothing
+// rather than a plan the guard refused.
+func emitJudgedSet(path string, rep *report.Report, out *latch) int {
+	if !rep.Passed() {
+		out.logf("assert: plans: the verdict is %s — the judged set is not emitted", rep.Verdict())
+
+		return exitOK
+	}
+
+	return writeDoc(path, func(w io.Writer) error { return jsonx.Encode(w, rep.Judged()) })
+}
+
+// writeDoc places one document at an operator-named path, mapping
+// every failure to exitIO: a tool whose job is asserting facts must
+// not report success after failing to write what it found. Shared by
+// every verb that puts a document beside its report — the shield a
+// README renders, the plan set a derivation leg iterates — so the
+// placement contract is stated once.
+func writeDoc(path string, encode func(io.Writer) error) int {
+	f, err := os.Create(path) //nolint:gosec // the path is an operator-supplied flag; writing where asked is the feature
+	if err != nil {
+		return exitIO
+	}
+
+	if err := encode(f); err != nil {
+		_ = f.Close() //nolint:errcheck // the encode error is the one that matters
+
+		return exitIO
+	}
+
+	if err := f.Close(); err != nil {
+		return exitIO
+	}
+
+	return exitOK
 }
 
 // findingLine renders one finding's substance for the human stream.
@@ -664,7 +717,7 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 		rep = report.Seal("assert "+targetBlastRadius, pop.Subject(),
 			report.PopulationFromListing(0, "walk incomplete"),
 			[]report.Finding{{Subject: pop.Subject(), Assertion: targetBlastRadius, Detail: err.Error()}},
-			nil, report.NoCanary())
+			nil, report.NoCanary(), report.NoJudgedSet())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -822,7 +875,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		rep = report.Seal("assert "+targetTags, pop.Subject(),
 			report.PopulationFromListing(0, "walk incomplete"),
 			[]report.Finding{{Subject: pop.Subject(), Assertion: targetTags, Detail: err.Error()}},
-			nil, report.NoCanary())
+			nil, report.NoCanary(), report.NoJudgedSet())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -946,7 +999,7 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 		rep = report.Seal("assert "+targetChains, pop.Subject(),
 			report.PopulationFromListing(0, "walk incomplete"),
 			[]report.Finding{{Subject: pop.Subject(), Assertion: targetChains, Detail: err.Error()}},
-			nil, report.NoCanary())
+			nil, report.NoCanary(), report.NoJudgedSet())
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO

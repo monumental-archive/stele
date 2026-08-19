@@ -65,7 +65,8 @@ never null.
   "excused": [ { "finding": { "…": "…" }, "exception": { "…": "…" } } ],
   "staleExceptions": [
     { "kind": "declared | derived", "subject": "…", "assertion": "…", "origin": "debt.txt:3" }
-  ]
+  ],
+  "judged": [ { "…": "…" } ]
 }
 ```
 
@@ -86,6 +87,20 @@ never null.
   sight is reported, never laundered into either verdict.
 - `excused` — every excused finding beside the exception that excused
   it; an excuse is visible, never a deletion.
+- `judged` — the collapsed, validated input set the run judged, in the
+  mode's own shape, present only where a mode declares one. Where
+  `population` says how many subjects a run covered and how the set
+  was obtained, this says what the set WAS. Information beside the
+  verdict, like `facts`: it can move no judgment.
+
+  It exists so a consumer that iterates a judgment's inputs iterates
+  what PASSED judgment rather than its own second reading of the same
+  raw bytes (stele#151: a publish guard judged the collapsed inventory
+  plan set while the derivation loop beside it re-collapsed the same
+  files with `jq -s 'add | unique'` — two derivations of one set,
+  agreeing by luck). The engine renders the set once; the document
+  carries that rendering, and a `--out` file carries the same bytes
+  back out, so the two cannot disagree.
 
 ## What `verify --json` puts in it
 
@@ -163,6 +178,15 @@ engine's message as the finding; a refusal before any population
 existed (an empty subject manifest) seals as `CANNOT_JUDGE` by law 1.
 With `--json` the progress lines move to stderr so stdout carries
 exactly one document; the exit code contract is unchanged.
+
+## What `assert plans` puts in it
+
+The pre-publish inventory-plan judgment
+([assert-policy-schema.md](assert-policy-schema.md#the-inventory-plan))
+seals `judged`: the collapsed, validated plan entries, canonicalised
+and ordered by document. `--out <path>` writes exactly those bytes
+beside the report, on `PASS` alone — the set exists to be iterated,
+and one that failed judgment must not be there to iterate.
 
 ## Deliberately absent
 

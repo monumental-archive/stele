@@ -336,7 +336,8 @@ func Seal(t Track, lad *Ladder, in *Inputs) *Assessment {
 
 	pop := report.PopulationAgainstDeclared(determined, in.InScope, in.PopulationDetail)
 
-	rep := report.Seal("level "+strings.ToLower(t.name), in.Subject, pop, findings, nil, report.NoCanary(), facts...)
+	rep := report.Seal("level "+strings.ToLower(t.name), in.Subject, pop, findings, nil,
+		report.NoCanary(), report.NoJudgedSet(), facts...)
 
 	return &Assessment{
 		rungs: lad.Rungs(),

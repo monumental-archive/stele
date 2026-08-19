@@ -97,7 +97,8 @@ func BlastRadius(
 		facts = append(facts, report.Fact{Name: "releasesWithoutSBOM", Value: strings.Join(w.missing, " ")})
 	}
 
-	return report.Seal("assert blast-radius", pop.Subject(), covered, w.findings, w.exceptions, w.canary(), facts...), nil
+	return report.Seal("assert blast-radius", pop.Subject(), covered, w.findings, w.exceptions,
+		w.canary(), report.NoJudgedSet(), facts...), nil
 }
 
 type blastWalk struct {
