@@ -78,7 +78,8 @@ var (
 // assertCmd dispatches `stele assert <target>`.
 func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele assert: a target is required: image-facts"); err != nil {
+		if _, err := fmt.Fprintln(stderr,
+			"stele assert: a target is required: image-facts, evidence, blast-radius, tags or chains"); err != nil {
 			return exitIO
 		}
 

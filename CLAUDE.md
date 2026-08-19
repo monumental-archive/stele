@@ -15,7 +15,9 @@ never a hardcoded name. Four verbs, which are the command surface:
 - **assert** — image facts, evidence-bundle completeness (releases,
   continuous digests, base approvals), advisory blast radius, release
   tags (tagger role, gitsign signature from the declared epoch, chain
-  link on the target).
+  link on the target), chain coverage of the whole population
+  (founded and verified per protected branch, or a declared
+  exception — cloneless, #94).
   Repo-settings drift was in the original charter and is DROPPED by
   written decision: rulesets enforce; a setting that matters to
   evidence surfaces as a consequence in the evidence walk, and a
@@ -24,8 +26,10 @@ never a hardcoded name. Four verbs, which are the command surface:
 - **emit** — source-chain links, VSA predicates, evidence-bundle
   layout: the JSON that gets signed
 - **verify** — every attestation against a pinned signer identity, the
-  source chain walk, the VSA verdict; plus `level`, the honest current
-  level computed from live evidence
+  source chain walk, the VSA verdict, the reproducibility rebuild's
+  typed verdict (#96); beside it `level`, its own verb since #125:
+  the honest current level measured from live evidence, taking no
+  declaration
 
 Born from `.github#392`: it replaces ~8000 lines of bash spread across
 the canon's scripts, workflow `run:` blocks and belt task bodies. The
@@ -81,9 +85,18 @@ over whole, and only then does the next open. State and next step:
    measured to omit `bypass_actors`). Facts and VEX are not yet
    shadow-proven: both want a release to point at, so they batch with
    the cutover.
+6. **the final four — DONE (2026-08-19)**: `assert chains` (#94 at
+   #137) retired the last evidence-audit bash's walk, cloneless, with
+   opt-outs as declared policy exceptions that structurally cannot
+   excuse a founded chain's defect; `verify repro` (#96 at #138)
+   typed the reproducibility rebuild's verdict, deliberately unwired
+   from `level` (nothing attests a local rebuild); the adopter guide
+   (#131/#132 at #139) states both policy floors as fenced examples
+   the test suite executes through `policy.Load`. The stele side of
+   the port is COMPLETE; everything remaining is canon-side.
 
    The canon cutover is deliberately NOT per-leg. One batched
-   handover after #40/#5/#94/#96, and inside it the stele pin bump
+   handover, filed as .github#545, and inside it the stele pin bump
    lands BEFORE the policy edit — inverted from the canon's usual
    policy-then-pin, because `jsonx` disallows unknown fields and
    `policy.Load` version-gates before strict decode, so a policy
