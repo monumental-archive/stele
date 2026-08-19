@@ -576,6 +576,37 @@ func (c Capture) IsAncestor(owner, repo, base, head string) (bool, error) {
 	return out, nil
 }
 
+// Ref implements RefResolver over the snapshot. A ref never captured
+// replays as the error the live client reports for a missing ref —
+// capture records facts, and a resolve that failed recorded nothing.
+func (s Snapshot) Ref(owner, repo, ref string) (string, error) {
+	var out string
+	if err := s.readJSON(filepath.Join(seg(owner), seg(repo), "refs", seg(ref)+".json"), &out); err != nil {
+		return "", err
+	}
+
+	return out, nil
+}
+
+// Ref implements RefResolver, recording through.
+func (c Capture) Ref(owner, repo, ref string) (string, error) {
+	resolver, ok := c.Live.(RefResolver)
+	if !ok {
+		return "", errors.New("gh: capture wraps a Forge that is not a RefResolver")
+	}
+
+	out, err := resolver.Ref(owner, repo, ref)
+	if err != nil {
+		return "", err
+	}
+
+	if werr := c.writeJSON(filepath.Join(seg(owner), seg(repo), "refs", seg(ref)+".json"), out); werr != nil {
+		return "", werr
+	}
+
+	return out, nil
+}
+
 // tagLive asserts the wrapped Forge also reads tags — the live
 // client does; a capture over anything else is a wiring defect and
 // refuses by name.

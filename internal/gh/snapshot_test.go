@@ -801,3 +801,47 @@ func TestCaptureTagWritesRefuse(t *testing.T) {
 		}
 	}
 }
+
+// TestRefCaptureAndReplay: the ref resolve (stele#94's cloneless
+// walk) records through Capture and replays from Snapshot; a ref the
+// capture never resolved refuses on replay, and a Capture over a
+// Forge with no ref surface refuses by name.
+func TestRefCaptureAndReplay(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	source := t.TempDir()
+
+	// Seed a snapshot that can answer the resolve, then capture
+	// through it into dir.
+	seedPath := filepath.Join(source, "acme", "widget", "refs")
+	if err := os.MkdirAll(seedPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	const tip = `"1111111111111111111111111111111111111111"`
+	if err := os.WriteFile(filepath.Join(seedPath, "refs%2Fheads%2Fmain.json"), []byte(tip), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := gh.Capture{Live: gh.Snapshot{Dir: source}, Dir: dir}
+
+	got, err := rec.Ref("acme", "widget", "refs/heads/main")
+	if err != nil {
+		t.Fatalf("Capture.Ref = %v", err)
+	}
+
+	replayed, err := gh.Snapshot{Dir: dir}.Ref("acme", "widget", "refs/heads/main")
+	if err != nil || replayed != got {
+		t.Fatalf("Snapshot.Ref = %q, %v; want %q recorded through", replayed, err, got)
+	}
+
+	if _, err := (gh.Snapshot{Dir: dir}).Ref("acme", "widget", "refs/heads/other"); err == nil {
+		t.Fatal("an uncaptured ref replayed — a resolve nobody recorded is not a fact")
+	}
+
+	noRefs := gh.Capture{Live: onlyForge{f: gh.Snapshot{Dir: source}}, Dir: dir}
+	if _, err := noRefs.Ref("acme", "widget", "refs/heads/main"); err == nil {
+		t.Fatal("Capture.Ref did not refuse a Forge with no ref surface")
+	}
+}
