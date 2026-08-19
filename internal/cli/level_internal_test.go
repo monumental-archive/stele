@@ -162,7 +162,7 @@ func TestLevelDependencyFromAScriptedRelease(t *testing.T) {
 			// Not a manifest: the search must reject it on content.
 			"README.md":     []byte("# widget\n"),
 			"checksums.txt": []byte(digest + "  " + artifact + "\n"),
-			artifact + ".spdx.json": []byte(`{"packages":[{"externalRefs":[` +
+			artifact + ".spdx.json": []byte(`{"spdxVersion":"SPDX-2.3","packages":[{"externalRefs":[` +
 				`{"referenceLocator":"` + purl + `"}],` +
 				`"downloadLocation":"https://mirror.example/acme/widget/dep"}]}`),
 			"decisions.openvex.json": []byte(`{"@context":"https://openvex.dev/ns/v0.2.0",` +
@@ -179,19 +179,23 @@ func TestLevelDependencyFromAScriptedRelease(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{"level", "dependency", "--repo", "acme/widget", "--json"}, &stdout, &stderr)
-	if code != exitOK {
-		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	if code != exitBlind {
+		t.Fatalf("Run = %d, want could-not-judge — level four's boundary is honest blindness\n"+
+			"stdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
 	doc := stdout.String()
 
-	// Every rung established from the release's own published
+	// Levels one to three established from the release's own published
 	// artifacts: an inventory, a scan of it, a decision for the finding,
-	// a producer-controlled source, and a quarantine floor.
+	// a producer-controlled source. Level four is UNDETERMINED on
+	// purpose: a positive quarantine floor is indistinguishable from a
+	// slow release cadence, so the scalar is three and the boundary
+	// above it is honestly blind rather than confidently either way.
 	for _, want := range []string{
-		`"level","value":"SLSA_DEPENDENCY_LEVEL_4"`,
+		`"level","value":"SLSA_DEPENDENCY_LEVEL_3"`,
 		`"specStatus","value":"draft"`,
-		"HELD: no dependency was taken sooner than",
+		"UNDETERMINED: no dependency shipped sooner than",
 		"HELD: all 1 advisory finding(s) carry a published triage decision",
 	} {
 		if !strings.Contains(doc, want) {
@@ -421,7 +425,10 @@ func TestTheReleasesOwnModuleIsNotADependency(t *testing.T) {
 
 	Run([]string{"level", "dependency", "--repo", "acme/widget", "--json"}, &stdout, &stderr)
 
-	if !strings.Contains(stdout.String(), "HELD: no dependency was taken sooner than") {
+	// The own module's zero interval must not appear: were it counted,
+	// the rung would read CONTRADICTED ("taken at or before its
+	// publication time") instead of the honest positive-floor report.
+	if !strings.Contains(stdout.String(), "UNDETERMINED: no dependency shipped sooner than") {
 		t.Errorf("the release's own module was counted as a dependency:\n%s", stdout.String())
 	}
 }

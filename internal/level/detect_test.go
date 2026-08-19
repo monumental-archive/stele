@@ -113,6 +113,22 @@ func TestBuildTrackFromPlatformClaims(t *testing.T) {
 			level: "SLSA_BUILD_LEVEL_1",
 		},
 		{
+			name: "another platform's self-managed value refutes the same way",
+			breakIt: func(ev *level.Evidence) {
+				ev.Subjects[0].Cert.RunnerEnvironment = "self-managed"
+			},
+			level: "SLSA_BUILD_LEVEL_1",
+		},
+		{
+			// The vocabulary is a table, not one platform's string: a
+			// GitLab-hosted certificate is a hosted claim too.
+			name: "another platform's hosted value holds the same way",
+			breakIt: func(ev *level.Evidence) {
+				ev.Subjects[0].Cert.RunnerEnvironment = "gitlab-hosted"
+			},
+			level: "SLSA_BUILD_LEVEL_3",
+		},
+		{
 			name: "a signing workflow that runs caller code puts the key within tenant reach",
 			breakIt: func(ev *level.Evidence) {
 				ev.SignerRunsTenantCode = func(string, string) (bool, error) { return true, nil }
@@ -174,6 +190,15 @@ func TestBuildTrackCannotSeeWithoutEvidence(t *testing.T) {
 		{
 			name:    "no capability-boundary check was possible",
 			breakIt: func(ev *level.Evidence) { ev.SignerRunsTenantCode = nil },
+		},
+		{
+			// A runner vocabulary this build does not know is a platform
+			// it cannot judge — refuting it as "the tenant's machine"
+			// would punish every platform the table has not met.
+			name: "an unknown runner vocabulary is undetermined, not refuted",
+			breakIt: func(ev *level.Evidence) {
+				ev.Subjects[0].Cert.RunnerEnvironment = "quantum-hosted-v2"
+			},
 		},
 	} {
 		ev := buildEvidence()
@@ -513,10 +538,11 @@ func TestEveryRequirementHasADetector(t *testing.T) {
 
 // TestSecureIngestionFromTheQuarantineFloor: the draft's level four,
 // judged by the interval between a version being published upstream
-// and this producer taking it. Threshold-free on purpose — how long a
-// window is acceptable is the organisation's risk determination, not
-// this tool's — so a zero floor refutes and any positive floor
-// establishes, with the floor stated for the reader.
+// and this producer shipping it. The asymmetry is the requirement's:
+// a zero floor refutes — something was consumed the moment it appeared
+// — but a positive floor establishes nothing, because a slow release
+// cadence leaves the same interval as a real quarantine. The floor is
+// stated for the reader; the verdict it cannot carry is not.
 func TestSecureIngestionFromTheQuarantineFloor(t *testing.T) {
 	t.Parallel()
 
@@ -535,12 +561,14 @@ func TestSecureIngestionFromTheQuarantineFloor(t *testing.T) {
 		want      level.Determination
 	}{
 		{
-			name: "a positive floor across every dependency",
+			// Consistent with a quarantine — and with a producer who
+			// merely releases slowly. Indistinguishable, so no verdict.
+			name: "a positive floor across every dependency is not proof of a policy",
 			intervals: map[string]time.Duration{
 				"pkg:golang/example.com/a@v1.0.0": 8 * 24 * time.Hour,
 				"pkg:golang/example.com/b@v2.0.0": 30 * 24 * time.Hour,
 			},
-			want: level.Held,
+			want: level.Undetermined,
 		},
 		{
 			name: "a version taken the moment it appeared",
@@ -580,11 +608,83 @@ func TestSecureIngestionFromTheQuarantineFloor(t *testing.T) {
 	}
 }
 
-// TestOutcomeConstructors: three results, three meanings, and the
-// attested flag that separates what the SCS recorded from what this
-// tool recomputed.
+// TestTwoPartyReviewFromTheForgesHistory: level four's second leg —
+// where no corroborated control settles it, the forge's own review
+// history counts the persons who agreed to each revision.
+func TestTwoPartyReviewFromTheForgesHistory(t *testing.T) {
+	t.Parallel()
+
+	const (
+		revA = "1111111111111111111111111111111111111111"
+		revB = "2222222222222222222222222222222222222222"
+	)
+
+	base := func() *level.Evidence {
+		return &level.Evidence{
+			Owner: "acme", Repo: "widget", Now: epoch,
+			Revisions: []level.Revision{
+				{ID: revA, Subject: "feat: one", Parents: 1},
+				{ID: revB, Subject: "feat: two", Parents: 1},
+			},
+		}
+	}
+
+	rungFour := func(ev *level.Evidence) level.Rung {
+		for _, r := range level.Assess(level.TrackSource, ev).Rungs() {
+			if r.Level == 4 {
+				return r
+			}
+		}
+
+		t.Fatal("no rung four")
+
+		return level.Rung{}
+	}
+
+	for _, tt := range []struct {
+		name      string
+		approvals map[string]int
+		want      level.Determination
+	}{
+		{
+			name:      "every revision agreed by two persons",
+			approvals: map[string]int{revA: 2, revB: 3},
+			want:      level.Held,
+		},
+		{
+			name:      "one revision agreed by its author alone",
+			approvals: map[string]int{revA: 2, revB: 1},
+			want:      level.Refuted,
+		},
+		{
+			name:      "a revision with no change record is an absence of sight",
+			approvals: map[string]int{revA: 2},
+			want:      level.Undetermined,
+		},
+		{
+			name: "history never read is no count at all",
+			want: level.Undetermined,
+		},
+	} {
+		ev := base()
+		ev.Approvals = tt.approvals
+
+		if got := rungFour(ev); got.Determination != tt.want {
+			t.Errorf("%s: level 4 = %q (%s), want %q", tt.name, got.Determination, got.Reason, tt.want)
+		}
+	}
+}
+
+// TestOutcomeConstructors: the results and their meanings — and the
+// structural rule that an attested outcome has exactly ONE
+// constructor, which demands the forge's live half. There is no
+// free-form attested constructor: a detector cannot hold a level on a
+// repository's record about itself without the platform's own answer
+// backing it.
 func TestOutcomeConstructors(t *testing.T) {
 	t.Parallel()
+
+	backs := func(l *level.LiveRules) bool { return l.Restrictive }
 
 	for _, tt := range []struct {
 		got      level.Outcome
@@ -592,7 +692,23 @@ func TestOutcomeConstructors(t *testing.T) {
 		attested bool
 	}{
 		{got: level.Established("proved %d", 1), want: level.Held},
-		{got: level.Attested("recorded %d", 1), want: level.Held, attested: true},
+		{
+			got: level.RecordHeld(&level.LiveRules{Restrictive: true}, backs,
+				"the record claims it", "recorded %d", 1),
+			want: level.Held, attested: true,
+		},
+		{
+			// A record with no live half is self-attestation and holds
+			// nothing.
+			got:  level.RecordHeld(nil, backs, "the record claims it", "recorded %d", 1),
+			want: level.Undetermined,
+		},
+		{
+			// A record the live answer does not back holds nothing.
+			got: level.RecordHeld(&level.LiveRules{Restrictive: false}, backs,
+				"the record claims it", "recorded %d", 1),
+			want: level.Undetermined,
+		},
 		{got: level.Contradicted("refuted %d", 1), want: level.Refuted},
 		{got: level.Unevaluated("unreachable %d", 1), want: level.Undetermined},
 	} {

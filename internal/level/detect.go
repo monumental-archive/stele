@@ -53,12 +53,31 @@ func Contradicted(format string, args ...any) Outcome {
 	return Outcome{Determination: Refuted, Reason: fmt.Sprintf(format, args...)}
 }
 
-// Attested is the outcome for a requirement established by a
-// contemporaneous record the SCS or platform signed, rather than by a
-// recomputation. Held, and marked so a reader can see what it rests
-// on.
-func Attested(format string, args ...any) Outcome {
-	return Outcome{Determination: Held, Reason: fmt.Sprintf(format, args...), Attested: true}
+// RecordHeld is the ONLY constructor for an outcome that holds on a
+// subject-issued record. It demands the live half by signature: the
+// forge's own current answer, and the predicate that says the live
+// answer backs this record. A chain link is emitted and signed by the
+// repository's own workflow, so a record about itself is a claim, and
+// a detector that could hold on it alone would let any repository mint
+// its own level — the defect this verb exists to refuse. There is no
+// free-form attested constructor to fall back to; a future detector
+// cannot reintroduce self-attestation without deleting this door.
+//
+// Disagreement between the record and the live answer is UNDETERMINED,
+// not refutation: rules legitimately change between a revision landing
+// and this run looking, so the mismatch impeaches the corroboration,
+// not the repository.
+func RecordHeld(live *LiveRules, backs func(*LiveRules) bool, record, held string, args ...any) Outcome {
+	switch {
+	case live == nil:
+		return Unevaluated("%s, but the forge's own rules were not readable — a repository's record about"+
+			" itself cannot corroborate itself", record)
+	case !backs(live):
+		return Unevaluated("%s, but the forge's effective rules do not show it enforced now — the record is"+
+			" uncorroborated", record)
+	}
+
+	return Outcome{Determination: Held, Reason: fmt.Sprintf(held, args...), Attested: true}
 }
 
 // Unevaluated is the outcome when the evidence needed was not
@@ -114,6 +133,22 @@ type Evidence struct {
 	// Revisions is the branch's history, newest first.
 	Revisions []Revision
 
+	// Live is the forge's OWN current statement of the controls
+	// enforced on the measured branch, read from the platform's rules
+	// API — the platform speaking about its own enforcement, not
+	// anything the repository emitted. nil means the rules were not
+	// readable, which is not the same as a forge that answered with no
+	// rules.
+	//
+	// It exists because a chain link's recorded controls are written
+	// and signed by the repository's own workflow identity: a record a
+	// subject issues about itself cannot, alone, establish the controls
+	// it names — that is self-attestation wearing a signature. The
+	// forge's live answer is the independent half; the link's record is
+	// the contemporaneous half; a control rung holds only where the two
+	// agree.
+	Live *LiveRules
+
 	// Approvals counts the distinct trusted persons who agreed to the
 	// change that produced each revision, keyed by revision. nil means
 	// the change history was not read — which is UNDETERMINED, never a
@@ -155,6 +190,21 @@ type Evidence struct {
 	UnrecognisedSources []string
 
 	Now time.Time
+}
+
+// LiveRules is what the forge's rules API says is enforced on the
+// branch right now. A rules read answers about NOW — that is exactly
+// why the spec asks the SCS for contemporaneous records — but the
+// branch tip IS now, so for the tip's controls the live answer is the
+// one statement no tenant can forge.
+type LiveRules struct {
+	// Restrictive reports whether any effective rule restricts a
+	// sensitive operation on the branch.
+	Restrictive bool
+	// ForcePushBlocked reports a non-fast-forward prohibition.
+	ForcePushBlocked bool
+	// RequiredApprovals is the reviews the forge demands before merge.
+	RequiredApprovals int
 }
 
 // detectors is the registry, keyed by catalogue ID.

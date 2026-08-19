@@ -86,23 +86,20 @@ type secureIngestion struct{}
 
 func (secureIngestion) For() string { return "dependency/secure-ingestion" }
 
-// Detect judges the draft's level 4 by its observable consequence.
+// Detect judges the draft's level 4 by the one consequence an
+// ingestion policy cannot avoid leaving: the interval between a
+// version appearing upstream and this producer shipping it.
 //
-// A secure ingestion policy — a quarantine window, a malicious-package
-// check, a risk feed consulted before a version is taken — is
-// configuration, and configuration is a claim. What it LEAVES BEHIND
-// is an interval: the gap between a version appearing upstream and the
-// producer's tree taking it. A producer running no quarantine ingests
-// versions the day they are published; one running any quarantine has
-// a floor below which no dependency was taken.
-//
-// So the judgment is threshold-free, which matters because the length
-// of an acceptable window is the organisation's risk determination and
-// not this tool's. A floor of zero refutes: some version was taken the
-// moment it appeared, so nothing stood between publication and use. A
-// positive floor across every dependency establishes that something
-// did, and the report states the floor so a reader can judge whether
-// it is long enough for them.
+// The asymmetry is the point. A floor of ZERO refutes — some version
+// was consumed the moment it appeared, so no ingestion control stood
+// between publication and use. But a POSITIVE floor establishes
+// nothing: a producer who merely releases slowly leaves exactly the
+// same interval as one running a real quarantine, and the two are
+// indistinguishable from published artifacts. Holding this rung on a
+// positive floor would hand level four to every infrequent releaser —
+// a false-positive machine. So a positive floor is UNDETERMINED with
+// the floor stated: the reader gets the measurement, never a verdict
+// the measurement cannot carry.
 func (secureIngestion) Detect(ev *Evidence) Outcome {
 	if len(ev.IngestionIntervals) == 0 {
 		return Unevaluated("no dependency's publication time was resolved, so the interval between a version" +
@@ -125,8 +122,9 @@ func (secureIngestion) Detect(ev *Evidence) Outcome {
 			" version appearing upstream and this producer consuming it", soonest)
 	}
 
-	return Established("no dependency was taken sooner than %s after it was published (%s was the soonest,"+
-		" across %d resolved), so some control stood between publication and use",
+	return Unevaluated("no dependency shipped sooner than %s after it was published (%s was the soonest,"+
+		" across %d resolved) — consistent with an ingestion control, but a slow release cadence leaves the"+
+		" same interval, so the policy's enforcement is not established from this alone",
 		floor.Round(time.Hour), soonest, len(ev.IngestionIntervals))
 }
 

@@ -306,6 +306,8 @@ func (la *levelArgs) gatherSource(ev *level.Evidence, forge gh.Forge, out *latch
 			level.Revision{ID: r.ID, Subject: r.Subject, Parents: r.Parents, Time: r.Time})
 	}
 
+	ev.Live = la.liveRules(forge, out)
+
 	measurer, code := la.measurer(out)
 	if code != exitOK {
 		return
@@ -323,6 +325,127 @@ func (la *levelArgs) gatherSource(ev *level.Evidence, forge gh.Forge, out *latch
 		ev.Measured = measured
 		out.logf("level: measured %d link(s), signed by %v", measured.Links(), measured.Signers())
 	}
+
+	la.gatherApprovals(ev, forge, out)
+}
+
+// maxApprovalReads bounds the review-history walk. Two API reads per
+// revision over an unbounded history is a walk that never ends on an
+// old repository; hitting the bound is logged and leaves the map nil,
+// which the judge reports as unevaluated — never as a pass.
+const maxApprovalReads = 200
+
+// gatherApprovals reads, for each revision, how many distinct trusted
+// persons the forge's own review history says agreed to it — the
+// source track's level-four evidence.
+//
+// Skipped when the recorded control plus the forge's live rules
+// already settle the judgment: that pair is stronger evidence (a
+// contemporaneous record, corroborated), and reading a whole review
+// history to re-answer a settled question is cost without sight.
+func (la *levelArgs) gatherApprovals(ev *level.Evidence, forge gh.Forge, out *latch) {
+	if recordSettlesReview(tipProperties(ev), ev.Live) {
+		return
+	}
+
+	reader, ok := forge.(gh.ApprovalsReader)
+	if !ok {
+		out.logf("level: this forge cannot serve review history")
+
+		return
+	}
+
+	if len(ev.Revisions) == 0 {
+		return
+	}
+
+	if len(ev.Revisions) > maxApprovalReads {
+		out.logf("level: %d revisions exceed the %d-read bound for review history, so two-party review"+
+			" stays unevaluated", len(ev.Revisions), maxApprovalReads)
+
+		return
+	}
+
+	approvals := make(map[string]int, len(ev.Revisions))
+
+	for _, r := range ev.Revisions {
+		parties, found, err := reader.Approvals(la.owner, la.name, r.ID)
+		if err != nil {
+			out.logf("level: review history for %.12s unreadable: %v", r.ID, err)
+
+			continue // absent from the map, which the judge reads as unevaluated
+		}
+
+		if found {
+			approvals[r.ID] = parties
+		}
+	}
+
+	ev.Approvals = approvals
+	out.logf("level: review history read for %d of %d revision(s)", len(approvals), len(ev.Revisions))
+}
+
+// tipProperties lists the controls the measured tip records, empty
+// when no tip was reached.
+func tipProperties(ev *level.Evidence) []string {
+	if ev.Measured == nil {
+		return nil
+	}
+
+	tip, ok := ev.Measured.Tip()
+	if !ok {
+		return nil
+	}
+
+	return tip.Properties()
+}
+
+// recordSettlesReview reports whether the tip's recorded two-party
+// control, corroborated by the forge's live rules, already answers the
+// review question.
+func recordSettlesReview(props []string, live *level.LiveRules) bool {
+	if live == nil || live.RequiredApprovals < 1 {
+		return false
+	}
+
+	for _, got := range props {
+		if level.SameControl(got, "SLSA_SOURCE_SCS_TWO_PARTY_REVIEW") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// liveRules reads the forge's own effective rules for the measured
+// branch — the platform's independent statement of what is enforced
+// NOW. A chain link's recorded controls are written by the
+// repository's own workflow, so the judge holds a control rung only
+// where this answer corroborates the record; nil (an unreadable read)
+// leaves those rungs unevaluated rather than letting a repository's
+// record about itself stand alone.
+func (la *levelArgs) liveRules(forge gh.Forge, out *latch) *level.LiveRules {
+	reader, ok := forge.(gh.RulesReader)
+	if !ok {
+		out.logf("level: this forge cannot serve branch rules, so recorded controls have no corroboration")
+
+		return nil
+	}
+
+	branch := strings.TrimPrefix(la.ref, "refs/heads/")
+
+	live, err := gh.EnforcedControls(reader, la.owner, la.name, branch)
+	if err != nil {
+		out.logf("level: %s: effective rules unreadable, so recorded controls have no corroboration: %v",
+			branch, err)
+
+		return nil
+	}
+
+	out.logf("level: %s: forge rules: restrictive=%t force-push-blocked=%t required-approvals=%d",
+		branch, live.Restrictive, live.ForcePushBlocked, live.RequiredApprovals)
+
+	return live
 }
 
 // gatherRelease reads the newest release's artifacts and the platform
@@ -620,12 +743,14 @@ func (la *levelArgs) gatherDependency(ev *level.Evidence, forge gh.Forge, out *l
 		return
 	}
 
+	invs := la.inventories(forge, tag, assets, out)
+
 	// The draft asks that a producer inventory the dependencies of
 	// every version they RELEASE. A union document covering the whole
 	// release covers each of its artifacts; requiring one document per
 	// artifact was this tool inventing a publishing convention, and it
 	// refused a release that ships exactly one complete inventory.
-	covered := la.inventoryCovers(forge, tag, assets, out)
+	covered := inventoryCovers(invs)
 
 	for name := range subjects {
 		if la.isEvidenceDocument(forge, tag, name) {
@@ -643,9 +768,9 @@ func (la *levelArgs) gatherDependency(ev *level.Evidence, forge gh.Forge, out *l
 
 	out.logf("level: release %s: %d inventoried, %d not", tag, len(ev.Inventoried), len(ev.Uninventoried))
 
-	la.gatherIngestion(ev, forge, tag, assets, out)
-	la.gatherTriage(ev, forge, tag, assets, out)
-	la.gatherSources(ev, forge, tag, assets, out)
+	la.gatherIngestion(ev, forge, tag, invs, out)
+	la.gatherTriage(ev, forge, tag, assets, invs, out)
+	la.gatherSources(ev, invs)
 }
 
 // gatherIngestion resolves, for each dependency the release's
@@ -654,7 +779,7 @@ func (la *levelArgs) gatherDependency(ev *level.Evidence, forge gh.Forge, out *l
 // ingestion policy, and it is a fact about published artifacts rather
 // than a claim about configuration.
 func (la *levelArgs) gatherIngestion(
-	ev *level.Evidence, forge gh.Forge, tag string, assets []string, out *latch,
+	ev *level.Evidence, forge gh.Forge, tag string, invs map[string][]byte, out *latch,
 ) {
 	released, err := forge.ReleaseDate(la.owner, la.name, tag)
 	if err != nil {
@@ -663,7 +788,7 @@ func (la *levelArgs) gatherIngestion(
 		return
 	}
 
-	purls := la.inventoryPurls(forge, tag, assets, out)
+	purls := inventoryPurls(invs)
 	if len(purls) == 0 {
 		return
 	}
@@ -677,7 +802,7 @@ func (la *levelArgs) gatherIngestion(
 		// it depends on. A producer does not ingest its own code, and
 		// its publication time is the release's own, so counting it
 		// would put every quarantine floor at zero.
-		if strings.Contains(strings.ToLower(purl), own) {
+		if mentionsModule(purl, own) {
 			continue
 		}
 
@@ -703,19 +828,12 @@ func (la *levelArgs) gatherIngestion(
 // TRIAGED, not that a release be free of them, so a decided finding is
 // the requirement met.
 func (la *levelArgs) gatherTriage(
-	ev *level.Evidence, forge gh.Forge, tag string, assets []string, out *latch,
+	ev *level.Evidence, forge gh.Forge, tag string, assets []string, invs map[string][]byte, out *latch,
 ) {
 	decisions := publishedDecisions(la, forge, tag, assets, out)
 	scanner := newScanner()
 
-	for _, name := range inventoryAssets(assets) {
-		raw, err := forge.Asset(la.owner, la.name, tag, name)
-		if err != nil {
-			out.logf("level: inventory %s unreadable: %v", name, err)
-
-			continue
-		}
-
+	for name, raw := range invs {
 		report, err := scanner.Scan(raw)
 		if err != nil {
 			out.logf("level: inventory %s could not be scanned: %v", name, err)
@@ -806,19 +924,12 @@ func publishedDecisions(la *levelArgs, forge gh.Forge, tag string, assets []stri
 // gatherSources reads where the release's dependencies were fetched
 // from. An inventory records each package's download location, and a
 // location the producer serves is one the producer controls.
-func (la *levelArgs) gatherSources(
-	ev *level.Evidence, forge gh.Forge, tag string, assets []string, out *latch,
-) {
+func (la *levelArgs) gatherSources(ev *level.Evidence, invs map[string][]byte) {
 	sources := map[string]bool{}
 	unrecognised := map[string]bool{}
 	own := strings.ToLower(la.owner + "/" + la.name)
 
-	for _, name := range inventoryAssets(assets) {
-		raw, err := forge.Asset(la.owner, la.name, tag, name)
-		if err != nil {
-			continue
-		}
-
+	for _, raw := range invs {
 		doc, derr := jsonx.DecodeForeign[inventoryPackages](raw)
 		if derr != nil {
 			continue
@@ -851,7 +962,7 @@ func (la *levelArgs) gatherSources(
 				continue
 			}
 
-			switch owns := producerControls(where, la.owner, la.name); owns {
+			switch owns := producerControls(where, la.owner); owns {
 			case ownedByProducer:
 				sources[where] = true
 			case upstreamDefault:
@@ -869,14 +980,10 @@ func (la *levelArgs) gatherSources(
 	sort.Strings(ev.UnrecognisedSources)
 
 	if len(sources) == 0 && len(unrecognised) == 0 {
-		out.logf("level: release %s: the inventory records no third-party dependency source", tag)
-
 		return
 	}
 
 	ev.DependencySources = sources
-
-	out.logf("level: release %s: %d distinct dependency source(s)", tag, len(sources))
 }
 
 // inventoryPackages is the part of an inventory this check reads: each
@@ -932,12 +1039,12 @@ func (p inventoryPackage) source() string {
 // namesModule reports whether this package IS the artifact rather than
 // one of its dependencies.
 func (p inventoryPackage) namesModule(own string) bool {
-	if strings.Contains(strings.ToLower(p.Name), own) {
+	if mentionsModule(p.Name, own) {
 		return true
 	}
 
 	for _, ref := range p.ExternalRefs {
-		if strings.Contains(strings.ToLower(ref.ReferenceLocator), own) {
+		if mentionsModule(ref.ReferenceLocator, own) {
 			return true
 		}
 	}
@@ -945,10 +1052,52 @@ func (p inventoryPackage) namesModule(own string) bool {
 	return false
 }
 
+// mentionsModule reports whether s names the owner/repo module as a
+// whole path element — bounded on both sides, so that a dependency
+// whose name merely EXTENDS the module's ("acme/widget-utils") is
+// never mistaken for the module itself, while its own subpaths and
+// versions ("acme/widget/v2", "acme/widget@v1") still match.
+func mentionsModule(s, own string) bool {
+	lower := strings.ToLower(s)
+
+	for i := 0; ; {
+		j := strings.Index(lower[i:], own)
+		if j < 0 {
+			return false
+		}
+
+		j += i
+
+		before := j == 0 || lower[j-1] == '/' || lower[j-1] == ':'
+		end := j + len(own)
+		after := end == len(lower) || strings.ContainsRune("@/?#", rune(lower[end]))
+
+		if before && after {
+			return true
+		}
+
+		i = j + 1
+	}
+}
+
+// forgeHost is the one host this adapter can place namespaces on. On
+// it, a namespace either is the producer's or belongs to someone else
+// — both answerable. On any other host, ownership cannot be derived
+// from a coordinate at all.
+const forgeHost = "github.com"
+
 // producerControls reports whether a download location is one the
-// producer serves. Their own repository host and namespace are theirs;
-// a public ecosystem proxy is not.
-func producerControls(location, owner, repo string) ownership {
+// producer serves.
+//
+// The decidable ground is deliberately small. The ecosystem's default
+// registry is upstream by definition. On the subject's own forge, the
+// namespace segment answers exactly: the producer's namespace is
+// theirs, and any other namespace is a location the producer does not
+// control. Everywhere else is UNDETERMINED — a producer's private
+// mirror and a stranger's server are indistinguishable from a
+// coordinate, and a substring match here once handed ownership to any
+// URL that happened to carry the producer's name in a path.
+func producerControls(location, owner string) ownership {
 	lower := strings.ToLower(location)
 
 	// An ecosystem's default registry is upstream by definition: that
@@ -957,16 +1106,32 @@ func producerControls(location, owner, repo string) ownership {
 		return upstreamDefault
 	}
 
-	if strings.Contains(lower, strings.ToLower(owner+"/"+repo)) ||
-		strings.Contains(lower, strings.ToLower("/"+owner+"/")) {
+	host, path := splitLocation(lower)
+	if host != forgeHost {
+		return unknownHost
+	}
+
+	segs := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segs) > 0 && strings.EqualFold(segs[0], owner) {
 		return ownedByProducer
 	}
 
-	// Some other host. Whose it is cannot be derived from a repository
-	// coordinate: a producer's private mirror and a stranger's server
-	// look identical from here, and guessing either way would answer
-	// the requirement with an assumption.
-	return unknownHost
+	return upstreamDefault
+}
+
+// splitLocation breaks a download location into host and path,
+// tolerating an absent scheme and a VCS prefix like git+https.
+//
+//nolint:gocritic // unnamedResult: host then path, named in the doc
+func splitLocation(location string) (string, string) {
+	if i := strings.Index(location, "://"); i >= 0 {
+		location = location[i+3:]
+	}
+
+	host, path, _ := strings.Cut(location, "/")
+	host, _, _ = strings.Cut(host, ":") // drop a port
+
+	return host, path
 }
 
 // ownership is what a run could establish about a dependency source.
@@ -978,35 +1143,73 @@ const (
 	upstreamDefault
 )
 
-// inventoryAssets names the release assets that are inventories.
-func inventoryAssets(assets []string) []string {
-	var out []string
+// inventories finds the release's dependency inventories BY CONTENT:
+// SPDX and CycloneDX documents name themselves inside their bytes, so
+// a producer may call the file anything — the same rule the digest
+// manifest and the triage documents already follow, because a filename
+// is a convention and a universal tool cannot require one.
+//
+// Name-hinted assets are probed first (they are almost always the
+// answer and always small); the rest are probed under a bound so this
+// search cannot download a whole release of binaries, and hitting the
+// bound is logged rather than silently read as absence.
+func (la *levelArgs) inventories(forge gh.Forge, tag string, assets []string, out *latch) map[string][]byte {
+	hinted, rest := splitByInventoryHint(assets)
+	found := map[string][]byte{}
+	probes := 0
+
+	for _, name := range append(hinted, rest...) {
+		if probes >= maxManifestProbes && len(found) == 0 {
+			out.logf("level: release %s: stopped looking for an inventory after %d asset(s)", tag, probes)
+
+			break
+		}
+
+		probes++
+
+		raw, err := forge.Asset(la.owner, la.name, tag, name)
+		if err != nil {
+			continue
+		}
+
+		if bytes.Contains(raw, []byte(`"spdxVersion"`)) || bytes.Contains(raw, []byte(`"bomFormat"`)) {
+			found[name] = raw
+		}
+	}
+
+	return found
+}
+
+// splitByInventoryHint orders the probe: assets whose names suggest an
+// inventory first. The hint decides ORDER, never membership — an
+// inventory named anything else is still found by its bytes.
+//
+//nolint:gocritic // unnamedResult: hinted then rest, named in the doc
+func splitByInventoryHint(assets []string) ([]string, []string) {
+	var hinted, rest []string
 
 	for _, a := range assets {
 		lower := strings.ToLower(a)
 		if strings.Contains(lower, "spdx") || strings.Contains(lower, "cyclonedx") ||
 			strings.Contains(lower, "sbom") {
-			out = append(out, a)
-		}
-	}
-
-	return out
-}
-
-// inventoryPurls reads the package URLs the release's inventories name.
-func (la *levelArgs) inventoryPurls(forge gh.Forge, tag string, assets []string, out *latch) []string {
-	seen := map[string]bool{}
-
-	var purls []string
-
-	for _, a := range inventoryAssets(assets) {
-		raw, err := forge.Asset(la.owner, la.name, tag, a)
-		if err != nil {
-			out.logf("level: inventory %s unreadable: %v", a, err)
+			hinted = append(hinted, a)
 
 			continue
 		}
 
+		rest = append(rest, a)
+	}
+
+	return hinted, rest
+}
+
+// inventoryPurls reads the package URLs the release's inventories name.
+func inventoryPurls(invs map[string][]byte) []string {
+	seen := map[string]bool{}
+
+	var purls []string
+
+	for _, raw := range invs {
 		for _, purl := range purlRE.FindAllString(string(raw), -1) {
 			if !seen[purl] {
 				seen[purl] = true
@@ -1014,6 +1217,8 @@ func (la *levelArgs) inventoryPurls(forge gh.Forge, tag string, assets []string,
 			}
 		}
 	}
+
+	sort.Strings(purls)
 
 	return purls
 }
@@ -1025,15 +1230,8 @@ var purlRE = regexp.MustCompile(`pkg:[a-zA-Z0-9.+-]+/[^"\s,\]}]+`)
 // inventoryCovers reports whether the release publishes an inventory
 // that names dependencies. Judged from the document's contents: an
 // inventory listing no package inventories nothing.
-func (la *levelArgs) inventoryCovers(forge gh.Forge, tag string, assets []string, out *latch) bool {
-	for _, name := range inventoryAssets(assets) {
-		raw, err := forge.Asset(la.owner, la.name, tag, name)
-		if err != nil {
-			out.logf("level: inventory %s unreadable: %v", name, err)
-
-			continue
-		}
-
+func inventoryCovers(invs map[string][]byte) bool {
+	for _, raw := range invs {
 		if purlRE.Match(raw) {
 			return true
 		}

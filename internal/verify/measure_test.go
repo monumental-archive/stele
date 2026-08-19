@@ -207,6 +207,7 @@ func TestMeasuredChainReachesSourceLevelThree(t *testing.T) {
 		Owner: "acme", Repo: "widget", Ref: "refs/heads/main",
 		Measured:  measured,
 		Revisions: []level.Revision{{ID: rev, Subject: "feat: one", Parents: 1}},
+		Live:      &level.LiveRules{Restrictive: true, ForcePushBlocked: true},
 		Now:       time.Unix(0, 0).UTC(),
 	})
 
@@ -269,32 +270,60 @@ func TestMeasuredChainDrivesTheSourceLadder(t *testing.T) {
 		unrelated = "ORG_SOURCE_GATED"
 	)
 
+	// The forge's own live answer, corroborating everything a link
+	// could record; rows below vary it to pin the anti-self-attestation
+	// rule.
+	corroborating := &level.LiveRules{Restrictive: true, ForcePushBlocked: true, RequiredApprovals: 1}
+
 	for _, tt := range []struct {
 		name     string
 		controls []string
+		live     *level.LiveRules
 		repaired bool
 		hole     bool
 		want     string
 	}{
 		{
-			name:     "recorded controls reach level three",
+			name:     "recorded controls corroborated by the forge reach level three",
 			controls: []string{access},
+			live:     corroborating,
 			want:     "SLSA_SOURCE_LEVEL_3",
 		},
 		{
 			name:     "the review control the SCS recorded reaches level four",
 			controls: []string{access, review},
+			live:     corroborating,
 			want:     "SLSA_SOURCE_LEVEL_4",
+		},
+		{
+			// THE rule this verb exists for: a chain the repository
+			// signed about itself, claiming every control there is,
+			// mints nothing when the forge's own rules were not read.
+			// Self-attestation must not become a level.
+			name:     "recorded controls without the forge's corroboration mint nothing",
+			controls: []string{access, review},
+			live:     nil,
+			want:     "SLSA_SOURCE_LEVEL_1",
+		},
+		{
+			// And a forge that answers "nothing is restricted" leaves a
+			// grand record equally unproven.
+			name:     "a record the forge's rules do not back stays unproven",
+			controls: []string{access, review},
+			live:     &level.LiveRules{Restrictive: false},
+			want:     "SLSA_SOURCE_LEVEL_1",
 		},
 		{
 			name:     "a repaired tip records a lapse, so continuity does not hold",
 			controls: []string{access},
+			live:     corroborating,
 			repaired: true,
 			want:     "SLSA_SOURCE_LEVEL_1",
 		},
 		{
 			name:     "a revision between links carrying none is a lapse",
 			controls: []string{access},
+			live:     corroborating,
 			hole:     true,
 			want:     "SLSA_SOURCE_LEVEL_1",
 		},
@@ -304,11 +333,13 @@ func TestMeasuredChainDrivesTheSourceLadder(t *testing.T) {
 			// be configured, not that they be spelled a particular way.
 			name:     "an organisation's own control names still establish the category",
 			controls: []string{unrelated},
+			live:     corroborating,
 			want:     "SLSA_SOURCE_LEVEL_3",
 		},
 		{
 			name:     "a link recording no control at all bounds the track at one",
 			controls: nil,
+			live:     corroborating,
 			want:     "SLSA_SOURCE_LEVEL_1",
 		},
 	} {
@@ -316,6 +347,7 @@ func TestMeasuredChainDrivesTheSourceLadder(t *testing.T) {
 			Owner: "acme", Repo: "widget", Ref: "refs/heads/main",
 			Measured:  build(t, tt.controls, tt.repaired, tt.hole),
 			Revisions: []level.Revision{{ID: revC2, Subject: "feat: one", Parents: 1}},
+			Live:      tt.live,
 			Now:       time.Unix(0, 0).UTC(),
 		})
 
@@ -357,6 +389,7 @@ func TestControlNamesFromAForeignControlPlane(t *testing.T) {
 		Owner: "acme", Repo: "widget", Ref: "refs/heads/main",
 		Measured:  measured,
 		Revisions: []level.Revision{{ID: revC2, Subject: "feat: one", Parents: 1}},
+		Live:      &level.LiveRules{Restrictive: true, ForcePushBlocked: true},
 		Now:       time.Unix(0, 0).UTC(),
 	})
 

@@ -29,11 +29,30 @@ func init() {
 	register(isolatedBuild{})
 }
 
-// hostedRunnerEnvironment is the claim a hosted platform's issuer
-// mints for a runner it owns and disposes of. A self-hosted runner is
-// the tenant's machine and gets a different value; the distinction is
-// the platform's to make and it makes it in the certificate.
-const hostedRunnerEnvironment = "github-hosted"
+// The published runner-environment vocabularies, one entry per
+// platform whose claims this tool can read — the same shape as
+// buildTypeSchemas: platform knowledge as an explicit table, never a
+// string comparison scattered where only one platform's value was
+// imagined. A value in neither table is a platform this build does not
+// know, which is UNDETERMINED — refuting it as "the tenant's machine"
+// would punish every platform this author had not met.
+//
+//nolint:gochecknoglobals // the vocabularies are constants; Go has no const map
+var (
+	// hostedRunnerValues are the claims platforms mint for runners they
+	// own, provision per build and destroy after it.
+	hostedRunnerValues = map[string]bool{
+		"github-hosted": true,
+		"gitlab-hosted": true,
+	}
+
+	// tenantRunnerValues are the claims platforms mint for machines the
+	// tenant operates.
+	tenantRunnerValues = map[string]bool{
+		"self-hosted":  true,
+		"self-managed": true,
+	}
+)
 
 type provenanceExists struct{}
 
@@ -129,8 +148,12 @@ func runnerEnvironment(ev *Evidence, established string) Outcome {
 		switch got := s.Cert.RunnerEnvironment; {
 		case got == "":
 			return Unevaluated("the certificate for %s carries no runner-environment claim", s.Name)
-		case got != hostedRunnerEnvironment:
+		case tenantRunnerValues[got]:
 			return Contradicted("%s was built on a %q runner, which is the tenant's machine and not the platform's",
+				s.Name, got)
+		case !hostedRunnerValues[got]:
+			return Unevaluated("the certificate for %s claims runner environment %q, a vocabulary this build"+
+				" does not know — neither a hosted claim it can accept nor a tenant claim it can refute",
 				s.Name, got)
 		}
 	}

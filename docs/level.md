@@ -79,15 +79,33 @@ the certificates. A detector returns one of three things:
 | `UNDETERMINED` | the evidence needed was not reachable in this run |
 
 A held requirement is additionally marked **attested** when it rests
-on what the SCS or the build platform RECORDED rather than on
-something this tool recomputed. Both are evidence. For the control
-requirements a contemporaneous attestation is the *only* evidence
-that can exist — which controls were configured when a revision
-landed is unrecoverable afterwards, since a rules API answers about
-now — and that is exactly why the specification asks the SCS to
-record them at the time. But attested and recomputed are not the same
-strength, so the report says which, and names the identity that
-signed.
+on a contemporaneous RECORD rather than on something this tool
+recomputed. For the control requirements a contemporaneous record is
+the *only* evidence that can exist — which controls were configured
+when a revision landed is unrecoverable afterwards, since a rules API
+answers about now — and that is exactly why the specification asks the
+SCS to record them at the time.
+
+But a chain link is emitted and signed by the repository's **own**
+workflow, and a record a subject issues about itself is a claim.
+Holding a level on it alone would let any repository mint its own —
+self-attestation wearing a signature, the exact defect this verb
+exists to refuse. So an attested outcome has exactly one constructor
+(`RecordHeld`), and it demands two halves:
+
+- the **record**: the control named in the tip link, contemporaneous
+  with the revision;
+- the **corroboration**: the forge's own live rules for the branch —
+  the platform speaking about its own enforcement, which no tenant can
+  forge — showing the control enforced now.
+
+The tip *is* now, so for the revision under judgment the two halves
+cover each other's blind spot: the record supplies contemporaneity,
+the live answer supplies independence. A record with no readable live
+half, or one the live rules do not back, is `UNDETERMINED` — never
+held, and not refuted either, because rules legitimately change
+between a revision landing and this run looking. A future detector
+cannot reintroduce self-attestation without deleting the constructor.
 
 A requirement with **no detector in this build** is `UNDETERMINED`, and
 the report names it. That is a statement about the tool's coverage, not
@@ -125,6 +143,19 @@ detectable:
   executes no caller-controlled step. That is the capability boundary,
   proven from two fetches.
 
+The runner-environment vocabulary is a **table of platform knowledge**
+(the same shape as the buildType parameter schemas): known hosted
+values hold, known tenant values refute, and a value from a platform
+the table has not met is `UNDETERMINED` — refuting it as "the tenant's
+machine" would punish every platform this tool's author had not seen.
+
+One honest limitation, stated rather than papered over: the boundary
+check reads what the signing workflow's text *expands* (`run:` bodies
+and `uses:` resolutions). A workflow that checks out the caller's
+repository and executes a script from that tree runs tenant code in a
+way no text-level read of the workflow alone can prove or refute; the
+check is precise about interpolation and silent about that shape.
+
 `SLSA_SOURCE_ORG_SAFE_EXPUNGE` has the same shape from the other
 direction: git has no expunge operation, so content leaves a branch
 only by force push. Where the chain proves the branch moved only to
@@ -156,6 +187,20 @@ declared identity, which is right for a release gate and wrong for a
 measurement: being handed the answer is how a measurement becomes a
 restatement of the claim.
 
+### Two-party review has two legs
+
+Where the tip records the review control and the forge's live rules
+corroborate it (a required-approvals rule ≥ 1: the author plus a
+distinct approver is two persons), the record settles level four. Where
+it does not, the judge reads the forge's **own review history** — a
+platform-served record, not a repository's claim about itself — and
+counts, per revision, the author plus each distinct approving reviewer.
+Every revision agreed by two or more holds; one agreed by fewer
+refutes; a revision the forge holds no change record for leaves the
+level undetermined. The history walk is bounded (two API reads per
+revision), and hitting the bound is logged and leaves the level
+undetermined — never silently passed.
+
 ## The draft dependency track
 
 SLSA v1.2 approves the Build and Source tracks. The Dependency track
@@ -171,16 +216,17 @@ The draft's own framing is what makes its levels detectable: it asks
 that an inventory EXIST and that findings be TRIAGED, not that a
 release be free of vulnerabilities.
 
-Its level 4 — a secure ingestion policy — is judged by the consequence
-a policy leaves behind rather than by the policy itself. A quarantine
-window, a malware check, a risk feed consulted before a version is
-taken: each shows up as an interval between a version appearing
-upstream and this producer taking it. A producer running no quarantine
-ingests versions the day they publish; one running any has a floor
-below which nothing was taken. So a zero floor refutes and any
-positive floor establishes, with the floor stated — because how long a
-window is long enough is the organisation's risk determination and not
-this tool's.
+Its level 4 — a secure ingestion policy — is judged by the one
+consequence a policy cannot avoid leaving: the interval between a
+version appearing upstream and this producer shipping it. The
+judgment is deliberately asymmetric. A **zero floor refutes** — some
+version was consumed the moment it appeared, so no control stood
+between publication and use. But a **positive floor establishes
+nothing**: a producer who merely releases slowly leaves exactly the
+same interval as one running a real quarantine, and the two are
+indistinguishable from published artifacts. So a positive floor is
+`UNDETERMINED` with the floor stated — the reader gets the
+measurement, never a verdict the measurement cannot carry.
 
 Publication times resolve by package URL type, since that is how the
 ecosystem already names which registry owns a package. Go modules

@@ -23,6 +23,7 @@
 package level
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -53,8 +54,14 @@ type scsIssues struct{}
 func (scsIssues) For() string { return "SLSA_SOURCE_ORG_SCS" }
 
 func (scsIssues) Detect(ev *Evidence) Outcome {
+	// The requirement is about CAPABILITY — choosing an SCS able to
+	// reach the desired level — and an unexercised capability is not a
+	// refuted one. A repository with no chain still fails Level 1, but
+	// through the VSA requirement, which is the one its absence
+	// actually contradicts.
 	if ev.NoChain {
-		return Contradicted("this repository's SCS issues no source attestations for its revisions")
+		return Established("the SCS serving this repository is capable of source attestations for its" +
+			" revisions; none exist yet, which the summary-attestation requirement judges")
 	}
 
 	if ev.Measured == nil {
@@ -159,16 +166,14 @@ func (accessControl) Detect(ev *Evidence) Outcome {
 			" operations is evidenced", rev)
 	}
 
-	// Named exactly, where an SCS uses the ecosystem's spelling: that
-	// is the stronger reading and the report says so.
-	for _, got := range controls {
-		if SameControl(got, "SLSA_SOURCE_ORG_ACCESS_CONTROL") {
-			return Attested("the SCS recorded access controls at revision %.12s, as control %q", rev, got)
-		}
-	}
-
-	return Attested("the SCS recorded %d control(s) restricting sensitive operations at revision %.12s: %v",
-		len(controls), rev, controls)
+	// The record names the controls; the forge's live rules say whether
+	// anything actually restricts the branch. Both halves are required:
+	// the record is issued by the repository about itself, and the live
+	// answer alone is not contemporaneous with anything but the tip.
+	return RecordHeld(ev.Live, anyRestriction,
+		fmt.Sprintf("the record at revision %.12s claims %d control(s)", rev, len(controls)),
+		"the SCS recorded %d control(s) restricting sensitive operations at revision %.12s, and the forge's"+
+			" effective rules corroborate that the branch is restricted: %v", len(controls), rev, controls)
 }
 
 type safeExpunge struct{}
@@ -187,7 +192,7 @@ func (safeExpunge) Detect(ev *Evidence) Outcome {
 			" git has no expunge operation, and without force push there is no path to one")
 	}
 
-	return recordedControl(ev, "SLSA_SOURCE_ORG_SAFE_EXPUNGE", "a documented safe expunging process")
+	return recordedControl(ev, "SLSA_SOURCE_ORG_SAFE_EXPUNGE", "a documented safe expunging process", noForcePush)
 }
 
 type orgContinuity struct{}
@@ -204,8 +209,10 @@ func (orgContinuity) Detect(ev *Evidence) Outcome {
 		return Contradicted("the tip link claims no control, so there is no continuous enforcement to evidence")
 	}
 
-	return Attested("every one of %d claimed control(s) is recorded at revision %.12s, the revision it"+
-		" covers: %v", len(controls), rev, controls)
+	return RecordHeld(ev.Live, anyRestriction,
+		fmt.Sprintf("%d control(s) are recorded at revision %.12s", len(controls), rev),
+		"every one of %d claimed control(s) is recorded at revision %.12s, the revision it covers, and the"+
+			" forge's effective rules corroborate enforcement: %v", len(controls), rev, controls)
 }
 
 type historyDescends struct{}
@@ -331,8 +338,10 @@ func (protectedRefs) Detect(ev *Evidence) Outcome {
 			" to none for this reference", rev)
 	}
 
-	return Attested("the link for %.12s records %d technical control(s) enforced on this reference: %v",
-		rev, len(controls), controls)
+	return RecordHeld(ev.Live, anyRestriction,
+		fmt.Sprintf("the link for %.12s records %d technical control(s)", rev, len(controls)),
+		"the link for %.12s records %d technical control(s) enforced on this reference, and the forge's"+
+			" effective rules corroborate enforcement: %v", rev, len(controls), controls)
 }
 
 type twoPartyReview struct{}
@@ -344,7 +353,7 @@ func (twoPartyReview) Detect(ev *Evidence) Outcome {
 	// it enforced two-party review, that is the contemporaneous
 	// evidence, and approvals visible today are a weaker echo of it.
 	if got := recordedControl(ev, "SLSA_SOURCE_SCS_TWO_PARTY_REVIEW",
-		"two-party review"); got.Determination == Held {
+		"two-party review", reviewRequired); got.Determination == Held {
 		return got
 	}
 
@@ -400,23 +409,50 @@ func tipOf(ev *Evidence) (string, []string, bool) {
 	return tip.Revision(), tip.Properties(), true
 }
 
-// recordedControl establishes one control from what the SCS recorded
-// at the revision.
-func recordedControl(ev *Evidence, name, human string) Outcome {
+// recordedControl establishes one control from what was recorded at
+// the revision, corroborated by the forge's own live rules.
+//
+// The record alone is deliberately NOT enough. A chain link is emitted
+// and signed by the repository's own workflow: a subject's record
+// about itself is a claim, and holding a level on it would let any
+// repository mint its own — the exact defect this verb exists to
+// refuse. The forge's rules API is the platform's independent
+// statement about what is enforced on the branch now, and the tip is
+// now; agreement between the contemporaneous record and the live
+// answer is what makes the record evidence rather than a boast.
+// Disagreement is UNDETERMINED, not refutation: rules legitimately
+// change between a revision landing and this run looking.
+func recordedControl(ev *Evidence, name, human string, corroborates func(*LiveRules) bool) Outcome {
 	rev, controls, ok := tipOf(ev)
 	if !ok {
 		return Unevaluated("the source chain could not be walked, so no recorded control could be read")
 	}
 
+	recorded := ""
+
 	for _, got := range controls {
 		if SameControl(got, name) {
-			return Attested("the SCS recorded %s at revision %.12s, as control %q", human, rev, got)
+			recorded = got
+
+			break
 		}
 	}
 
-	return Contradicted("the SCS records no control for %s at revision %.12s; it recorded %v",
-		human, rev, controls)
+	if recorded == "" {
+		return Contradicted("the SCS records no control for %s at revision %.12s; it recorded %v",
+			human, rev, controls)
+	}
+
+	return RecordHeld(ev.Live, corroborates,
+		fmt.Sprintf("the record at revision %.12s claims %s (as %q)", rev, human, recorded),
+		"the SCS recorded %s at revision %.12s (as control %q), and the forge's effective rules corroborate"+
+			" it", human, rev, recorded)
 }
+
+// The corroboration predicates: which live fact backs which control.
+func anyRestriction(l *LiveRules) bool { return l.Restrictive }
+func noForcePush(l *LiveRules) bool    { return l.ForcePushBlocked }
+func reviewRequired(l *LiveRules) bool { return l.RequiredApprovals >= 1 }
 
 // SameControl reports whether a recorded control name means the
 // ecosystem's.
