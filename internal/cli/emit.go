@@ -152,18 +152,20 @@ type emitArgs struct {
 	machineryPin string
 
 	// vsa
-	tag       string
-	subjects  string
-	sboms     string
-	signerPin string
-	out       string
+	tag         string
+	subjects    string
+	sboms       string
+	inventories string
+	signerPin   string
+	out         string
 
-	p           *policy.Policy
-	coords      verify.Coords
-	subjectList []verify.Subject
-	sbomList    []verify.Subject
-	bv          verify.BundleVerifier
-	claimsDoc   *claims.Payload
+	p             *policy.Policy
+	coords        verify.Coords
+	subjectList   []verify.Subject
+	sbomList      []verify.Subject
+	inventoryList []verify.Subject
+	bv            verify.BundleVerifier
+	claimsDoc     *claims.Payload
 }
 
 // emitCmd dispatches `stele emit <mode>`.
@@ -253,6 +255,7 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.tag, "tag", "", "release tag (required)")
 		fs.StringVar(&ea.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
 		fs.StringVar(&ea.sboms, "sboms", "", "sha256sum manifest of the release's SBOM assets (required)")
+		fs.StringVar(&ea.inventories, "inventories", "", inventoriesUsage)
 		fs.StringVar(&ea.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&ea.out, "out", "", "write the predicate here instead of stdout")
 	}
@@ -374,6 +377,18 @@ func (ea *emitArgs) loadVSA(fail func(error) int) int {
 		return fail(err)
 	}
 
+	if ea.inventories != "" {
+		manifest, err = os.ReadFile(ea.inventories)
+		if err != nil {
+			return fail(err)
+		}
+
+		ea.inventoryList, err = parsePlan(string(manifest))
+		if err != nil {
+			return fail(err)
+		}
+	}
+
 	return exitOK
 }
 
@@ -426,7 +441,9 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 func runEmitVSA(ea *emitArgs, out *latch) error {
 	pins := verify.Pins{Signer: ea.signerPin, Machinery: ea.machineryPin}
 
-	verdict, err := verify.Release(ea.p, ea.coords, ea.subjectList, ea.sbomList, pins, newStore(false), ea.bv, out.logf)
+	sboms := verify.SBOMs{Assets: ea.sbomList, Planned: ea.inventoryList}
+
+	verdict, err := verify.Release(ea.p, ea.coords, ea.subjectList, sboms, pins, newStore(false), ea.bv, out.logf)
 	if err != nil {
 		return err
 	}

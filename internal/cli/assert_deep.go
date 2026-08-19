@@ -127,7 +127,7 @@ type engineVerifier struct {
 }
 
 func (e *engineVerifier) Release(
-	c verify.Coords, subjects, sboms []verify.Subject, pins verify.Pins, decision bool,
+	c verify.Coords, subjects []verify.Subject, sboms verify.SBOMs, pins verify.Pins, decision bool,
 ) error {
 	if !decision {
 		_, err := verify.ReleaseProvenance(e.vp, c, subjects, pins, e.store, e.bv, func(string, ...any) {})

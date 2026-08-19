@@ -31,7 +31,7 @@ import (
 type DeepVerifier interface {
 	// Release proves the release; decision=false runs the provenance
 	// half alone (pre-decision-epoch history verifies what it can).
-	Release(c verify.Coords, subjects, sboms []verify.Subject, pins verify.Pins, decision bool) error
+	Release(c verify.Coords, subjects []verify.Subject, sboms verify.SBOMs, pins verify.Pins, decision bool) error
 	// VSA proves the store-resident verdict over every subject;
 	// a nil demand leaves a declared enrichment obligation unasked
 	// (pre-enrichment-epoch history proves what it can), and a
@@ -75,7 +75,15 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		w.log("assert: evidence: %s predates the decision epoch — deep release check bounded to provenance", subject)
 	}
 
-	if rerr := w.full.Verifier.Release(c, subjects, sboms, pins, contract.Decision); rerr != nil {
+	// The plan as the decision's denominator (stele#158): what this
+	// release planned to inventory, recovered from the obligations its
+	// classes owed at its own machinery version — derived once, beside
+	// the vocabulary it reads, never re-spelled here.
+	planned := w.pol.PlannedInventories(contract, sboms)
+
+	if rerr := w.full.Verifier.Release(
+		c, subjects, verify.SBOMs{Assets: sboms, Planned: planned}, pins, contract.Decision,
+	); rerr != nil {
 		w.finding(subject, "deep", rerr.Error())
 	}
 

@@ -354,3 +354,149 @@ var (
 	errWrongIdentity   = errors.New("the bundle was not signed under that identity")
 	errUncoveredDigest = errors.New("the bundle covers no such digest")
 )
+
+// writeManifest drops one sha256sum document in a temp dir and names
+// it — the plan arrives as exactly the manifest shape the subject and
+// SBOM lists already use.
+func writeManifest(t *testing.T, name, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// TestVerifyReleaseWithAPlan drives the release mode as a release
+// shipping per-artifact inventories runs it (stele#158): the planned
+// inventory carries the decision, the release view beside it carries
+// none, and the verdict aggregates over the plan rather than
+// demanding one decision for the whole release.
+func TestVerifyReleaseWithAPlan(t *testing.T) {
+	w := newReleaseWorld(t)
+	swap(t, w.bv, w.store)
+
+	px := files(t)
+	subjects, _ := w.manifests(t)
+
+	viewSHA := chain.SHA256Hex([]byte("the release view"))
+	sboms := writeManifest(t, "sboms.sha256",
+		w.sbomSHA+"  app.spdx.json\n"+viewSHA+"  widget-1.2.3.spdx.json\n")
+	plan := writeManifest(t, "plan.sha256", w.sbomSHA+"  app.spdx.json\n")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "release", "--json",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", relTag,
+		"--subjects", subjects, "--sboms", sboms, "--inventories", plan,
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+	if doc.Verdict == nil || *doc.Verdict != "PASS" {
+		t.Fatalf("verdict = %v, want PASS", doc.Verdict)
+	}
+}
+
+// TestVerifyReleasePlanRefusals pins the plan flag's own surface: a
+// plan that cannot be read, one that names nothing, and one naming a
+// document the release does not carry.
+func TestVerifyReleasePlanRefusals(t *testing.T) {
+	w := newReleaseWorld(t)
+
+	px := files(t)
+	subjects, sboms := w.manifests(t)
+
+	tests := []struct {
+		name string
+		plan func(t *testing.T) string
+		want int
+	}{
+		{
+			"a plan file that is not there",
+			func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "absent.sha256") },
+			exitUsage,
+		},
+		{
+			"a plan that names nothing",
+			func(t *testing.T) string { t.Helper(); return writeManifest(t, "empty.sha256", "\n") },
+			exitUsage,
+		},
+		{
+			"a plan line that is not a sha256sum record",
+			func(t *testing.T) string { t.Helper(); return writeManifest(t, "bad.sha256", "not a record\n") },
+			exitUsage,
+		},
+		{
+			"a plan naming a document the release does not carry",
+			func(t *testing.T) string {
+				t.Helper()
+
+				return writeManifest(t, "absent-doc.sha256",
+					chain.SHA256Hex([]byte("never shipped"))+"  sbom-npm-widget-1.2.3.spdx.json\n")
+			},
+			exitRefused,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			swap(t, w.bv, w.store)
+
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"verify", "release",
+				"--policy", px.policy, "--trusted-root", px.root,
+				"--repo", "acme/widget", "--tag", relTag,
+				"--subjects", subjects, "--sboms", sboms, "--inventories", tt.plan(t),
+				"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
+			}, &stdout, &stderr)
+			if code != tt.want {
+				t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s", code, tt.want, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+// TestEmitVSAWithAPlan pins the same input on the verb that renders
+// the verdict: `emit vsa` runs the identical engine, so the plan
+// reaches it through the identical flag — one description, one
+// loader, no second spelling of what the denominator is.
+func TestEmitVSAWithAPlan(t *testing.T) {
+	w := newReleaseWorld(t)
+	swap(t, w.bv, w.store)
+
+	px := files(t)
+	subjects, _ := w.manifests(t)
+
+	viewSHA := chain.SHA256Hex([]byte("the release view"))
+	sboms := writeManifest(t, "sboms.sha256",
+		w.sbomSHA+"  app.spdx.json\n"+viewSHA+"  widget-1.2.3.spdx.json\n")
+	plan := writeManifest(t, "plan.sha256", w.sbomSHA+"  app.spdx.json\n")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"emit", "vsa",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", relTag,
+		"--subjects", subjects, "--sboms", sboms, "--inventories", plan,
+		"--signer-digest", strings.Repeat("a", 40), "--machinery-digest", strings.Repeat("b", 40),
+		"--policy-uri", "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), `"verificationResult":"PASSED"`) {
+		t.Errorf("stdout = %q, want the predicate", stdout.String())
+	}
+}

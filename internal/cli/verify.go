@@ -179,24 +179,26 @@ func (l *latch) logf(format string, args ...any) {
 
 // verifyArgs is everything the four modes read, parsed in one place.
 type verifyArgs struct {
-	policyPath   string
-	root         rootFlags
-	repo         string
-	tag          string
-	subjects     string
-	sboms        string
-	signerPin    string
-	machineryPin string
-	gitDir       string
-	ref          string
-	mode         string
-	jsonOut      bool
-	noRetry      bool
-	p            *policy.Policy
-	coords       verify.Coords
-	subjectList  []verify.Subject
-	sbomList     []verify.Subject
-	bv           verify.BundleVerifier
+	policyPath    string
+	root          rootFlags
+	repo          string
+	tag           string
+	subjects      string
+	sboms         string
+	inventories   string
+	signerPin     string
+	machineryPin  string
+	gitDir        string
+	ref           string
+	mode          string
+	jsonOut       bool
+	noRetry       bool
+	p             *policy.Policy
+	coords        verify.Coords
+	subjectList   []verify.Subject
+	sbomList      []verify.Subject
+	inventoryList []verify.Subject
+	bv            verify.BundleVerifier
 }
 
 // verifyCmd dispatches `stele verify <mode>`.
@@ -512,6 +514,7 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 		fs.StringVar(&va.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
 		fs.StringVar(&va.sboms, "sboms", "",
 			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode, required)")
+		fs.StringVar(&va.inventories, "inventories", "", inventoriesUsage+" (release mode)")
 		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&va.machineryPin, "machinery-digest", "",
 			"commit digest the verifier/decision identities are pinned at (required)")
@@ -574,34 +577,14 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 	}
 
 	if va.mode == modeRelease || va.mode == modeVSA {
-		if va.subjects == "" {
-			return fail(errors.New("--subjects is required"))
-		}
-
-		manifest, err := os.ReadFile(va.subjects)
-		if err != nil {
-			return fail(err)
-		}
-
-		va.subjectList, err = parseManifest(string(manifest))
-		if err != nil {
-			return fail(err)
+		if serr := va.loadSubjects(); serr != nil {
+			return fail(serr)
 		}
 	}
 
 	if va.mode == modeRelease {
-		if va.sboms == "" {
-			return fail(errors.New("--sboms is required"))
-		}
-
-		manifest, err := os.ReadFile(va.sboms)
-		if err != nil {
-			return fail(err)
-		}
-
-		va.sbomList, err = parseManifest(string(manifest))
-		if err != nil {
-			return fail(err)
+		if berr := va.loadSBOMs(); berr != nil {
+			return fail(berr)
 		}
 	}
 
@@ -610,6 +593,80 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 	}
 
 	return exitOK
+}
+
+// loadSubjects reads the release's subject manifest — the bytes the
+// release claims, which every provenance check is held against.
+func (va *verifyArgs) loadSubjects() error {
+	if va.subjects == "" {
+		return errors.New("--subjects is required")
+	}
+
+	manifest, err := os.ReadFile(va.subjects)
+	if err != nil {
+		return fmt.Errorf("reading the subject manifest: %w", err)
+	}
+
+	va.subjectList, err = parseManifest(string(manifest))
+
+	return err
+}
+
+// loadSBOMs reads the decision candidates and, when the release
+// declares one, its inventory plan — the decision's denominator.
+func (va *verifyArgs) loadSBOMs() error {
+	if va.sboms == "" {
+		return errors.New("--sboms is required")
+	}
+
+	manifest, err := os.ReadFile(va.sboms)
+	if err != nil {
+		return fmt.Errorf("reading the SBOM manifest: %w", err)
+	}
+
+	if va.sbomList, err = parseManifest(string(manifest)); err != nil {
+		return err
+	}
+
+	if va.inventories == "" {
+		return nil
+	}
+
+	manifest, err = os.ReadFile(va.inventories)
+	if err != nil {
+		return fmt.Errorf("reading the inventory plan: %w", err)
+	}
+
+	va.inventoryList, err = parsePlan(string(manifest))
+
+	return err
+}
+
+// inventoriesUsage is the one spelling of what the plan input IS,
+// stated where both modes read it: the flag exists on `verify
+// release` and `emit vsa` because they run the same engine, and two
+// descriptions of one input drift.
+const inventoriesUsage = "sha256sum manifest of the release's PLANNED inventory documents — " +
+	"the inventory plan as digests, each owing its own release decision; " +
+	"absent declares a release with no plan, judged under the whole-release decision invariant"
+
+// parsePlan reads the inventory plan manifest — the same sha256sum
+// shape as every other manifest input, because the plan reaches the
+// engine as digests. A plan document that names nothing is refused:
+// declaring a plan and planning nothing is not the same claim as
+// declaring no plan, and only the second one may soften the gate.
+func parsePlan(text string) ([]verify.Subject, error) {
+	planned, err := parseManifest(text)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(planned) == 0 {
+		return nil, errors.New(
+			"the inventory plan names no document — a declared plan that plans nothing is not an absent plan")
+	}
+
+	return planned, nil
 }
 
 // parseManifest reads a sha256sum manifest: "<64 hex>  <name>" per
@@ -645,8 +702,10 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 
 	switch va.mode {
 	case modeRelease:
+		sboms := verify.SBOMs{Assets: va.sbomList, Planned: va.inventoryList}
+
 		verdict, err := verify.Release(
-			va.p, va.coords, va.subjectList, va.sbomList, pins, newStore(va.noRetry), va.bv, out.logf)
+			va.p, va.coords, va.subjectList, sboms, pins, newStore(va.noRetry), va.bv, out.logf)
 		if err != nil {
 			return nil, err
 		}

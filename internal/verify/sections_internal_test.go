@@ -42,7 +42,7 @@ func TestEngineRefusesUndeclaredSections(t *testing.T) {
 	pins := Pins{Signer: strings.Repeat("a", 40), Machinery: strings.Repeat("b", 40)}
 	silent := func(string, ...any) {}
 
-	if _, err := Release(p, c, subjects, subjects, pins, nil, nil, silent); err == nil ||
+	if _, err := Release(p, c, subjects, SBOMs{Assets: subjects}, pins, nil, nil, silent); err == nil ||
 		!strings.Contains(err.Error(), "no build section") {
 		t.Errorf("Release without build = %v, want the section refusal", err)
 	}

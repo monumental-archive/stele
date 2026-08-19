@@ -79,6 +79,16 @@ version mismatch, never as an unknown-field error.
   inventory and an unplanned attestation asset (the `pgrx-extension`
   shape). Absent means the obligation is judged only by the
   post-publish evidence walk.
+
+  The declaration has a second consumer (stele#158): a planned
+  document is one the release decision is borne per, so the evidence
+  walk hands the verify engine the assets these obligations claim as
+  the decision's denominator — one decision per planned inventory,
+  and none for the per-release view. The epoch answers for history
+  by construction: a release whose classes owed no planned prefix at
+  its machinery version planned nothing, and keeps the whole-release
+  decision invariant it was published under
+  ([policy-schema.md](policy-schema.md#trustdecision-optional)).
 - `classes.<name>.enrichment` — dependency names a release declaring
   this class owes its build-enrichment claim ON TOP of the verify
   policy's universal `required` set (stele#122): a `pgrx-extension`

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 func TestManifestSource(t *testing.T) {
@@ -294,5 +295,115 @@ func TestSourcesOrder(t *testing.T) {
 
 	if len(c.Classes) != 1 || c.Classes[0] != "oci-image" {
 		t.Fatalf("classes = %v, want the manifest's oci-image, not the workflow's", c.Classes)
+	}
+}
+
+// The policy the plan derivation is measured against: two classes
+// bearing planned inventories at different epochs, one class bearing
+// an unplanned prefix obligation beside its planned one, and one
+// bearing none at all.
+const plannedPolicyJSON = `{
+  "schema": 4,
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "storeVsaFromVersion": "1.13.0",
+    "debtFile": "security/attestation-debt.txt",
+    "classes": {
+      "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},
+      "wasm-npm": {
+        "bundles": ["attestations-npm.intoto.jsonl"],
+        "assetPrefixes": [{"prefix": "sbom-npm-", "owedFrom": "1.42.0", "planned": true}]
+      },
+      "pgrx-extension": {
+        "bundles": ["attestations-extensions.intoto.jsonl"],
+        "assetPrefixes": [
+          {"prefix": "attestations-extimg-pg"},
+          {"prefix": "sbom-pgrx-", "owedFrom": "1.43.0", "planned": true}
+        ]
+      }
+    }
+  }
+}`
+
+// TestPlannedInventories pins the decision's denominator (stele#158):
+// what a release planned is recovered from the planned obligations
+// its classes owed AT ITS OWN machinery version, so a release
+// published before per-artifact inventories existed plans nothing and
+// keeps the whole-release invariant it shipped under.
+func TestPlannedInventories(t *testing.T) {
+	t.Parallel()
+
+	pol, err := assert.LoadPolicy(strings.NewReader(plannedPolicyJSON))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	sboms := []verify.Subject{
+		{Name: "sbom-npm-widget-wasm-1.0.0.spdx.json", SHA256: subjectDigest},
+		{Name: "sbom-pgrx-widget-pg17-1.0.0.spdx.json", SHA256: subjectDigest},
+		{Name: "widget-1.0.0.spdx.json", SHA256: subjectDigest},
+		{Name: "widget-1.0.0-image.spdx.json", SHA256: subjectDigest},
+	}
+
+	tests := []struct {
+		name      string
+		classes   []string
+		machinery string
+		want      []string
+	}{
+		{
+			"a release under the pre-inventory machinery plans nothing",
+			[]string{"wasm-npm", "pgrx-extension"},
+			"1.41.0", nil,
+		},
+		{
+			"each planned obligation arrives at its own epoch",
+			[]string{"wasm-npm", "pgrx-extension"},
+			"1.42.0",
+			[]string{"sbom-npm-widget-wasm-1.0.0.spdx.json"},
+		},
+		{
+			"every planned inventory, and neither the view nor the image",
+			[]string{"wasm-npm", "pgrx-extension"},
+			"1.43.0",
+			[]string{"sbom-npm-widget-wasm-1.0.0.spdx.json", "sbom-pgrx-widget-pg17-1.0.0.spdx.json"},
+		},
+		{
+			"a class the release did not declare claims no document",
+			[]string{"wasm-npm"},
+			"1.43.0",
+			[]string{"sbom-npm-widget-wasm-1.0.0.spdx.json"},
+		},
+		{
+			"a class carrying no planned obligation plans nothing",
+			[]string{"oci-image"},
+			"1.43.0", nil,
+		},
+		{
+			"a class no policy declares owes nothing derivable here",
+			[]string{"source-archive"},
+			"1.43.0", nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := pol.Evidence.PlannedInventories(
+				&assert.Contract{Classes: tt.classes, MachineryVersion: tt.machinery}, sboms)
+
+			names := make([]string, 0, len(got))
+			for _, s := range got {
+				names = append(names, s.Name)
+			}
+
+			if strings.Join(names, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("PlannedInventories = %v, want %v", names, tt.want)
+			}
+		})
 	}
 }

@@ -236,7 +236,7 @@ func TestReleaseDivergentPeek(t *testing.T) {
 		}).bytes(t)
 		w.store.bundles[w.appSHA] = []verify.StoredBundle{{URI: "u", Bundle: bundle}}
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "verified payload is not provenance") {
 			t.Errorf("Release error = %v, want the divergence refusal", err)
 		}
@@ -262,7 +262,7 @@ func TestReleaseDivergentPeek(t *testing.T) {
 		}).bytes(t)
 		w.store.bundles[w.sbomSHA] = []verify.StoredBundle{w.store.bundles[w.sbomSHA][0], {URI: "u", Bundle: bundle}}
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "not a release decision") {
 			t.Errorf("Release error = %v, want the divergence refusal", err)
 		}

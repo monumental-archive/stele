@@ -71,6 +71,57 @@ func (e *EvidencePolicy) EnrichmentDemand(c *Contract) *verify.EnrichmentDemand 
 	return &verify.EnrichmentDemand{AlsoRequired: slices.Compact(names)}
 }
 
+// PlannedInventories selects, from a release's SBOM assets, the
+// documents its inventory plan named — the denominator the release
+// decision is measured against (stele#158), derived HERE for the same
+// reason EnrichmentDemand is: the obligation is per-class, and the
+// class list joins the policy only in the walk.
+//
+// The plan itself is a build-leg artifact that no longer exists by
+// the time history is walked, so what a release planned is recovered
+// through the one vocabulary that outlives it: the planned prefix
+// obligations its classes owed at ITS machinery version (stele#142's
+// `planned: true`, through the one owedFrom semantics). A release
+// whose classes owed no planned prefix planned no inventories — which
+// is every release published before per-artifact inventories existed,
+// and the whole-release decision invariant is exactly what those
+// releases were published under.
+//
+// Never epoch-free: whether a document is one a class could EVER owe
+// is a naming question, but whether the release owed it is a time
+// question (stele#143), and this is the time one — measuring a 2026
+// obligation against a 2025 release would demand a decision over a
+// document that machinery could not yet write.
+func (e *EvidencePolicy) PlannedInventories(c *Contract, sboms []verify.Subject) []verify.Subject {
+	var prefixes []string
+
+	for _, class := range c.Classes {
+		cp, ok := e.Classes[class]
+		if !ok {
+			// A class no policy declares owes unknowable evidence; the
+			// walk's own class check speaks for it, and inventing an
+			// obligation here would be this reader answering that.
+			continue
+		}
+
+		prefixes = append(prefixes, cp.owedPlannedPrefixes(c.MachineryVersion)...)
+	}
+
+	var planned []verify.Subject
+
+	for _, s := range sboms {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(s.Name, prefix) {
+				planned = append(planned, s)
+
+				break
+			}
+		}
+	}
+
+	return planned
+}
+
 // ContractSource resolves one release's contract. ok=false means the
 // source has no contract for this release — the caller may fall
 // through to the next source, and a release no source can speak for
