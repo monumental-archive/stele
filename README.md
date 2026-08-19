@@ -13,12 +13,15 @@
 [![fair-software](https://img.shields.io/badge/fair--software.eu-%E2%97%8F%20%E2%97%8F%20%E2%97%8B%20%E2%97%8F%20%E2%97%8B-orange)](https://fair-software.eu)
 <!-- badges:end -->
 
-A **universal supply-chain engine: it drives the release and then
-judges it**. One binary derives what a release ships — the version
-and changelog from conventional commits (it retired git-cliff across
-its home org), version-mirror bumps, per-artifact SBOMs, VEX — emits
-the evidence that gets signed, and then verifies that evidence the
-way a stranger would, fail-closed. Standard formats live in code —
+A **universal SLSA evidence engine and verifier — and the release
+engine that produces the evidence**. Both halves in one binary is
+the point. It derives what a release ships (the version and
+changelog from conventional commits — it retired git-cliff across
+its home org — version-mirror bumps, per-artifact SBOMs, VEX),
+emits the attestable JSON that gets signed, and then verifies that
+evidence the way a stranger would, fail-closed: the thing that makes
+a release and the thing that judges it share one set of types, so
+neither can drift from the other. Standard formats live in code —
 DSSE, in-toto, SLSA provenance and VSAs, OpenVEX, SPDX — with every
 organisation-specific convention (signer identities, chain layout,
 completeness policy, what a release owes) in a committed policy file
@@ -42,9 +45,8 @@ code: the capability boundary lives strictly above it.
 
 The tool eats first. Its own releases run entirely through it —
 version and notes from `derive`, evidence from `emit`, each release
-built and attested by the previous one — and the emitter and
-verifier are one binary sharing one set of types, so the checker can
-never drift from the thing it checks.
+built and attested by the version before it, and the published
+result verified by the same walk it asks of everyone else.
 
 ## Why a stranger would run it
 
