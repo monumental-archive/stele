@@ -318,15 +318,25 @@ func TestVerifyReproUsageRefusals(t *testing.T) {
 func factValue(t *testing.T, doc *jsonReportDoc, name string) string {
 	t.Helper()
 
+	got, ok := optionalFact(doc, name)
+	if !ok {
+		t.Fatalf("no %s fact on the verdict: %+v", name, doc.Facts)
+	}
+
+	return got
+}
+
+// optionalFact reads a fact that may legitimately be absent — the
+// absence IS an answer for classScopeUnmet, so a row must be able to
+// assert it rather than only its value.
+func optionalFact(doc *jsonReportDoc, name string) (string, bool) {
 	for _, f := range doc.Facts {
 		if f.Name == name {
-			return f.Value
+			return f.Value, true
 		}
 	}
 
-	t.Fatalf("no %s fact on the verdict: %+v", name, doc.Facts)
-
-	return ""
+	return "", false
 }
 
 // The defect, measured: release-lab v0.25.3 rebuilt ONE class and the
@@ -406,12 +416,16 @@ func TestVerifyReproScopeStaysLoudInsideItsClass(t *testing.T) {
 	}
 }
 
-// What the verdict COVERS is stated, never inferred. Three shapes,
-// three answers: no class asked, a class asked and answered, and a
-// class asked of a manifest that has no class answer to give — where
-// the population stays the whole release and the fact says exactly
-// that, because a whole-release verdict wearing a class's name is the
-// defect this scoping exists to remove.
+// What the verdict COVERS is stated, never inferred — and stated as
+// TWO facts, because what the population covers and why that is not
+// what was asked are two different things. A single value a reader
+// has to split at a separator is two facts wearing one name, which is
+// the shape this org refuses everywhere else.
+//
+// So `classScope` is always the population's own scope, and
+// `classScopeUnmet` appears ONLY when a request went unhonoured: its
+// absence is the answer in the two clean cases, and every row asserts
+// that absence rather than leaving it untested.
 func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 	oneSubject := digestA + "  widget-linux-amd64.tar.gz\n"
 
@@ -420,16 +434,17 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 		released  string
 		class     string
 		wantScope string
+		wantUnmet string
 	}{
 		{
 			"no class asked: the whole release",
 			typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary")),
-			"", "whole-release",
+			"", "whole-release", "",
 		},
 		{
 			"a class asked and answered",
 			typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary")),
-			"go-binary", "go-binary",
+			"go-binary", "go-binary", "",
 		},
 		{
 			// A published manifest from before entries named their
@@ -439,12 +454,12 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 			"a class asked of a manifest that predates the answer",
 			legacyTypedManifest(
 				`{"name": "widget-linux-amd64.tar.gz", "sha256": "` + digestA + `", "type": "build-subject"}`),
-			"go-binary", "whole-release/no-class-answer",
+			"go-binary", "whole-release", "no-class-answer",
 		},
 		{
 			// A sha256sum manifest names assets and nothing else.
 			"a class asked of a manifest with no typing at all",
-			oneSubject, "go-binary", "whole-release/no-class-answer",
+			oneSubject, "go-binary", "whole-release", "no-class-answer",
 		},
 	}
 
@@ -471,6 +486,17 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 				t.Fatalf("classScope = %q, want %q", got, tt.wantScope)
 			}
 
+			// The absence of the unmet fact is itself the answer, so
+			// the clean rows assert it is not there at all.
+			unmet, present := optionalFact(doc, "classScopeUnmet")
+			if want := tt.wantUnmet != ""; present != want {
+				t.Fatalf("classScopeUnmet present = %v, want %v: %+v", present, want, doc.Facts)
+			}
+
+			if present && unmet != tt.wantUnmet {
+				t.Fatalf("classScopeUnmet = %q, want %q", unmet, tt.wantUnmet)
+			}
+
 			if doc.Population == nil || doc.Population.Size == nil || *doc.Population.Size != 1 {
 				t.Fatalf("population = %+v, want the one build subject either way", doc.Population)
 			}
@@ -478,7 +504,7 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 			// Loud on stderr too: a caller that asked for one class and
 			// got the whole release reads it, never deduces it.
 			said := strings.Contains(stderr.String(), "carries no class answer")
-			if want := tt.wantScope == "whole-release/no-class-answer"; said != want {
+			if want := tt.wantUnmet != ""; said != want {
 				t.Errorf("stderr said-it-could-not-scope = %v, want %v: %s", said, want, stderr.String())
 			}
 		})

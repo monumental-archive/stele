@@ -495,9 +495,16 @@ thirteen falsely reported missing, two supply-chain issues filed for
 a release that was fine. Narrowing does not mute — an artifact *of
 the class under rebuild* that the rebuild failed to produce is still
 a finding — and where the released manifest carries no class answer,
-the population stays the whole release and the verdict's `classScope`
-fact says `whole-release/no-class-answer` rather than wearing the
-class's name.
+the population stays the whole release rather than wearing the class's
+name.
+
+The verdict says which it is in **two** facts, never one string a
+reader has to split: `classScope` is the population's own scope (the
+class name, or `whole-release`), and `classScopeUnmet` appears only
+when a request went unhonoured, carrying why (`no-class-answer`). Its
+absence is the answer in the honoured case. Which KIND of manifest
+could not answer — one below the schema that types it, or one with no
+typing at all — is already the `subjectTyping` fact beside them.
 
 A manifest cannot pin itself: a document carrying its own digest is
 not a document. The entries are therefore the assets published

@@ -353,7 +353,7 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 
 	// Loud, never inferred: a caller that asked for one class and got
 	// the whole release must read it here, not deduce it from a count.
-	if pop.scope == scopeNoClassAnswer {
+	if pop.unmet != "" {
 		out.logf("repro: the released manifest carries no class answer, so %s cannot be scoped:"+
 			" judging every build subject the release published", class)
 	}
@@ -379,10 +379,7 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 
 	rep := report.Seal("verify repro", repo+"@"+tag,
 		report.PopulationFromEvidence(len(subjects), pop.describe()),
-		j, report.NoCanary(), report.NoJudgedSet(),
-		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))},
-		report.Fact{Name: "subjectTyping", Value: pop.typing},
-		report.Fact{Name: "classScope", Value: pop.scope})
+		j, report.NoCanary(), report.NoJudgedSet(), pop.facts(len(built))...)
 
 	return emitReport(rep, jsonOut, stdout, stderr)
 }
@@ -402,37 +399,65 @@ const (
 // reason the typing is: a verdict over one class and a verdict over
 // the whole release are different claims, and a reader must never
 // have to infer which one it is holding.
-const (
-	// scopeWholeRelease: no class was asked for, so the population is
-	// every build subject the release published.
-	scopeWholeRelease = "whole-release"
-	// scopeNoClassAnswer: a class WAS asked for and this released
-	// manifest carries no class answer — a manifest below the schema
-	// that types it, or one with no typing at all. The population
-	// stays the whole release and the verdict says nothing about that
-	// class alone, which is the honest reading and must be stated
-	// rather than left to look like a scoped one.
-	scopeNoClassAnswer = "whole-release/no-class-answer"
-)
+//
+// scopeWholeRelease is every build subject the release published —
+// because no class was asked for, or because one was and the released
+// manifest could not answer it. WHICH of those two is a separate fact
+// below, never a second half spliced into this string: a value a
+// reader has to split is two facts wearing one name.
+const scopeWholeRelease = "whole-release"
+
+// Why a requested class scope went unmet, reported beside the scope
+// and only when there was a request to miss. The population stays the
+// whole release and the verdict says nothing about that class alone,
+// which is the honest reading and must be STATED rather than left
+// looking like a scoped one.
+//
+// The vocabulary is closed at one entry: a released manifest either
+// carries the class answer or it does not, and which KIND of manifest
+// could not answer — one below the schema that types it, or one with
+// no typing at all — is already the subjectTyping fact beside it. A
+// second spelling of that here would be the same two-facts-one-name
+// defect one field over.
+const unmetNoClassAnswer = "no-class-answer"
 
 // reproPopulation is the released set a rebuild is judged against and
-// how it was drawn: which typing answered, and what the set covers.
-// One value, because the three travel together into one sealed report
-// and a caller holding two of them has a verdict it cannot describe.
+// how it was drawn: which typing answered, what the set covers, and
+// why that is not what was asked for where it is not. One value,
+// because they travel together into one sealed report and a caller
+// holding some of them has a verdict it cannot describe.
 type reproPopulation struct {
 	subjects []verify.Subject
 	typing   string
 	scope    string
+	unmet    string
 }
 
 // describe names the population for the report — the scope in words,
 // beside the count the seal carries.
 func (p *reproPopulation) describe() string {
-	if p.scope == scopeWholeRelease || p.scope == scopeNoClassAnswer {
+	if p.scope == scopeWholeRelease {
 		return "released build subjects under rebuild"
 	}
 
 	return "released " + p.scope + " build subjects under rebuild"
+}
+
+// facts renders what this population is, for the seal. The unmet
+// reason appears only when there is one: a fact whose absence is the
+// answer beats a fact carrying a word for "nothing to report".
+func (p *reproPopulation) facts(rebuilt int) []report.Fact {
+	facts := []report.Fact{
+		{Name: "rebuiltArtifacts", Value: strconv.Itoa(rebuilt)},
+		{Name: "subjectTyping", Value: p.typing},
+		{Name: "classScope", Value: p.scope},
+	}
+
+	if p.unmet != "" {
+		facts = append(facts, report.Fact{Name: "classScopeUnmet", Value: p.unmet})
+	}
+
+	return facts
 }
 
 // reproSubjects reads the released manifest whole and returns the
@@ -488,7 +513,7 @@ func reproSubjects(path, policyPath, class string) (*reproPopulation, error) {
 	// declared class list either — so a class asked for here is
 	// neither honoured nor refused, it is unanswerable, and the
 	// verdict says exactly that.
-	return &reproPopulation{subjects: subjects, typing: typingPolicy, scope: scopeOf(class, false)}, nil
+	return newReproPopulation(subjects, typingPolicy, class, false), nil
 }
 
 // reproFromManifest draws the population from a typed evidence
@@ -522,21 +547,27 @@ func reproFromManifest(raw []byte, class string) (*reproPopulation, error) {
 		subjects = append(subjects, verify.Subject{Name: a.Name, SHA256: a.SHA256})
 	}
 
-	return &reproPopulation{subjects: subjects, typing: typingManifest, scope: scopeOf(class, scoped)}, nil
+	return newReproPopulation(subjects, typingManifest, class, scoped), nil
 }
 
-// scopeOf names what the population covers, from the one pair of
-// facts that decide it: whether a class was asked for, and whether
-// the released manifest could answer.
-func scopeOf(class string, scoped bool) string {
+// newReproPopulation assembles the judged set and names what it
+// covers. The ONE constructor, so the scope and the unmet reason
+// cannot be set apart from the subjects they describe — they are two
+// facts, but they answer one question and a caller holding a
+// half-filled pair has a verdict it cannot state.
+func newReproPopulation(subjects []verify.Subject, typing, class string, scoped bool) *reproPopulation {
+	p := &reproPopulation{subjects: subjects, typing: typing, scope: scopeWholeRelease}
+
 	switch {
 	case class == "":
-		return scopeWholeRelease
+		return p
 	case scoped:
-		return class
+		p.scope = class
 	default:
-		return scopeNoClassAnswer
+		p.unmet = unmetNoClassAnswer
 	}
+
+	return p
 }
 
 // verifyOutcome carries what a completed mode proved, for the report:
