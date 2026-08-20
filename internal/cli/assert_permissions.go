@@ -26,6 +26,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/workflow"
 )
@@ -119,14 +120,14 @@ func assertPermissions(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	pop := assert.Population{Org: org, Repo: repo}
+	scope := population.Scope{Org: org, Repo: repo}
 
 	j, code := openJournal(debtPathFor(pol, debtPath), targetPermissions, stderr)
 	if code != exitOK {
 		return code
 	}
 
-	subject, callers, err := permissionCallers(pol.Permissions, pop, callersDir, forge)
+	subject, callers, err := permissionCallers(pol, scope, callersDir, forge)
 	if err != nil {
 		return emitReport(blindPermissions(subject, err), jsonOut, stdout, stderr)
 	}
@@ -218,28 +219,35 @@ func reusableTree(pp *assert.PermissionsPolicy, root string) ([]workflow.File, e
 }
 
 // permissionCallers builds the caller sets and the report subject. A
-// nil forge is the checkout-local run: no forge, no walk.
+// nil forge is the checkout-local run: no forge, no walk — and no
+// population either, because a checkout is not an organisation and
+// the declaration says nothing about the directories in front of it.
 func permissionCallers(
-	pp *assert.PermissionsPolicy, pop assert.Population, callersDir string, forge gh.Forge,
+	pol *assert.Policy, scope population.Scope, callersDir string, forge gh.Forge,
 ) (string, []assert.CallerSet, error) {
 	if forge == nil {
 		if callersDir == "" {
 			callersDir = "."
 		}
 
-		sets, err := localCallers(pp, callersDir)
+		sets, err := localCallers(pol.Permissions, callersDir)
 
 		return callersDir, sets, err
 	}
 
-	owner, repos, err := pop.Resolve(forge)
+	pop, err := resolvePopulation(scope, forge, pol.Population)
 	if err != nil {
-		return pop.Subject(), nil, err
+		return scope.Subject(), nil, err
 	}
 
-	sets, err := forgeCallers(owner, repos, forge)
+	repos, err := pop.Members(assert.TrackPermissions)
+	if err != nil {
+		return scope.Subject(), nil, err
+	}
 
-	return pop.Subject(), sets, err
+	sets, err := forgeCallers(pop.Owner(), repos, forge)
+
+	return scope.Subject(), sets, err
 }
 
 // localCallers reads each declared caller directory out of one

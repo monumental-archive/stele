@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/workflow"
 )
@@ -108,12 +110,47 @@ type fakeForge struct {
 	assetErr map[string]error
 }
 
-func (f *fakeForge) Repos(string) ([]string, error) {
+func (f *fakeForge) ListRepos(string) ([]gh.Repo, error) {
 	if f.reposErr != nil {
 		return nil, f.reposErr
 	}
 
-	return f.repos, f.tear("Repos")
+	out := make([]gh.Repo, 0, len(f.repos))
+	for _, name := range f.repos {
+		out = append(out, gh.Repo{Name: name})
+	}
+
+	return out, f.tear("ListRepos")
+}
+
+// testOrg is the organisation every fixture in this package sits
+// under; the population's own tests cover the name varying.
+const testOrg = "acme"
+
+// orgPop resolves an organisation the way the binary does — through
+// the one component allowed to enumerate one — so a test walks the
+// population the CLI would hand it, never one assembled beside it.
+func orgPop(t *testing.T, lister gh.RepoLister, d *population.Declaration) *population.Set {
+	t.Helper()
+
+	set, err := population.Scope{Org: testOrg}.Resolve(lister, d)
+	if err != nil {
+		t.Fatalf("resolving the %s population: %v", testOrg, err)
+	}
+
+	return set
+}
+
+// repoPop is the single-repository population (stele#79).
+func repoPop(t *testing.T, repo string) *population.Set {
+	t.Helper()
+
+	set, err := population.Scope{Repo: repo}.Resolve(nil, nil)
+	if err != nil {
+		t.Fatalf("resolving the %s population: %v", repo, err)
+	}
+
+	return set
 }
 
 func (f *fakeForge) ReleaseTags(_, repo string) ([]string, error) {
@@ -261,7 +298,7 @@ func runEvidenceWith(t *testing.T, f *fakeForge, debt []report.Exception, policy
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
 		report.NewJournal(debt...), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
@@ -429,7 +466,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	pol.Evidence.PublishWorkflows = []string{"publish", "self-publish"}
 	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep4, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f4, src4, &fakeAttestor{},
+	rep4, err := assert.Evidence(pol, orgPop(t, f4, nil), f4, src4, &fakeAttestor{},
 		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err != nil {
@@ -446,7 +483,7 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	f5.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard", "publish"}}
 	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep5, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f5, src5, &fakeAttestor{},
+	rep5, err := assert.Evidence(pol, orgPop(t, f5, nil), f5, src5, &fakeAttestor{},
 		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err != nil {
@@ -538,7 +575,7 @@ func TestEvidenceSingleRepoPopulation(t *testing.T) {
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
-	rep, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src,
+	rep, err := assert.Evidence(pol, repoPop(t, "acme/widget"), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
@@ -549,10 +586,12 @@ func TestEvidenceSingleRepoPopulation(t *testing.T) {
 	}
 }
 
-// TestEvidenceSingleRepoRefusals: the guard branches the single-repo
-// population adds — a declared org population cannot apply, and a
-// population that is not owner/name cannot resolve.
-func TestEvidenceSingleRepoRefusals(t *testing.T) {
+// TestEvidenceOutsideItsTrack: a repository the policy declares
+// outside the build track is not walked here, and naming ONE such
+// repository is a contradiction the walk reports rather than answers
+// with an empty pass. The population's own guards live in
+// internal/population; this pins that the evidence walk asks it.
+func TestEvidenceOutsideItsTrack(t *testing.T) {
 	t.Parallel()
 
 	pol := loadTestPolicy(t)
@@ -560,51 +599,26 @@ func TestEvidenceSingleRepoRefusals(t *testing.T) {
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 	silent := func(string, ...any) {}
 
-	expected := 1
-	pol.Evidence.ExpectedRepos = &expected
+	sourceOnly := &population.Declaration{Repositories: []population.Entry{
+		{Repo: new("widget"), Tracks: &[]string{"source"}, Reason: new("publishes no releases")},
+	}}
 
-	_, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src, &fakeAttestor{},
-		report.NewJournal(), nil, nil, silent)
-	if err == nil || !strings.Contains(err.Error(), "expectedRepos") {
-		t.Fatalf("error = %v, want the expectedRepos-over-one-repo refusal", err)
+	// Over the organisation and over the one repository alike: what
+	// owes nothing on this track has nothing for this walk to judge,
+	// and the walk says which track rather than sealing a verdict.
+	set, serr := population.Scope{Repo: "acme/widget"}.Resolve(nil, sourceOnly)
+	if serr != nil {
+		t.Fatalf("resolving the single-repository population: %v", serr)
 	}
 
-	pol.Evidence.ExpectedRepos = nil
-
-	for _, bad := range []string{"solo", "/name", "owner/"} {
-		if _, err := assert.Evidence(pol, assert.Population{Repo: bad}, f, src,
-			&fakeAttestor{}, report.NewJournal(), nil, nil, silent); err == nil ||
-			!strings.Contains(err.Error(), "owner/name") {
-			t.Fatalf("population %q: error = %v, want the owner/name refusal", bad, err)
+	for name, pop := range map[string]*population.Set{
+		"organisation": orgPop(t, f, sourceOnly),
+		"repository":   set,
+	} {
+		_, err := assert.Evidence(pol, pop, f, src, &fakeAttestor{}, report.NewJournal(), nil, nil, silent)
+		if err == nil || !strings.Contains(err.Error(), "outside the build track") {
+			t.Fatalf("%s scope: error = %v, want the track contradiction", name, err)
 		}
-	}
-}
-
-func TestEvidenceRefusals(t *testing.T) {
-	t.Parallel()
-
-	pol := loadTestPolicy(t)
-	expected := 2
-	pol.Evidence.ExpectedRepos = &expected
-
-	f := completeRelease() // one repo, expectation says two
-
-	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
-
-	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
-		report.NewJournal(), nil, nil,
-		func(string, ...any) {})
-	if err == nil || !strings.Contains(err.Error(), "declared population") {
-		t.Fatalf("error = %v, want the population guard", err)
-	}
-
-	broken := &fakeForge{reposErr: errors.New("listing torn")}
-
-	_, err = assert.Evidence(
-		loadTestPolicy(t), assert.Population{Org: "acme"}, broken, src, &fakeAttestor{}, nil, nil, nil,
-		func(string, ...any) {})
-	if err == nil || !strings.Contains(err.Error(), "listing torn") {
-		t.Fatalf("error = %v, want the listing failure", err)
 	}
 }
 

@@ -30,7 +30,14 @@ type levelForge struct {
 	err      error
 }
 
-func (f *levelForge) Repos(string) ([]string, error) { return f.repos, f.err }
+func (f *levelForge) ListRepos(string) ([]gh.Repo, error) {
+	out := make([]gh.Repo, 0, len(f.repos))
+	for _, name := range f.repos {
+		out = append(out, gh.Repo{Name: name})
+	}
+
+	return out, f.err
+}
 
 func (f *levelForge) ReleaseTags(_, _ string) ([]string, error) { return f.tags, f.err }
 
@@ -237,6 +244,93 @@ func TestLevelOrgFoldsThePopulation(t *testing.T) {
 
 	if !strings.Contains(stdout.String(), "2 repositories") {
 		t.Errorf("the report does not name the population:\n%s", stdout.String())
+	}
+}
+
+// TestLevelOrgDeclaredPopulation: --policy decides WHO IS ASKED, per
+// repository and per track. A repository declared outside a track is
+// absent from that board — not measured, not counted, not a grey cell
+// — while the track it does bear evidence on still names it.
+func TestLevelOrgDeclaredPopulation(t *testing.T) {
+	swapLevelSeams(t, &levelForge{repos: []string{"widget", "signer"}}, nil)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "assert-policy.json")
+	policy := `{
+	  "schema": 5,
+	  "population": {"repositories": [
+	    {"repo": "widget"},
+	    {"repo": "signer", "tracks": ["source"], "reason": "publishes no releases"}
+	  ]},
+	  "evidence": {
+	    "sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+	    "storeVsaFromVersion": "1.0.0",
+	    "classes": {"go-binary": {"bundles": ["attestations-go-binaries.intoto.jsonl"]}}
+	  }
+	}`
+
+	if err := os.WriteFile(path, []byte(policy), 0o600); err != nil {
+		t.Fatalf("writing the policy: %v", err)
+	}
+
+	for _, tc := range []struct {
+		track string
+		want  string
+	}{
+		{"build", "1 repositories"},
+		{"source", "2 repositories"},
+	} {
+		t.Run(tc.track, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			Run([]string{"level", tc.track, "--org", "acme", "--policy", path, "--json"}, &stdout, &stderr)
+
+			if !strings.Contains(stdout.String(), tc.want) {
+				t.Errorf("the %s board does not carry %q:\n%s", tc.track, tc.want, stdout.String())
+			}
+		})
+	}
+}
+
+// TestLevelPolicyRefusals: the declaration's guard branches at the
+// command surface — a population over the one repository a caller
+// named could only veto the question, and a policy that will not load
+// is a refusal, never a walk over whatever arrived.
+func TestLevelPolicyRefusals(t *testing.T) {
+	swapLevelSeams(t, &levelForge{repos: []string{"widget"}}, nil)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want int
+		doc  string
+	}{
+		{
+			name: "a declared population cannot apply to one repository",
+			args: []string{"level", "build", "--repo", "acme/widget", "--policy", "any.json"},
+			want: exitUsage,
+		},
+		{
+			name: "a policy that is not there is not a population",
+			args: []string{"level", "build", "--org", "acme", "--policy", "absent.json"},
+			want: exitBlind,
+			// The cause rides IN the document: a board consumer must be
+			// able to tell "nobody could look" from "nobody is here".
+			doc: "absent.json",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			if got := Run(append(tc.args, "--json"), &stdout, &stderr); got != tc.want {
+				t.Errorf("Run = %d, want %d\nstderr: %s", got, tc.want, stderr.String())
+			}
+
+			if tc.doc != "" && !strings.Contains(stdout.String(), tc.doc) {
+				t.Errorf("the report does not carry the cause %q:\n%s", tc.doc, stdout.String())
+			}
+		})
 	}
 }
 

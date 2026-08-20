@@ -8,6 +8,7 @@ package gh_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,8 @@ func testServer(t *testing.T) *gh.Client {
 
 	mux.HandleFunc("/orgs/acme/repos", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("page") == "1" {
-			// widget survives; the archive and the fork are filtered.
+			// All three travel: the listing reports facts, and the
+			// membership rule that reads them is the population's.
 			writeBody(w, []byte(`[
 			  {"name": "widget", "archived": false, "fork": false},
 			  {"name": "old", "archived": true, "fork": false},
@@ -145,9 +147,13 @@ func TestClientReads(t *testing.T) {
 
 	c := testServer(t)
 
-	repos, err := c.Repos("acme")
-	if err != nil || len(repos) != 1 || repos[0] != "widget" {
-		t.Fatalf("Repos = %v, %v — archived and forks must be filtered", repos, err)
+	repos, err := c.ListRepos("acme")
+	if err != nil || !reflect.DeepEqual(repos, []gh.Repo{
+		{Name: "widget"},
+		{Name: "old", Archived: true},
+		{Name: "copy", Fork: true},
+	}) {
+		t.Fatalf("ListRepos = %v, %v — the listing reports facts, and filters none of them", repos, err)
 	}
 
 	tags, err := c.ReleaseTags("acme", "widget")
@@ -213,7 +219,7 @@ func TestClientTypedRefusals(t *testing.T) {
 
 	// A 404 on a listing endpoint is an error: the population source
 	// itself is missing, which is not an empty population.
-	if _, err := c.Repos("ghost"); err == nil {
+	if _, err := c.ListRepos("ghost"); err == nil {
 		t.Fatal("a missing org listing did not refuse")
 	}
 
@@ -294,9 +300,9 @@ func TestTransientRetry(t *testing.T) {
 
 			c, seen := flakyServer(t, status, 2)
 
-			repos, err := c.Repos("acme")
+			repos, err := c.ListRepos("acme")
 			if err != nil || len(repos) != 1 {
-				t.Fatalf("Repos = %v, %v — a transient status must not end the walk", repos, err)
+				t.Fatalf("ListRepos = %v, %v — a transient status must not end the walk", repos, err)
 			}
 
 			// Two transient attempts and the answering page: that page
@@ -316,7 +322,7 @@ func TestTransientExhausted(t *testing.T) {
 
 	c, seen := flakyServer(t, http.StatusServiceUnavailable, 99)
 
-	if _, err := c.Repos("acme"); err == nil || !strings.Contains(err.Error(), "after 4 attempts") {
+	if _, err := c.ListRepos("acme"); err == nil || !strings.Contains(err.Error(), "after 4 attempts") {
 		t.Fatalf("err = %v, want the bounded refusal", err)
 	}
 

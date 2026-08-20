@@ -233,7 +233,7 @@ func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snap
 	bundle := `{"dsseEnvelope": {"payload": "` + base64.StdEncoding.EncodeToString([]byte(stmt)) + `"}}`
 
 	files := map[string]string{
-		"snap/acme/repos.json":       `["widget"]`,
+		"snap/acme/repos.json":       `[{"name": "widget"}]`,
 		"snap/acme/widget/tags.json": `["v1.0.0"]`,
 		"snap/acme/widget/releases/v1.0.0/assets.json": `["evidence-manifest.json", "app.spdx.json", ` +
 			`"checksums.txt", "attestations-image.intoto.jsonl"]`,
@@ -279,6 +279,73 @@ func TestAssertEvidenceSnapshotEndToEnd(t *testing.T) {
 	doc := decodeReport(t, &stdout)
 	if doc.Verdict == nil || *doc.Verdict != "PASS" {
 		t.Fatalf("verdict = %v, want PASS", doc.Verdict)
+	}
+}
+
+// TestAssertPopulationReconciliation walks the declared roster
+// through the whole verb, both ways round: a repository the listing
+// shows that the roster does not account for, and a repository the
+// roster names that the listing does not show. Either way the run has
+// not learned its own population, so it seals CANNOT_JUDGE naming the
+// repository — never a pass over a set nobody enumerated.
+func TestAssertPopulationReconciliation(t *testing.T) {
+	base := `{"schema": 5, %s"evidence": {"sbomSuffix": ".spdx.json", ` +
+		`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
+		`"manifestAsset": "evidence-manifest.json", ` +
+		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`
+
+	for _, tc := range []struct {
+		name string
+		pop  string
+		want string
+	}{
+		{
+			name: "a repository nobody declared",
+			pop:  `"population": {"repositories": [{"repo": "other"}]}, `,
+			want: "the listing shows widget",
+		},
+		{
+			name: "a repository the listing does not show",
+			pop:  `"population": {"repositories": [{"repo": "widget"}, {"repo": "ghost"}]}, `,
+			want: "names ghost",
+		},
+		{
+			name: "a roster that accounts for the listing exactly",
+			pop:  `"population": {"repositories": [{"repo": "widget"}]}, `,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap, policy := evidenceSnapshot(t)
+
+			if err := os.WriteFile(policy, fmt.Appendf(nil, base, tc.pop), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"assert", "evidence", "--org", "acme", "--policy", policy, "--snapshot", snap, "--json",
+			}, &stdout, &stderr)
+
+			doc := decodeReport(t, &stdout)
+
+			if tc.want == "" {
+				if code != exitOK || doc.Verdict == nil || *doc.Verdict != "PASS" {
+					t.Fatalf("Run = %d, verdict = %v, want a clean reconciled walk\nstderr: %s",
+						code, doc.Verdict, stderr.String())
+				}
+
+				return
+			}
+
+			if code != exitBlind || doc.Verdict == nil || *doc.Verdict != "CANNOT_JUDGE" {
+				t.Fatalf("Run = %d, verdict = %v, want CANNOT_JUDGE", code, doc.Verdict)
+			}
+
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr does not name the divergence %q:\n%s", tc.want, stderr.String())
+			}
+		})
 	}
 }
 
@@ -334,7 +401,7 @@ func blastSnapshot(t *testing.T) (string, string, string) {
 	digest := chain.SHA256Hex([]byte(sbom))
 
 	files := map[string]string{
-		"snap/acme/repos.json":                                  `["widget"]`,
+		"snap/acme/repos.json":                                  `[{"name": "widget"}]`,
 		"snap/acme/widget/tags.json":                            `["v1.0.0"]`,
 		"snap/acme/widget/releases/v1.0.0/assets.json":          `["app.spdx.json"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,

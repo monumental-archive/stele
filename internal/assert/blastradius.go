@@ -27,6 +27,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/osv"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/sbomwalk"
 	"github.com/monumental-archive/stele/internal/triage"
@@ -73,14 +74,16 @@ func (b *BlastRadiusPolicy) validate() error {
 
 // BlastRadius walks one org's SBOMs and seals the triage verdict.
 func BlastRadius(
-	pol *Policy, pop Population, forge gh.Forge, scanner osv.Scanner, decisions *vexjoin.Decisions,
+	pol *Policy, pop *population.Set, forge gh.Forge, scanner osv.Scanner, decisions *vexjoin.Decisions,
 	j *report.Journal, log Logf,
 ) (*report.Report, error) {
 	if pol.BlastRadius == nil {
 		return nil, errors.New("assert: the policy declares no blastRadius section")
 	}
 
-	org, repos, err := pop.Resolve(forge)
+	org := pop.Owner()
+
+	repos, err := pop.Members(TrackBlastRadius)
 	if err != nil {
 		return nil, err
 	}

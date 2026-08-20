@@ -17,6 +17,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/population"
 )
 
 // PolicySchema is the document epoch this implementation reads — any
@@ -44,12 +45,20 @@ type Policy struct {
 	// the file is. Absent means the org declares no exceptions —
 	// validate by declared obligation, so nothing is excusable and
 	// every finding stands.
-	DebtFile    *string            `json:"debtFile,omitempty"`
-	Evidence    *EvidencePolicy    `json:"evidence"`
-	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
-	Tags        *TagsPolicy        `json:"tags,omitempty"`
-	Chains      *ChainsPolicy      `json:"chains,omitempty"`
-	Permissions *PermissionsPolicy `json:"permissions,omitempty"`
+	DebtFile *string `json:"debtFile,omitempty"`
+	// Population is the organisation's own statement of which
+	// repositories bear evidence, and on which tracks (stele#153). It
+	// sits at the ROOT beside debtFile and for the same reason: every
+	// target enumerates through it, and a population declared inside
+	// one walk's section would be a second population for the other
+	// five. Absent means the default predicate — archived repositories
+	// and forks out, everything else in, on every track.
+	Population  *population.Declaration `json:"population,omitempty"`
+	Evidence    *EvidencePolicy         `json:"evidence"`
+	BlastRadius *BlastRadiusPolicy      `json:"blastRadius,omitempty"`
+	Tags        *TagsPolicy             `json:"tags,omitempty"`
+	Chains      *ChainsPolicy           `json:"chains,omitempty"`
+	Permissions *PermissionsPolicy      `json:"permissions,omitempty"`
 }
 
 // ChainsPolicy parameterises the chain-coverage audit (stele#94).
@@ -289,9 +298,6 @@ type EvidencePolicy struct {
 	// its tag; a repository carrying its own machinery uses its own
 	// version (docs/assert-policy-schema.md defines it once).
 	StoreVSAFromVersion *string `json:"storeVsaFromVersion"`
-	// ExpectedRepos, when set, is the declared org population — a
-	// listing that sees a different count cannot judge.
-	ExpectedRepos *int `json:"expectedRepos,omitempty"`
 	// Continuous, when set, adds the continuous-digest half: repos
 	// whose stub calls the org's continuous workflow publish rolling
 	// digests whose evidence lives ONLY in the attestation store.
@@ -540,10 +546,6 @@ func (p *Policy) validate() error {
 		return err
 	}
 
-	if e.ExpectedRepos != nil && *e.ExpectedRepos <= 0 {
-		return errors.New("evidence.expectedRepos must be positive when set")
-	}
-
 	if (e.Continuous != nil || e.BaseImages != nil) && (p.Issuer == nil || *p.Issuer == "") {
 		return errors.New("issuer is required when evidence.continuous or evidence.baseImages is declared")
 	}
@@ -564,6 +566,10 @@ func (p *Policy) validate() error {
 		if err := p.BlastRadius.validate(); err != nil {
 			return err
 		}
+	}
+
+	if err := p.Population.Validate(); err != nil {
+		return err
 	}
 
 	if p.Chains != nil {

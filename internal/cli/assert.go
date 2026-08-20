@@ -27,6 +27,7 @@ import (
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/policy"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
@@ -339,7 +340,12 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	pop := assert.Population{Org: org, Repo: repo}
+	scope := population.Scope{Org: org, Repo: repo}
+
+	pop, perr := resolvePopulation(scope, forge, pol.Population)
+	if perr != nil {
+		return refuseToStart(targetEvidence, scope.Subject(), perr, jsonOut, stdout, stderr)
+	}
 
 	rep, err := assert.Evidence(pol, pop, forge, src, attestor, j, pinFile, full, out.logf, root.facts()...)
 	if out.err != nil {
@@ -347,7 +353,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err != nil {
-		rep = refusal(targetEvidence, pop.Subject(), err.Error(),
+		rep = refusal(targetEvidence, scope.Subject(), err.Error(),
 			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
@@ -512,6 +518,41 @@ func debtPathFor(pol *assert.Policy, override string) string {
 	}
 
 	return *pol.DebtFile
+}
+
+// resolvePopulation enumerates a walk's population once, through the
+// one component allowed to enumerate one (stele#153). The forge is
+// asked for its listing seam here and nowhere else: a forge that
+// cannot list an organisation can still serve a single-repository
+// scope, and saying so by name beats a walk that quietly covers
+// nothing.
+func resolvePopulation(
+	scope population.Scope, forge gh.Forge, d *population.Declaration,
+) (*population.Set, error) {
+	lister, ok := forge.(gh.RepoLister)
+	if !ok {
+		// Not an error here: a single-repository scope needs no
+		// listing at all, and the population says so by name when one
+		// is actually required.
+		return scope.Resolve(nil, d)
+	}
+
+	return scope.Resolve(lister, d)
+}
+
+// refuseToStart seals and emits the report a walk that never learned
+// its own population still owes. A run that cannot name its subjects
+// has not judged them, so the population is empty and the verdict is
+// CANNOT_JUDGE — never a pass over a set nobody enumerated.
+func refuseToStart(target, subject string, err error, jsonOut bool, stdout, stderr io.Writer) int {
+	rep := refusal(target, subject, err.Error(),
+		report.PopulationFromListing(0, "the population could not be enumerated"))
+
+	if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+		return exitIO
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
 }
 
 // refusal seals the report a walk that could not finish still owes.
@@ -764,7 +805,12 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	pop := assert.Population{Org: org, Repo: repo}
+	scope := population.Scope{Org: org, Repo: repo}
+
+	pop, perr := resolvePopulation(scope, forge, pol.Population)
+	if perr != nil {
+		return refuseToStart(targetBlastRadius, scope.Subject(), perr, jsonOut, stdout, stderr)
+	}
 
 	j, code := openJournal(debtPathFor(pol, debtPath), targetBlastRadius, stderr)
 	if code != exitOK {
@@ -777,7 +823,7 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err != nil {
-		rep = refusal(targetBlastRadius, pop.Subject(), err.Error(),
+		rep = refusal(targetBlastRadius, scope.Subject(), err.Error(),
 			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
@@ -922,7 +968,12 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		return usageFail("this forge cannot read tags")
 	}
 
-	pop := assert.Population{Org: org, Repo: repo}
+	scope := population.Scope{Org: org, Repo: repo}
+
+	pop, perr := resolvePopulation(scope, forge, pol.Population)
+	if perr != nil {
+		return refuseToStart(targetTags, scope.Subject(), perr, jsonOut, stdout, stderr)
+	}
 
 	j, code := openJournal(debtPathFor(pol, debtPath), targetTags, stderr)
 	if code != exitOK {
@@ -934,13 +985,13 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.Tags(pol, pop, forge, tags, tv, j, out.logf, root.facts()...)
+	rep, err := assert.Tags(pol, pop, tags, tv, j, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = refusal(targetTags, pop.Subject(), err.Error(),
+		rep = refusal(targetTags, scope.Subject(), err.Error(),
 			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
@@ -1056,20 +1107,25 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 	}
 
 	cv := chainWalker{vpol: vpol, tags: tags, bv: bv, log: out.logf}
-	pop := assert.Population{Org: org, Repo: repo}
+	scope := population.Scope{Org: org, Repo: repo}
+
+	pop, perr := resolvePopulation(scope, forge, pol.Population)
+	if perr != nil {
+		return refuseToStart(targetChains, scope.Subject(), perr, jsonOut, stdout, stderr)
+	}
 
 	j, code := openJournal(debtPathFor(pol, debtPath), targetChains, stderr)
 	if code != exitOK {
 		return code
 	}
 
-	rep, err := assert.Chains(pol, pop, forge, tags, cv, notesRef, refs, j, out.logf, root.facts()...)
+	rep, err := assert.Chains(pol, pop, tags, cv, notesRef, refs, j, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = refusal(targetChains, pop.Subject(), err.Error(),
+		rep = refusal(targetChains, scope.Subject(), err.Error(),
 			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {

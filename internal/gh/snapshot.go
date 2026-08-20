@@ -63,6 +63,13 @@ func unseg(s string) string {
 // decodeInto adapts the generic decode to a pointer target.
 func decodeInto(raw jsonx.Raw, into any) error {
 	switch t := into.(type) {
+	case *[]Repo:
+		v, err := jsonx.DecodeBytes[[]Repo](raw)
+		if err != nil {
+			return err
+		}
+
+		*t = *v
 	case *[]string:
 		v, err := jsonx.DecodeBytes[[]string](raw)
 		if err != nil {
@@ -126,9 +133,9 @@ func decodeInto(raw jsonx.Raw, into any) error {
 	return nil
 }
 
-// Repos implements Forge.
-func (s Snapshot) Repos(org string) ([]string, error) {
-	var out []string
+// ListRepos implements RepoLister.
+func (s Snapshot) ListRepos(org string) ([]Repo, error) {
+	var out []Repo
 	if err := s.readJSON(filepath.Join(seg(org), "repos.json"), &out); err != nil {
 		return nil, err
 	}
@@ -289,9 +296,17 @@ type Capture struct {
 	Dir  string
 }
 
-// Repos implements Forge.
-func (c Capture) Repos(org string) ([]string, error) {
-	out, err := c.Live.Repos(org)
+// ListRepos implements RepoLister. Capture wraps a live LISTER here,
+// not the Forge: the listing is the one read that is not a Forge read
+// (stele#153), so a capture over a forge that cannot list records
+// everything else and says so by absence.
+func (c Capture) ListRepos(org string) ([]Repo, error) {
+	lister, ok := c.Live.(RepoLister)
+	if !ok {
+		return nil, errors.New("gh: this forge cannot list an organisation")
+	}
+
+	out, err := lister.ListRepos(org)
 	if err != nil {
 		return nil, err
 	}

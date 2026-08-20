@@ -413,6 +413,31 @@ func summarise(outcomes []levelOutcome) string {
 	return msg
 }
 
+// populationDetail names what an --org population is made of. One
+// constant, because the count and the two ways of failing to reach
+// one must describe the same set.
+const populationDetail = "repositories with a determinable ladder"
+
+// Unenumerated seals the assessment a run that never learned its own
+// population still owes. The cause travels IN the document, not only
+// on a log: a CANNOT_JUDGE whose report says nothing about why cannot
+// be told apart, by the machine reading it, from a population that
+// really is empty — and "the credential died" and "nobody bears
+// evidence here" are opposite facts a board must not merge.
+func Unenumerated(t Track, subject string, cause error, now time.Time) *Assessment {
+	lad := NewLadder(t)
+	lad.Blind(1, "the population could not be enumerated, so nothing was measured")
+
+	return Seal(t, lad, &Inputs{
+		Subject: subject, InScope: 1, Determined: 0,
+		PopulationDetail: populationDetail,
+		Findings: []report.Finding{{
+			Subject: subject, Assertion: "population", Detail: cause.Error(),
+		}},
+		Now: now,
+	})
+}
+
 // AssessPopulation measures many repositories and folds them into one
 // answer: what the population as a whole supports.
 //
@@ -423,10 +448,15 @@ func summarise(outcomes []levelOutcome) string {
 // is level 2" without saying which repository held it there is a
 // number nobody can act on.
 //
-// The population itself is evidence, not a declaration: a listing is
-// what the forge says exists. Which members are PERMITTED to fall
-// short is a different question, asked by a verb that compares
-// evidence to a declaration, and deliberately not asked here.
+// The members arrive already enumerated, and this package never asks
+// where from. Which repositories BEAR evidence on a track is the
+// organisation's own shape to state (stele#153) and the caller
+// resolves it; which members are PERMITTED to fall short is a
+// different question again, asked by a verb that compares evidence to
+// a declaration, and deliberately not asked here. What reaches this
+// function is a subject list, and every subject on it is judged the
+// same way — no declaration reaches a rung, because none reaches this
+// package at all.
 func AssessPopulation(t Track, members []*Evidence, now time.Time) *Assessment {
 	if len(members) == 0 {
 		lad := NewLadder(t)
@@ -434,7 +464,7 @@ func AssessPopulation(t Track, members []*Evidence, now time.Time) *Assessment {
 
 		return Seal(t, lad, &Inputs{
 			Subject: "(empty population)", InScope: 1, Determined: 0,
-			PopulationDetail: "repositories with a determinable ladder", Now: now,
+			PopulationDetail: populationDetail, Now: now,
 		})
 	}
 
@@ -487,7 +517,7 @@ func AssessPopulation(t Track, members []*Evidence, now time.Time) *Assessment {
 		Weakest:          weakest,
 		InScope:          len(members),
 		Determined:       determined,
-		PopulationDetail: "repositories with a determinable ladder",
+		PopulationDetail: populationDetail,
 		Findings:         findings,
 		ExtraFacts:       facts,
 		Now:              now,

@@ -29,6 +29,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 )
 
@@ -53,7 +54,7 @@ const assertionUnactivated = "unactivated"
 // runFacts are the caller's facts about the run itself — the trust
 // material it held, which the walk cannot know.
 func Chains(
-	pol *Policy, pop Population, forge gh.Forge, tags gh.TagReader, cv ChainVerifier,
+	pol *Policy, pop *population.Set, tags gh.TagReader, cv ChainVerifier,
 	notesRef string, refs []string, j *report.Journal, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	cp := pol.Chains
@@ -65,7 +66,9 @@ func Chains(
 		return nil, errors.New("assert: chains needs the source notes ref and at least one protected branch")
 	}
 
-	org, repos, err := pop.Resolve(forge)
+	org := pop.Owner()
+
+	repos, err := pop.Members(TrackChains)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +94,7 @@ func Chains(
 		report.Fact{Name: "chainsVerified", Value: strconv.Itoa(w.verified)},
 		report.Fact{Name: "links", Value: strconv.Itoa(w.links)})
 
-	pop2 := report.PopulationFromListing(len(repos), "repositories in the population")
-
-	return report.Seal("assert chains", pop.Subject(), pop2, j,
+	return report.Seal("assert chains", pop.Subject(), pop.Population(TrackChains), j,
 		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 

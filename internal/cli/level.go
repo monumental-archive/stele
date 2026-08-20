@@ -6,6 +6,18 @@
 // and requiring them made a universal judge into something you
 // configure before it will speak.
 //
+// --org takes one optional declaration and it is worth stating what
+// it can and cannot do. A population declaration decides WHO IS
+// ASKED; it can never touch what the answer is (stele#153). Being
+// outside the population means a track was never measured for that
+// repository — no cell, no number, no finding — which is a different
+// claim from a measured shortfall, and the declaration has no
+// vocabulary for the second. There is still no route from anything an
+// organisation writes down to a rung: internal/level imports no
+// policy, this file filters the SUBJECT LIST before any evidence is
+// gathered, and a repository that is asked is judged on what the
+// platform says about it and nothing else.
+//
 // What is left here is fetching. Nothing in this file judges: it
 // gathers what the forge and the attestation store will give up, hands
 // it to internal/level, and prints what came back. If a fetch fails,
@@ -33,6 +45,7 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/level"
 	"github.com/monumental-archive/stele/internal/pkgtime"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 )
@@ -80,6 +93,7 @@ type levelArgs struct {
 	notesRef    string
 	tag         string
 	shieldPath  string
+	policyPath  string
 	jsonOut     bool
 	root        rootFlags
 	owner, name string
@@ -157,6 +171,8 @@ func parseLevelArgs(track string, args []string, stderr io.Writer) (*levelArgs, 
 	fs.StringVar(&la.ref, "ref", defaultBranch, "fully qualified branch ref to measure")
 	fs.StringVar(&la.notesRef, "notes-ref", defaultNotesRef, "fully qualified notes ref carrying the source chain")
 	fs.StringVar(&la.tag, "tag", "", "release to measure (default: the repository's highest released version)")
+	fs.StringVar(&la.policyPath, "policy", "",
+		"assert policy whose declared population scopes --org (membership only: no declaration reaches a verdict)")
 	la.root.register(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -176,6 +192,12 @@ func parseLevelArgs(track string, args []string, stderr io.Writer) (*levelArgs, 
 		// Two populations is two questions; answering one and labelling
 		// it the other is how a measurement stops meaning anything.
 		return fail("--repo and --org name two different populations — choose one")
+	case la.repo != "" && la.policyPath != "":
+		// A declared population is a statement about an organisation's
+		// listing. Over the one repository a caller named, it can only
+		// veto the question that was asked — so it is refused rather
+		// than reinterpreted (the stele#79 shape).
+		return fail("--policy declares a population and --repo already is one — the declaration cannot apply")
 	case la.org != "":
 		la.owner = la.org
 
@@ -194,16 +216,28 @@ func parseLevelArgs(track string, args []string, stderr io.Writer) (*levelArgs, 
 	return la, exitOK
 }
 
-// assessOrg measures every repository the forge lists for one
-// organisation and folds the results. The population comes from the
-// listing — what the forge says exists — so no declaration decides who
-// is counted.
+// assessOrg measures every repository in the organisation's
+// population for this track and folds the results.
+//
+// The population is the listing, narrowed by whatever the
+// organisation declared about it (stele#153) — a repository that
+// bears no evidence on this track is not measured here, because a
+// cell that can never be filled reads as a gap forever and an
+// organisation learns to stop reading a board that is permanently
+// amber. What it is NOT is an excuse: a repository that is asked is
+// measured on the platform's own facts, and no declaration can lift
+// its rung or hide a shortfall it did establish.
 func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 	forge := newForge()
 
-	repos, err := forge.Repos(la.org)
+	repos, err := la.members(forge)
 	if err != nil {
-		out.logf("level: the organisation's repositories could not be listed: %v", err)
+		out.logf("level: the organisation's population could not be enumerated: %v", err)
+
+		// Sealed rather than measured: a run that does not know who it
+		// was asking about has measured nobody, and the report says so
+		// with the cause in it rather than only on this log.
+		return level.Unenumerated(la.trackValue(), la.org, err, clock())
 	}
 
 	members := make([]*level.Evidence, 0, len(repos))
@@ -219,6 +253,35 @@ func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 	out.logf("level: measured %d of %s's repositories", len(members), la.org)
 
 	return level.AssessPopulation(la.trackValue(), members, clock())
+}
+
+// members enumerates the organisation's population for this track,
+// through the one component allowed to enumerate one.
+//
+// A failure here is not survivable by measuring what happened to
+// arrive: a partial listing, or a listing that does not reconcile
+// with the declaration, is a run that does not know its own
+// population — and AssessPopulation folds an empty population into a
+// blind ladder, which is the honest answer to a question nobody could
+// ask.
+func (la *levelArgs) members(forge gh.Forge) ([]string, error) {
+	var declared *population.Declaration
+
+	if la.policyPath != "" {
+		pol, err := loadAssertPolicy(la.policyPath)
+		if err != nil {
+			return nil, err
+		}
+
+		declared = pol.Population
+	}
+
+	pop, err := resolvePopulation(population.Scope{Org: la.org}, forge, declared)
+	if err != nil {
+		return nil, err
+	}
+
+	return pop.Members(la.trackValue())
 }
 
 // assess gathers what it can and hands it to the judge.

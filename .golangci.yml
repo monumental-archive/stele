@@ -54,9 +54,6 @@ linters:
     # messages are the product. Wrapping discipline stays enforced by
     # errorlint and wrapcheck.
     - err113 # dynamic diagnostics are the product; errorlint/wrapcheck keep the discipline
-    # The ruff T201 verdict's shape: forbidigo's default pattern bans
-    # fmt.Print*, and print IS a CLI's output mechanism.
-    - forbidigo # print is the CLI's output mechanism (the T201 verdict)
     # t.Parallel is a per-test performance judgement, not a defect; the
     # misuse half (tparallel) stays on.
     - paralleltest # parallelism is a judgement, not a defect; tparallel stays
@@ -75,6 +72,24 @@ linters:
     - wsl # deprecated since v2.2.0; wsl_v5 is the successor and is disabled on its merits
     - gomodguard # deprecated since v2.12.0; gomodguard_v2 is the successor and stays on
   settings:
+    forbidigo:
+      # forbidigo is ON with its DEFAULT PATTERNS REPLACED. The default
+      # set bans fmt.Print*, and print IS a CLI's output mechanism (the
+      # ruff T201 verdict) — so the default set stays out and the rule
+      # earns its place on the one thing depguard cannot express: a
+      # METHOD. depguard bans a package; the population law bans a
+      # single read, wherever the handle came from.
+      analyze-types: true
+      forbid:
+        # Enumerating an organisation is internal/population's alone
+        # (stele#153). The population is a declared object with a
+        # membership rule and a reconciliation against the listing; a
+        # second enumeration beside it is a second population, and the
+        # two disagree in exactly the degraded states the population
+        # rule exists to catch. The method is off Forge already — this
+        # closes the door a type assertion would leave open.
+        - pattern: ^gh\.(RepoLister|Client|Snapshot|Capture)\.ListRepos$
+          msg: enumerate through internal/population — a second listing is a second population
     depguard:
       rules:
         # encoding/json silently turns an absent field into a zero
@@ -151,6 +166,13 @@ linters:
       - path: _test\.go
         linters:
           - gochecknoglobals
+      # internal/gh DEFINES the listing seam and internal/population is
+      # the one component allowed to use it; the rule above exists to
+      # keep every OTHER package out, so excluding its two homes is the
+      # rule working, not a carve-out from it.
+      - path: internal/(gh|population)/
+        linters:
+          - forbidigo
       # Test helpers forward the engine's error VERBATIM because the
       # table rows assert on the exact refusal text — wrapping in the
       # helper would decorate the very surface under test. Production

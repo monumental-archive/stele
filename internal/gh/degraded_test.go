@@ -39,8 +39,8 @@ type read struct {
 //nolint:funlen // one row per read is the point: a short list is an incomplete walk
 func everyRead() []read {
 	return []read{
-		{name: "Repos", decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.Repos("acme")
+		{name: "ListRepos", decodes: true, call: func(c *gh.Client) (bool, error) {
+			out, err := c.ListRepos("acme")
 
 			return len(out) > 0, err
 		}},
@@ -241,7 +241,7 @@ func TestStatusClasses(t *testing.T) {
 	t.Run("401 is the unreadable sentinel", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := everyPath(t, http.StatusUnauthorized, "").Repos("acme")
+		_, err := everyPath(t, http.StatusUnauthorized, "").ListRepos("acme")
 		if !errors.Is(err, gh.ErrForbidden) {
 			t.Fatalf("401 = %v, want ErrForbidden", err)
 		}
@@ -250,7 +250,7 @@ func TestStatusClasses(t *testing.T) {
 	t.Run("an unclassified 4xx names the status alone", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := everyPath(t, http.StatusBadRequest, "server-controlled prose").Repos("acme")
+		_, err := everyPath(t, http.StatusBadRequest, "server-controlled prose").ListRepos("acme")
 		if err == nil || !strings.Contains(err.Error(), "HTTP 400") {
 			t.Fatalf("400 = %v, want the status", err)
 		}
@@ -280,7 +280,7 @@ func TestTransportFaults(t *testing.T) {
 		c.Base = unbuildable
 		c.Sleep = func(time.Duration) {}
 
-		if _, err := c.Repos("acme"); err == nil || !strings.Contains(err.Error(), "build request") {
+		if _, err := c.ListRepos("acme"); err == nil || !strings.Contains(err.Error(), "build request") {
 			t.Fatalf("Repos = %v, want the build-request refusal", err)
 		}
 	})
@@ -305,7 +305,7 @@ func TestTransportFaults(t *testing.T) {
 		dead := deadServer(t)
 		c.Base, c.Download = dead, dead
 
-		if _, err := c.Repos("acme"); err == nil {
+		if _, err := c.ListRepos("acme"); err == nil {
 			t.Error("Repos over a dead API host did not refuse")
 		}
 
@@ -319,7 +319,7 @@ func TestTransportFaults(t *testing.T) {
 
 		c := truncatingServer(t)
 
-		if _, err := c.Repos("acme"); err == nil || !strings.Contains(err.Error(), "read") {
+		if _, err := c.ListRepos("acme"); err == nil || !strings.Contains(err.Error(), "read") {
 			t.Errorf("Repos = %v, want the read refusal", err)
 		}
 
@@ -396,7 +396,7 @@ func TestPaginationBound(t *testing.T) {
 	c.Base = srv.URL
 	c.Sleep = func(time.Duration) {}
 
-	if _, err := c.Repos("acme"); err == nil || !strings.Contains(err.Error(), "did not converge") {
+	if _, err := c.ListRepos("acme"); err == nil || !strings.Contains(err.Error(), "did not converge") {
 		t.Fatalf("Repos = %v, want the pagination bound", err)
 	}
 }

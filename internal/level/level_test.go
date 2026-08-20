@@ -17,22 +17,41 @@ var epoch = time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 func TestTrackVocabulary(t *testing.T) {
 	t.Parallel()
 
+	tracks := level.Tracks()
+	if len(tracks) != 3 {
+		t.Fatalf("Tracks = %v, want the three this release judges", tracks)
+	}
+
 	for _, tt := range []struct {
 		track       level.Track
 		name        string
+		key         string
 		level3      string
 		unevaluated string
 		draft       bool
 	}{
-		{level.TrackBuild, "BUILD", "SLSA_BUILD_LEVEL_3", "SLSA_BUILD_LEVEL_UNEVALUATED", false},
-		{level.TrackSource, "SOURCE", "SLSA_SOURCE_LEVEL_3", "SLSA_SOURCE_LEVEL_UNEVALUATED", false},
+		{level.TrackBuild, "BUILD", "build", "SLSA_BUILD_LEVEL_3", "SLSA_BUILD_LEVEL_UNEVALUATED", false},
+		{level.TrackSource, "SOURCE", "source", "SLSA_SOURCE_LEVEL_3", "SLSA_SOURCE_LEVEL_UNEVALUATED", false},
 		// The draft track renders in the spec's own generic syntax —
 		// SLSA_<TRACK>_LEVEL_<N> — because that syntax is defined over
 		// track names, not over an approved list of them.
-		{level.TrackDependency, "DEPENDENCY", "SLSA_DEPENDENCY_LEVEL_3", "SLSA_DEPENDENCY_LEVEL_UNEVALUATED", true},
+		{
+			level.TrackDependency, "DEPENDENCY", "dependency",
+			"SLSA_DEPENDENCY_LEVEL_3", "SLSA_DEPENDENCY_LEVEL_UNEVALUATED", true,
+		},
 	} {
 		if got := tt.track.Name(); got != tt.name {
 			t.Errorf("Name = %q, want %q", got, tt.name)
+		}
+
+		// The command line's spelling and the policy document's are
+		// one fact DERIVED from the spec name, never written twice.
+		if got := tt.track.Key(); got != tt.key {
+			t.Errorf("Key = %q, want %q", got, tt.key)
+		}
+
+		if got, ok := level.TrackByName(tt.key); !ok || got != tt.track {
+			t.Errorf("TrackByName(%q) = %v, %v", tt.key, got, ok)
 		}
 
 		if got := tt.track.Level(3); got != tt.level3 {
@@ -45,6 +64,16 @@ func TestTrackVocabulary(t *testing.T) {
 
 		if got := tt.track.Draft(); got != tt.draft {
 			t.Errorf("Draft = %v, want %v — v1.2 approves the build and source tracks only", got, tt.draft)
+		}
+	}
+
+	// A track this release does not judge is ABSENT from the
+	// vocabulary; what that means about a caller's own document is the
+	// caller's to decide, and this package refuses nothing.
+	for _, absent := range []string{"BUILD", "platform", ""} {
+		if _, ok := level.TrackByName(absent); ok {
+			t.Errorf("TrackByName(%q) resolved — the policy spelling is lower case, and only these three",
+				absent)
 		}
 	}
 }

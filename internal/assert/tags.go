@@ -32,6 +32,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 )
 
@@ -67,7 +68,7 @@ type linkNote struct {
 // runFacts are the caller's facts about the run itself — the trust
 // material it held, which the walk cannot know.
 func Tags(
-	pol *Policy, pop Population, forge gh.Forge, tags gh.TagReader, tv TagVerifier, j *report.Journal, log Logf,
+	pol *Policy, pop *population.Set, tags gh.TagReader, tv TagVerifier, j *report.Journal, log Logf,
 	runFacts ...report.Fact,
 ) (*report.Report, error) {
 	tp := pol.Tags
@@ -75,13 +76,13 @@ func Tags(
 		return nil, errors.New("assert: the policy declares no tags section")
 	}
 
-	org, repos, err := pop.Resolve(forge)
+	repos, err := pop.Members(TrackTags)
 	if err != nil {
 		return nil, err
 	}
 
 	w := &tagsWalk{
-		pol: tp, org: org, tags: tags, tv: tv, j: j, log: log,
+		pol: tp, org: pop.Owner(), tags: tags, tv: tv, j: j, log: log,
 		tagRE: regexp.MustCompile(*tp.TagPattern),
 	}
 

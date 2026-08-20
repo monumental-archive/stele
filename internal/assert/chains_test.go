@@ -12,6 +12,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 )
 
@@ -62,18 +63,20 @@ const (
 	mainRef  = "refs/heads/main"
 )
 
+// oneRepo is the smallest listing a chains walk can cover.
+func oneRepo() *fakeForge { return &fakeForge{repos: []string{"widget"}} }
+
 // chainNotes builds one repo's notes map entry: a link-shaped note.
 func linkNotes() []gh.ChainNote {
 	return []gh.ChainNote{{Rev: linkedRev, Note: []byte(link)}}
 }
 
 func runChains(
-	t *testing.T, pol *assert.Policy, pop assert.Population, forge *fakeForge, tags *fakeTags,
-	cv *fakeChainVerifier,
+	t *testing.T, pol *assert.Policy, pop *population.Set, tags *fakeTags, cv *fakeChainVerifier,
 ) (*report.Report, error) {
 	t.Helper()
 
-	return assert.Chains(pol, pop, forge, tags, cv, notesRef, []string{mainRef},
+	return assert.Chains(pol, pop, tags, cv, notesRef, []string{mainRef},
 		report.NewJournal(), func(string, ...any) {})
 }
 
@@ -84,7 +87,7 @@ func TestChainsVerifiedPopulation(t *testing.T) {
 	tags := &fakeTags{notes: map[string][]gh.ChainNote{"widget": linkNotes()}}
 	cv := &fakeChainVerifier{links: map[string]int{"widget": 3}}
 
-	rep, err := runChains(t, loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, tags, cv)
+	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
 	if err != nil {
 		t.Fatalf("Chains = %v", err)
 	}
@@ -107,7 +110,7 @@ func TestChainsUnactivatedWithoutExceptionIsRed(t *testing.T) {
 	tags := &fakeTags{notes: map[string][]gh.ChainNote{"widget": linkNotes()}}
 	cv := &fakeChainVerifier{links: map[string]int{"widget": 1}}
 
-	rep, err := runChains(t, loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, tags, cv)
+	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
 	if err != nil {
 		t.Fatalf("Chains = %v", err)
 	}
@@ -133,7 +136,7 @@ func TestChainsOptOutCannotExcuseABrokenChain(t *testing.T) {
 	tags := &fakeTags{notes: map[string][]gh.ChainNote{"lab": linkNotes()}}
 	cv := &fakeChainVerifier{broken: map[string]error{"lab": errors.New("link 2: signature refused")}}
 
-	rep, err := runChains(t, loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, tags, cv)
+	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
 	if err != nil {
 		t.Fatalf("Chains = %v", err)
 	}
@@ -160,7 +163,7 @@ func TestChainsScaffoldingNotesAreNotAFoundedChain(t *testing.T) {
 	}}
 	cv := &fakeChainVerifier{}
 
-	rep, err := runChains(t, loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, tags, cv)
+	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
 	if err != nil {
 		t.Fatalf("Chains = %v", err)
 	}
@@ -181,7 +184,7 @@ func TestChainsZeroPopulationCannotJudge(t *testing.T) {
 	// nothing. Refusing to judge is the only honest verdict.
 	forge := &fakeForge{repos: nil}
 
-	rep, err := runChains(t, loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, &fakeTags{},
+	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), &fakeTags{},
 		&fakeChainVerifier{})
 	if err != nil {
 		t.Fatalf("Chains = %v", err)
@@ -224,7 +227,7 @@ func TestChainsRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, rerr := assert.Chains(tc.pol, assert.Population{Org: "acme"}, &fakeForge{repos: []string{"widget"}},
+			_, rerr := assert.Chains(tc.pol, orgPop(t, oneRepo(), nil),
 				&fakeTags{}, &fakeChainVerifier{}, tc.notesRef, tc.refs, report.NewJournal(), func(string, ...any) {})
 			if rerr == nil || !strings.Contains(rerr.Error(), tc.want) {
 				t.Fatalf("Chains = %v, want a refusal naming %q", rerr, tc.want)
@@ -238,23 +241,10 @@ func TestChainsNotesTearRefusesTheWalk(t *testing.T) {
 
 	tags := &fakeTags{torn: map[string]error{"ChainNotes": errTorn}}
 
-	_, err := assert.Chains(loadChainsPolicy(t), assert.Population{Org: "acme"},
-		&fakeForge{repos: []string{"widget"}}, tags, &fakeChainVerifier{}, notesRef, []string{mainRef}, report.NewJournal(),
-		func(string, ...any) {})
+	_, err := assert.Chains(loadChainsPolicy(t), orgPop(t, oneRepo(), nil),
+		tags, &fakeChainVerifier{}, notesRef, []string{mainRef}, report.NewJournal(), func(string, ...any) {})
 	if err == nil || !errors.Is(err, errTorn) {
 		t.Fatalf("Chains = %v, want the tear carried out — partial sight is never a verdict", err)
-	}
-}
-
-func TestChainsListingTearRefusesTheWalk(t *testing.T) {
-	t.Parallel()
-
-	forge := &fakeForge{reposErr: errTorn}
-
-	_, err := assert.Chains(loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, &fakeTags{},
-		&fakeChainVerifier{}, notesRef, []string{mainRef}, report.NewJournal(), func(string, ...any) {})
-	if err == nil || !errors.Is(err, errTorn) {
-		t.Fatalf("Chains = %v, want the listing tear", err)
 	}
 }
 

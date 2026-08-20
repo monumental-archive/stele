@@ -55,10 +55,29 @@ func TestLoadPolicyRefusals(t *testing.T) {
 			"storeVsaFromVersion",
 		},
 		{
-			"non-positive population",
-			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
-				`"storeVsaFromVersion": "1.13.0", "expectedRepos": 0`, 1),
-			"expectedRepos",
+			"a population declared as nothing",
+			strings.Replace(testPolicyJSON, `"evidence": {`,
+				`"population": {"repositories": []}, "evidence": {`, 1),
+			"population.repositories is empty",
+		},
+		{
+			"a population entry with no repository",
+			strings.Replace(testPolicyJSON, `"evidence": {`,
+				`"population": {"repositories": [{"tracks": ["build"], "reason": "why"}]}, "evidence": {`, 1),
+			"repositories[0].repo is absent or empty",
+		},
+		{
+			"a narrowing with no reason",
+			strings.Replace(testPolicyJSON, `"evidence": {`,
+				`"population": {"repositories": [{"repo": "signer", "tracks": ["source"]}]}, "evidence": {`, 1),
+			"repositories[0].reason is absent or empty",
+		},
+		{
+			"a track name this release does not judge",
+			strings.Replace(testPolicyJSON, `"evidence": {`,
+				`"population": {"repositories": [{"repo": "a", "tracks": ["BUILD"], `+
+					`"reason": "the SlsaResult spelling"}]}, "evidence": {`, 1),
+			"no track this release judges",
 		},
 		{
 			"unparsable decision epoch",

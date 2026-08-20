@@ -274,7 +274,7 @@ func permissionsSnapshot(t *testing.T, caller string) string {
 
 	// The snapshot's repos.json is the recorded listing; workflow files
 	// ride as their own bytes under the repository.
-	write(filepath.Join("acme", "repos.json"), `["widget"]`)
+	write(filepath.Join("acme", "repos.json"), `[{"name": "widget"}]`)
 	write(filepath.Join("acme", "widget", "workflows", "gate.yml"), caller)
 
 	return dir
@@ -574,7 +574,7 @@ func TestAssertPermissionsUnreadableMember(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(snap, "acme", "repos.json"), []byte(`["widget"]`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(snap, "acme", "repos.json"), []byte(`[{"name": "widget"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
