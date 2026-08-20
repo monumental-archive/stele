@@ -10,6 +10,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.19.0](https://github.com/monumental-archive/stele/compare/v0.18.0...v0.19.0) - 2026-08-20
+
+### Breaking
+
+- judge the rebuild targets the caller declared ([#235](https://github.com/monumental-archive/stele/pull/235))
+
+### Added
+
+- join govulncheck findings against the vex decisions ([#224](https://github.com/monumental-archive/stele/pull/224))
+- cross-check checksums against the manifest pins ([#232](https://github.com/monumental-archive/stele/pull/232))
+
+### Fixed
+
+- answer a nil decided set from every accessor ([#226](https://github.com/monumental-archive/stele/pull/226))
+- excuse a blast-radius finding on status, not existence ([#228](https://github.com/monumental-archive/stele/pull/228))
+- credit every exception that matches a finding ([#229](https://github.com/monumental-archive/stele/pull/229))
+- type a refused store apart from an empty one ([#227](https://github.com/monumental-archive/stele/pull/227))
+- pause a 429 for the wait the host named ([#231](https://github.com/monumental-archive/stele/pull/231))
+- derive the signer pin from the chain that signs ([#234](https://github.com/monumental-archive/stele/pull/234))
+
+### Testing
+
+- raise statement coverage from 92.1% to 94.9% ([#238](https://github.com/monumental-archive/stele/pull/238))
+
 ## [0.18.0](https://github.com/monumental-archive/stele/compare/v0.17.1...v0.18.0) - 2026-08-20
 
 ### Added
