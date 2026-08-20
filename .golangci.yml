@@ -128,11 +128,22 @@ linters:
     gocritic:
       enable-all: true
     wrapcheck:
-      # Errors from this module's own internal packages are already
-      # namespaced diagnostics ("verify: …", "gitrepo: …") written to
-      # be shown verbatim; re-wrapping at the CLI seam would prefix
-      # the prefix. Foreign packages stay under the rule — their
-      # errors carry no context a caller's wrap must add.
+      # wrapcheck's domain is the FOREIGN package boundary: an error
+      # crossing it carries no context a caller's wrap must add, so
+      # foreign packages stay under the rule. This module's own errors
+      # are already namespaced diagnostics ("verify: …", "gitrepo: …")
+      # written to be shown verbatim, and re-wrapping one at the CLI
+      # seam would prefix the prefix. The module path is therefore the
+      # scope, and it is the WHOLE scope — tests and production alike.
+      #
+      # Decided 2026-08-20, and written here because it was previously
+      # true only by override: a `_test.go` exclusion sat in the rules
+      # below claiming production code stayed under the rule, and
+      # could never fire. With both mechanisms removed wrapcheck
+      # reports 202 findings — 90 in tests, 112 in production — and
+      # every one is an own-module error this glob already covers.
+      # Test-versus-production was never the boundary wrapcheck
+      # measures; the package boundary is.
       ignore-package-globs:
         - github.com/monumental-archive/stele/*
     nolintlint:
@@ -173,13 +184,6 @@ linters:
       - path: internal/(gh|population)/
         linters:
           - forbidigo
-      # Test helpers forward the engine's error VERBATIM because the
-      # table rows assert on the exact refusal text — wrapping in the
-      # helper would decorate the very surface under test. Production
-      # code stays under the rule. (Same firing.)
-      - path: _test\.go
-        linters:
-          - wrapcheck
 
 formatters:
   enable:
