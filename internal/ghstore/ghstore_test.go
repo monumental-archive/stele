@@ -126,27 +126,6 @@ func TestBundlesRetries(t *testing.T) {
 		}
 	})
 
-	t.Run("404 still rides the propagation ladder", func(t *testing.T) {
-		t.Parallel()
-
-		c, calls := client(t, func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "not yet", http.StatusNotFound)
-		})
-
-		_, err := c.Bundles("acme/widget", digest)
-		if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
-			t.Errorf("Bundles = %v, want the propagation refusal", err)
-		}
-
-		if calls.Load() != 5 {
-			t.Errorf("calls = %d, want all attempts — 404 is the propagation signal", calls.Load())
-		}
-
-		if errors.Is(err, gh.ErrForbidden) {
-			t.Error("a 404 typed as a refusal — the propagation signal is not one")
-		}
-	})
-
 	t.Run("server error surfaces as status", func(t *testing.T) {
 		t.Parallel()
 
@@ -176,6 +155,31 @@ func TestBundlesRetries(t *testing.T) {
 			t.Errorf("Bundles = %v, want the decode refusal", err)
 		}
 	})
+}
+
+// TestPropagationSignalIsUnchanged holds the boundary stele#216 drew
+// from the other side: the 404 that a just-published attestation
+// answers with is the reason the ladder exists, so it still rides every
+// attempt and is still typed as no refusal at all.
+func TestPropagationSignalIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	c, calls := client(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not yet", http.StatusNotFound)
+	})
+
+	_, err := c.Bundles("acme/widget", digest)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("Bundles = %v, want the propagation refusal", err)
+	}
+
+	if calls.Load() != 5 {
+		t.Errorf("calls = %d, want all attempts — 404 is the propagation signal", calls.Load())
+	}
+
+	if errors.Is(err, gh.ErrForbidden) {
+		t.Error("a 404 typed as a refusal — the propagation signal is not one")
+	}
 }
 
 // TestBundlesFailFast pins the auditor stance (#19 item 4): a
