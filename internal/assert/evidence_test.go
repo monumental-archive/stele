@@ -8,11 +8,13 @@ package assert_test
 import (
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
@@ -21,7 +23,7 @@ import (
 )
 
 const testPolicyJSON = `{
-  "schema": 5,
+  "schema": 6,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -69,8 +71,15 @@ func bundleJSONL(predicateType string) string {
 // manifestEntry renders one typed entry — the fixtures carry the
 // typing the format requires (stele#156), so a manifest a test builds
 // is one the writer could have written.
-func manifestEntry(name, entryType string) string {
-	return `{"name": "` + name + `", "sha256": "` + strings.Repeat("a", 64) + `", "type": "` + entryType + `"}`
+// manifestEntry renders one entry at the current schema: an artifact
+// names the class that built it, a document names none.
+func manifestEntry(name, entryType, class string) string {
+	entry := `{"name": "` + name + `", "sha256": "` + strings.Repeat("a", 64) + `", "type": "` + entryType + `"`
+	if class != "" {
+		entry += `, "class": "` + class + `"`
+	}
+
+	return entry + `}`
 }
 
 func manifestAsset(classes []string, storeVSA bool) string {
@@ -79,8 +88,9 @@ func manifestAsset(classes []string, storeVSA bool) string {
 		sv = "true"
 	}
 
-	return `{"schema": 2, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": ` + sv +
-		`, "machineryVersion": "9.9.9", "entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject") + `]}`
+	return `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["` + strings.Join(classes, `", "`) +
+		`"], "storeVsa": ` + sv + `, "machineryVersion": "9.9.9", "entries": [` +
+		manifestEntry("widget-x86_64.tar.gz", "build-subject", classes[0]) + `]}`
 }
 
 // fakeForge scripts the whole forge for one org.

@@ -62,7 +62,7 @@ func TestLoadFullDepth(t *testing.T) {
 		t.Parallel()
 
 		p := filepath.Join(t.TempDir(), "vp.json")
-		if err := os.WriteFile(p, []byte(`{"schema": 5}`), 0o600); err != nil {
+		if err := os.WriteFile(p, []byte(`{"schema": 6}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 

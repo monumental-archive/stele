@@ -13,7 +13,7 @@ Four formats are defined here: the policy file, the release
 evidence manifest, the debt file, and the inventory plan. A change to any is a reviewed
 edit to this document first.
 
-`schema` is the refusal boundary: current **5**, the one epoch shared
+`schema` is the refusal boundary: current **6**, the one epoch shared
 by this policy, the verify policy and the report, so a bump cannot
 land on one document and miss another ([docs/versioning.md](versioning.md)).
 The gate fires before strict decoding, so another schema refuses as a
@@ -23,7 +23,7 @@ version mismatch, never as an unknown-field error.
 
 ```json
 {
-  "schema": 5,
+  "schema": 6,
   "debtFile": "security/attestation-debt.txt",
   "population": {
     "repositories": [
@@ -150,6 +150,21 @@ version mismatch, never as an unknown-field error.
   always; declare it before declaring `build.enrichment` in the
   verify policy, or the corpus walk turns red on every release that
   predates the mechanism.
+- `manifestSchemaFromVersion` — the machinery version (inclusive)
+  from which a release owes an evidence manifest at the schema this
+  build writes (stele#185). Same semantics again, one more time from
+  the one definition — and the only epoch that governs a *document's
+  own format* rather than an obligation it carries. Below it, a
+  manifest written under an older schema is read for exactly what
+  that schema promised and named in the report as what it is; at it
+  and above, the same document is a present-tense defect and
+  refuses. **Absent means every manifest owes the current schema** —
+  correct for an adopter with no history, and the reason an org that
+  has already published older manifests must declare the version its
+  machinery moved at. A published manifest is an immutable release
+  asset attested by digest at its tag, so it cannot be re-emitted the
+  way a mutable note can; the epoch is how history stays readable
+  without a dual-version reader.
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
   entry as an evidence DOCUMENT rather than an artifact (an org's
   per-release VEX documents, for one). Documents are excluded from
@@ -393,10 +408,11 @@ publisher's CI. Writer and reader share one definition
 this reader admits cannot drift apart:
 
 ```json
-{ "schema": 2, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+{ "schema": 3, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
   "machineryVersion": "1.40.0",
   "entries": [
-    { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject" },
+    { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject",
+      "class": "rust-crate" },
     { "name": "attestations-image.intoto.jsonl", "sha256": "2222…", "type": "evidence" }
   ] }
 ```
@@ -446,6 +462,43 @@ exists to retire. The classifier's other job is a manifest that
 arrives untyped — a legacy release, or a foreign one this org never
 wrote — where it classifies a plain sha256sum manifest instead.
 
+### The class that built each artifact
+
+Every `build-subject` entry names the evidence **class** whose build
+leg produced it; an `evidence` entry names none, because a document
+about the release belongs to no one class and a per-entry answer
+there would be a second vocabulary. The name must be one the
+manifest's own `classes` already declares — an entry claiming a class
+the release did not ship is incoherent about its own document, and
+the check needs no policy to make it.
+
+This is the one fact `emit manifest` cannot compute: no declared
+vocabulary names a release's build artifacts by the leg that produced
+them. It arrives as one subject manifest per class —
+`--class-subjects <class>=<path>`, repeatable — which is the shape a
+publisher already holds, since every build leg emits the digests of
+what it produced. The join is checked in both directions against
+`--assets`, because a caller's split is a second statement about the
+same release: an artifact named by a class but absent from the
+release did not ship, one whose digest disagrees is not the same
+bytes, one claimed by two classes has no answer, and a document is
+not an artifact any class built. **An artifact no class claims
+refuses the manifest**, rather than shipping unattributed — a
+per-class rebuild would then scope a population that silently omitted
+it, which is the same defect as an untyped entry one field over.
+
+What it buys is scope. `stele verify repro --class <name>` narrows
+its population to the artifacts that class built, so a rebuild
+covering one class stops reporting every other class as absent from
+it. Measured on release-lab v0.25.3: one artifact reproduced,
+thirteen falsely reported missing, two supply-chain issues filed for
+a release that was fine. Narrowing does not mute — an artifact *of
+the class under rebuild* that the rebuild failed to produce is still
+a finding — and where the released manifest carries no class answer,
+the population stays the whole release and the verdict's `classScope`
+fact says `whole-release/no-class-answer` rather than wearing the
+class's name.
+
 A manifest cannot pin itself: a document carrying its own digest is
 not a document. The entries are therefore the assets published
 *beside* it, and nothing is lost — the manifest is an evidence
@@ -455,9 +508,27 @@ The manifest's `schema` is its own number, outside the live-document
 epoch ([versioning.md](versioning.md)): manifests are published
 release assets, immutable once shipped, so the number moves only
 when this format's own key set changes against documents that exist.
-It moved to `2` when entries gained their type. Pre-v1 there is no
-dual-version reader — a schema-1 manifest is refused, and the
-manifests already published re-emit typed at the canon train.
+It moved to `2` when entries gained their type and to `3` when they
+gained their class.
+
+A published manifest cannot be re-emitted. It is an immutable release
+asset, pinned by digest in `checksums.txt` and attested under the
+signer's identity at release time — the mutable-note precedent does
+not transfer. So an older manifest is admitted by the **declared
+epoch** above, `manifestSchemaFromVersion`, or not at all: below it
+the manifest is read for exactly what its own schema promised, and at
+or above it the same document refuses, because the epoch excuses
+history and never the present. What an older manifest could not say,
+the walk never asks it for — which assets a release published, and
+which of them are artifacts, come from the checksum manifest and the
+vocabulary this policy declares.
+
+This is not a dual-version reader: every field is decoded exactly one
+way, and what the number selects is which fields were **promised**,
+never how any of them is read. A manifest carrying a field its schema
+never had refuses as loudly as one missing a field its schema owed —
+a document that lies about its own format reads worse than an old
+one.
 
 Releases without a manifest fall back to the workflow adapter — the
 quarantined read of the first consumer's publish-workflow convention

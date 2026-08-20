@@ -21,7 +21,7 @@ import (
 )
 
 const testPolicy = `{
-  "schema": 5,
+  "schema": 6,
   "issuer": "https://token.actions.githubusercontent.com",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},
@@ -378,12 +378,14 @@ type jsonReportDoc struct {
 	Population *struct {
 		Size   *int    `json:"size"`
 		Source *string `json:"source"`
+		Detail *string `json:"detail"`
 	} `json:"population"`
 	Facts []struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
 	} `json:"facts"`
 	Findings []struct {
+		Subject   string `json:"subject"`
 		Assertion string `json:"assertion"`
 		Detail    string `json:"detail"`
 	} `json:"findings"`

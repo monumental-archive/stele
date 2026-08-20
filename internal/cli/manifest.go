@@ -19,6 +19,16 @@
 // every walk downstream reads the answer instead of deriving a second
 // one.
 //
+// Which CLASS built each artifact is the same kind of fact and lands
+// the same way (stele#185), but it is one no policy can answer: no
+// vocabulary names a release's build artifacts by the leg that
+// produced them, and only the publisher holds the split — one subject
+// manifest per build leg, which is what `--class-subjects` takes. An
+// artifact no class claims refuses the manifest rather than shipping
+// unattributed: a per-class rebuild would then scope a population
+// that silently omitted it, which is the same defect as an untyped
+// entry one field over.
+//
 // What leaves this command is proven readable, not assumed: the
 // rendered bytes are read back through the same internal/evidence
 // seam the assert reader uses, so a manifest this writer can produce
@@ -33,9 +43,11 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/evidence"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 // emitManifest is the mode name.
@@ -50,13 +62,64 @@ type manifestArgs struct {
 	out              string
 }
 
+// classSubjects is the repeatable `--class-subjects <class>=<path>`
+// flag: one build leg's subject manifest per occurrence, which is the
+// shape the publisher already holds — every class's build job emits
+// the digests of what it produced, and this reads them back rather
+// than asking a caller to restate the split in some new spelling.
+type classSubjects []classSubjectSet
+
+// classSubjectSet is one leg: the class, and the sha256sum manifest
+// of the artifacts it built.
+type classSubjectSet struct {
+	class string
+	path  string
+}
+
+// String implements flag.Value — the classes named so far, which is
+// what a usage dump should show; the paths are noise there.
+func (c *classSubjects) String() string {
+	names := make([]string, 0, len(*c))
+	for _, set := range *c {
+		names = append(names, set.class)
+	}
+
+	return strings.Join(names, ",")
+}
+
+// Set implements flag.Value. A class named twice is refused here
+// rather than merged: two manifests for one leg means the caller
+// holds two answers for what that class built, and merging them would
+// pick one silently.
+func (c *classSubjects) Set(v string) error {
+	class, path, ok := strings.Cut(v, "=")
+	if !ok || strings.TrimSpace(class) == "" || strings.TrimSpace(path) == "" {
+		return fmt.Errorf("--class-subjects %q is not <class>=<path>", v)
+	}
+
+	class, path = strings.TrimSpace(class), strings.TrimSpace(path)
+
+	for _, set := range *c {
+		if set.class == class {
+			return fmt.Errorf("--class-subjects names %s twice — one build leg has one subject set", class)
+		}
+	}
+
+	*c = append(*c, classSubjectSet{class: class, path: path})
+
+	return nil
+}
+
 // parseManifestArgs reads the flag surface.
 //
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
 func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	ma := &manifestArgs{}
 
-	var classes, storeVSA, assets, policyPath string
+	var (
+		classes, storeVSA, assets, policyPath string
+		perClass                              classSubjects
+	)
 
 	flags := flag.NewFlagSet("stele emit manifest", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -75,6 +138,10 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 		"assert policy whose evidence vocabulary types each asset (required) — which names mark a "+
 			"document ABOUT the release is a declared org fact, never this tool's knowledge. Named for "+
 			"the document it takes: --policy is the VERIFY policy in this verb's other modes")
+	flags.Var(&perClass, "class-subjects",
+		"the sha256sum manifest of the artifacts ONE class built, as `<class>=<path>`, repeatable once "+
+			"per class — the split only the publisher holds, and the answer a per-class rebuild scopes "+
+			"its population by. Every build subject in --assets must be claimed by exactly one of these")
 	flags.StringVar(&ma.out, "out", "", "file to write the manifest to; empty prints to stdout")
 
 	if err := flags.Parse(args); err != nil {
@@ -110,7 +177,7 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 		return ma, usageFail(fmt.Sprintf("--store-vsa %q is not true or false", storeVSA))
 	}
 
-	entries, err := typedEntries(assets, policyPath)
+	entries, err := typedEntries(assets, policyPath, perClass)
 	if err != nil {
 		return ma, usageFail(err.Error())
 	}
@@ -130,7 +197,12 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 // artifacts", a set only this tool's private knowledge could draw, so
 // every caller that honoured it reimplemented the tool in workflow
 // bash (stele#156).
-func typedEntries(assets, policyPath string) ([]evidence.Entry, error) {
+// The class attribution is the CALLER's, and it is the one thing here
+// that is: no declared vocabulary names a release's build artifacts by
+// the leg that produced them, so the split arrives as one subject
+// manifest per class and is joined to the release's assets by name and
+// digest — never trusted as a second list of what shipped (stele#185).
+func typedEntries(assets, policyPath string, perClass classSubjects) ([]evidence.Entry, error) {
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
@@ -142,25 +214,98 @@ func typedEntries(assets, policyPath string) ([]evidence.Entry, error) {
 		return nil, err
 	}
 
-	raw, err := os.ReadFile(assets) //nolint:gosec // the manifest path is operator-supplied by design
+	listed, err := digestManifest(assets)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+		return nil, err
 	}
 
-	// One reader for the sha256sum format, shared with every other leg
-	// that takes one: two parsers of one format drift into a writer
-	// whose output the reader refuses.
-	listed, err := parseManifest(string(raw))
+	built, err := classOfAsset(listed, perClass, pol.Evidence)
 	if err != nil {
 		return nil, err
 	}
 
 	entries := make([]evidence.Entry, 0, len(listed))
+
 	for _, a := range listed {
-		entries = append(entries, evidence.NewEntry(a.Name, a.SHA256, pol.Evidence.Classify(a.Name)))
+		if pol.Evidence.Classify(a.Name) == evidence.TypeEvidence {
+			entries = append(entries, evidence.NewEvidence(a.Name, a.SHA256))
+
+			continue
+		}
+
+		class, claimed := built[a.Name]
+		if !claimed {
+			return nil, fmt.Errorf("%s is a build subject no --class-subjects manifest claims — an"+
+				" artifact with no class goes unjudged by every per-class rebuild, in silence", a.Name)
+		}
+
+		entries = append(entries, evidence.NewSubject(a.Name, a.SHA256, class))
 	}
 
 	return entries, nil
+}
+
+// classOfAsset joins the per-class subject manifests onto the assets
+// the release publishes: name to the class that built it.
+//
+// The join is checked in both directions, because a caller's split is
+// a SECOND statement about the same release and the two must agree or
+// one of them is wrong. An artifact named by a class but absent from
+// the release did not ship; one whose digest disagrees is not the same
+// bytes; one claimed by two classes has no answer; and a document the
+// release publishes about itself is not an artifact any class built.
+func classOfAsset(
+	listed []verify.Subject, perClass classSubjects, pol *assert.EvidencePolicy,
+) (map[string]string, error) {
+	shipped := make(map[string]string, len(listed))
+	for _, a := range listed {
+		shipped[a.Name] = a.SHA256
+	}
+
+	built := make(map[string]string)
+
+	for _, set := range perClass {
+		subjects, err := digestManifest(set.path)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, s := range subjects {
+			switch digest, ok := shipped[s.Name]; {
+			case !ok:
+				return nil, fmt.Errorf("--class-subjects %s names %s, which this release does not publish"+
+					" — a class cannot claim an artifact that did not ship", set.class, s.Name)
+			case digest != s.SHA256:
+				return nil, fmt.Errorf("--class-subjects %s pins %s at %s, but the release publishes %s"+
+					" — one artifact, two digests", set.class, s.Name, s.SHA256, digest)
+			case pol.Classify(s.Name) == evidence.TypeEvidence:
+				return nil, fmt.Errorf("--class-subjects %s names %s, which the evidence vocabulary calls a"+
+					" document ABOUT the release — a document belongs to no one class", set.class, s.Name)
+			}
+
+			if other, claimed := built[s.Name]; claimed {
+				return nil, fmt.Errorf("%s is claimed by both %s and %s — one artifact has one build leg",
+					s.Name, other, set.class)
+			}
+
+			built[s.Name] = set.class
+		}
+	}
+
+	return built, nil
+}
+
+// digestManifest reads one sha256sum manifest from disk through the
+// ONE reader for the format, shared with every other leg that takes
+// one: two parsers of one format drift into a writer whose output the
+// reader refuses.
+func digestManifest(path string) ([]verify.Subject, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the manifest path is operator-supplied by design
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+	}
+
+	return parseManifest(string(raw))
 }
 
 // runEmitManifest builds, proves, and writes the manifest.

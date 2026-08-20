@@ -26,7 +26,7 @@ import (
 // declaring no planned prefixes at all — no vocabulary, so its plans
 // are absent from the judgment, not refused by it.
 const plansPolicy = `{
-  "schema": 5,
+  "schema": 6,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

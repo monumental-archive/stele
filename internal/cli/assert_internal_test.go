@@ -237,12 +237,13 @@ func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snap
 		"snap/acme/widget/tags.json": `["v1.0.0"]`,
 		"snap/acme/widget/releases/v1.0.0/assets.json": `["evidence-manifest.json", "app.spdx.json", ` +
 			`"checksums.txt", "attestations-image.intoto.jsonl"]`,
-		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": 2, ` +
+		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": 3, ` +
 			`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9", "entries": [` +
-			`{"name": "app.tar.gz", "sha256": "` + strings.Repeat("a", 64) + `", "type": "build-subject"}]}`,
+			`{"name": "app.tar.gz", "sha256": "` + strings.Repeat("a", 64) + `", "type": "build-subject", ` +
+			`"class": "oci-image"}]}`,
 		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
 		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
-		"policy.json": `{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
@@ -289,7 +290,7 @@ func TestAssertEvidenceSnapshotEndToEnd(t *testing.T) {
 // not learned its own population, so it seals CANNOT_JUDGE naming the
 // repository — never a pass over a set nobody enumerated.
 func TestAssertPopulationReconciliation(t *testing.T) {
-	base := `{"schema": 5, %s"evidence": {"sbomSuffix": ".spdx.json", ` +
+	base := `{"schema": 6, %s"evidence": {"sbomSuffix": ".spdx.json", ` +
 		`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 		`"manifestAsset": "evidence-manifest.json", ` +
 		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`
@@ -406,7 +407,7 @@ func blastSnapshot(t *testing.T) (string, string, string) {
 		"snap/acme/widget/releases/v1.0.0/assets.json":          `["app.spdx.json"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,
 		"snap/acme/widget/attestations/" + digest + ".json":     `[{"bundle": 1}]`,
-		"policy.json": `{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
@@ -698,7 +699,7 @@ func storeSnapshot(t *testing.T) (string, string) {
 	dir := filepath.Dir(snap)
 	policy := filepath.Join(dir, "store-policy.json")
 
-	content := `{"schema": 5, "issuer": "https://token.actions.githubusercontent.com",
+	content := `{"schema": 6, "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
@@ -889,7 +890,7 @@ func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot
 		"snap/acme/widget/commits/" + target + ".json": `{"Parents": ["` +
 			genesis + `"], "CommitEpoch": 200}`,
 		"snap/acme/widget/ancestry/" + genesis + "..." + target + ".json": `true`,
-		"policy.json": `{"schema": 5, "issuer": "https://token.example.com", ` +
+		"policy.json": `{"schema": 6, "issuer": "https://token.example.com", ` +
 			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
 			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
@@ -1040,7 +1041,7 @@ func TestNewTagVerifier(t *testing.T) {
 func TestAssertTagsPolicyWithoutSection(t *testing.T) {
 	dir := t.TempDir()
 	policy := filepath.Join(dir, "policy.json")
-	doc := `{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+	doc := `{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", 	  "classes": {"a": {"bundles": ["b"]}}}}`
 
 	if err := os.WriteFile(policy, []byte(doc), 0o600); err != nil {

@@ -22,7 +22,7 @@ import (
 // declared evidence suffix, per-class bundles, a legacy VSA bundle,
 // and a prefixed asset.
 const classifyPolicyJSON = `{
-  "schema": 5,
+  "schema": 6,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

@@ -277,10 +277,19 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 // reads which entries are build subjects: from the manifest's own
 // typing where it carries one, and from the org's declared vocabulary
 // where a legacy or foreign manifest does not.
+//
+// A rebuild that covers ONE class says so with --class (stele#185).
+// Judging the whole release against a single class's rebuild reported
+// every other class as absent from it — thirteen artifacts of a
+// fourteen-artifact release, and two supply-chain issues filed against
+// a release that was fine (release-lab v0.25.3). The scope is
+// narrowed only where the released manifest can answer it; where it
+// cannot, the population stays the whole release and the verdict says
+// which of the two it is.
 func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	var (
-		repo, tag, released, rebuilt, policyPath string
-		jsonOut                                  bool
+		repo, tag, released, rebuilt, policyPath, class string
+		jsonOut                                         bool
 	)
 
 	fs := flag.NewFlagSet("stele verify repro", flag.ContinueOnError)
@@ -295,6 +304,10 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		"assert policy whose evidence vocabulary types an UNTYPED released manifest; unused, and not "+
 			"read, when the manifest carries its own typing. Named for the document it takes: --policy "+
 			"is the VERIFY policy everywhere else under this verb, and this comparison verifies nothing")
+	fs.StringVar(&class, "class", "",
+		"the evidence class this rebuild covers — the population narrows to the artifacts the released "+
+			"manifest says that class built. Omit when the rebuild covers the whole release. A manifest "+
+			"carrying no class answer keeps the whole-release population and reports that it did")
 	fs.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -321,19 +334,28 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		return fail("--rebuilt is required")
 	}
 
-	subjects, typing, err := reproSubjects(released, policyPath)
+	pop, err := reproSubjects(released, policyPath, class)
 	if err != nil {
 		return fail("released: " + err.Error())
 	}
 
-	built, err := reproManifest(rebuilt)
+	built, err := digestManifest(rebuilt)
 	if err != nil {
 		return fail("rebuilt: " + err.Error())
 	}
 
+	subjects := pop.subjects
+
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
+	}
+
+	// Loud, never inferred: a caller that asked for one class and got
+	// the whole release must read it here, not deduce it from a count.
+	if pop.scope == scopeNoClassAnswer {
+		out.logf("repro: the released manifest carries no class answer, so %s cannot be scoped:"+
+			" judging every build subject the release published", class)
 	}
 
 	divergences := verify.Repro(subjects, built, out.logf)
@@ -356,10 +378,11 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rep := report.Seal("verify repro", repo+"@"+tag,
-		report.PopulationFromEvidence(len(subjects), "released build subjects under rebuild"),
+		report.PopulationFromEvidence(len(subjects), pop.describe()),
 		j, report.NoCanary(), report.NoJudgedSet(),
 		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))},
-		report.Fact{Name: "subjectTyping", Value: typing})
+		report.Fact{Name: "subjectTyping", Value: pop.typing},
+		report.Fact{Name: "classScope", Value: pop.scope})
 
 	return emitReport(rep, jsonOut, stdout, stderr)
 }
@@ -375,55 +398,81 @@ const (
 	typingPolicy = "policy"
 )
 
+// What the judged population COVERS, reported as a fact for the same
+// reason the typing is: a verdict over one class and a verdict over
+// the whole release are different claims, and a reader must never
+// have to infer which one it is holding.
+const (
+	// scopeWholeRelease: no class was asked for, so the population is
+	// every build subject the release published.
+	scopeWholeRelease = "whole-release"
+	// scopeNoClassAnswer: a class WAS asked for and this released
+	// manifest carries no class answer — a manifest below the schema
+	// that types it, or one with no typing at all. The population
+	// stays the whole release and the verdict says nothing about that
+	// class alone, which is the honest reading and must be stated
+	// rather than left to look like a scoped one.
+	scopeNoClassAnswer = "whole-release/no-class-answer"
+)
+
+// reproPopulation is the released set a rebuild is judged against and
+// how it was drawn: which typing answered, and what the set covers.
+// One value, because the three travel together into one sealed report
+// and a caller holding two of them has a verdict it cannot describe.
+type reproPopulation struct {
+	subjects []verify.Subject
+	typing   string
+	scope    string
+}
+
+// describe names the population for the report — the scope in words,
+// beside the count the seal carries.
+func (p *reproPopulation) describe() string {
+	if p.scope == scopeWholeRelease || p.scope == scopeNoClassAnswer {
+		return "released build subjects under rebuild"
+	}
+
+	return "released " + p.scope + " build subjects under rebuild"
+}
+
 // reproSubjects reads the released manifest whole and returns the
-// build subjects alone, with the source of that classification.
+// build subjects alone, with the source of that classification and
+// what the resulting population covers.
 //
 // The two formats are told apart by the FIRST byte, never by trying
 // one and falling back to the other: a typed manifest whose schema or
 // shape this build refuses must refuse the walk, and a fallback would
 // launder that refusal into a text parse that happens to fail
 // differently.
-func reproSubjects(path, policyPath string) ([]verify.Subject, string, error) {
+func reproSubjects(path, policyPath, class string) (*reproPopulation, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the manifest path is operator-supplied by design
 	if err != nil {
-		return nil, "", err //nolint:wrapcheck // reported under the flag's own name by the caller
+		return nil, err //nolint:wrapcheck // reported under the flag's own name by the caller
 	}
 
 	if bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("{")) {
-		doc, perr := evidence.Parse(raw)
-		if perr != nil {
-			return nil, "", perr
-		}
-
-		typed := doc.Subjects()
-
-		subjects := make([]verify.Subject, 0, len(typed))
-		for _, a := range typed {
-			subjects = append(subjects, verify.Subject{Name: a.Name, SHA256: a.SHA256})
-		}
-
-		return subjects, typingManifest, nil
+		return reproFromManifest(raw, class)
 	}
 
 	listed, err := parseManifest(string(raw))
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	if policyPath == "" {
-		return nil, "", errors.New("this manifest carries no typing, so --assert-policy is required: which" +
+		return nil, errors.New("this manifest carries no typing, so --assert-policy is required: which" +
 			" assets are build subjects can only come from the org's declared evidence vocabulary")
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
-		return nil, "", err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
 	}
 	defer pf.Close() //nolint:errcheck // read-only close
 
 	pol, err := assert.LoadPolicy(pf)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	var subjects []verify.Subject
@@ -434,17 +483,60 @@ func reproSubjects(path, policyPath string) ([]verify.Subject, string, error) {
 		}
 	}
 
-	return subjects, typingPolicy, nil
+	// A sha256sum manifest names assets and nothing else. It cannot
+	// say which class built one, and it does not carry the release's
+	// declared class list either — so a class asked for here is
+	// neither honoured nor refused, it is unanswerable, and the
+	// verdict says exactly that.
+	return &reproPopulation{subjects: subjects, typing: typingPolicy, scope: scopeOf(class, false)}, nil
 }
 
-// reproManifest reads one sha256sum manifest from disk.
-func reproManifest(path string) ([]verify.Subject, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // the manifest path is operator-supplied by design
+// reproFromManifest draws the population from a typed evidence
+// manifest — its own answer, read rather than re-derived.
+func reproFromManifest(raw []byte, class string) (*reproPopulation, error) {
+	doc, err := evidence.Parse(raw)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // reported under the flag's own name by the caller
+		return nil, err
 	}
 
-	return parseManifest(string(raw))
+	// A class the release never shipped refuses rather than sealing
+	// over the population of zero it would otherwise draw: zero is an
+	// honest CANNOT_JUDGE for a class that built nothing, and a
+	// misspelling that seals the same way is a verdict nobody asked
+	// for.
+	if class != "" && !doc.Declares(class) {
+		return nil, fmt.Errorf("this release declared no class %q — it shipped %s",
+			class, strings.Join(doc.Classes, ", "))
+	}
+
+	typed, scoped := doc.Subjects(), false
+
+	if class != "" {
+		if of, ok := doc.SubjectsOf(class); ok {
+			typed, scoped = of, true
+		}
+	}
+
+	subjects := make([]verify.Subject, 0, len(typed))
+	for _, a := range typed {
+		subjects = append(subjects, verify.Subject{Name: a.Name, SHA256: a.SHA256})
+	}
+
+	return &reproPopulation{subjects: subjects, typing: typingManifest, scope: scopeOf(class, scoped)}, nil
+}
+
+// scopeOf names what the population covers, from the one pair of
+// facts that decide it: whether a class was asked for, and whether
+// the released manifest could answer.
+func scopeOf(class string, scoped bool) string {
+	switch {
+	case class == "":
+		return scopeWholeRelease
+	case scoped:
+		return class
+	default:
+		return scopeNoClassAnswer
+	}
 }
 
 // verifyOutcome carries what a completed mode proved, for the report:
