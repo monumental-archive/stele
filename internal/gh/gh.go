@@ -644,10 +644,22 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 // Enforced rather than documented, because a comment is not a guard
 // and silently-wrong is this codebase's worst failure mode: a path
 // carrying a query refuses by name.
+//
+// Termination is arithmetic and not a content guess (#154). The walk
+// ends on the SHORT-PAGE rule: a page carrying fewer entries than the
+// size asked for is the last one, and the empty page is that rule's
+// degenerate case rather than its only case. The empty literal alone
+// was not enough — `git/matching-refs/tags/` ignores `page` entirely
+// and answers every page with the same full array, so a repository
+// with tags walked to the bound and refused. maxPages stays as the
+// backstop, reachable now only when a forge genuinely misbehaves.
 func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 	const maxPages = 50
-	// emptyPageLen is the API's empty array literal, the last page.
-	const emptyPageLen = 2
+	// perPage is both the page size asked for and the short-page
+	// rule's yardstick — one constant, because a walk whose request
+	// and whose termination test disagreed about the size would run
+	// forever or stop early.
+	const perPage = 100
 
 	if strings.Contains(path, "?") {
 		return nil, fmt.Errorf("gh: %s: the path carries its own query; pass filters as arguments so"+
@@ -657,7 +669,7 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 	var pages [][]byte
 
 	for page := 1; page <= maxPages; page++ {
-		query := fmt.Sprintf("%s?per_page=100&page=%d", path, page)
+		query := fmt.Sprintf("%s?per_page=%d&page=%d", path, perPage, page)
 		if len(filters) > 0 {
 			query += "&" + strings.Join(filters, "&")
 		}
@@ -671,12 +683,19 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 			return nil, fmt.Errorf("gh: %s: not found", path)
 		}
 
+		// Counting entries needs no schema: every paginated endpoint
+		// here answers with a JSON array, so the page decodes as
+		// deferred values and the caller still re-slices it under its
+		// own type. A body that is not an array is a refusal by name
+		// rather than a walk that cannot count.
+		entries, derr := jsonx.DecodeForeign[[]jsonx.Raw](body)
+		if derr != nil {
+			return nil, fmt.Errorf("gh: %s: page %d is not a JSON array: %w", path, page, derr)
+		}
+
 		pages = append(pages, body)
 
-		// A short page ends the walk; counting entries needs the
-		// caller's schema, so the caller re-slices — here the heuristic
-		// is the API's own: an empty array literal is the last page.
-		if len(body) <= emptyPageLen {
+		if len(*entries) < perPage {
 			break
 		}
 

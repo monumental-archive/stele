@@ -299,10 +299,11 @@ func TestTransientRetry(t *testing.T) {
 				t.Fatalf("Repos = %v, %v — a transient status must not end the walk", repos, err)
 			}
 
-			// Two transient attempts, the answering page, then the
-			// empty page that ends pagination.
-			if *seen != 4 {
-				t.Fatalf("attempts = %d, want 4 (two transient, one answer, one empty page)", *seen)
+			// Two transient attempts and the answering page: that page
+			// is short, which ends the walk (#154) — nothing asks for
+			// the empty page after it.
+			if *seen != 3 {
+				t.Fatalf("attempts = %d, want 3 (two transient, one short answering page)", *seen)
 			}
 		})
 	}

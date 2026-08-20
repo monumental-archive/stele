@@ -27,11 +27,14 @@ func rulesServer(t *testing.T) *gh.Client {
 
 	mux := http.NewServeMux()
 
-	// Two pages, so the merge is exercised rather than assumed.
+	// Two pages, so the merge is exercised rather than assumed. Page
+	// one is FULL — the walk ends on the first short page (#154), so a
+	// one-entry first page would never ask for the second.
 	mux.HandleFunc("/repos/acme/widget/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("page") {
 		case "1":
-			writeBody(w, []byte(`[{"type": "deletion", "ruleset_id": 1}]`))
+			writeBody(w, []byte("["+strings.Repeat(`{"type": "filler", "ruleset_id": 0},`, 99)+
+				`{"type": "deletion", "ruleset_id": 1}]`))
 		case "2":
 			writeBody(w, []byte(`[{"type": "required_signatures", "ruleset_id": 2}]`))
 		default:
