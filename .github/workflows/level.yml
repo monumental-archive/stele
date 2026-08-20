@@ -1,0 +1,85 @@
+# This repository's SLSA levels, measured from its own evidence and
+# published to its own `levels` branch (.github#554).
+#
+# The whole per-repository obligation is below, and the only line that
+# is this repository's to write is `tracks:` — WHICH tracks this
+# repository bears evidence on. State it positively; the org's roster
+# lives in the canon and arrives with the shared workflow, so nothing
+# here restates who else exists.
+#
+# `tracks: build source dependency` is the ordinary case. A repository
+# that publishes no releases bears no build or dependency evidence and
+# says `tracks: source` — that is not a shortfall, it is a fact about
+# the repository, and declaring it is what keeps a permanently grey
+# cell off the board. The canon's declared population must agree, and
+# the canon's weekly sweep reds if the two disagree.
+---
+name: level
+
+# zizmor's `dangerous-triggers` audit fires on the `workflow_run`
+# below, at high confidence, and it is right to by default: that
+# trigger runs in the BASE repository with a writable token and access
+# to secrets, so the classic exploit is a workflow that then checks out
+# the triggering pull request's head and executes it.
+#
+# Ignored here because this stub does none of that, and neither does
+# its callee. Nothing is checked out — not this repository, not the
+# triggering ref — and no step reads workspace content or any
+# attacker-influenced field of the event. The single thing read from
+# the triggering context is `workflow_run.conclusion`, a value GitHub
+# computes, in an `if:`. The judgment itself reads the forge, the
+# attestation store and published artifacts, never a tree. The callee
+# is pinned by SHA and declares no `id-token`.
+#
+# The alternative was refused upstream: `release: published` fires
+# while the publish workflow is still attaching the evidence being
+# judged, so it races the thing it measures (.github#554).
+"on": # zizmor: ignore[dangerous-triggers]
+  # A release is when build evidence materially changes, so the badge
+  # moves with it — but on the PUBLISH WORKFLOW COMPLETING, never on
+  # `release: published`, which fires while that workflow is still
+  # attaching the very evidence about to be judged. Name the workflow
+  # this repository publishes with; a repository that publishes
+  # nothing simply never matches, and its weekly run below is its only
+  # firing trigger.
+  workflow_run:
+    workflows:
+      - publish
+    types:
+      - completed
+  schedule:
+    # Mondays 05:00 UTC — before the canon's 05:30 sweep reads this
+    # branch. A level degrades with no release at all (a ruleset
+    # weakened, an advisory left undecided, a chain link never
+    # emitted), so the weekly run is not a backstop for the trigger
+    # above; it is the other half of the question.
+    - cron: 0 5 * * 1
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false # a queued run must not cancel a publication
+
+jobs:
+  level:
+    # A failed publish attached no evidence worth re-judging, and
+    # `types: [completed]` fires on failure too. The scheduled and
+    # dispatched runs carry no `workflow_run` context and always pass.
+    if: >-
+      ${{ github.event_name != 'workflow_run'
+      || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      # Stated, not inherited: a `uses:` job takes the WORKFLOW-level
+      # default, never the caller's ambient grant, so a shared workflow
+      # that gains a permission kills silent callers as
+      # startup_failure (lint:nested-permissions enforces the writing;
+      # lint:caller-permissions checks it against what the callee
+      # asks).
+      contents: write # pushes this repository's cells to its own levels branch
+    uses: monumental-archive/.github/.github/workflows/level.yml@92dfcc8d3e3713b06674f13111daa8fdc171e146 # v1.47.0
+    with:
+      tracks: build source dependency
+...
