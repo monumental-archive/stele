@@ -230,6 +230,16 @@ type TagsPolicy struct {
 	// IdentityPattern is the regular expression the signing
 	// certificate's SAN must match.
 	IdentityPattern *string `json:"identityPattern"`
+	// ProofFloor is the floor of proof the org requires of a tag
+	// signature (stele#173) — how much countersigned evidence is
+	// enough is the ORG's declaration, never the tool's decision.
+	// "certificate-transparency": the signing certificate's issuance
+	// countersigned by a trusted CT log — what any Fulcio-minted
+	// signature can prove offline, receipts or not. Or
+	// "observer-timestamp": additionally a transparency-log entry and
+	// an observer timestamp over the signature itself, which only a
+	// mint that embeds its receipts can meet.
+	ProofFloor *string `json:"proofFloor"`
 	// NotesRef is the source chain's notes ref, fully qualified.
 	NotesRef *string `json:"notesRef"`
 	// Epochs maps each releasing repository to the first tag that
@@ -253,6 +263,17 @@ func (tp *TagsPolicy) validate() error {
 		if _, err := regexp.Compile(field); err != nil {
 			return fmt.Errorf("tags pattern: %w", err)
 		}
+	}
+
+	if tp.ProofFloor == nil || *tp.ProofFloor == "" {
+		return errors.New(
+			"tags.proofFloor is absent or empty — the org declares how much proof is enough, the tool never does")
+	}
+
+	if *tp.ProofFloor != "certificate-transparency" && *tp.ProofFloor != "observer-timestamp" {
+		return fmt.Errorf(
+			"tags.proofFloor %q is not a floor this verifier judges (certificate-transparency, observer-timestamp)",
+			*tp.ProofFloor)
 	}
 
 	if !strings.HasPrefix(*tp.NotesRef, "refs/") {

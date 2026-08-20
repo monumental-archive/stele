@@ -1221,7 +1221,7 @@ func loadTagVerifier(pol *assert.Policy, root *rootFlags, stderr io.Writer) (ass
 		return fail(err.Error())
 	}
 
-	tv, err := newTagVerifier(rootJSON, *pol.Tags.IdentityPattern, *pol.Issuer)
+	tv, err := newTagVerifier(rootJSON, *pol.Tags.IdentityPattern, *pol.Issuer, *pol.Tags.ProofFloor)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -1229,11 +1229,11 @@ func loadTagVerifier(pol *assert.Policy, root *rootFlags, stderr io.Writer) (ass
 	return tv, exitOK
 }
 
-// newTagVerifier builds the gitsign verifier over the trust package.
-// Swappable in tests.
+// newTagVerifier builds the gitsign verifier over the trust package,
+// carrying the policy's declared proof floor. Swappable in tests.
 //
 //nolint:gochecknoglobals // test seam, written only by test setup
-var newTagVerifier = func(rootJSON []byte, sanPattern, issuer string) (assert.TagVerifier, error) {
+var newTagVerifier = func(rootJSON []byte, sanPattern, issuer, proofFloor string) (assert.TagVerifier, error) {
 	tr, err := trust.LoadRoot(rootJSON)
 	if err != nil {
 		return nil, fmt.Errorf("trusted root: %w", err)
@@ -1249,20 +1249,34 @@ var newTagVerifier = func(rootJSON []byte, sanPattern, issuer string) (assert.Ta
 		return nil, fmt.Errorf("identity pattern: %w", err)
 	}
 
-	return tagTrust{v: v, id: trust.TagIdentity{SANPattern: re, Issuer: issuer}}, nil
+	return tagTrust{
+		v:     v,
+		id:    trust.TagIdentity{SANPattern: re, Issuer: issuer},
+		floor: trust.TagFloor(proofFloor),
+	}, nil
 }
 
 // tagTrust adapts trust.VerifyTag to the walk's seam.
 type tagTrust struct {
-	v  *trust.Verifier
-	id trust.TagIdentity
+	v     *trust.Verifier
+	id    trust.TagIdentity
+	floor trust.TagFloor
 }
 
-func (t tagTrust) Verify(payload, signature []byte) (string, error) {
-	san, err := t.v.VerifyTag(payload, signature, t.id)
+func (t tagTrust) Verify(payload, signature []byte) (assert.TagProof, error) {
+	verdict, err := t.v.VerifyTag(payload, signature, t.id, t.floor)
 	if err != nil {
-		return "", err
+		return assert.TagProof{}, err
 	}
 
-	return san, nil
+	observed := make([]string, 0, len(verdict.Observed))
+	for _, o := range verdict.Observed {
+		observed = append(observed, o.String())
+	}
+
+	return assert.TagProof{
+		SAN:      verdict.SAN,
+		Depth:    string(verdict.Depth),
+		Observed: strings.Join(observed, ", "),
+	}, nil
 }

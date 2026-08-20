@@ -31,6 +31,7 @@ const tagsPolicyJSON = `{
     "tagPattern": "^v[0-9]",
     "taggerName": "release-mint[bot]",
     "identityPattern": "^https://github\\.com/acme/",
+    "proofFloor": "certificate-transparency",
     "notesRef": "refs/notes/commits",
     "epochs": {"widget": "v1.1.0", "gadget": "pending"}
   }
@@ -116,10 +117,14 @@ type fakeTagVerifier struct {
 	called int
 }
 
-func (v *fakeTagVerifier) Verify(_, _ []byte) (string, error) {
+func (v *fakeTagVerifier) Verify(_, _ []byte) (assert.TagProof, error) {
 	v.called++
 
-	return "https://github.com/acme/widget/x", v.err
+	return assert.TagProof{
+		SAN:      "https://github.com/acme/widget/x",
+		Depth:    "certificate-transparency",
+		Observed: "2026-08-19T13:49:19Z (certificate-transparency test-log)",
+	}, v.err
 }
 
 // conformantTags scripts one repo, widget, with a signed post-epoch

@@ -155,7 +155,8 @@ func TestTagsPolicyRefusals(t *testing.T) {
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", 	    "classes": {"a": {"bundles": ["b"]}}},
 	  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
-	    "identityPattern": "^https://github\\.com/acme/", "notesRef": "refs/notes/commits",
+	    "identityPattern": "^https://github\\.com/acme/", "proofFloor": "certificate-transparency",
+	    "notesRef": "refs/notes/commits",
 	    "epochs": {"widget": "v1.0.0", "gadget": "pending"}}}`
 
 	if _, err := assert.LoadPolicy(strings.NewReader(base)); err != nil {
@@ -175,6 +176,14 @@ func TestTagsPolicyRefusals(t *testing.T) {
 			`"identityPattern": "("`, "pattern",
 		},
 		{"unqualified notes ref", `"notesRef": "refs/notes/commits"`, `"notesRef": "commits"`, "fully qualified"},
+		{
+			"missing proof floor", `"proofFloor": "certificate-transparency",`, ``,
+			"proofFloor",
+		},
+		{
+			"unknown proof floor", `"proofFloor": "certificate-transparency"`,
+			`"proofFloor": "vibes"`, "not a floor this verifier judges",
+		},
 		{"no epochs", `"epochs": {"widget": "v1.0.0", "gadget": "pending"}`, `"epochs": {}`, "epochs"},
 		{
 			"unparsable epoch", `"epochs": {"widget": "v1.0.0", "gadget": "pending"}`,

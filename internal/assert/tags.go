@@ -38,11 +38,26 @@ import (
 
 // TagVerifier proves one tag signature — the trust boundary behind a
 // seam so every guard here stays table-tested; the CLI binds the
-// real gitsign verification.
+// real gitsign verification, carrying the policy's declared proof
+// floor.
 type TagVerifier interface {
-	// Verify proves the signature over the payload and returns the
-	// certificate identity it verified under.
-	Verify(payload, signature []byte) (string, error)
+	// Verify proves the signature over the payload to at least the
+	// declared floor and returns the proof it reached.
+	Verify(payload, signature []byte) (TagProof, error)
+}
+
+// TagProof is one verified tag signature's verdict: who signed, the
+// depth of proof reached, and the countersigned instants it was held
+// against (stele#173: the verdict states the depth it reached; the
+// policy states the floor it requires).
+type TagProof struct {
+	// SAN is the certificate identity the signature verified under.
+	SAN string
+	// Depth is the proof depth reached — at least the declared floor.
+	Depth string
+	// Observed names every countersigned instant and the log that
+	// carries it, human-readable.
+	Observed string
 }
 
 // The tag audit's assertions: one per obligation, so an exception can
@@ -272,13 +287,18 @@ func (w *tagsWalk) signature(subject string, obj *gh.TagObject) {
 	}
 
 	// The detail names the obligation, never the cause: the verifier
-	// refuses over the signature, the certificate chain, the declared
+	// refuses over the signature, the countersignatures, the declared
 	// signing time and the identity, and a prefix that picks one of
-	// them misreports the other three (stele#167, where a clock
+	// them misreports the others (stele#167, where a clock
 	// disagreement surfaced as an untrusted chain).
-	if _, err := w.tv.Verify(obj.Payload, obj.Signature); err != nil {
+	proof, err := w.tv.Verify(obj.Payload, obj.Signature)
+	if err != nil {
 		c.Diverged("signature refused: " + err.Error())
+
+		return
 	}
+
+	w.log("assert: tags: %s signature %s observed %s", subject, proof.Depth, proof.Observed)
 }
 
 // tagAtOrAfter reports whether the tag sits at or after the epoch

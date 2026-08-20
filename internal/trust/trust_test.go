@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/root"
-	"github.com/sigstore/sigstore-go/pkg/testing/ca"
 	"github.com/sigstore/sigstore-go/pkg/testing/data"
 
 	"github.com/monumental-archive/stele/internal/trust"
@@ -42,30 +42,24 @@ const (
 	wantVerify = "verify"
 )
 
-// harness stands up one virtual sigstore, one attested entity and a
-// verifier over that virtual world's trusted material.
-func harness(t *testing.T) (*trust.Verifier, *ca.TestEntity, string) {
+// harness stands up one synthesized world, one attested entity and a
+// verifier over that world's trusted material.
+func harness(t *testing.T) (*trust.Verifier, *entity, string) {
 	t.Helper()
 
-	vs, err := ca.NewVirtualSigstore()
-	if err != nil {
-		t.Fatalf("NewVirtualSigstore = %v", err)
-	}
+	w := newWorld(t)
 
 	body := statementOver([]byte("the artifact bytes"))
 	digestHex := digestOf([]byte("the artifact bytes"))
 
-	entity, err := vs.Attest(san, issuer, body)
-	if err != nil {
-		t.Fatalf("Attest = %v", err)
-	}
+	ent := w.attest(t, san, issuer, body)
 
-	v, err := trust.NewVerifier(vs)
+	v, err := trust.NewVerifier(w.material(t))
 	if err != nil {
 		t.Fatalf("NewVerifier = %v", err)
 	}
 
-	return v, entity, digestHex
+	return v, ent, digestHex
 }
 
 func TestVerify(t *testing.T) {
@@ -85,6 +79,49 @@ func TestVerify(t *testing.T) {
 
 	if got.SAN != san {
 		t.Errorf("SAN = %q, want %q", got.SAN, san)
+	}
+
+	// The verdict states the depth it reached: the log's observation
+	// of the signature AND the CT log's countersignature of the
+	// certificate's issuance (stele#173).
+	sources := map[string]bool{}
+	for _, o := range got.Observed {
+		sources[o.Source()] = true
+	}
+
+	if !sources[trust.SourceTransparencyLog] || !sources[trust.SourceCertificateTransparency] {
+		t.Errorf("Observed = %v, want the log observation and the countersigned issuance", got.Observed)
+	}
+}
+
+// TestVerifyWithoutSCT: certificate transparency is part of the
+// stance on EVERY path (stele#173) — a bundle whose signing
+// certificate carries no SCT refuses, on the bundle path exactly as
+// on the tag path.
+func TestVerifyWithoutSCT(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+
+	body := statementOver([]byte("the artifact bytes"))
+
+	leaf, key := w.issueLeaf(t, &leafSpec{
+		san: san, issuer: issuer,
+		notBefore: time.Unix(worldEpoch-300, 0), notAfter: time.Unix(worldEpoch+300, 0),
+		noSCT: true,
+	})
+
+	ent := w.attestWithLeaf(t, leaf, key, body)
+
+	v, err := trust.NewVerifier(w.material(t))
+	if err != nil {
+		t.Fatalf("NewVerifier = %v", err)
+	}
+
+	if _, verr := v.Verify(ent, trust.Identity{SAN: san, Issuer: issuer}, algSHA256,
+		digestOf([]byte("the artifact bytes"))); verr == nil ||
+		!strings.Contains(verr.Error(), "no signed certificate timestamp") {
+		t.Fatalf("Verify = %v, want the missing-SCT refusal", verr)
 	}
 }
 
@@ -215,25 +252,19 @@ func TestEmptyTrustWorld(t *testing.T) {
 func TestVerifyBareSignature(t *testing.T) {
 	t.Parallel()
 
-	vs, err := ca.NewVirtualSigstore()
-	if err != nil {
-		t.Fatalf("NewVirtualSigstore = %v", err)
-	}
+	w := newWorld(t)
 
 	artifact := []byte("the artifact bytes")
 	digest := sha256.Sum256(artifact)
 
-	entity, err := vs.Sign(san, issuer, artifact)
-	if err != nil {
-		t.Fatalf("Sign = %v", err)
-	}
+	ent := w.sign(t, san, issuer, artifact)
 
-	v, err := trust.NewVerifier(vs)
+	v, err := trust.NewVerifier(w.material(t))
 	if err != nil {
 		t.Fatalf("NewVerifier = %v", err)
 	}
 
-	_, err = v.Verify(entity, trust.Identity{SAN: san, Issuer: issuer}, algSHA256, hex.EncodeToString(digest[:]))
+	_, err = v.Verify(ent, trust.Identity{SAN: san, Issuer: issuer}, algSHA256, hex.EncodeToString(digest[:]))
 	if err == nil {
 		t.Fatal("Verify accepted a bare signature as an attestation")
 	}
@@ -243,29 +274,23 @@ func TestVerifyBareSignature(t *testing.T) {
 	}
 }
 
-// blobHarness stands up one virtual sigstore and one BLOB-signed
+// blobHarness stands up one synthesized world and one BLOB-signed
 // entity — the cosign sign-blob shape a chain link's halves carry.
-func blobHarness(t *testing.T) (*trust.Verifier, *ca.TestEntity, string) {
+func blobHarness(t *testing.T) (*trust.Verifier, *entity, string) {
 	t.Helper()
 
-	vs, err := ca.NewVirtualSigstore()
-	if err != nil {
-		t.Fatalf("NewVirtualSigstore = %v", err)
-	}
+	w := newWorld(t)
 
 	artifact := []byte("the statement bytes")
 
-	entity, err := vs.Sign(san, issuer, artifact)
-	if err != nil {
-		t.Fatalf("Sign = %v", err)
-	}
+	ent := w.sign(t, san, issuer, artifact)
 
-	v, err := trust.NewVerifier(vs)
+	v, err := trust.NewVerifier(w.material(t))
 	if err != nil {
 		t.Fatalf("NewVerifier = %v", err)
 	}
 
-	return v, entity, digestOf(artifact)
+	return v, ent, digestOf(artifact)
 }
 
 func TestVerifyBlob(t *testing.T) {

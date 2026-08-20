@@ -2,50 +2,35 @@
 // gitsign mint leaves on an annotated tag, verified natively — no
 // gitsign binary on the runner (stele#83). The signature block is a
 // PEM-wrapped CMS SignedData, detached over the tag payload (the tag
-// object with the signature block removed). Verification is:
+// object with the signature block removed).
 //
-//  1. CMS signature integrity over the payload, and the signer's own
-//     signing instant held inside the certificate that signed it —
-//     both from digitorus/pkcs7, the module sigstore's timestamp
-//     path already pins. See requireSigningTime for the half pkcs7
-//     will not do.
-//  2. Certificate chain to the trusted root's Fulcio CAs through
-//     sigstore-go's own CA verification, observed at the
-//     certificate's issuance instant. See chainToFulcio: the
-//     observation instant is not a parameter, and that is the point.
-//  3. The payload's tagger clock against the certificate that signed
-//     it, bounded by the certificate itself. See
-//     taggerWithinCertificate.
-//  4. Certificate identity: the Fulcio issuer extension equal to the
-//     policy issuer, and the SAN matched against the policy's
-//     identity pattern.
+// One stance, one path (stele#173): the tag is an ADAPTER over the
+// signed-entity abstraction, not a second verifier. What differs by
+// shape is only the binding — a CMS binds its payload to the
+// signature through the message-digest attribute (pkcs7 proves
+// that), and binds the signature to any transparency log through the
+// signed-attribute blob the log records (cms.go extracts it
+// byte-exact). Everything past the binding is the package stance:
+// certificate transparency, a chain observed at a countersigned
+// instant, identity — and, when the tag carries its mint's receipts
+// or the caller's floor demands them, the full observer stance
+// through the SAME sigstore-go verifier the bundle path uses.
 //
-// Integrity bound, stated plainly (stele#167 owed this in writing).
-// NOTHING read here is a countersigned timestamp. The tagger line
-// and the signingTime attribute are both authored by the signer,
-// inside material the signer produced; a certificate holds them only
-// against a window Fulcio chose. So steps 1 and 3 prove CONSISTENCY
-// — that the tag's own account of when it was made agrees with the
-// certificate that signed it — and they never prove WHEN. Reading
-// either of them as an independent anchor was the defect #167
-// recorded: it bought no property against any adversary, and it
-// reddened honest tags whenever the mint crossed a second boundary
-// between git's stamp and Fulcio's issuance — measured over every
-// gitsign tag inside the org's two declared epochs, 10 of 43, each
-// by exactly one second.
-//
-// The observer timestamp the bundle path requires (see NewVerifier)
-// has no counterpart here, and no bound in this file can supply one.
-// A gitsign signature CAN carry its own Rekor entry as a CMS
-// unsigned attribute (OID 1.3.6.1.4.1.57264.3.1), which would make
-// the tag path offline-verifiable against a real countersigned
-// instant on the same stance as every other artifact. No tag this
-// org has minted carries one (measured: 0 of 43). That is a gap in
-// the mint, not a choice of this verifier.
+// How much proof is enough is NOT decided here. The caller declares
+// a floor (TagFloor, policy data); the verdict states the depth it
+// reached and the instants it observed. A mint that logs its tags
+// but drops the receipt — this org's, today — verifies honestly at
+// the certificate-transparency floor: its certificate's issuance is
+// countersigned by a CT log, and nothing countersigns an observation
+// of the signature itself. The moment the mint embeds its Rekor
+// entry (the decision recorded on stele#167), the same tag verifies
+// at the observer-timestamp floor with no code change here.
 
 package trust
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -56,7 +41,31 @@ import (
 	"time"
 
 	"github.com/digitorus/pkcs7"
+	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
+	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
+	"github.com/sigstore/sigstore-go/pkg/tlog"
+	"github.com/sigstore/sigstore-go/pkg/verify"
+	"google.golang.org/protobuf/proto"
+)
+
+// TagFloor is the floor of proof a caller requires of a tag
+// signature — declared policy data, never a code decision
+// (stele#173). The ladder is ordered: observer-timestamp implies
+// everything certificate-transparency proves.
+type TagFloor string
+
+const (
+	// TagFloorCertificateTransparency requires the signing
+	// certificate's issuance to be countersigned by a trusted CT log
+	// — the depth every Fulcio-minted signature can reach offline,
+	// receipts or not.
+	TagFloorCertificateTransparency TagFloor = "certificate-transparency"
+	// TagFloorObserverTimestamp additionally requires a countersigned
+	// observation of the signature itself: a transparency-log entry
+	// and an observer timestamp, the same stance the bundle path
+	// holds. Only a mint that embeds its receipts can meet it.
+	TagFloorObserverTimestamp TagFloor = "observer-timestamp"
 )
 
 // TagIdentity is the trust expectation for one tag signature: the
@@ -66,46 +75,265 @@ type TagIdentity struct {
 	Issuer     string
 }
 
-// VerifyTag proves one gitsign tag signature: CMS over the payload,
-// a declared signing instant, a chain to a trusted Fulcio CA, a
-// tagger clock consistent with the certificate, and the certificate
-// identity. Returns the verified certificate's SAN.
-func (t *Verifier) VerifyTag(payload, sigPEM []byte, id TagIdentity) (string, error) {
+// TagVerdict is a successful tag verification: who signed, the depth
+// the proof reached, and every countersigned instant it was held
+// against — stated, never implied.
+type TagVerdict struct {
+	SAN      string
+	Depth    TagFloor
+	Observed []ObservedInstant
+}
+
+// VerifyTag proves one gitsign tag signature to at least the given
+// floor: CMS integrity over the payload, the package stance
+// (transparency, chain at a countersigned instant, identity), the
+// floor's observer obligations, and the tagger clock's consistency
+// with the countersigned issuance. Returns the verdict with the
+// depth actually reached.
+func (t *Verifier) VerifyTag(payload, sigPEM []byte, id TagIdentity, floor TagFloor) (*TagVerdict, error) {
+	if floor != TagFloorCertificateTransparency && floor != TagFloorObserverTimestamp {
+		return nil, fmt.Errorf("trust: unknown tag proof floor %q", floor)
+	}
+
 	block, _ := pem.Decode(sigPEM)
 	if block == nil {
-		return "", errors.New("trust: tag signature is not PEM")
+		return nil, errors.New("trust: tag signature is not PEM")
 	}
 
 	p7, err := pkcs7.Parse(block.Bytes)
 	if err != nil {
-		return "", fmt.Errorf("trust: tag signature is not CMS: %w", err)
+		return nil, fmt.Errorf("trust: tag signature is not CMS: %w", err)
 	}
 
 	p7.Content = payload
 
+	// The payload↔signature binding: the message-digest attribute
+	// covers the payload, the signature covers the attributes.
 	if verr := p7.Verify(); verr != nil {
-		return "", fmt.Errorf("trust: tag signature does not verify over the tag payload: %w", verr)
+		return nil, fmt.Errorf("trust: tag signature does not verify over the tag payload: %w", verr)
 	}
 
 	leaf := p7.GetOnlySigner()
 	if leaf == nil {
-		return "", errors.New("trust: tag signature carries no single signer certificate")
+		return nil, errors.New("trust: tag signature carries no single signer certificate")
 	}
 
 	if serr := requireSigningTime(p7); serr != nil {
-		return "", serr
+		return nil, serr
 	}
 
-	if cerr := t.chainToFulcio(leaf); cerr != nil {
-		return "", cerr
+	pieces, err := parseCMS(block.Bytes)
+	if err != nil {
+		return nil, err
 	}
 
-	if terr := taggerWithinCertificate(payload, leaf); terr != nil {
-		return "", terr
+	verdict, issuance, err := t.judgeTag(leaf, pieces, id, floor)
+	if err != nil {
+		return nil, err
 	}
 
-	return tagIdentity(leaf, id)
+	// The tag's own account of when it was made, held against the
+	// countersigned issuance instant — never against a window the
+	// signer chose.
+	if terr := taggerConsistent(payload, leaf, issuance); terr != nil {
+		return nil, terr
+	}
+
+	return verdict, nil
 }
+
+// judgeTag runs the stance over the parsed signature and returns the
+// verdict scaffold (SAN, depth, instants) along with the
+// countersigned issuance instant the tagger clock is held against.
+//
+// Route selection is by EVIDENCE, not only by floor: a tag carrying
+// its mint's receipts is judged through the full observer path even
+// when the floor asks less, because a receipt that does not prove is
+// tampering-shaped and must refuse loudly, never be ignored down to
+// a shallower success.
+func (t *Verifier) judgeTag(
+	leaf *x509.Certificate, pieces *cmsPieces, id TagIdentity, floor TagFloor,
+) (*TagVerdict, ObservedInstant, error) {
+	entries, err := parseTagTlogEntries(pieces.tlogEntries)
+	if err != nil {
+		return nil, ObservedInstant{}, err
+	}
+
+	if floor == TagFloorObserverTimestamp && len(entries) == 0 && len(pieces.timestamps) == 0 {
+		return nil, ObservedInstant{}, errors.New(
+			"trust: the tag signature carries no transparency-log entry and no signed timestamp — " +
+				"nothing countersigns an observation of the signature, and the declared floor requires one")
+	}
+
+	if len(entries) > 0 || len(pieces.timestamps) > 0 {
+		return t.judgeTagObserved(leaf, pieces, entries, id)
+	}
+
+	return t.judgeTagIssuance(leaf, id)
+}
+
+// judgeTagObserved reaches the verdict through the SAME verifier the
+// bundle path uses: the CMS becomes a message-signature entity over
+// its signed-attribute blob, and sigstore-go proves the log entry,
+// the observer timestamps, the chain at those instants, the
+// signature and the identity — the whole stance, unrepeated.
+func (t *Verifier) judgeTagObserved(
+	leaf *x509.Certificate, pieces *cmsPieces, entries []*tlog.Entry, id TagIdentity,
+) (*TagVerdict, ObservedInstant, error) {
+	ci, err := tagCertIdentity(id)
+	if err != nil {
+		return nil, ObservedInstant{}, err
+	}
+
+	entity := &tagEntity{leaf: leaf, pieces: pieces, entries: entries}
+
+	result, err := t.v.Verify(entity, verify.NewPolicy(
+		verify.WithArtifact(bytes.NewReader(pieces.signedBlob)),
+		verify.WithCertificateIdentity(ci),
+	))
+	if err != nil {
+		return nil, ObservedInstant{}, fmt.Errorf("trust: tag signature countersignatures do not verify: %w", err)
+	}
+
+	ctInstant, err := t.observeCT(leaf)
+	if err != nil {
+		return nil, ObservedInstant{}, err
+	}
+
+	if result.Signature == nil || result.Signature.Certificate == nil {
+		return nil, ObservedInstant{}, errors.New(
+			"trust: verification returned no certificate — nothing to hold the policy against")
+	}
+
+	return &TagVerdict{
+		SAN:      result.Signature.Certificate.SubjectAlternativeName,
+		Depth:    TagFloorObserverTimestamp,
+		Observed: append(observedFromResult(result), ctInstant),
+	}, ctInstant, nil
+}
+
+// judgeTagIssuance is the certificate-transparency depth: nothing
+// countersigns an observation of the signature, so the verdict rests
+// on what IS countersigned — the certificate's issuance, proven by
+// observeCT together with the chain at that instant — plus the
+// identity, held through sigstore-go's own identity matcher so the
+// definition is the bundle path's.
+func (t *Verifier) judgeTagIssuance(leaf *x509.Certificate, id TagIdentity) (*TagVerdict, ObservedInstant, error) {
+	ctInstant, err := t.observeCT(leaf)
+	if err != nil {
+		return nil, ObservedInstant{}, err
+	}
+
+	ci, err := tagCertIdentity(id)
+	if err != nil {
+		return nil, ObservedInstant{}, err
+	}
+
+	summary, err := certificate.SummarizeCertificate(leaf)
+	if err != nil {
+		return nil, ObservedInstant{}, fmt.Errorf("trust: tag signing certificate: %w", err)
+	}
+
+	if _, ierr := (verify.CertificateIdentities{ci}).Verify(summary); ierr != nil {
+		return nil, ObservedInstant{}, fmt.Errorf("trust: tag signing certificate identity: %w", ierr)
+	}
+
+	return &TagVerdict{
+		SAN:      summary.SubjectAlternativeName,
+		Depth:    TagFloorCertificateTransparency,
+		Observed: []ObservedInstant{ctInstant},
+	}, ctInstant, nil
+}
+
+// tagCertIdentity builds the identity expectation once, in
+// sigstore-go's own vocabulary: issuer exact, SAN by the declared
+// pattern.
+func tagCertIdentity(id TagIdentity) (verify.CertificateIdentity, error) {
+	ci, err := verify.NewShortCertificateIdentity(id.Issuer, "", "", id.SANPattern.String())
+	if err != nil {
+		return verify.CertificateIdentity{}, fmt.Errorf("trust: tag identity: %w", err)
+	}
+
+	return ci, nil
+}
+
+// parseTagTlogEntries decodes the embedded Rekor entries. A receipt
+// that does not parse refuses — a malformed countersignature is
+// evidence of tampering, never something to fall back from. The
+// attribute payload is the protobuf TransparencyLogEntry gitsign
+// embeds in its offline mode; no tag this org has minted carries one
+// yet (measured on stele#167: 0 of 43), so the canon's mint change
+// shadow-proves this decode against real material before any policy
+// floor relies on it.
+func parseTagTlogEntries(raw [][]byte) ([]*tlog.Entry, error) {
+	entries := make([]*tlog.Entry, 0, len(raw))
+
+	for _, data := range raw {
+		var pb protorekor.TransparencyLogEntry
+		if err := proto.Unmarshal(data, &pb); err != nil {
+			return nil, fmt.Errorf("trust: tag signature transparency-log entry does not decode: %w", err)
+		}
+
+		entry, err := tlog.ParseTransparencyLogEntry(&pb)
+		if err != nil {
+			return nil, fmt.Errorf("trust: tag signature transparency-log entry: %w", err)
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+// tagEntity adapts one parsed CMS to sigstore-go's signed-entity
+// abstraction: a message signature over the signed-attribute blob
+// (the seam invariant, cms.go), the signer's certificate, and
+// whatever countersignatures the mint embedded.
+type tagEntity struct {
+	leaf    *x509.Certificate
+	pieces  *cmsPieces
+	entries []*tlog.Entry
+}
+
+//nolint:ireturn // sigstore-go's SignedEntity contract returns its interface
+func (e *tagEntity) VerificationContent() (verify.VerificationContent, error) {
+	return bundle.NewCertificate(e.leaf), nil
+}
+
+//nolint:ireturn // sigstore-go's SignedEntity contract returns its interface
+func (e *tagEntity) SignatureContent() (verify.SignatureContent, error) {
+	digest := sha256.Sum256(e.pieces.signedBlob)
+
+	return bundle.NewMessageSignature(digest[:], "SHA2_256", e.pieces.signature), nil
+}
+
+func (e *tagEntity) Timestamps() ([][]byte, error) { return e.pieces.timestamps, nil }
+
+func (e *tagEntity) TlogEntries() ([]*tlog.Entry, error) { return e.entries, nil }
+
+func (e *tagEntity) HasInclusionPromise() bool {
+	for _, entry := range e.entries {
+		if entry.HasInclusionPromise() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (e *tagEntity) HasInclusionProof() bool {
+	for _, entry := range e.entries {
+		if entry.HasInclusionProof() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Version names the entity shape; nothing here needs the bundle
+// media-type compatibility switches keyed off it.
+func (e *tagEntity) Version() (string, error) { return "gitsign-tag", nil }
 
 // requireSigningTime proves the CMS carries its RFC 5652 signingTime
 // signed attribute.
@@ -128,73 +356,34 @@ func requireSigningTime(p7 *pkcs7.PKCS7) error {
 	return nil
 }
 
-// chainToFulcio accepts the leaf if any trusted Fulcio CA builds a
-// chain for it at the certificate's own issuance instant.
+// taggerConsistent holds the payload's tagger clock against the
+// countersigned instant the verdict observed — one side of the
+// comparison is finally trustworthy (stele#173), so the bound needs
+// no declared tolerance.
 //
-// The observation instant is NOT a parameter, and that is the whole
-// design (stele#167). What the instant selects is which CA
-// generation is asked to vouch — sigstore's hybrid model, where a
-// signature holds only if every certificate up the chain was valid
-// at one instant — and the only instant at which a ten-minute leaf
-// and a years-long CA are jointly meaningful is the leaf's issuance.
-// NotBefore is the CA's own statement of that instant, is present on
-// every certificate, and lies inside the leaf's window by
-// construction, so this call cannot redden a healthy tag over a
-// clock. A time that can be passed in is a time that can be passed
-// in wrong.
-//
-// What this deliberately does NOT prove is that the signature was
-// made while the certificate was live. Only a countersigned
-// timestamp proves that (see the integrity bound at the head of this
-// file). A signer-authored instant fed in here would wear that
-// proof's shape and carry none.
-func (t *Verifier) chainToFulcio(leaf *x509.Certificate) error {
-	cas := t.trusted.FulcioCertificateAuthorities()
-	if len(cas) == 0 {
-		return errors.New("trust: the trusted root names no certificate authority")
-	}
-
-	var last error
-
-	for _, ca := range cas {
-		_, cerr := ca.Verify(leaf, leaf.NotBefore)
-		if cerr == nil {
-			return nil
-		}
-
-		last = cerr
-	}
-
-	return fmt.Errorf("trust: tag signing certificate chains to no trusted authority: %w", last)
-}
-
-// taggerWithinCertificate holds the payload's tagger clock against
-// the certificate that signed it.
-//
-// The bound is DERIVED, never declared: a tag may not claim a time
-// after its certificate expires, nor more than one certificate
-// lifetime before that certificate was issued. Nobody chooses that
-// number — the certificate states its own tolerance by stating its
-// own window — so it cannot be widened under pressure, which is what
-// a declared tolerance eventually becomes.
+// The bound is still DERIVED, never chosen: a tag may not claim a
+// time after its signing certificate expires, nor more than one
+// certificate lifetime before the countersigned instant. The
+// certificate states its own tolerance by stating its own window, so
+// nothing here can widen under pressure.
 //
 // The asymmetry is the mint's real shape: git stamps the tagger line
 // from the tagging process's clock and only then invokes the signer,
-// so an honest tagger time PRECEDES issuance by the mint's latency
-// (measured across both declared epochs: zero or one second, never
-// more, never negative) and can never legitimately follow the
+// so an honest tagger time PRECEDES the countersigned issuance by
+// the mint's latency (measured across both declared epochs: zero or
+// one second, never more) and can never legitimately follow the
 // certificate's expiry.
-func taggerWithinCertificate(payload []byte, leaf *x509.Certificate) error {
+func taggerConsistent(payload []byte, leaf *x509.Certificate, observed ObservedInstant) error {
 	tagged, err := taggerTime(payload)
 	if err != nil {
 		return err
 	}
 
-	earliest := leaf.NotBefore.Add(-leaf.NotAfter.Sub(leaf.NotBefore))
+	earliest := observed.Time().Add(-leaf.NotAfter.Sub(leaf.NotBefore))
 
 	if tagged.Before(earliest) || tagged.After(leaf.NotAfter) {
 		return fmt.Errorf(
-			"trust: the tag is stamped %s, outside the window its signing certificate allows (%s to %s)",
+			"trust: the tag is stamped %s, outside the window its countersigned issuance allows (%s to %s)",
 			tagged.UTC().Format(time.RFC3339),
 			earliest.UTC().Format(time.RFC3339),
 			leaf.NotAfter.UTC().Format(time.RFC3339))
@@ -203,41 +392,11 @@ func taggerWithinCertificate(payload []byte, leaf *x509.Certificate) error {
 	return nil
 }
 
-// tagIdentity holds the leaf's Fulcio identity against the
-// expectation and returns the SAN that matched.
-func tagIdentity(leaf *x509.Certificate, id TagIdentity) (string, error) {
-	ext, err := certificate.ParseExtensions(leaf.Extensions)
-	if err != nil {
-		return "", fmt.Errorf("trust: tag signing certificate extensions: %w", err)
-	}
-
-	if ext.Issuer != id.Issuer {
-		return "", fmt.Errorf("trust: tag signing certificate issuer %q is not %q", ext.Issuer, id.Issuer)
-	}
-
-	san := ""
-
-	for _, uri := range leaf.URIs {
-		if id.SANPattern.MatchString(uri.String()) {
-			san = uri.String()
-
-			break
-		}
-	}
-
-	if san == "" {
-		return "", fmt.Errorf(
-			"trust: no certificate SAN matches the declared identity pattern %q", id.SANPattern.String())
-	}
-
-	return san, nil
-}
-
 // taggerTime reads the tagger timestamp out of the signed payload —
-// the tag's own account of when it was made, which
-// taggerWithinCertificate holds against the signing certificate. The
-// line is `tagger NAME <EMAIL> UNIX TZ`, git's own format; a payload
-// without one is not an annotated tag and refuses.
+// the tag's own account of when it was made, which taggerConsistent
+// holds against the countersigned issuance. The line is
+// `tagger NAME <EMAIL> UNIX TZ`, git's own format; a payload without
+// one is not an annotated tag and refuses.
 func taggerTime(payload []byte) (time.Time, error) {
 	for line := range strings.SplitSeq(string(payload), "\n") {
 		if line == "" {
