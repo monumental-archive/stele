@@ -445,7 +445,7 @@ func enrichedDeepPolicy(t *testing.T) *assert.Policy {
 // that carry no class, which is everything schema 2 could say.
 func classlessManifest() string {
 	return `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9",` +
-		` "entries": [{"name": "widget-v1.0.0.tar.gz", "sha256": "` + strings.Repeat("a", 64) +
+		` "entries": [{"name": "widget-v1.0.0.tar.gz", "sha256": "` + subjectDigest +
 		`", "type": "build-subject"}]}`
 }
 
@@ -457,13 +457,36 @@ func runDeepDemand(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert.Polic
 ) (*report.Report, string) {
 	t.Helper()
 
+	return runDeepDemandSource(t, f, deep, pol,
+		assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}, declared...)
+}
+
+// runDeepSource walks one release at full depth through the given
+// contract source — the seam the cross-check's not-owed rows need,
+// where WHICH source speaks for the release is the fixture.
+//
+//nolint:gocritic // unnamedResult: the report, then its transcript — named in the doc
+func runDeepSource(t *testing.T, f *fakeForge, pol *assert.Policy, src assert.ContractSource,
+	declared ...report.Exception,
+) (*report.Report, string) {
+	t.Helper()
+
+	return runDeepDemandSource(t, f, &fakeDeep{}, pol, src, declared...)
+}
+
+//nolint:gocritic // unnamedResult: the report, then its transcript — named in the doc
+func runDeepDemandSource(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert.Policy,
+	source assert.ContractSource, declared ...report.Exception,
+) (*report.Report, string) {
+	t.Helper()
+
 	full, err := assert.NewFullDepth(deep,
 		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
+	src := assert.Sources{source}
 
 	var said strings.Builder
 

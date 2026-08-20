@@ -465,6 +465,26 @@ manifest, because unknown defaulting into either population is the
 failure this typing exists to prevent. So does an entry with no
 digest, or the same asset twice.
 
+### The checksum cross-check
+
+A release carries two documents that pin its bytes — `checksums` and
+the evidence manifest's `entries` — and each is internally
+consistent, so a name carrying one digest in one and another digest
+in the other passes every per-document check. At full depth, where
+both documents are in hand, the walk asks whether they describe the
+same bytes and reds `manifest:checksums` naming every disagreeing
+asset and both digests (stele#219).
+
+Only the **intersection** of names is judged. A name in one document
+and not the other is sound and owned elsewhere: the evidence manifest
+cannot pin itself, the checksum manifest does pin it, and asset
+presence is the presence leg's own obligation. A manifest whose
+schema carries no entries — or a release no manifest speaks for — is
+a narrowing, stated in the walk's output and never recorded as a
+check: an obligation the release could not meet would sit in the
+journal forever, and an exception written against it would read as
+stale from the day it was written.
+
 The type is stamped by `stele emit manifest`, from the vocabulary
 this policy already declares — `checksums`, `manifestAsset`,
 `umbrellaBundle`, `sbomSuffix`, `evidenceSuffixes`, and each class's
@@ -582,7 +602,7 @@ target's vocabulary is its own:
 
 | target | assertions |
 | --- | --- |
-| `evidence` | `sbom`, the checksum or bundle asset name, an `assetPrefixes` prefix, `class:<name>`, `<asset>:unreadable`, `vsa:<first 12 digest hex>`, `continuous-digest`, `base-image-approval`, and at full depth `deep`, `vsa:deep` and `manifest:attribution` |
+| `evidence` | `sbom`, the checksum or bundle asset name, an `assetPrefixes` prefix, `class:<name>`, `<asset>:unreadable`, `vsa:<first 12 digest hex>`, `continuous-digest`, `base-image-approval`, and at full depth `deep`, `vsa:deep`, `manifest:attribution` and `manifest:checksums` |
 | `tags` | `tag:epoch`, `tag:annotated`, `tag:tagger`, `tag:signature`, `tag:link` |
 | `chains` | `chains` — a founded chain's defect is never excusable; absence is excused by the policy's `chains.exceptions`, never here |
 | `blast-radius` | `<advisory>:<package>@<version>`, `<asset>:unattested`, `<asset>:empty-scan` |

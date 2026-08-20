@@ -74,7 +74,15 @@ func bundleJSONL(predicateType string) string {
 // manifestEntry renders one entry at the current schema: an artifact
 // names the class that built it, a document names none.
 func manifestEntry(name, entryType, class string) string {
-	entry := `{"name": "` + name + `", "sha256": "` + strings.Repeat("a", 64) + `", "type": "` + entryType + `"`
+	return manifestEntryPinned(name, entryType, class, strings.Repeat("a", 64))
+}
+
+// manifestEntryPinned is manifestEntry with the pinned bytes chosen —
+// the fixture control the checksum cross-check needs (stele#219),
+// where a name's digest in this document either matches the checksum
+// manifest's or is the disagreement under test.
+func manifestEntryPinned(name, entryType, class, digest string) string {
+	entry := `{"name": "` + name + `", "sha256": "` + digest + `", "type": "` + entryType + `"`
 	if class != "" {
 		entry += `, "class": "` + class + `"`
 	}
@@ -87,6 +95,8 @@ func manifestEntry(name, entryType, class string) string {
 // documents describe one release: an evidence manifest naming an
 // artifact the checksums do not is the disagreement the attribution
 // finding exists to report (stele#206), not the fixture's baseline.
+// It pins the same bytes for it too, for the same reason: a healthy
+// release's two documents agree by digest (stele#219).
 func manifestAsset(classes []string, storeVSA bool) string {
 	sv := "false"
 	if storeVSA {
@@ -95,7 +105,7 @@ func manifestAsset(classes []string, storeVSA bool) string {
 
 	return `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["` + strings.Join(classes, `", "`) +
 		`"], "storeVsa": ` + sv + `, "machineryVersion": "9.9.9", "entries": [` +
-		manifestEntry("widget-v1.0.0.tar.gz", "build-subject", classes[0]) + `]}`
+		manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", classes[0], subjectDigest) + `]}`
 }
 
 // fakeForge scripts the whole forge for one org.

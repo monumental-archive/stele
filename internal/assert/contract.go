@@ -54,6 +54,15 @@ type Contract struct {
 	// ArtifactClasses maps a build subject's asset name to the class
 	// that built it — meaningful only where Attributed.
 	ArtifactClasses map[string]string
+	// Pinned reports whether the source pins the release's assets by
+	// digest at all — carried as its own fact rather than inferred
+	// from an empty Pins for the reason Attributed is: a manifest that
+	// pins nothing and a source that cannot pin are different facts,
+	// and only the second may excuse the cross-check (stele#219).
+	Pinned bool
+	// Pins maps each named asset to the bytes the source pins for it —
+	// meaningful only where Pinned.
+	Pins map[string]string
 	// ManifestSchema is the schema the manifest declared, 0 when no
 	// manifest spoke for the release. It says WHY attribution is
 	// missing, so a narrowing states its own cause instead of asserting
@@ -381,6 +390,7 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	// judgment, and the manifest's silence is itself the fact
 	// (stele#206).
 	artifactClasses, attributed := doc.ArtifactClasses()
+	pins, pinned := doc.Pins()
 
 	return &Contract{
 		Classes:          doc.Classes,
@@ -390,6 +400,8 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		MachineryVersion: *doc.MachineryVersion,
 		Attributed:       attributed,
 		ArtifactClasses:  artifactClasses,
+		Pinned:           pinned,
+		Pins:             pins,
 		ManifestSchema:   *doc.Schema,
 		Origin:           origin,
 	}, true, nil

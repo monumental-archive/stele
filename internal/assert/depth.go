@@ -59,12 +59,25 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 	// known: the three ways it can fail are one obligation.
 	deep := w.check(subject, "deep")
 
-	subjects, sboms, err := w.checksumSubjects(repo, tag)
+	pinned, err := w.checksumPins(repo, tag)
 	if err != nil {
 		deep.Diverged(err.Error())
 
 		return nil
 	}
+
+	subjects, sboms, err := w.checksumSubjects(pinned)
+	if err != nil {
+		deep.Diverged(err.Error())
+
+		return nil
+	}
+
+	// Both pinning documents are in hand exactly here, and nowhere
+	// else in the walk (stele#219). Taken after the subject
+	// derivation succeeds: an unreadable checksum manifest is one
+	// cause, and `deep` has already spoken for it.
+	w.checksumAgreement(subject, contract, pinned)
 
 	pins, err := w.resolvePins(repo, tag)
 	if err != nil {
@@ -175,19 +188,24 @@ func (w *evidenceWalk) enrichmentDemand(
 	return ad.Demand
 }
 
-// checksumSubjects reads the release's checksum manifest into the
-// verify engine's subject list — the same manifest a stranger pins
-// bytes against. SBOM candidates are the subset carrying the policy's
-// SBOM suffix.
+// checksumPins reads the release's checksum manifest as what it is:
+// every name it pins and the bytes it pins for it, in file order.
 //
-//nolint:gocritic // unnamedResult: subjects then sboms, documented above
-func (w *evidenceWalk) checksumSubjects(repo, tag string) ([]verify.Subject, []verify.Subject, error) {
+// It is the ONE reading of that document (stele#219). The subject
+// derivation below classifies on top of this slice and the
+// cross-check compares against it, so the two legs cannot come to
+// different conclusions about what the checksum manifest says — the
+// same share-the-definition rule that put one SHA256Hex across emit
+// and verify. Lines that pin nothing (blank, commentary, a digest
+// that is not one) are not part of the document's claim and are
+// skipped once, here.
+func (w *evidenceWalk) checksumPins(repo, tag string) ([]verify.Subject, error) {
 	raw, err := w.forge.Asset(w.org, repo, tag, *w.pol.Checksums)
 	if err != nil {
-		return nil, nil, fmt.Errorf("the checksum manifest is unreadable: %w", err)
+		return nil, fmt.Errorf("the checksum manifest is unreadable: %w", err)
 	}
 
-	var subjects, sboms []verify.Subject
+	var pins []verify.Subject
 
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		fields := strings.Fields(line)
@@ -195,8 +213,69 @@ func (w *evidenceWalk) checksumSubjects(repo, tag string) ([]verify.Subject, []v
 			continue
 		}
 
-		s := verify.Subject{Name: fields[1], SHA256: fields[0]}
+		pins = append(pins, verify.Subject{Name: fields[1], SHA256: fields[0]})
+	}
 
+	return pins, nil
+}
+
+// checksumAgreement asks the one question no per-document check can:
+// whether the release's two pinning documents describe the same bytes
+// (stele#219). Each is internally consistent, and a name carrying one
+// digest in the checksum manifest and another in the evidence
+// manifest passes both — two pinning documents for one release that
+// can silently disagree.
+//
+// Only the INTERSECTION of names is judged. A name in one document
+// and not the other is sound and owned elsewhere: the evidence
+// manifest cannot pin itself, the checksum manifest does pin it, and
+// asset presence is the presence leg's obligation. Re-judging it here
+// would red a release for the documents' own shapes.
+//
+// The check is recorded only where the source could meet it. A
+// contract that cannot pin at all — a manifest schema below entries,
+// or no manifest speaking for the release — is a narrowing, logged
+// loudly and never recorded: an obligation the release could never
+// meet would sit in the journal forever, and any exception written
+// against it would read as stale from the day it was written.
+func (w *evidenceWalk) checksumAgreement(subject string, contract *Contract, pinned []verify.Subject) {
+	if !contract.Pinned {
+		w.log("assert: evidence: %s: the contract pins no assets (%s) — the checksum cross-check is not asked",
+			subject, contract.Origin)
+
+		return
+	}
+
+	var details []string
+
+	for _, p := range pinned {
+		declared, both := contract.Pins[p.Name]
+		if !both || declared == p.SHA256 {
+			continue
+		}
+
+		details = append(details, fmt.Sprintf("%s: %s pins %s, the evidence manifest pins %s",
+			p.Name, *w.pol.Checksums, p.SHA256, declared))
+	}
+
+	// One check for one obligation — the two documents agree or they
+	// do not — taken whether it holds or not, so an excuse for a
+	// cross-check this run never performed cannot read as stale.
+	if c := w.check(subject, "manifest:checksums"); len(details) > 0 {
+		c.Diverged(strings.Join(details, "; "))
+	}
+}
+
+// checksumSubjects classifies the checksum manifest's pins into the
+// verify engine's subject list — the same manifest a stranger pins
+// bytes against. SBOM candidates are the subset carrying the policy's
+// SBOM suffix.
+//
+//nolint:gocritic // unnamedResult: subjects then sboms, documented above
+func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subject, []verify.Subject, error) {
+	var subjects, sboms []verify.Subject
+
+	for _, s := range pinned {
 		// The checksum manifest pins evidence documents beside the
 		// artifacts, and a document about the release is not a subject
 		// of its build (measured on v0.5.0: provenance covers exactly
@@ -366,7 +445,12 @@ func ReleaseInputs(
 
 	w := &evidenceWalk{pol: pol.Evidence, org: owner, forge: forge, full: full}
 
-	subjects, sboms, err := w.checksumSubjects(repo, tag)
+	pinned, err := w.checksumPins(repo, tag)
+	if err != nil {
+		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	subjects, sboms, err := w.checksumSubjects(pinned)
 	if err != nil {
 		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
 	}
