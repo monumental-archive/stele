@@ -1,13 +1,16 @@
 package ghstore_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/ghstore"
 )
 
@@ -265,4 +268,179 @@ func TestBundlesTransportFailures(t *testing.T) {
 			t.Fatalf("Bundles = %v, want the read refusal", err)
 		}
 	})
+}
+
+// The scripted rate-limit refusals, one per marker the classifier
+// reads, plus the refusal that carries none of them.
+const secondaryLimitBody = `{"message":"You have exceeded a secondary rate limit. ` +
+	`Please wait a few minutes before you try again.",` +
+	`"documentation_url":"https://docs.github.com/rest/overview/` +
+	`rate-limits-for-the-rest-api#about-secondary-rate-limits"}`
+
+func retryAfter403(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "60")
+	w.WriteHeader(http.StatusForbidden)
+}
+
+func remainingZero403(w http.ResponseWriter) {
+	w.Header().Set("X-Ratelimit-Remaining", "0")
+	w.WriteHeader(http.StatusForbidden)
+}
+
+func secondaryLimit403(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusForbidden)
+	//nolint:errcheck,gosec // test server write
+	w.Write([]byte(secondaryLimitBody))
+}
+
+func bare403(w http.ResponseWriter) {
+	http.Error(w, "Resource not accessible by personal access token", http.StatusForbidden)
+}
+
+// throttleProbe is the store's ladder under a scripted rate limit: the
+// reads it made, and the pauses it took between them.
+type throttleProbe struct {
+	client *ghstore.Client
+	calls  atomic.Int32
+	waits  []time.Duration
+}
+
+// newThrottleProbe refuses the first `refuse` reads, then serves a
+// real bundle list.
+func newThrottleProbe(t *testing.T, refuse int32, respond func(http.ResponseWriter)) *throttleProbe {
+	t.Helper()
+
+	p := &throttleProbe{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if p.calls.Add(1) <= refuse {
+			respond(w)
+
+			return
+		}
+
+		w.Write([]byte(`{"attestations": [{"bundle": {}}]}`)) //nolint:errcheck,gosec // test server write
+	}))
+	t.Cleanup(srv.Close)
+
+	p.client = &ghstore.Client{
+		Base: srv.URL,
+		HTTP: srv.Client(),
+		// The clock is the assertion: honouring the host's own number
+		// and ignoring it differ nowhere else.
+		Sleep: func(d time.Duration) { p.waits = append(p.waits, d) },
+	}
+
+	return p
+}
+
+// TestThrottleIsNotAFactAboutTheDigest pins stele#209 on the verify
+// engine's store. This leg reads the same forge over the same statuses
+// as the assert walk, so it asks the same classifier — and it is the
+// leg where the confusion costs most, because "nothing is stored for
+// this digest" is its documented finding. A throttle reported through
+// that sentence would say the evidence is absent when the run simply
+// never got to look.
+func TestThrottleIsNotAFactAboutTheDigest(t *testing.T) {
+	t.Parallel()
+
+	// The ladder's own backoff is attempt × 5s, so the pauses below are
+	// the ladder's when the host named no wait, and the host's when it
+	// did.
+	ladder := []time.Duration{10 * time.Second, 15 * time.Second, 20 * time.Second, 25 * time.Second}
+
+	for _, tc := range []struct {
+		name    string
+		respond func(http.ResponseWriter)
+		// refuse is how many reads are refused before a real answer;
+		// more than the budget exhausts it.
+		refuse int32
+		calls  int32
+		waits  []time.Duration
+		// found is whether the store answers at all.
+		found bool
+		// throttled is whether the refusal types as the host's, not the
+		// digest's; says and never are fragments it must and must not
+		// carry.
+		throttled   bool
+		says, never string
+	}{
+		{
+			name:    "a named wait is honoured over the ladder's own backoff",
+			respond: retryAfter403,
+			refuse:  2,
+			calls:   3,
+			waits:   []time.Duration{60 * time.Second, 60 * time.Second},
+			found:   true,
+		},
+		{
+			name:    "a spent budget is retried on the ladder's own backoff",
+			respond: remainingZero403,
+			refuse:  2,
+			calls:   3,
+			waits:   ladder[:2],
+			found:   true,
+		},
+		{
+			name:      "a throttle that never clears names the throttle, never the evidence",
+			respond:   secondaryLimit403,
+			refuse:    99,
+			calls:     5,
+			waits:     ladder,
+			throttled: true,
+			says:      "throttled this walk",
+			never:     "no attestations",
+		},
+		{
+			// The boundary held: this leg's stance on a REFUSED read is
+			// unchanged by stele#209 — it still rides the propagation
+			// ladder — but it must never be typed as the host's doing.
+			name:    "a bare 403 is the subject's, and is typed as neither the host's nor an empty store",
+			respond: bare403,
+			refuse:  99,
+			calls:   5,
+			waits:   ladder,
+			says:    "HTTP 403",
+			never:   "throttled this walk",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newThrottleProbe(t, tc.refuse, tc.respond)
+
+			got, err := p.client.Bundles("acme/widget", digest)
+
+			switch {
+			case tc.found && (err != nil || len(got) != 1):
+				t.Fatalf("Bundles = %v, %v — a throttled read must not end the fetch", got, err)
+			case !tc.found && err == nil:
+				t.Fatal("Bundles answered where the forge refused")
+			}
+
+			if p.calls.Load() != tc.calls {
+				t.Fatalf("calls = %d, want %d", p.calls.Load(), tc.calls)
+			}
+
+			if !slices.Equal(p.waits, tc.waits) {
+				t.Fatalf("waits = %v, want %v", p.waits, tc.waits)
+			}
+
+			if tc.found {
+				return
+			}
+
+			if is := errors.Is(err, gh.ErrThrottled); is != tc.throttled {
+				t.Fatalf("errors.Is(%v, ErrThrottled) = %v, want %v", err, is, tc.throttled)
+			}
+
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Fatalf("err = %v, want it to say %q", err, tc.says)
+			}
+
+			if strings.Contains(err.Error(), tc.never) {
+				t.Fatalf("err = %v, must not say %q — that is the other refusal", err, tc.never)
+			}
+		})
+	}
 }
