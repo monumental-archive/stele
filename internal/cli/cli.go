@@ -90,7 +90,8 @@ release engine that produces the evidence
 usage:
   stele help             show this synopsis
   stele version          report the build's module version
-  stele verify <mode>    verify published evidence; modes:
+  stele verify <mode>    verify published evidence, and the documents
+                         that judge it; modes:
     release   every attestation of one release against the pinned
               signer identity, the four verifying-artifacts
               comparisons, subject coverage, the release decision
@@ -99,6 +100,11 @@ usage:
     repro     the reproducibility rebuild: the release's checksum
               manifest against the rebuild's, one typed finding per
               artifact that failed to reproduce
+    policy    one committed policy document against this engine's own
+              loader, offline and reaching nothing: exit 0 if it
+              loads, else the loader's refusal verbatim. The drift
+              guard for a pinned binary — the engine is asked, never
+              an epoch re-derived beside it
 
   stele derive <mode>    turn facts into claims; modes:
     version   the release this history's conventional commits call
@@ -243,6 +249,8 @@ verify flags: --policy --repo; release/vsa add
 --git-dir [--ref]; repro takes --repo --tag --released --rebuilt
 [--assert-policy --json] and no trust material — a digest comparison
 signs nothing; --assert-policy types an UNTYPED released manifest.
+verify policy takes exactly one of --assert-policy or --verify-policy,
+naming the document to load, and nothing else.
 level takes --repo|--org [--ref --notes-ref --tag --json
 --shield <path>], where --shield writes a shields.io endpoint document
 from the same seal as the report; --org adds [--policy] for the

@@ -59,6 +59,52 @@ tools**, not pull requests meeting each other: the number names the
 key set of a *released* stele, so every key-set change landing
 between two releases shares one bump.
 
+## Asking whether a committed document still loads
+
+A consumer pins a stele and commits policy documents beside it. When
+the pin moves across an epoch bump, those documents stop loading —
+correctly, and loudly, but at the moment some unrelated verb runs.
+The question "does what I committed still load against what I pin?"
+has its own entry point:
+
+```console
+stele verify policy --assert-policy slsa/assert-policy.json
+stele verify policy --verify-policy slsa/verify-policy.json
+```
+
+A document that loads says nothing and exits 0 — silence is the
+whole answer. Any other exit prints the engine's own refusal,
+verbatim:
+
+```console
+$ stele verify policy --verify-policy slsa/verify-policy.json
+policy: jsonx: schema 5 is not the implemented schema 6 — refusing, never best-efforting
+```
+
+The command is offline and side-effect-free: it opens one file, runs
+the loader that the verbs of that document's kind already use, and
+exits. It reaches no network, no repository and no evidence store,
+so it belongs in a lint task rather than an audit.
+
+Two properties are deliberate, and both follow from "one number, one
+definition":
+
+- **It never prints the implemented epoch.** A consumer given the
+  number would compare it to their own, which is a second copy of
+  `jsonx.Epoch` living in a caller — exactly the drift the one-number
+  rule exists to prevent. The question is load-or-refuse, never
+  compare.
+- **A guard must be this command, not a re-derivation.** Reading the
+  constant out of stele's source, or parsing it from release notes,
+  makes a third copy of the definition. The pinned binary is the
+  authority; a pin is a pointer to it.
+
+Each policy kind has its own loader (`internal/policy` for the verify
+policy, `internal/assert` for the assert policy), which is why the
+flag names the kind: they share the version gate and nothing else,
+and the check has to BE the loader the verbs use rather than a third
+reader that agrees with them today.
+
 ## Identifiers written into history keep their own numbers
 
 Two identifiers are NOT part of the epoch, because the documents

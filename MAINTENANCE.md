@@ -32,6 +32,7 @@ the same statement as this one and tested against it.
 | `stele verify vsa` | the published verdict, as the spec's consumer procedure |
 | `stele verify chain` | the source chain: coverage tip→genesis, and the ledger |
 | `stele verify repro` | the reproducibility rebuild's typed verdict, one finding per artifact that failed to reproduce |
+| `stele verify policy` | one committed policy document run through this engine's own loader, offline: exit 0 if it loads, else the loader's refusal verbatim |
 | `stele derive` | facts turned into claims |
 | `stele derive version` | the release a history's conventional commits call for, within one tag namespace; `--release-as` declares one instead, judged against the derived base and the names the namespace has taken |
 | `stele derive notes` | that release's changelog section, printed or spliced into a file |
