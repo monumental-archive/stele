@@ -556,6 +556,69 @@ func TestLoadStoreInputsGuards(t *testing.T) {
 	})
 }
 
+// TestLoadStoreInputsPinFileMessage: the base-pins refusal names its
+// remedy (#237). Both directions: an absent pin file refuses AND
+// names --base-pins, and a pin file that is there refuses nothing —
+// the flag is a remedy, never a requirement.
+// Not parallel: the rows swap the trust seam.
+func TestLoadStoreInputsPinFileMessage(t *testing.T) {
+	dir := t.TempDir()
+
+	present := filepath.Join(dir, "pins.toml")
+	if err := os.WriteFile(present, []byte("# pins\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := newBundleVerifier
+	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{}, nil }
+
+	t.Cleanup(func() { newBundleVerifier = orig })
+
+	tests := []struct {
+		name     string
+		declared string
+		override string
+		want     string // empty: no refusal at all
+	}{
+		{
+			name:     "the declared pin file is absent",
+			declared: filepath.Join(dir, "no-such-pins.toml"),
+			want:     "is absent from this checkout — pass --base-pins <path> to supply it from elsewhere",
+		},
+		{
+			name:     "an overridden pin file is absent",
+			declared: present,
+			override: filepath.Join(dir, "elsewhere.toml"),
+			want:     "is absent from this checkout — pass --base-pins <path> to supply it from elsewhere",
+		},
+		{"the declared pin file is there", present, "", ""},
+		{"an overridden pin file is there", filepath.Join(dir, "no-such-pins.toml"), present, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, pins, err := loadStoreInputs(
+				baseImagesPolicy(t, tt.declared), &storeForge{}, nil, tt.override)
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("loadStoreInputs = %v, want no refusal", err)
+				}
+
+				if len(pins) == 0 {
+					t.Fatal("loadStoreInputs returned no pin file, want the read one")
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("loadStoreInputs = %v, want it to name %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // TestLoadFullDepthRefusesABrokenRoot: the deep leg's own trust
 // boundary, refused at load with the real constructor in place.
 func TestLoadFullDepthRefusesABrokenRoot(t *testing.T) {

@@ -228,7 +228,10 @@ func TestAssertPermissionsUsageRefusals(t *testing.T) {
 		{
 			"a declared tree the checkout does not carry",
 			[]string{"--policy", policyPath, "--tree", filepath.Join(root, "nowhere"), "--callers", root},
-			"holds no such directory",
+			// The refusal names its remedy (#237): a declared tree the
+			// checkout does not carry is still refused, but the message
+			// says which flag supplies it from elsewhere.
+			"holds no such directory — pass --tree <path>",
 		},
 		{"a policy that is not there", []string{"--policy", filepath.Join(root, "ghost.json")}, "no such file"},
 	}
