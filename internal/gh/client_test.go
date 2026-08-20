@@ -24,6 +24,28 @@ func writeBody(w http.ResponseWriter, b []byte) {
 	}
 }
 
+// ownTransport gives one test client a connection pool no other test
+// can reach (stele#243). A client built by gh.New carries no
+// transport of its own, so it dials through http.DefaultTransport —
+// and httptest.Server.Close flushes THAT pool's idle connections,
+// which means the first parallel subtest to finish can break a
+// connection a sibling is reusing mid-retry. The pool handed out here
+// belongs to this test's own server (httptest gives each server its
+// own), so a sibling's cleanup reaches nothing of ours.
+//
+// srv is nil for a client that never dials; it still takes a private
+// transport, so no client in this package is on the shared pool.
+// Production behaviour is untouched: nothing here changes gh.New.
+func ownTransport(c *gh.Client, srv *httptest.Server) {
+	if srv == nil {
+		c.HTTP.Transport = &http.Transport{}
+
+		return
+	}
+
+	c.HTTP.Transport = srv.Client().Transport
+}
+
 const testHex = "1111111111111111111111111111111111111111111111111111111111111111"
 
 // testServer scripts the REST surface the client reads.
@@ -136,6 +158,7 @@ func testServer(t *testing.T) *gh.Client {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("test-token")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 
@@ -278,6 +301,7 @@ func flakyServer(t *testing.T, status, fails int) (*gh.Client, *int) {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("test-token")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 	c.Sleep = func(time.Duration) {} // no wall time in tests
@@ -355,6 +379,7 @@ func TestAnswersAreNotRetried(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Sleep = func(time.Duration) {}
 

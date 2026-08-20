@@ -91,6 +91,7 @@ func tagServer(t *testing.T) *gh.Client {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Sleep = func(_ time.Duration) {}
 
@@ -281,6 +282,7 @@ func hostileTagServer(t *testing.T) *gh.Client {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Sleep = func(_ time.Duration) {}
 

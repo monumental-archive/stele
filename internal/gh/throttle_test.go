@@ -220,6 +220,7 @@ func newProbe(t *testing.T, refuse int, respond func(http.ResponseWriter)) *prob
 	t.Cleanup(srv.Close)
 
 	c := gh.New("test-token")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 	// The clock is the assertion, not wall time: a ladder that honours
@@ -507,6 +508,7 @@ func TestAssetRateLimitHonoursTheNamedWait(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("test-token")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 	c.Sleep = func(d time.Duration) { waits = append(waits, d) }
@@ -604,6 +606,7 @@ func TestAssetThrottleIsRetried(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("test-token")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 	c.Sleep = func(d time.Duration) { waits = append(waits, d) }
