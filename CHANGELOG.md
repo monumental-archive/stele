@@ -10,6 +10,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.19.1](https://github.com/monumental-archive/stele/compare/v0.19.0...v0.19.1) - 2026-08-20
+
+### Fixed
+
+- name the flag that supplies a declared input ([#240](https://github.com/monumental-archive/stele/pull/240))
+
+### Documentation
+
+- state the store-resident requirement as trust material ([#239](https://github.com/monumental-archive/stele/pull/239))
+
 ## [0.19.0](https://github.com/monumental-archive/stele/compare/v0.18.0...v0.19.0) - 2026-08-20
 
 ### Breaking
