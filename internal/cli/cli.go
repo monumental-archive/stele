@@ -179,10 +179,15 @@ usage:
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,
-                         4 could-not-judge. Takes --repo or --org and
-                         nothing else: no clone, no policy, no trusted
-                         root. An --org population is the forge's own
-                         listing, folded to its weakest member:
+                         4 could-not-judge. Takes --repo or --org: no
+                         clone, no trusted root, and the only policy
+                         it reads decides who is ASKED, never what the
+                         answer is. An --org population is the forge's
+                         own listing, narrowed by whatever the org
+                         declared, folded to its weakest member. With
+                         --out-dir and no track it publishes every
+                         cell instead of folding, and never over a
+                         level already proven:
     build       provenance, its authenticity, and the platform's own
                 certificate claims about the runner and the workflow
                 that held the signing capability
@@ -240,7 +245,9 @@ verify flags: --policy --repo; release/vsa add
 signs nothing; --assert-policy types an UNTYPED released manifest.
 level takes --repo|--org [--ref --notes-ref --tag --json
 --shield <path>], where --shield writes a shields.io endpoint document
-from the same seal as the report. emit adds --machinery-digest --policy-uri; emit chain
+from the same seal as the report; --org adds [--policy] for the
+declared population, and --org --out-dir <dir> with no track publishes
+<repo>/<track>.report.json and .shield.json per cell. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]; emit manifest takes --classes --store-vsa

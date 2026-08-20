@@ -297,6 +297,69 @@ written down can lift its rung or hide a shortfall it established.
 question that was asked, so the combination is refused rather than
 reinterpreted.
 
+## The board
+
+`stele level --org <org> --out-dir <dir>`, with no track named,
+measures every cell the population holds and publishes each as its own
+pair of documents:
+
+```text
+<dir>/<repo>/<track>.report.json
+<dir>/<repo>/<track>.shield.json
+```
+
+That layout is the whole format. WHICH repositories and tracks appear
+is the population's to say and never this tool's, so an organisation
+whose repositories are not uniformly evidence-bearing gets a board
+with the shape it declared rather than one with grey holes in it.
+
+The board form folds nothing. `--org` with a track answers *what does
+this organisation support*, which is a fold to its weakest member;
+`--out-dir` answers *what does each cell support*, which is a
+different question and keeps every answer separate.
+
+### What may replace what
+
+One rule, and it belongs to the judge rather than to whatever
+schedules it. **A cell that cannot be judged today never publishes
+over a level somebody proved yesterday.** What that means depends
+entirely on whether the cell was ever judgeable, and the two must not
+be confused:
+
+| prior state | this run | what happens |
+| --- | --- | --- |
+| anything | measured | the measurement publishes |
+| absent | could not judge | grey publishes, and **nothing pages** |
+| grey | could not judge | grey publishes, and nothing pages |
+| a level | could not judge | the level **stands**, and the run exits 4 |
+| unreadable | could not judge | the file stands, and the run exits 4 |
+
+A repository that publishes nothing has no build level. That is a fact
+about it, not a fault — an alarm there would fire every week forever
+over repositories behaving exactly as intended, and a board that is
+permanently amber is a board nobody reads. A cell that carried a level
+and no longer can is the opposite: evidence went missing, a credential
+narrowed, or a forge read degraded, and that is the one state worth
+waking somebody for.
+
+A cell whose published shield this release cannot read counts as
+holding a level. Its contents are unknown, and overwriting an unknown
+with *could not see* is the direction that loses information.
+
+### What leaves the board
+
+A cell the population no longer holds is removed, and each removal is
+named on the run's own output. A board is this engine's output whole —
+nothing else writes it — so a cell left behind after the population
+stopped holding it is not history worth keeping; it is a published
+level for a repository and track nobody measured.
+
+Only the cell layout is touched. A file the board did not write is not
+the board's to delete, and neither is a track this release does not
+judge: a board may have been written by a stele that judges more than
+this one does, and pruning what it cannot name would narrow somebody
+else's board to this release's vocabulary.
+
 ## Output
 
 The report carries the computed level, the ladder, and — for every
