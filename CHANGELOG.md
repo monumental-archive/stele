@@ -10,6 +10,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.17.1](https://github.com/monumental-archive/stele/compare/v0.17.0...v0.17.1) - 2026-08-20
+
+### Fixed
+
+- retry the host's throttle, refuse only the subject's 403 ([#198](https://github.com/monumental-archive/stele/pull/198))
+- drop openpgp from the link by naming the rekor kind ([#200](https://github.com/monumental-archive/stele/pull/200))
+
 ## [0.17.0](https://github.com/monumental-archive/stele/compare/v0.16.0...v0.17.0) - 2026-08-20
 
 ### Breaking
