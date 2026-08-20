@@ -19,18 +19,23 @@
 // How much proof is enough is NOT decided here. The caller declares
 // a floor (TagFloor, policy data); the verdict states the depth it
 // reached and the instants it observed. A mint that logs its tags
-// but drops the receipt — this org's, today — verifies honestly at
-// the certificate-transparency floor: its certificate's issuance is
+// but drops the receipt verifies honestly at the
+// certificate-transparency floor: its certificate's issuance is
 // countersigned by a CT log, and nothing countersigns an observation
-// of the signature itself. The moment the mint embeds its Rekor
-// entry (the decision recorded on stele#167), the same tag verifies
-// at the observer-timestamp floor with no code change here.
+// of the signature itself. A mint that embeds its Rekor entry
+// reaches the observer-timestamp floor over the same code.
+//
+// That second half was predicted here to need no code change at all,
+// and the first offline-minted tag proved the prediction wrong
+// (stele#182): gitsign omits the entry's canonicalized body, and the
+// rebuild that answers it lives in rekorbody.go. Recorded rather
+// than quietly deleted — the prediction was the reason this decode
+// went unproven until live material arrived.
 
 package trust
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -154,19 +159,19 @@ func (t *Verifier) VerifyTag(payload, sigPEM []byte, id TagIdentity, floor TagFl
 func (t *Verifier) judgeTag(
 	leaf *x509.Certificate, pieces *cmsPieces, id TagIdentity, floor TagFloor,
 ) (*TagVerdict, ObservedInstant, error) {
-	entries, err := parseTagTlogEntries(pieces.tlogEntries)
+	receipts, err := parseTagTlogEntries(pieces, leaf)
 	if err != nil {
 		return nil, ObservedInstant{}, err
 	}
 
-	if floor == TagFloorObserverTimestamp && len(entries) == 0 && len(pieces.timestamps) == 0 {
+	if floor == TagFloorObserverTimestamp && len(receipts.entries) == 0 && len(pieces.timestamps) == 0 {
 		return nil, ObservedInstant{}, errors.New(
 			"trust: the tag signature carries no transparency-log entry and no signed timestamp — " +
 				"nothing countersigns an observation of the signature, and the declared floor requires one")
 	}
 
-	if len(entries) > 0 || len(pieces.timestamps) > 0 {
-		return t.judgeTagObserved(leaf, pieces, entries, id)
+	if len(receipts.entries) > 0 || len(pieces.timestamps) > 0 {
+		return t.judgeTagObserved(leaf, pieces, receipts, id)
 	}
 
 	return t.judgeTagIssuance(leaf, id)
@@ -178,21 +183,22 @@ func (t *Verifier) judgeTag(
 // the observer timestamps, the chain at those instants, the
 // signature and the identity — the whole stance, unrepeated.
 func (t *Verifier) judgeTagObserved(
-	leaf *x509.Certificate, pieces *cmsPieces, entries []*tlog.Entry, id TagIdentity,
+	leaf *x509.Certificate, pieces *cmsPieces, receipts tagReceipts, id TagIdentity,
 ) (*TagVerdict, ObservedInstant, error) {
 	ci, err := tagCertIdentity(id)
 	if err != nil {
 		return nil, ObservedInstant{}, err
 	}
 
-	entity := &tagEntity{leaf: leaf, pieces: pieces, entries: entries}
+	entity := &tagEntity{leaf: leaf, pieces: pieces, entries: receipts.entries}
 
 	result, err := t.v.Verify(entity, verify.NewPolicy(
 		verify.WithArtifact(bytes.NewReader(pieces.signedBlob)),
 		verify.WithCertificateIdentity(ci),
 	))
 	if err != nil {
-		return nil, ObservedInstant{}, fmt.Errorf("trust: tag signature countersignatures do not verify: %w", err)
+		return nil, ObservedInstant{}, fmt.Errorf(
+			"trust: tag signature countersignatures do not verify%s: %w", receipts.rebuiltNote(), err)
 	}
 
 	ctInstant, err := t.observeCT(leaf)
@@ -257,32 +263,107 @@ func tagCertIdentity(id TagIdentity) (verify.CertificateIdentity, error) {
 	return ci, nil
 }
 
+// tagReceipts is a tag's decoded transparency-log evidence: the
+// entries themselves, and how many of them arrived without a
+// canonicalized body and were rebuilt. The count is carried because a
+// refusal downstream means something different in each case, and the
+// reader is told which rather than left to work it out.
+type tagReceipts struct {
+	entries []*tlog.Entry
+	rebuilt int
+}
+
+// rebuiltNote names the reconstruction inside a refusal. A
+// countersignature that fails over a REBUILT body is not the same
+// finding as one that fails over a body the entry carried: it says
+// the log recorded something other than this signature. Saying so
+// costs one clause; not saying it cost a live tag audit a day
+// (stele#182).
+func (r tagReceipts) rebuiltNote() string {
+	if r.rebuilt == 0 {
+		return ""
+	}
+
+	return " (the entry carried no canonicalized body and was rebuilt from this signature)"
+}
+
 // parseTagTlogEntries decodes the embedded Rekor entries. A receipt
 // that does not parse refuses — a malformed countersignature is
-// evidence of tampering, never something to fall back from. The
-// attribute payload is the protobuf TransparencyLogEntry gitsign
-// embeds in its offline mode; no tag this org has minted carries one
-// yet (measured on stele#167: 0 of 43), so the canon's mint change
-// shadow-proves this decode against real material before any policy
-// floor relies on it.
-func parseTagTlogEntries(raw [][]byte) ([]*tlog.Entry, error) {
-	entries := make([]*tlog.Entry, 0, len(raw))
+// evidence of tampering, never something to fall back from.
+//
+// The attribute payload is the protobuf TransparencyLogEntry gitsign
+// embeds in its offline mode, and it arrives WITHOUT its canonicalized
+// body: gitsign does not carry a second copy of bytes derivable from
+// the signature beside it. The body is rebuilt here (rekorbody.go) so
+// the entry can be proven the ordinary way, over the reconstruction.
+// A body the entry does carry is left exactly as it came — sigstore-go
+// holds a Rekor v1 entry field-by-field against this signature, this
+// certificate and this digest, so there is nothing to rebuild and
+// rebuilding would only add a second definition of the same bytes.
+func parseTagTlogEntries(pieces *cmsPieces, leaf *x509.Certificate) (tagReceipts, error) {
+	receipts := tagReceipts{entries: make([]*tlog.Entry, 0, len(pieces.tlogEntries))}
 
-	for _, data := range raw {
+	for _, data := range pieces.tlogEntries {
 		var pb protorekor.TransparencyLogEntry
 		if err := proto.Unmarshal(data, &pb); err != nil {
-			return nil, fmt.Errorf("trust: tag signature transparency-log entry does not decode: %w", err)
+			return tagReceipts{}, fmt.Errorf("trust: tag signature transparency-log entry does not decode: %w", err)
+		}
+
+		if err := requireTagEntryFields(&pb); err != nil {
+			return tagReceipts{}, err
+		}
+
+		if len(pb.GetCanonicalizedBody()) == 0 {
+			body, berr := rebuildRekorBody(pb.GetKindVersion(), leaf, pieces)
+			if berr != nil {
+				return tagReceipts{}, berr
+			}
+
+			pb.CanonicalizedBody = body
+			receipts.rebuilt++
 		}
 
 		entry, err := tlog.ParseTransparencyLogEntry(&pb)
 		if err != nil {
-			return nil, fmt.Errorf("trust: tag signature transparency-log entry: %w", err)
+			return tagReceipts{}, fmt.Errorf("trust: tag signature transparency-log entry: %w", err)
 		}
 
-		entries = append(entries, entry)
+		receipts.entries = append(receipts.entries, entry)
 	}
 
-	return entries, nil
+	return receipts, nil
+}
+
+// requireTagEntryFields states, one field at a time, what an entry
+// must name before anything can be held against it.
+//
+// These are sigstore-go's own requirements, checked separately for one
+// reason: its parser collapses every absent field into a single
+// sentinel — "nil value in transaction log entry" — which names
+// nothing and cost a live tag audit a day to attribute (stele#182). A
+// refusal that does not say which field is missing is itself a defect.
+func requireTagEntryFields(pb *protorekor.TransparencyLogEntry) error {
+	kv := pb.GetKindVersion()
+
+	switch {
+	case kv.GetKind() == "" || kv.GetVersion() == "":
+		return errors.New(
+			"trust: tag signature transparency-log entry names no kind and version — " +
+				"nothing says what shape the entry is, so nothing can be held against it")
+
+	case len(pb.GetLogId().GetKeyId()) == 0:
+		return errors.New(
+			"trust: tag signature transparency-log entry names no log key ID — " +
+				"nothing says which transparency log is supposed to have recorded it")
+
+	case pb.GetLogIndex() < 0:
+		return fmt.Errorf(
+			"trust: tag signature transparency-log entry declares log index %d, which no log ever issues",
+			pb.GetLogIndex())
+
+	default:
+		return nil
+	}
 }
 
 // tagEntity adapts one parsed CMS to sigstore-go's signed-entity
@@ -302,7 +383,7 @@ func (e *tagEntity) VerificationContent() (verify.VerificationContent, error) {
 
 //nolint:ireturn // sigstore-go's SignedEntity contract returns its interface
 func (e *tagEntity) SignatureContent() (verify.SignatureContent, error) {
-	digest := sha256.Sum256(e.pieces.signedBlob)
+	digest := e.pieces.signedBlobDigest()
 
 	return bundle.NewMessageSignature(digest[:], "SHA2_256", e.pieces.signature), nil
 }
