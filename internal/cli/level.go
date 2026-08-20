@@ -101,8 +101,16 @@ type levelArgs struct {
 
 // levelCmd dispatches `stele level <track>`.
 func levelCmd(args []string, stdout, stderr io.Writer) int {
+	// A leading flag is the BOARD form: every track at once, published
+	// as files under --out-dir. A track argument is the single cell.
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		return levelBoard(args, stdout, stderr)
+	}
+
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele level: a track is required: build, source or dependency"); err != nil {
+		if _, err := fmt.Fprintln(stderr,
+			"stele level: a track is required: build, source or dependency\n"+
+				"stele level: or --org with --out-dir <dir> to publish every track as its own document"); err != nil {
 			return exitIO
 		}
 

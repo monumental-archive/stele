@@ -27,9 +27,12 @@ import (
 // its modes at four, and the enumeration every verb prints when its
 // mode is missing.
 var (
-	verbRE   = regexp.MustCompile(`(?m)^ {2}stele ([a-z]+)`)
-	modeRE   = regexp.MustCompile(`(?m)^ {4}([a-z][a-z-]*) +\S`)
-	refusaRE = regexp.MustCompile(`^stele [a-z]+: an? [a-z]+ is required: (.+)$`)
+	verbRE = regexp.MustCompile(`(?m)^ {2}stele ([a-z]+)`)
+	modeRE = regexp.MustCompile(`(?m)^ {4}([a-z][a-z-]*) +\S`)
+	// Multi-line: a verb whose refusal also points at a form that is
+	// not a mode (level's board) carries that on its own line, so the
+	// mode list stays exactly the modes.
+	refusaRE = regexp.MustCompile(`(?m)^stele [a-z]+: an? [a-z]+ is required: (.+)$`)
 )
 
 // The exit codes this binary can answer with, named where they are

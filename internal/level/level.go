@@ -509,6 +509,31 @@ func shieldFor(t Track, established bool, scalar int) Shield {
 	return Shield{SchemaVersion: 1, Label: t.label, Message: message, Color: color}
 }
 
+// Measured reports whether this shield carries a level rather than
+// the grey "could not see" message. It reads the COLOUR, which is the
+// field shieldFor sets from that same distinction, so the badge and
+// the question "was this cell ever judged" cannot come apart.
+func (s Shield) Measured() bool { return s.Color != colorBlind }
+
+// DecodeShield reads back a shield this package wrote.
+//
+// There is deliberately no decoder from a report document into a
+// Report, for the reason report/report.go states: a render that
+// parsed one could be handed a forged verdict. This is a different
+// question and it never becomes a judgment — a published board is
+// asked what it ALREADY HOLDS at a cell, so that a run which cannot
+// judge today does not overwrite a level somebody proved yesterday
+// (stele#135). Nothing here can raise a level; the worst a wrong
+// answer does is refuse to overwrite, which is the safe direction.
+func DecodeShield(r io.Reader) (*Shield, error) {
+	s, err := jsonx.Decode[Shield](r)
+	if err != nil {
+		return nil, fmt.Errorf("level: shield: %w", err)
+	}
+
+	return s, nil
+}
+
 // Encode writes the shield as one JSON document plus newline.
 func (s Shield) Encode(w io.Writer) error {
 	if err := jsonx.Encode(w, s); err != nil {

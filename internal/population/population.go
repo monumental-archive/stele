@@ -230,6 +230,37 @@ func (s *Set) Members(t level.Track) ([]string, error) {
 	return out, nil
 }
 
+// Membership is one repository's place on one track — the unit a
+// board of cells is built from.
+type Membership struct {
+	Repo  string
+	Track level.Track
+}
+
+// Grid is every (repository, track) pair this population holds, in
+// listing order, tracks in the spec's own order.
+//
+// Its own door, beside Members, because it answers a different
+// question. Members is asked BY a walk that named one track, so a
+// track nobody is in is a contradiction it must report. Grid is asked
+// by a consumer that named no track at all — an empty column is then
+// the declaration working, not a contradiction — and having the two
+// separately named is what keeps a walk from reaching for the quiet
+// one by accident.
+func (s *Set) Grid() []Membership {
+	var out []Membership
+
+	for _, m := range s.members {
+		for _, t := range level.Tracks() {
+			if m.bears(t) {
+				out = append(out, Membership{Repo: m.name, Track: t})
+			}
+		}
+	}
+
+	return out
+}
+
 // Population is the coverage claim a walk over one track seals with.
 // A declared population says so — provenance travels with the count,
 // because "what a credential happened to show" and "the population

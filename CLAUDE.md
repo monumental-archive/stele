@@ -43,7 +43,11 @@ never a hardcoded name. Four verbs, which are the command surface:
   the honest current level measured from live evidence, taking no
   declaration — `--org` reads one, and only to decide WHO IS ASKED;
   `internal/level` still imports no policy, so nothing written down
-  can reach a rung
+  can reach a rung. `--org --out-dir` with no track publishes the
+  whole board (#152), and `internal/board` owns the one rule about
+  what may replace what: a cell that cannot be judged today never
+  publishes over a level proven yesterday, grey lands only onto
+  absence, and a cell the population no longer holds is removed
 
 Born from `.github#392`: it replaces ~8000 lines of bash spread across
 the canon's scripts, workflow `run:` blocks and belt task bodies. The
