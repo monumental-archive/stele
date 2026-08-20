@@ -33,7 +33,10 @@ laws it encodes, so a schema change is a reviewed edit here first.
 3. **Exceptions**: `declared` exceptions come only from a committed
    file a human edited under review; `derived` exceptions come only
    from engine logic and name their evidence. An exception matching no
-   finding is reported, never silently carried.
+   finding is reported, never silently carried — as a claim addressed
+   to whoever could act on it, which is why only `declared` exceptions
+   reach the stale and unexercised buckets. A finding several
+   exceptions answer credits every one of them (stele#220).
 4. **Coverage**: a walk records every check it PERFORMED, not only the
    checks that failed — through `Journal`, the one door a finding
    reaches a report by. That is what makes law 3's report honest: an
@@ -83,10 +86,10 @@ never null.
   ],
   "excused": [ { "finding": { "…": "…" }, "exception": { "…": "…" } } ],
   "staleExceptions": [
-    { "kind": "declared | derived", "subject": "…", "assertion": "…", "origin": "debt.txt:3" }
+    { "kind": "declared", "subject": "…", "assertion": "…", "origin": "debt.txt:3" }
   ],
   "unexercisedExceptions": [
-    { "kind": "declared | derived", "subject": "…", "assertion": "…", "origin": "debt.txt:9" }
+    { "kind": "declared", "subject": "…", "assertion": "…", "origin": "debt.txt:9" }
   ],
   "judged": [ { "…": "…" } ]
 }
@@ -108,13 +111,20 @@ never null.
   findings gathered before sight was lost are still carried: partial
   sight is reported, never laundered into either verdict.
 - `excused` — every excused finding beside the exception that excused
-  it; an excuse is visible, never a deletion.
-- `staleExceptions` — excuses whose check this run performed and found
-  clean: retire them.
-- `unexercisedExceptions` — excuses this run did not look for. Not a
-  retirement candidate and not an error: a single-repository run
+  it; an excuse is visible, never a deletion. A finding several
+  exceptions answer appears once **per exception**: excusing is not a
+  race, and the entries are the observation, not a ruling about which
+  excuse "really" applied. A declared line paired here beside a
+  derivation over the same coordinate is the signal that the machinery
+  has outgrown the line — read it and retire the line (stele#220).
+- `staleExceptions` — declared excuses whose check this run performed
+  and found clean: retire them. `declared` only; nobody can retire
+  engine logic, so a derived exception is never listed here.
+- `unexercisedExceptions` — declared excuses this run did not look for.
+  Not a retirement candidate and not an error: a single-repository run
   answers only for that repository, and a check an epoch exempts was
-  never asked.
+  never asked. `declared` only, for the same reason: both buckets
+  address the human holding the committed file.
 - `judged` — the collapsed, validated input set the run judged, in the
   mode's own shape, present only where a mode declares one. Where
   `population` says how many subjects a run covered and how the set

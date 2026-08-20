@@ -609,6 +609,11 @@ A line matching no finding is sorted by what the run could SEE
 Both are reported, neither fails: red means evidence is missing, not
 that the paperwork lags.
 
+A line that DID match is credited even where a derivation matched the
+same coordinate — both appear in `excused`, and a line shown beside a
+derivation is one the engine has made redundant: retire it. Only a
+clean check makes a line stale (stele#220).
+
 Burned releases (a verdict absent because the publish run died after
 the release sealed) are NOT written here — they are derived from run
 history by the walk itself, excuse only `vsa:` findings on the
