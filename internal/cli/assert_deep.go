@@ -107,7 +107,8 @@ func loadStoreInputs(
 		switch {
 		case errors.Is(perr, fs.ErrNotExist):
 			return nil, nil, fmt.Errorf(
-				"the policy declares baseImages but %s is absent from this checkout", pinPath)
+				"the policy declares baseImages but %s is absent from this checkout"+
+					" — pass --base-pins <path> to supply it from elsewhere", pinPath)
 		case perr != nil:
 			return nil, nil, perr //nolint:wrapcheck // the refusal names the path already
 		default:
