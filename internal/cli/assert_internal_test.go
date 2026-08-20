@@ -894,7 +894,8 @@ func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot
 			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
 			`"tags": {"tagPattern": "^v[0-9]", "taggerName": "release-mint[bot]", ` +
-			`"identityPattern": "^https://github\\.com/acme/", "notesRef": "refs/notes/commits", ` +
+			`"identityPattern": "^https://github\\.com/acme/", "proofFloor": "certificate-transparency", ` +
+			`"notesRef": "refs/notes/commits", ` +
 			`"epochs": {"widget": "v0.1.0"}}}`,
 	}
 
@@ -916,8 +917,12 @@ func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot
 // proven in internal/trust; the cli layer under test only routes.
 type scriptedTagVerifier struct{ err error }
 
-func (s scriptedTagVerifier) Verify(_, _ []byte) (string, error) {
-	return "https://github.com/acme/widget/x", s.err
+func (s scriptedTagVerifier) Verify(_, _ []byte) (assert.TagProof, error) {
+	return assert.TagProof{
+		SAN:      "https://github.com/acme/widget/x",
+		Depth:    "certificate-transparency",
+		Observed: "2026-08-19T13:49:19Z (certificate-transparency test-log)",
+	}, s.err
 }
 
 // swapTagVerifier installs the tag trust seam for one test.
@@ -926,7 +931,7 @@ func swapTagVerifier(t *testing.T, tv assert.TagVerifier) {
 
 	orig := newTagVerifier
 
-	newTagVerifier = func([]byte, string, string) (assert.TagVerifier, error) { return tv, nil }
+	newTagVerifier = func([]byte, string, string, string) (assert.TagVerifier, error) { return tv, nil }
 
 	t.Cleanup(func() { newTagVerifier = orig })
 }
@@ -1012,7 +1017,8 @@ func TestNewTagVerifier(t *testing.T) {
 		t.Skipf("no seed root: %v", err)
 	}
 
-	tv, err := newTagVerifier(rootJSON, "^https://github\\.com/acme/", "https://token.example.com")
+	tv, err := newTagVerifier(
+		rootJSON, "^https://github\\.com/acme/", "https://token.example.com", "certificate-transparency")
 	if err != nil {
 		t.Fatalf("newTagVerifier: %v", err)
 	}
@@ -1021,11 +1027,12 @@ func TestNewTagVerifier(t *testing.T) {
 		t.Fatal("a junk signature verified")
 	}
 
-	if _, berr := newTagVerifier(rootJSON, "(", "https://token.example.com"); berr == nil {
+	if _, berr := newTagVerifier(rootJSON, "(", "https://token.example.com", "certificate-transparency"); berr == nil {
 		t.Fatal("a malformed identity pattern built a verifier")
 	}
 
-	if _, rerr := newTagVerifier([]byte("junk"), ".*", "https://token.example.com"); rerr == nil {
+	if _, rerr := newTagVerifier(
+		[]byte("junk"), ".*", "https://token.example.com", "certificate-transparency"); rerr == nil {
 		t.Fatal("a junk trusted root built a verifier")
 	}
 }

@@ -1,11 +1,32 @@
-// Package trust is the cryptographic boundary: Sigstore bundle
+// Package trust is the cryptographic boundary: signed-evidence
 // verification against a pinned identity, wrapped so the rest of the
-// verifier never touches sigstore-go directly. The wrapper fixes the
-// org's verification stance in one place — a transparency log entry
-// AND an observer timestamp required, identity always (issuer, SAN)
-// exact — and returns the verified envelope's own payload bytes, so
-// what the caller parses is exactly what the signature covered (the
-// DSSE rule).
+// verifier never touches sigstore-go directly.
+//
+// The verification stance is stated HERE and nowhere else
+// (stele#173: one stance, one path). Every signed entity — DSSE
+// bundle, blob signature, gitsign tag — must prove:
+//
+//   - signature integrity over its content, with the content bound
+//     to the bytes the caller consumes (the DSSE rule; for a CMS,
+//     the message-digest attribute — see tag.go's seam note)
+//   - certificate transparency: the signing certificate's embedded
+//     SCT verified against the trusted root (observeCT, the one CT
+//     check on every path)
+//   - a chain to a trusted Fulcio CA, observed at a countersigned
+//     instant — never at a moment any party to the signing chose
+//     (the ObservedInstant construction, observed.go)
+//   - certificate identity against the caller's expectation
+//
+// Bundle and blob entities additionally carry the full observer
+// stance — a transparency-log entry AND an observer timestamp, both
+// required (NewVerifier). For tags that requirement is a POLICY
+// floor, not a code decision: see VerifyTag. What depth a
+// verification reached is stated on its verdict as ObservedInstants;
+// how much depth is enough is the caller's declared floor.
+//
+// Verified attestation payloads are returned as the envelope's own
+// bytes, so what the caller parses is exactly what the signature
+// covered.
 package trust
 
 import (
@@ -36,6 +57,9 @@ type Verified struct {
 	Payload    []byte
 	SAN        string
 	Extensions certificate.Extensions
+	// Observed is every countersigned instant the verification held —
+	// the depth it reached, stated rather than implied (stele#173).
+	Observed []ObservedInstant
 }
 
 // Verifier verifies signed entities against one trusted material
@@ -93,7 +117,7 @@ func NewVerifier(trusted root.TrustedMaterial) (*Verifier, error) {
 // there proves nothing. Every branch reachable through real signed
 // material is table-tested.
 func (t *Verifier) Verify(entity verify.SignedEntity, id Identity, alg, digestHex string) (*Verified, error) {
-	result, err := t.verifyEntity(entity, id, alg, digestHex)
+	result, observed, err := t.verifyEntity(entity, id, alg, digestHex)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +145,7 @@ func (t *Verifier) Verify(entity verify.SignedEntity, id Identity, alg, digestHe
 		Payload:    payload,
 		SAN:        result.Signature.Certificate.SubjectAlternativeName,
 		Extensions: result.Signature.Certificate.Extensions,
+		Observed:   observed,
 	}, nil
 }
 
@@ -132,7 +157,7 @@ func (t *Verifier) Verify(entity verify.SignedEntity, id Identity, alg, digestHe
 // caller already holds the artifact, and returning a copy would
 // invite parsing something other than what was hashed.
 func (t *Verifier) VerifyBlob(entity verify.SignedEntity, id Identity, alg, digestHex string) (*Verified, error) {
-	result, err := t.verifyEntity(entity, id, alg, digestHex)
+	result, observed, err := t.verifyEntity(entity, id, alg, digestHex)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +169,7 @@ func (t *Verifier) VerifyBlob(entity verify.SignedEntity, id Identity, alg, dige
 	return &Verified{
 		SAN:        result.Signature.Certificate.SubjectAlternativeName,
 		Extensions: result.Signature.Certificate.Extensions,
+		Observed:   observed,
 	}, nil
 }
 
@@ -184,10 +210,16 @@ func (t *Verifier) MeasureBlob(b *bundle.Bundle, alg, digestHex string) (*Verifi
 		return nil, errors.New("trust: the bundle carries no certificate, so nothing identifies its signer")
 	}
 
+	ctInstant, err := t.transparency(b)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Verified{
 		Payload:    nil,
 		SAN:        result.Signature.Certificate.SubjectAlternativeName,
 		Extensions: result.Signature.Certificate.Extensions,
+		Observed:   append(observedFromResult(result), ctInstant),
 	}, nil
 }
 
@@ -232,10 +264,16 @@ func (t *Verifier) MeasureAttestation(b *bundle.Bundle, alg, digestHex string) (
 		return nil, errors.New("trust: the bundle carries no certificate, so nothing identifies its signer")
 	}
 
+	ctInstant, err := t.transparency(b)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Verified{
 		Payload:    payload,
 		SAN:        result.Signature.Certificate.SubjectAlternativeName,
 		Extensions: result.Signature.Certificate.Extensions,
+		Observed:   append(observedFromResult(result), ctInstant),
 	}, nil
 }
 
@@ -243,19 +281,19 @@ func (t *Verifier) MeasureAttestation(b *bundle.Bundle, alg, digestHex string) (
 // verify the same way and differ only in what a success returns.
 func (t *Verifier) verifyEntity(
 	entity verify.SignedEntity, id Identity, alg, digestHex string,
-) (*verify.VerificationResult, error) {
+) (*verify.VerificationResult, []ObservedInstant, error) {
 	if id.SAN == "" || id.Issuer == "" {
-		return nil, errors.New("trust: identity must carry both SAN and issuer — a half identity matches half the world")
+		return nil, nil, errors.New("trust: identity must carry both SAN and issuer — a half identity matches half the world")
 	}
 
 	digest, err := hex.DecodeString(digestHex)
 	if err != nil || len(digest) == 0 {
-		return nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
+		return nil, nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
 	}
 
 	ci, err := verify.NewShortCertificateIdentity(id.Issuer, "", id.SAN, "")
 	if err != nil {
-		return nil, fmt.Errorf("trust: identity: %w", err)
+		return nil, nil, fmt.Errorf("trust: identity: %w", err)
 	}
 
 	result, err := t.v.Verify(entity, verify.NewPolicy(
@@ -263,10 +301,34 @@ func (t *Verifier) verifyEntity(
 		verify.WithCertificateIdentity(ci),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("trust: verify: %w", err)
+		return nil, nil, fmt.Errorf("trust: verify: %w", err)
 	}
 
-	return result, nil
+	ctInstant, err := t.transparency(entity)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return result, append(observedFromResult(result), ctInstant), nil
+}
+
+// transparency runs the stance's certificate-transparency obligation
+// on one entity's signing certificate. Every verification path calls
+// this — bundles, blobs, measurements, tags — so no entity shape can
+// drop the property (stele#173).
+func (t *Verifier) transparency(entity verify.SignedEntity) (ObservedInstant, error) {
+	vc, err := entity.VerificationContent()
+	if err != nil {
+		return ObservedInstant{}, fmt.Errorf("trust: verification content: %w", err)
+	}
+
+	leaf := vc.Certificate()
+	if leaf == nil {
+		return ObservedInstant{}, errors.New(
+			"trust: the entity carries no certificate — the stance holds identity and transparency against one")
+	}
+
+	return t.observeCT(leaf)
 }
 
 // PeekStatement returns a bundle's DSSE payload bytes WITHOUT

@@ -334,10 +334,12 @@ func TestLoadTagVerifierRefusesABrokenRoot(t *testing.T) {
 	t.Parallel()
 
 	pattern, issuer := "^https://github\\.com/acme/", "https://token.example.com"
+	floor := "certificate-transparency"
 	pol := &assert.Policy{
 		Issuer: &issuer,
 		Tags: &assert.TagsPolicy{
 			IdentityPattern: &pattern,
+			ProofFloor:      &floor,
 			Epochs:          map[string]string{"widget": "v0.1.0"},
 		},
 	}

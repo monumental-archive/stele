@@ -640,6 +640,7 @@ precondition. Declared means every field, validated strictly:
   "tagPattern": "^v[0-9]",
   "taggerName": "tag-mint[bot]",
   "identityPattern": "^https://github\\.com/example-org/",
+  "proofFloor": "certificate-transparency",
   "notesRef": "refs/notes/commits",
   "epochs": {"widget": "v1.2.0", "gadget": "pending"}
 }
@@ -651,6 +652,16 @@ precondition. Declared means every field, validated strictly:
 - `identityPattern` — the regular expression the signing
   certificate's SAN must match; the issuer is the policy's top-level
   `issuer`, required when this section is declared.
+- `proofFloor` — how much countersigned proof a tag signature owes,
+  the ORG's declaration and never the tool's decision (stele#173).
+  `certificate-transparency`: the signing certificate's issuance
+  countersigned by a trusted CT log — what any Fulcio-minted
+  signature can prove offline, whether or not the mint kept its
+  receipts. `observer-timestamp`: additionally a transparency-log
+  entry and an observer timestamp over the signature itself, which
+  only a mint that embeds its Rekor entry (gitsign's offline mode)
+  can meet. The verdict states the depth actually reached; the floor
+  states the minimum that passes.
 - `notesRef` — the source chain's notes ref, fully qualified.
 - `epochs` — each releasing repository's first signed tag, or
   `pending` for declared-unsigned. A repository that releases tags
@@ -660,13 +671,19 @@ precondition. Declared means every field, validated strictly:
 The walk (`stele assert tags --org|--repo`): for every matching tag,
 the tagger is the declared role, the tag from the epoch onward
 carries a gitsign signature verified natively against the trusted
-root (CMS over the tag payload, chain to the root's certificate
-authorities at the payload's tagger time, SAN and issuer held to the
-policy — no gitsign binary, and the forge's own verification verdict
-is never consulted: it cannot judge x509-in-the-PGP-slot), and the
-tag's target carries a source chain link. The legacy bound is derived
-from the chain itself: a target that does not descend from the chain
-genesis predates the machinery and owes nothing, reported by name.
+root to at least the declared floor — CMS over the tag payload, the
+certificate's embedded SCT countersigned by a trusted CT log, the
+chain to the root's certificate authorities observed at that
+countersigned instant, SAN and issuer held to the policy, and the
+tagger clock consistent with the countersigned issuance (no gitsign
+binary, and the forge's own verification verdict is never consulted:
+it cannot judge x509-in-the-PGP-slot). A tag carrying its mint's own
+Rekor receipt is judged through the full observer stance — the same
+verifier every bundle passes — regardless of floor, so a receipt
+that does not prove refuses loudly. And the tag's target carries a
+source chain link. The legacy bound is derived from the chain
+itself: a target that does not descend from the chain genesis
+predates the machinery and owes nothing, reported by name.
 
 ## The chains section
 
