@@ -28,6 +28,10 @@ import (
 	"testing"
 )
 
+// muslX86 is the canary target the weekly rebuild covers — the one
+// value release-lab v0.26.0's rust-binary matrix declares by default.
+const muslX86 = "x86_64-unknown-linux-musl"
+
 const digestA = "1111111111111111111111111111111111111111111111111111111111111111"
 
 const digestB = "2222222222222222222222222222222222222222222222222222222222222222"
@@ -78,16 +82,30 @@ func typedManifest(entries string) string {
 // classedManifest is typedManifest for a release shipping more than
 // one class — the shape a per-class rebuild scopes into.
 func classedManifest(classes []string, entries string) string {
-	return `{"schema": 3, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": true, ` +
+	return `{"schema": 4, "classes": ["` + strings.Join(classes, `", "`) + `"], "storeVsa": true, ` +
+		`"machineryVersion": "1.49.0", "entries": [` + entries + `]}`
+}
+
+// preTargetManifest is a manifest from before entries named the
+// target that produced them — a real published asset, immutable, that
+// says which class built each artifact and cannot say which target
+// (stele#223).
+func preTargetManifest(entries string) string {
+	return `{"schema": 3, "classes": ["rust-binary"], "storeVsa": true, ` +
 		`"machineryVersion": "1.40.0", "entries": [` + entries + `]}`
 }
 
-// typedEntry renders one entry; class is empty for a document about
-// the release, which belongs to no one class.
-func typedEntry(name, digest, entryType, class string) string {
+// typedEntry renders one entry; class and target are empty for a
+// document about the release, which belongs to no one build leg, and
+// for a fixture at a schema that never carried them.
+func typedEntry(name, digest, entryType, class, target string) string {
 	entry := `{"name": "` + name + `", "sha256": "` + digest + `", "type": "` + entryType + `"`
 	if class != "" {
 		entry += `, "class": "` + class + `"`
+	}
+
+	if target != "" {
+		entry += `, "target": "` + target + `"`
 	}
 
 	return entry + `}`
@@ -160,9 +178,9 @@ func TestVerifyReproTakesTheReleasedManifestWhole(t *testing.T) {
 // no --policy is needed or consulted.
 func TestVerifyReproReadsTheManifestTyping(t *testing.T) {
 	released := typedManifest(
-		typedEntry("odd-name-no-convention-would-match", digestA, "build-subject", "go-binary") + ", " +
+		typedEntry("odd-name-no-convention-would-match", digestA, "build-subject", "go-binary", "linux-amd64") + ", " +
 			// Named exactly like an artifact, typed as a document.
-			typedEntry("widget-linux-amd64.tar.gz", digestB, "evidence", ""))
+			typedEntry("widget-linux-amd64.tar.gz", digestB, "evidence", "", ""))
 
 	sub, reb := reproManifests(t, released, digestA+"  odd-name-no-convention-would-match\n")
 
@@ -232,7 +250,7 @@ func TestVerifyReproEmptySubjectPopulationCannotJudge(t *testing.T) {
 		"an empty manifest":        "",
 		"documents alone, untyped": digestB + "  attestations.intoto.jsonl\n",
 		"documents alone, self-typed": typedManifest(
-			typedEntry("attestations.intoto.jsonl", digestB, "evidence", "")),
+			typedEntry("attestations.intoto.jsonl", digestB, "evidence", "", "")),
 		// A manifest from before entries existed lists nothing, so it
 		// is a population of zero — an honest CANNOT_JUDGE, and the
 		// reason the canon hands those releases their checksum
@@ -347,10 +365,10 @@ func optionalFact(doc *jsonReportDoc, name string) (string, bool) {
 // says nothing about the rest.
 func TestVerifyReproScopesToTheClassUnderRebuild(t *testing.T) {
 	released := classedManifest([]string{"rust-binary", "pgrx-extension"},
-		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary")+", "+
-			typedEntry("lab-aarch64-darwin.tar.gz", digestB, "build-subject", "rust-binary")+", "+
-			typedEntry("lab_pg-pg17-linux-amd64.tar.gz", digestC, "build-subject", "pgrx-extension")+", "+
-			typedEntry("attestations-extensions.intoto.jsonl", digestD, "evidence", ""))
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86)+", "+
+			typedEntry("lab-aarch64-darwin.tar.gz", digestB, "build-subject", "rust-binary", "aarch64-apple-darwin")+", "+
+			typedEntry("lab_pg-pg17-linux-amd64.tar.gz", digestC, "build-subject", "pgrx-extension", "pg17-amd64")+", "+
+			typedEntry("attestations-extensions.intoto.jsonl", digestD, "evidence", "", ""))
 
 	// The pgrx leg alone rebuilt: the rust binaries are absent from
 	// this rebuild by design, not by defect.
@@ -390,9 +408,9 @@ func TestVerifyReproScopesToTheClassUnderRebuild(t *testing.T) {
 // a finding — the v0.25.3 darwin case stays true.
 func TestVerifyReproScopeStaysLoudInsideItsClass(t *testing.T) {
 	released := classedManifest([]string{"rust-binary", "pgrx-extension"},
-		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary")+", "+
-			typedEntry("lab-aarch64-darwin.tar.gz", digestB, "build-subject", "rust-binary")+", "+
-			typedEntry("lab_pg-pg17-linux-amd64.tar.gz", digestC, "build-subject", "pgrx-extension"))
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86)+", "+
+			typedEntry("lab-aarch64-darwin.tar.gz", digestB, "build-subject", "rust-binary", "aarch64-apple-darwin")+", "+
+			typedEntry("lab_pg-pg17-linux-amd64.tar.gz", digestC, "build-subject", "pgrx-extension", "pg17-amd64"))
 
 	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
 
@@ -438,12 +456,12 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 	}{
 		{
 			"no class asked: the whole release",
-			typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary")),
+			typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary", "linux-amd64")),
 			"", "whole-release", "",
 		},
 		{
 			"a class asked and answered",
-			typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary")),
+			typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary", "linux-amd64")),
 			"go-binary", "go-binary", "",
 		},
 		{
@@ -517,7 +535,7 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 // seals the same way is a verdict nobody asked for.
 func TestVerifyReproRefusesAClassTheReleaseNeverShipped(t *testing.T) {
 	sub, reb := reproManifests(t,
-		typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary")),
+		typedManifest(typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary", "linux-amd64")),
 		digestA+"  widget-linux-amd64.tar.gz\n")
 
 	var stdout, stderr bytes.Buffer
@@ -540,7 +558,7 @@ func TestVerifyReproRefusesAClassTheReleaseNeverShipped(t *testing.T) {
 // CANNOT_JUDGE. That is the answer, not the absence of one.
 func TestVerifyReproScopedToAClassThatShipsNoAssets(t *testing.T) {
 	released := classedManifest([]string{"go-binary", "oci-image"},
-		typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary"))
+		typedEntry("widget-linux-amd64.tar.gz", digestA, "build-subject", "go-binary", "linux-amd64"))
 
 	sub, reb := reproManifests(t, released, digestA+"  widget-linux-amd64.tar.gz\n")
 
@@ -557,5 +575,341 @@ func TestVerifyReproScopedToAClassThatShipsNoAssets(t *testing.T) {
 	doc := decodeReport(t, &stdout)
 	if got := factValue(t, doc, "classScope"); got != "oci-image" {
 		t.Errorf("classScope = %q — an empty population is still a class answer", got)
+	}
+}
+
+// The defect this scoping exists for, measured: release-lab v0.26.0
+// published four rust-binary artifacts and the weekly rebuild covers
+// ONE target. Scoped by class alone the walk judged all four and
+// reported the three nobody asked it to rebuild as absent — FAIL over
+// a release that was fine, filed weekly (stele#223).
+//
+// Both directions in one test, because the fix is the declaration and
+// not a mute: undeclared, the same healthy rebuild still fails over
+// artifacts nobody rebuilt; declared, the population is the target
+// under test and the verdict is clean.
+func TestVerifyReproScopesToTheDeclaredTargets(t *testing.T) {
+	released := classedManifest([]string{"rust-binary"},
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86)+", "+
+			typedEntry("lab-aarch64-linux.tar.gz", digestB, "build-subject", "rust-binary",
+				"aarch64-unknown-linux-musl")+", "+
+			typedEntry("lab-x86_64-darwin.tar.gz", digestC, "build-subject", "rust-binary",
+				"x86_64-apple-darwin")+", "+
+			typedEntry("lab-aarch64-darwin.tar.gz", digestD, "build-subject", "rust-binary",
+				"aarch64-apple-darwin"))
+
+	// The canary rebuild, healthy: the one target it covered, at the
+	// digest the release published.
+	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+	base := []string{
+		"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0",
+		"--released", sub, "--rebuilt", reb, "--class", "rust-binary", "--json",
+	}
+
+	t.Run("declaring no target judges the whole class, as it did", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		if code := Run(base, &stdout, &stderr); code != exitRefused {
+			t.Fatalf("Run = %d, want %d\nstdout: %s", code, exitRefused, stdout.String())
+		}
+
+		if doc := decodeReport(t, &stdout); len(doc.Findings) != 3 {
+			t.Fatalf("findings = %+v, want the three artifacts nobody rebuilt", doc.Findings)
+		}
+	})
+
+	t.Run("declaring the target under test judges that target", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		if code := Run(append(base, "--targets", muslX86), &stdout, &stderr); code != exitOK {
+			t.Fatalf("Run = %d — artifacts nobody rebuilt were judged\nstdout: %s\nstderr: %s",
+				code, stdout.String(), stderr.String())
+		}
+
+		doc := decodeReport(t, &stdout)
+		if doc.Verdict == nil || *doc.Verdict != "PASS" || len(doc.Findings) != 0 {
+			t.Fatalf("verdict = %v with %d finding(s), want PASS and none", doc.Verdict, len(doc.Findings))
+		}
+
+		// The population is the DECLARATION, not the artifact count: it
+		// is what the caller said was under test, and a target it could
+		// not place would short-cover it.
+		pop := doc.Population
+		if pop == nil || pop.Size == nil || *pop.Size != 1 || pop.Expected == nil || *pop.Expected != 1 {
+			t.Fatalf("population = %+v, want the one declared target answered", pop)
+		}
+
+		if pop.Source == nil || *pop.Source != "declared" {
+			t.Errorf("population source = %v, want the declaration named as the source", pop.Source)
+		}
+
+		if got := factValue(t, doc, "targetScope"); got != muslX86 {
+			t.Errorf("targetScope = %q, want the declared target", got)
+		}
+
+		// The artifact count still rides, because the seal now counts
+		// targets and a reader must not have to infer how many artifacts
+		// that came to.
+		if got := factValue(t, doc, "judgedArtifacts"); got != "1" {
+			t.Errorf("judgedArtifacts = %q, want the one artifact that target built", got)
+		}
+
+		if got := factValue(t, doc, "classScope"); got != "rust-binary" {
+			t.Errorf("classScope = %q — the class narrowing still stands beside the target one", got)
+		}
+	})
+}
+
+// Narrowing to a target does not mute it. The partial-rebuild
+// inversion stele#96 exists to catch cannot regress here, because the
+// declaration precedes the rebuild: a declared target that produced
+// nothing, and one that produced the wrong bytes, are both loud.
+func TestVerifyReproDeclaredTargetStaysLoud(t *testing.T) {
+	released := classedManifest([]string{"rust-binary"},
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86)+", "+
+			typedEntry("lab-x86_64-musl-debug.tar.gz", digestB, "build-subject", "rust-binary", muslX86)+", "+
+			typedEntry("lab-aarch64-darwin.tar.gz", digestC, "build-subject", "rust-binary",
+				"aarch64-apple-darwin"))
+
+	tests := []struct {
+		name          string
+		rebuilt       string
+		wantAssertion string
+		wantSubject   string
+	}{
+		{
+			// One of the declared target's two artifacts is missing from
+			// a rebuild that claimed to cover it.
+			"an artifact the declared target did not produce",
+			digestA + "  lab-x86_64-linux.tar.gz\n",
+			"repro/absent-from-rebuild", "lab-x86_64-musl-debug.tar.gz",
+		},
+		{
+			"an artifact the declared target rebuilt to other bytes",
+			digestA + "  lab-x86_64-linux.tar.gz\n" + digestD + "  lab-x86_64-musl-debug.tar.gz\n",
+			"repro/diverged", "lab-x86_64-musl-debug.tar.gz",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, reb := reproManifests(t, released, tt.rebuilt)
+
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0",
+				"--released", sub, "--rebuilt", reb, "--class", "rust-binary", "--targets", muslX86, "--json",
+			}, &stdout, &stderr)
+			if code != exitRefused {
+				t.Fatalf("Run = %d, want %d\nstdout: %s", code, exitRefused, stdout.String())
+			}
+
+			doc := decodeReport(t, &stdout)
+			if len(doc.Findings) != 1 || doc.Findings[0].Assertion != tt.wantAssertion {
+				t.Fatalf("findings = %+v, want one %s", doc.Findings, tt.wantAssertion)
+			}
+
+			if doc.Findings[0].Subject != tt.wantSubject {
+				t.Errorf("finding subject = %q, want %q", doc.Findings[0].Subject, tt.wantSubject)
+			}
+		})
+	}
+}
+
+// A declared target the release cannot place is CANNOT_JUDGE, named
+// — never silence, and never a pass over the targets that did answer.
+// The three ways a release fails to place one are opposite in cause
+// and identical in shape, so each gets a row and each carries the
+// cause a reader would act on.
+func TestVerifyReproDeclaredTargetTheReleaseCannotPlace(t *testing.T) {
+	tests := []struct {
+		name      string
+		released  string
+		targets   string
+		wantCause string
+	}{
+		{
+			// A release published before targets were typed. The fix is
+			// the publisher's.
+			"a manifest that predates the target answer",
+			preTargetManifest(
+				typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", "")),
+			muslX86, "types no targets",
+		},
+		{
+			// A sha256sum manifest names assets and nothing else.
+			"a manifest with no typing at all",
+			digestA + "  lab-x86_64-linux.tar.gz\n",
+			muslX86, "types no targets",
+		},
+		{
+			// The manifest types targets and carries no artifact of this
+			// one: a matrix value nobody built. The fix is the caller's.
+			"a target this release never built",
+			classedManifest([]string{"rust-binary"},
+				typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86)),
+			"riscv64gc-unknown-linux-gnu", "was built for this target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, reb := reproManifests(t, tt.released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0",
+				"--released", sub, "--rebuilt", reb, "--assert-policy", reproPolicy(t),
+				"--targets", tt.targets, "--json",
+			}, &stdout, &stderr)
+			if code != exitBlind {
+				t.Fatalf("Run = %d, want %d — an unplaceable target is not a judgment\nstdout: %s",
+					code, exitBlind, stdout.String())
+			}
+
+			doc := decodeReport(t, &stdout)
+			if doc.Verdict == nil || *doc.Verdict != "CANNOT_JUDGE" {
+				t.Fatalf("verdict = %v, want CANNOT_JUDGE", doc.Verdict)
+			}
+
+			// By NAME: a count cannot say which target went unjudged.
+			if len(doc.Findings) != 1 || doc.Findings[0].Assertion != "repro/target-not-typed" {
+				t.Fatalf("findings = %+v, want the target named", doc.Findings)
+			}
+
+			if doc.Findings[0].Subject != tt.targets {
+				t.Errorf("finding subject = %q, want the declared target", doc.Findings[0].Subject)
+			}
+
+			if !strings.Contains(doc.Findings[0].Detail, tt.wantCause) {
+				t.Errorf("finding detail = %q, want it to carry %q", doc.Findings[0].Detail, tt.wantCause)
+			}
+		})
+	}
+}
+
+// The other direction of the same guard: a declaration one target of
+// which the release cannot place does not pass over the one it can.
+// Partial sight is reported, never laundered into either verdict.
+func TestVerifyReproPartlyPlaceableDeclarationCannotJudge(t *testing.T) {
+	released := classedManifest([]string{"rust-binary"},
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86))
+
+	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0", "--released", sub, "--rebuilt", reb,
+		"--targets", muslX86 + ",riscv64gc-unknown-linux-gnu", "--json",
+	}, &stdout, &stderr)
+	if code != exitBlind {
+		t.Fatalf("Run = %d, want %d\nstdout: %s", code, exitBlind, stdout.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+
+	pop := doc.Population
+	if pop == nil || pop.Size == nil || *pop.Size != 1 || pop.Expected == nil || *pop.Expected != 2 {
+		t.Fatalf("population = %+v, want one of two declared targets answered", pop)
+	}
+
+	if got := factValue(t, doc, "targetScope"); got != muslX86+",riscv64gc-unknown-linux-gnu" {
+		t.Errorf("targetScope = %q, want the whole declaration whatever answered", got)
+	}
+}
+
+// An undeclared target produces NOTHING — no finding, no count, no
+// cell. The artifact the rebuild did not produce is one nobody
+// claimed to have rebuilt, so there is nothing to say about it, and
+// saying something quieter instead is how the false-finding class was
+// born.
+func TestVerifyReproUndeclaredTargetProducesNothing(t *testing.T) {
+	released := classedManifest([]string{"rust-binary"},
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86)+", "+
+			typedEntry("lab-aarch64-darwin.tar.gz", digestB, "build-subject", "rust-binary",
+				"aarch64-apple-darwin"))
+
+	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0",
+		"--released", sub, "--rebuilt", reb, "--targets", muslX86, "--json",
+	}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "lab-aarch64-darwin.tar.gz") {
+		t.Errorf("the undeclared target's artifact reached the verdict: %s", out)
+	}
+
+	if got := factValue(t, decodeReport(t, &stdout), "judgedArtifacts"); got != "1" {
+		t.Errorf("judgedArtifacts = %q, want the undeclared target counted nowhere", got)
+	}
+}
+
+// A declaration with a hole in it is not one: an empty element is
+// refused rather than dropped, because a split that swallowed it
+// would narrow the judged population by exactly the value nobody
+// noticed was missing.
+func TestVerifyReproRefusesADeclarationWithAHole(t *testing.T) {
+	released := classedManifest([]string{"rust-binary"},
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86))
+
+	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+	for _, targets := range []string{muslX86 + ",", ",", muslX86 + "," + muslX86} {
+		t.Run(targets, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0",
+				"--released", sub, "--rebuilt", reb, "--targets", targets,
+			}, &stdout, &stderr)
+			if code != exitUsage {
+				t.Fatalf("Run = %d, want %d\nstderr: %s", code, exitUsage, stderr.String())
+			}
+		})
+	}
+}
+
+// A manifest that cannot say which class built an artifact cannot say
+// which target did either, so a caller that asked for both reads what
+// the population became: a declaration it can place nothing in, never
+// a silent widening to every build subject the release published.
+func TestVerifyReproUnmetClassSaysWhatTheTargetsBecame(t *testing.T) {
+	released := legacyTypedManifest(
+		`{"name": "lab-x86_64-linux.tar.gz", "sha256": "` + digestA + `", "type": "build-subject"}`)
+
+	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0", "--released", sub, "--rebuilt", reb,
+		"--class", "go-binary", "--targets", muslX86, "--json",
+	}, &stdout, &stderr)
+	if code != exitBlind {
+		t.Fatalf("Run = %d, want %d\nstdout: %s", code, exitBlind, stdout.String())
+	}
+
+	if !strings.Contains(stderr.String(), "can place no declared target either") {
+		t.Errorf("stderr = %q, want the population it became stated", stderr.String())
+	}
+
+	doc := decodeReport(t, &stdout)
+	if got := factValue(t, doc, "classScopeUnmet"); got != "no-class-answer" {
+		t.Errorf("classScopeUnmet = %q, want the class request named unhonoured beside it", got)
+	}
+
+	if len(doc.Findings) != 1 || doc.Findings[0].Assertion != "repro/target-not-typed" {
+		t.Fatalf("findings = %+v, want the unplaceable target named", doc.Findings)
 	}
 }

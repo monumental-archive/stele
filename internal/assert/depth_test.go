@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -570,16 +572,16 @@ func TestDepthAttributionDefects(t *testing.T) {
 	}{
 		{
 			name: "an artifact the manifest does not list",
-			manifest: `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9",` +
-				` "entries": [{"name": "somewhere-else.tar.gz", "sha256": "` + strings.Repeat("a", 64) +
-				`", "type": "build-subject", "class": "oci-image"}]}`,
+			manifest: `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["oci-image"], ` +
+				`"storeVsa": true, "machineryVersion": "9.9.9", "entries": [` +
+				manifestEntry("somewhere-else.tar.gz", "build-subject", "oci-image", "linux-amd64") + `]}`,
 			want: "attributes every artifact to a class and this one to none",
 		},
 		{
 			name: "an artifact attributed to a class the policy does not define",
-			manifest: `{"schema": 3, "classes": ["conjured"], "storeVsa": true, "machineryVersion": "9.9.9",` +
-				` "entries": [{"name": "widget-v1.0.0.tar.gz", "sha256": "` + strings.Repeat("a", 64) +
-				`", "type": "build-subject", "class": "conjured"}]}`,
+			manifest: `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["conjured"], ` +
+				`"storeVsa": true, "machineryVersion": "9.9.9", "entries": [` +
+				manifestEntry("widget-v1.0.0.tar.gz", "build-subject", "conjured", "linux-amd64") + `]}`,
 			want: `built by class "conjured", which the policy does not define`,
 		},
 	}

@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
@@ -249,10 +251,11 @@ func evidenceSnapshotWith(t *testing.T, rewrite func(files map[string]string)) (
 		"snap/acme/widget/tags.json": `["v1.0.0"]`,
 		"snap/acme/widget/releases/v1.0.0/assets.json": `["evidence-manifest.json", "app.spdx.json", ` +
 			`"checksums.txt", "attestations-image.intoto.jsonl"]`,
-		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": 3, ` +
-			`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9", "entries": [` +
+		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": ` +
+			strconv.Itoa(evidence.Schema) + `, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "9.9.9", "entries": [` +
 			`{"name": "app.tar.gz", "sha256": "` + digest + `", "type": "build-subject", ` +
-			`"class": "oci-image"}]}`,
+			`"class": "oci-image", "target": "linux-amd64"}]}`,
 		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
 		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
 		"policy.json": `{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", ` +

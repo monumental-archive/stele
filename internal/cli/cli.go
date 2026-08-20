@@ -98,8 +98,9 @@ usage:
     vsa       the published verdict, as the spec's consumer procedure
     chain     the source chain: coverage tip→genesis and the ledger
     repro     the reproducibility rebuild: the release's checksum
-              manifest against the rebuild's, one typed finding per
-              artifact that failed to reproduce
+              manifest against the rebuild's, over the class and
+              targets the rebuild declares it covered, one typed
+              finding per artifact that failed to reproduce
     policy    one committed policy document against this engine's own
               loader, offline and reaching nothing: exit 0 if it
               loads, else the loader's refusal verbatim. The drift
@@ -253,8 +254,10 @@ in this binary.
 verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain adds
 --git-dir [--ref]; repro takes --repo --tag --released --rebuilt
-[--assert-policy --json] and no trust material — a digest comparison
-signs nothing; --assert-policy types an UNTYPED released manifest.
+[--class --targets --assert-policy --json] and no trust material — a
+digest comparison signs nothing; --assert-policy types an UNTYPED
+released manifest, --class and --targets scope the judged population
+to what the rebuild covered.
 verify policy takes exactly one of --assert-policy or --verify-policy,
 naming the document to load, and nothing else.
 level takes --repo|--org [--ref --notes-ref --tag --json
@@ -265,8 +268,8 @@ declared population, and --org --out-dir <dir> with no track publishes
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]; emit manifest takes --classes --store-vsa
---machinery-version --assets --assert-policy [--out] and none of the
-above.
+--machinery-version --assets --assert-policy --leg-subjects [--out]
+and none of the above.
 GITHUB_TOKEN/GH_TOKEN authenticates store reads and the notes push.
 `
 

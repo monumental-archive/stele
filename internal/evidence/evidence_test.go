@@ -25,7 +25,7 @@ const (
 // artifact and a document about it, which is what a release ships.
 func oneOfEach() []evidence.Entry {
 	return []evidence.Entry{
-		evidence.NewSubject("widget-x86_64.tar.gz", digestA, "go-binary"),
+		evidence.NewSubject("widget-x86_64.tar.gz", digestA, "go-binary", "linux-amd64"),
 		evidence.NewEvidence("attestations-image.intoto.jsonl", digestB),
 	}
 }
@@ -75,7 +75,7 @@ func TestSubjectsReadTheTypingAlone(t *testing.T) {
 		// Named exactly like an artifact, typed as a document: the
 		// name loses, because the type is the answer.
 		evidence.NewEvidence("widget-x86_64.tar.gz", digestA),
-		evidence.NewSubject("odd-name-no-convention-would-match", digestB, "go-binary"),
+		evidence.NewSubject("odd-name-no-convention-would-match", digestB, "go-binary", "linux-amd64"),
 	})
 	if err != nil {
 		t.Fatalf("New = %v", err)
@@ -94,7 +94,9 @@ func TestSubjectsReadTheTypingAlone(t *testing.T) {
 func TestSubjectsSkipsUnbuiltEntries(t *testing.T) {
 	t.Parallel()
 
-	m := &evidence.Manifest{Entries: []evidence.Entry{{}, evidence.NewSubject("a", digestA, "go-binary")}}
+	built := evidence.NewSubject("a", digestA, "go-binary", "linux-amd64")
+
+	m := &evidence.Manifest{Entries: []evidence.Entry{{}, built}}
 	if got := m.Subjects(); len(got) != 1 || got[0].Name != "a" {
 		t.Fatalf("Subjects = %+v", got)
 	}
@@ -142,7 +144,7 @@ func TestEntryRefusals(t *testing.T) {
 		{"no entries at all", nil, "lists nothing"},
 		{
 			"an entry naming no asset",
-			[]evidence.Entry{evidence.NewSubject("", digestA, "go-binary")},
+			[]evidence.Entry{evidence.NewSubject("", digestA, "go-binary", "linux-amd64")},
 			"has no name",
 		},
 		{
@@ -152,7 +154,7 @@ func TestEntryRefusals(t *testing.T) {
 		},
 		{
 			"an entry whose digest is not one",
-			[]evidence.Entry{evidence.NewSubject("a.tar.gz", "cafe", "go-binary")},
+			[]evidence.Entry{evidence.NewSubject("a.tar.gz", "cafe", "go-binary", "linux-amd64")},
 			"is not a sha256 digest",
 		},
 		{
@@ -168,10 +170,19 @@ func TestEntryRefusals(t *testing.T) {
 		{
 			"the same asset twice",
 			[]evidence.Entry{
-				evidence.NewSubject("a.tar.gz", digestA, "go-binary"),
+				evidence.NewSubject("a.tar.gz", digestA, "go-binary", "linux-amd64"),
 				evidence.NewEvidence("a.tar.gz", digestB),
 			},
 			"appears twice",
+		},
+		{
+			// The target's own guard, from the writing side: the
+			// constructor takes one, so the only way past it is a name
+			// that says nothing — and an artifact no target claims falls
+			// out of every target-scoped rebuild in silence.
+			"an artifact whose target is a name that says nothing",
+			[]evidence.Entry{evidence.NewSubject("a.tar.gz", digestA, "go-binary", "")},
+			"has no target",
 		},
 	}
 
@@ -211,7 +222,7 @@ func TestParseRefusals(t *testing.T) {
 		},
 		{
 			"a schema above the current one",
-			`{"schema": 4, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` + entries + `}`,
+			`{"schema": 5, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` + entries + `}`,
 			"not a manifest schema this build reads",
 		},
 		{
@@ -261,6 +272,31 @@ func TestParseRefusals(t *testing.T) {
 				`"entries": [{"name": "sbom.spdx.json", "sha256": "` + digestA + `", "type": "evidence",` +
 				` "class": "a"}]}`,
 			"belongs to no one class",
+		},
+		{
+			// The target rules, from the reader's side, in the same three
+			// directions the class has: a schema that never had the field
+			// carrying one, an artifact owing one and omitting it, and a
+			// document claiming one no leg could have given it.
+			"a classed schema carrying a target it never had",
+			`{"schema": 3, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` +
+				`"entries": [{"name": "a.tar.gz", "sha256": "` + digestA + `", "type": "build-subject",` +
+				` "class": "a", "target": "linux-amd64"}]}`,
+			"which schema 3 does not have",
+		},
+		{
+			"an artifact no target claims",
+			`{"schema": 4, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` +
+				`"entries": [{"name": "a.tar.gz", "sha256": "` + digestA + `", "type": "build-subject",` +
+				` "class": "a"}]}`,
+			"has no target",
+		},
+		{
+			"a document claiming a target",
+			`{"schema": 4, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` +
+				`"entries": [{"name": "sbom.spdx.json", "sha256": "` + digestA + `", "type": "evidence",` +
+				` "target": "linux-amd64"}]}`,
+			"produced by no build leg",
 		},
 		{
 			"a field outside the format",
@@ -351,7 +387,74 @@ func TestOlderSchemasReadForWhatTheyPromised(t *testing.T) {
 			if got, ok := m.ArtifactClasses(); ok || got != nil {
 				t.Errorf("ArtifactClasses = %+v, ok = %v, want no answer at all", got, ok)
 			}
+
+			if m.Targets() {
+				t.Error("Targets = true on a schema that carries no target on any entry")
+			}
 		})
+	}
+}
+
+// The schema between the two answers: it says which class built each
+// artifact and cannot say which target produced it. Its own row,
+// because this is the manifest a target-scoped rebuild will meet for
+// as long as the corpus holds releases published before targets were
+// typed, and reading its silence as "no artifact was built for that
+// target" would blame a caller's matrix for the publisher's vintage
+// (stele#223).
+func TestClassedSchemaCarriesNoTargetAnswer(t *testing.T) {
+	t.Parallel()
+
+	m, err := evidence.Parse([]byte(
+		`{"schema": 3, "classes": ["go-binary"], "storeVsa": true, "machineryVersion": "1.47.0",` +
+			` "entries": [{"name": "a.tar.gz", "sha256": "` + digestA + `", "type": "build-subject",` +
+			` "class": "go-binary"}]}`))
+	if err != nil {
+		t.Fatalf("Parse = %v, want history to read", err)
+	}
+
+	if !m.Attributes() {
+		t.Error("Attributes = false on the schema that carries the class")
+	}
+
+	if m.Targets() {
+		t.Error("Targets = true on the schema below the target answer")
+	}
+
+	subjects := m.Subjects()
+	if len(subjects) != 1 || subjects[0].Target != "" {
+		t.Errorf("Subjects = %+v, want the artifact with no target of its own", subjects)
+	}
+}
+
+// The target answer, read from the manifest's own entries: every
+// artifact carries the target that produced it, through the whole
+// population and through a class-narrowed one, so a judge scoping to
+// a declared target reads the answer rather than deriving a second.
+func TestSubjectsCarryTheirTarget(t *testing.T) {
+	t.Parallel()
+
+	m, err := evidence.New([]string{"go-binary"}, true, "1.49.0", []evidence.Entry{
+		evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary", "linux-amd64"),
+		evidence.NewSubject("tool-darwin-arm64.tar.gz", digestB, "go-binary", "darwin-arm64"),
+		evidence.NewEvidence("attestations.intoto.jsonl", digestC),
+	})
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	if !m.Targets() {
+		t.Fatal("Targets = false on the schema that carries the target")
+	}
+
+	whole := m.Subjects()
+	if len(whole) != 2 || whole[0].Target != "linux-amd64" || whole[1].Target != "darwin-arm64" {
+		t.Errorf("Subjects = %+v, want each artifact with the target that produced it", whole)
+	}
+
+	scoped, ok := m.SubjectsOf("go-binary")
+	if !ok || len(scoped) != 2 || scoped[1].Target != "darwin-arm64" {
+		t.Errorf("SubjectsOf = %+v, ok = %v, want the narrowing to keep each target", scoped, ok)
 	}
 }
 
@@ -365,8 +468,8 @@ func TestArtifactClassesReadsTheAttribution(t *testing.T) {
 
 	m, err := evidence.New([]string{"go-binary", "source-archive"}, true, "1.48.0",
 		[]evidence.Entry{
-			evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary"),
-			evidence.NewSubject("src-1.0.0.tar.gz", digestB, "source-archive"),
+			evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary", "linux-amd64"),
+			evidence.NewSubject("src-1.0.0.tar.gz", digestB, "source-archive", "any"),
 			evidence.NewEvidence("attestations.intoto.jsonl", digestC),
 		})
 	if err != nil {
@@ -411,9 +514,9 @@ func TestSubjectsOfScopesToOneClass(t *testing.T) {
 
 	m, err := evidence.New([]string{"go-binary", "oci-image", "source-archive"}, true, "1.47.0",
 		[]evidence.Entry{
-			evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary"),
-			evidence.NewSubject("tool-darwin-arm64.tar.gz", digestB, "go-binary"),
-			evidence.NewSubject("src-1.0.0.tar.gz", digestC, "source-archive"),
+			evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary", "linux-amd64"),
+			evidence.NewSubject("tool-darwin-arm64.tar.gz", digestB, "go-binary", "darwin-arm64"),
+			evidence.NewSubject("src-1.0.0.tar.gz", digestC, "source-archive", "any"),
 			evidence.NewEvidence("attestations.intoto.jsonl", digestD),
 		})
 	if err != nil {
@@ -454,7 +557,7 @@ func TestPinsReadsBothPopulations(t *testing.T) {
 	t.Parallel()
 
 	m, err := evidence.New([]string{"go-binary"}, true, "1.48.0", []evidence.Entry{
-		evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary"),
+		evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary", "linux-amd64"),
 		evidence.NewEvidence("attestations.intoto.jsonl", digestC),
 	})
 	if err != nil {

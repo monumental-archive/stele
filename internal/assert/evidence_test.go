@@ -70,21 +70,27 @@ func bundleJSONL(predicateType string) string {
 
 // manifestEntry renders one typed entry — the fixtures carry the
 // typing the format requires (stele#156), so a manifest a test builds
-// is one the writer could have written.
-// manifestEntry renders one entry at the current schema: an artifact
-// names the class that built it, a document names none.
-func manifestEntry(name, entryType, class string) string {
-	return manifestEntryPinned(name, entryType, class, strings.Repeat("a", 64))
+// is one the writer could have written: an artifact names the class
+// that built it and the target that produced it, a document names
+// neither. Both are passed rather than defaulted, because a fixture
+// at an OLDER schema must carry neither, and a helper that stamped
+// them anyway would build documents that lie about their own format.
+func manifestEntry(name, entryType, class, target string) string {
+	return manifestEntryPinned(name, entryType, class, target, strings.Repeat("a", 64))
 }
 
 // manifestEntryPinned is manifestEntry with the pinned bytes chosen —
 // the fixture control the checksum cross-check needs (stele#219),
 // where a name's digest in this document either matches the checksum
 // manifest's or is the disagreement under test.
-func manifestEntryPinned(name, entryType, class, digest string) string {
+func manifestEntryPinned(name, entryType, class, target, digest string) string {
 	entry := `{"name": "` + name + `", "sha256": "` + digest + `", "type": "` + entryType + `"`
 	if class != "" {
 		entry += `, "class": "` + class + `"`
+	}
+
+	if target != "" {
+		entry += `, "target": "` + target + `"`
 	}
 
 	return entry + `}`
@@ -105,7 +111,8 @@ func manifestAsset(classes []string, storeVSA bool) string {
 
 	return `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["` + strings.Join(classes, `", "`) +
 		`"], "storeVsa": ` + sv + `, "machineryVersion": "9.9.9", "entries": [` +
-		manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", classes[0], subjectDigest) + `]}`
+		manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", classes[0], "linux-amd64",
+			subjectDigest) + `]}`
 }
 
 // fakeForge scripts the whole forge for one org.

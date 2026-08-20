@@ -19,15 +19,16 @@
 // every walk downstream reads the answer instead of deriving a second
 // one.
 //
-// Which CLASS built each artifact is the same kind of fact and lands
-// the same way (stele#185), but it is one no policy can answer: no
+// Which LEG built each artifact — its class (stele#185) and the
+// target that leg built (stele#223) — is the same kind of fact and
+// lands the same way, but it is one no policy can answer: no
 // vocabulary names a release's build artifacts by the leg that
 // produced them, and only the publisher holds the split — one subject
-// manifest per build leg, which is what `--class-subjects` takes. An
-// artifact no class claims refuses the manifest rather than shipping
-// unattributed: a per-class rebuild would then scope a population
-// that silently omitted it, which is the same defect as an untyped
-// entry one field over.
+// manifest per build leg, which is what `--leg-subjects` takes. An
+// artifact no leg claims refuses the manifest rather than shipping
+// unattributed: a scoped rebuild would then judge a population that
+// silently omitted it, which is the same defect as an untyped entry
+// one field over.
 //
 // What leaves this command is proven readable, not assumed: the
 // rendered bytes are read back through the same internal/evidence
@@ -62,50 +63,74 @@ type manifestArgs struct {
 	out              string
 }
 
-// classSubjects is the repeatable `--class-subjects <class>=<path>`
+// legSubjects is the repeatable `--leg-subjects <class>:<target>=<path>`
 // flag: one build leg's subject manifest per occurrence, which is the
-// shape the publisher already holds — every class's build job emits
-// the digests of what it produced, and this reads them back rather
-// than asking a caller to restate the split in some new spelling.
-type classSubjects []classSubjectSet
+// shape the publisher already holds — every matrix job emits the
+// digests of what it produced, and this reads them back rather than
+// asking a caller to restate the split in some new spelling.
+//
+// A leg is a (class, target) pair (stele#223), because that is the
+// unit a build job and a rebuild both have. Keying it by class alone
+// left the manifest unable to say which artifacts one target's
+// rebuild covers, and a judge that cannot ask that question grades
+// artifacts nobody rebuilt.
+type legSubjects []legSubjectSet
 
-// classSubjectSet is one leg: the class, and the sha256sum manifest
-// of the artifacts it built.
-type classSubjectSet struct {
-	class string
-	path  string
+// legSubjectSet is one leg: the class, the target it built, and the
+// sha256sum manifest of the artifacts that produced.
+type legSubjectSet struct {
+	class  string
+	target string
+	path   string
 }
 
-// String implements flag.Value — the classes named so far, which is
-// what a usage dump should show; the paths are noise there.
-func (c *classSubjects) String() string {
-	names := make([]string, 0, len(*c))
-	for _, set := range *c {
-		names = append(names, set.class)
+// key spells one leg for a diagnostic and for the duplicate check —
+// the same spelling the flag takes, so a message names the thing the
+// caller typed.
+func (l legSubjectSet) key() string { return l.class + ":" + l.target }
+
+// String implements flag.Value — the legs named so far, which is what
+// a usage dump should show; the paths are noise there.
+func (l *legSubjects) String() string {
+	names := make([]string, 0, len(*l))
+	for _, leg := range *l {
+		names = append(names, leg.key())
 	}
 
 	return strings.Join(names, ",")
 }
 
-// Set implements flag.Value. A class named twice is refused here
-// rather than merged: two manifests for one leg means the caller
-// holds two answers for what that class built, and merging them would
-// pick one silently.
-func (c *classSubjects) Set(v string) error {
-	class, path, ok := strings.Cut(v, "=")
-	if !ok || strings.TrimSpace(class) == "" || strings.TrimSpace(path) == "" {
-		return fmt.Errorf("--class-subjects %q is not <class>=<path>", v)
+// Set implements flag.Value. A leg named twice is refused here rather
+// than merged: two manifests for one leg means the caller holds two
+// answers for what that leg built, and merging them would pick one
+// silently.
+//
+// The path is cut off first, at the leftmost `=`, so a path may carry
+// either delimiter; class and target may carry neither, which is the
+// price of a delimiter and is paid where the values are short and the
+// publisher chooses them.
+func (l *legSubjects) Set(v string) error {
+	leg, path, ok := strings.Cut(v, "=")
+	if !ok {
+		return fmt.Errorf("--leg-subjects %q is not <class>:<target>=<path>", v)
 	}
 
-	class, path = strings.TrimSpace(class), strings.TrimSpace(path)
+	class, target, named := strings.Cut(leg, ":")
 
-	for _, set := range *c {
-		if set.class == class {
-			return fmt.Errorf("--class-subjects names %s twice — one build leg has one subject set", class)
+	class, target, path = strings.TrimSpace(class), strings.TrimSpace(target), strings.TrimSpace(path)
+	if !named || class == "" || target == "" || path == "" {
+		return fmt.Errorf("--leg-subjects %q is not <class>:<target>=<path>", v)
+	}
+
+	set := legSubjectSet{class: class, target: target, path: path}
+
+	for _, other := range *l {
+		if other.key() == set.key() {
+			return fmt.Errorf("--leg-subjects names %s twice — one build leg has one subject set", set.key())
 		}
 	}
 
-	*c = append(*c, classSubjectSet{class: class, path: path})
+	*l = append(*l, set)
 
 	return nil
 }
@@ -118,7 +143,7 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 
 	var (
 		classes, storeVSA, assets, policyPath string
-		perClass                              classSubjects
+		perLeg                                legSubjects
 	)
 
 	flags := flag.NewFlagSet("stele emit manifest", flag.ContinueOnError)
@@ -138,10 +163,11 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 		"assert policy whose evidence vocabulary types each asset (required) — which names mark a "+
 			"document ABOUT the release is a declared org fact, never this tool's knowledge. Named for "+
 			"the document it takes: --policy is the VERIFY policy in this verb's other modes")
-	flags.Var(&perClass, "class-subjects",
-		"the sha256sum manifest of the artifacts ONE class built, as `<class>=<path>`, repeatable once "+
-			"per class — the split only the publisher holds, and the answer a per-class rebuild scopes "+
-			"its population by. Every build subject in --assets must be claimed by exactly one of these")
+	flags.Var(&perLeg, "leg-subjects",
+		"the sha256sum manifest of the artifacts ONE build leg produced, as `<class>:<target>=<path>`, "+
+			"repeatable once per leg — the split only the publisher holds, and the answer a rebuild "+
+			"scopes its population by, at the grain a rebuild actually covers. Every build subject in "+
+			"--assets must be claimed by exactly one of these")
 	flags.StringVar(&ma.out, "out", "", "file to write the manifest to; empty prints to stdout")
 
 	if err := flags.Parse(args); err != nil {
@@ -177,7 +203,7 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 		return ma, usageFail(fmt.Sprintf("--store-vsa %q is not true or false", storeVSA))
 	}
 
-	entries, err := typedEntries(assets, policyPath, perClass)
+	entries, err := typedEntries(assets, policyPath, perLeg)
 	if err != nil {
 		return ma, usageFail(err.Error())
 	}
@@ -197,12 +223,13 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 // artifacts", a set only this tool's private knowledge could draw, so
 // every caller that honoured it reimplemented the tool in workflow
 // bash (stele#156).
-// The class attribution is the CALLER's, and it is the one thing here
-// that is: no declared vocabulary names a release's build artifacts by
-// the leg that produced them, so the split arrives as one subject
-// manifest per class and is joined to the release's assets by name and
-// digest — never trusted as a second list of what shipped (stele#185).
-func typedEntries(assets, policyPath string, perClass classSubjects) ([]evidence.Entry, error) {
+// The class and target attribution is the CALLER's, and it is the one
+// thing here that is: no declared vocabulary names a release's build
+// artifacts by the leg that produced them, so the split arrives as one
+// subject manifest per leg and is joined to the release's assets by
+// name and digest — never trusted as a second list of what shipped
+// (stele#185, at target grain stele#223).
+func typedEntries(assets, policyPath string, perLeg legSubjects) ([]evidence.Entry, error) {
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
@@ -219,7 +246,7 @@ func typedEntries(assets, policyPath string, perClass classSubjects) ([]evidence
 		return nil, err
 	}
 
-	built, err := classOfAsset(listed, perClass, pol.Evidence)
+	built, err := legOfAsset(listed, perLeg, pol.Evidence)
 	if err != nil {
 		return nil, err
 	}
@@ -233,39 +260,40 @@ func typedEntries(assets, policyPath string, perClass classSubjects) ([]evidence
 			continue
 		}
 
-		class, claimed := built[a.Name]
+		leg, claimed := built[a.Name]
 		if !claimed {
-			return nil, fmt.Errorf("%s is a build subject no --class-subjects manifest claims — an"+
-				" artifact with no class goes unjudged by every per-class rebuild, in silence", a.Name)
+			return nil, fmt.Errorf("%s is a build subject no --leg-subjects manifest claims — an"+
+				" artifact with no class and no target goes unjudged by every scoped rebuild, in silence",
+				a.Name)
 		}
 
-		entries = append(entries, evidence.NewSubject(a.Name, a.SHA256, class))
+		entries = append(entries, evidence.NewSubject(a.Name, a.SHA256, leg.class, leg.target))
 	}
 
 	return entries, nil
 }
 
-// classOfAsset joins the per-class subject manifests onto the assets
-// the release publishes: name to the class that built it.
+// legOfAsset joins the per-leg subject manifests onto the assets the
+// release publishes: name to the leg that built it.
 //
 // The join is checked in both directions, because a caller's split is
 // a SECOND statement about the same release and the two must agree or
-// one of them is wrong. An artifact named by a class but absent from
+// one of them is wrong. An artifact named by a leg but absent from
 // the release did not ship; one whose digest disagrees is not the same
-// bytes; one claimed by two classes has no answer; and a document the
-// release publishes about itself is not an artifact any class built.
-func classOfAsset(
-	listed []verify.Subject, perClass classSubjects, pol *assert.EvidencePolicy,
-) (map[string]string, error) {
+// bytes; one claimed by two legs has no answer; and a document the
+// release publishes about itself is not an artifact any leg built.
+func legOfAsset(
+	listed []verify.Subject, perLeg legSubjects, pol *assert.EvidencePolicy,
+) (map[string]legSubjectSet, error) {
 	shipped := make(map[string]string, len(listed))
 	for _, a := range listed {
 		shipped[a.Name] = a.SHA256
 	}
 
-	built := make(map[string]string)
+	built := make(map[string]legSubjectSet)
 
-	for _, set := range perClass {
-		subjects, err := digestManifest(set.path)
+	for _, leg := range perLeg {
+		subjects, err := digestManifest(leg.path)
 		if err != nil {
 			return nil, err
 		}
@@ -273,22 +301,22 @@ func classOfAsset(
 		for _, s := range subjects {
 			switch digest, ok := shipped[s.Name]; {
 			case !ok:
-				return nil, fmt.Errorf("--class-subjects %s names %s, which this release does not publish"+
-					" — a class cannot claim an artifact that did not ship", set.class, s.Name)
+				return nil, fmt.Errorf("--leg-subjects %s names %s, which this release does not publish"+
+					" — a leg cannot claim an artifact that did not ship", leg.key(), s.Name)
 			case digest != s.SHA256:
-				return nil, fmt.Errorf("--class-subjects %s pins %s at %s, but the release publishes %s"+
-					" — one artifact, two digests", set.class, s.Name, s.SHA256, digest)
+				return nil, fmt.Errorf("--leg-subjects %s pins %s at %s, but the release publishes %s"+
+					" — one artifact, two digests", leg.key(), s.Name, s.SHA256, digest)
 			case pol.Classify(s.Name) == evidence.TypeEvidence:
-				return nil, fmt.Errorf("--class-subjects %s names %s, which the evidence vocabulary calls a"+
-					" document ABOUT the release — a document belongs to no one class", set.class, s.Name)
+				return nil, fmt.Errorf("--leg-subjects %s names %s, which the evidence vocabulary calls a"+
+					" document ABOUT the release — a document belongs to no one leg", leg.key(), s.Name)
 			}
 
 			if other, claimed := built[s.Name]; claimed {
 				return nil, fmt.Errorf("%s is claimed by both %s and %s — one artifact has one build leg",
-					s.Name, other, set.class)
+					s.Name, other.key(), leg.key())
 			}
 
-			built[s.Name] = set.class
+			built[s.Name] = leg
 		}
 	}
 

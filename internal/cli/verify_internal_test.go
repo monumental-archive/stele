@@ -376,9 +376,10 @@ type jsonReportDoc struct {
 	Subject    *string `json:"subject"`
 	Verdict    *string `json:"verdict"`
 	Population *struct {
-		Size   *int    `json:"size"`
-		Source *string `json:"source"`
-		Detail *string `json:"detail"`
+		Size     *int    `json:"size"`
+		Expected *int    `json:"expected"`
+		Source   *string `json:"source"`
+		Detail   *string `json:"detail"`
 	} `json:"population"`
 	Facts []struct {
 		Name  string `json:"name"`

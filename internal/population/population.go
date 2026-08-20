@@ -27,6 +27,18 @@
 // indistinguishable from no check — so a declared population is
 // checked against the listing in both directions, by NAME. A count
 // cannot say which repository went missing; this does.
+//
+// TWO KINDS of population live here, and they are one law wearing two
+// shapes. A repository population answers "who does this walk cover"
+// against a forge listing. A rebuild-target population (targets.go,
+// stele#223) answers the same question INSIDE one release, against
+// what its manifest types: the caller declares the targets its
+// rebuild covered, and the declaration — never the rebuild's own
+// output — is the population. Both are declared objects reconciled
+// against an observation by name; in both, an undeclared member
+// produces nothing at all and a declared member the observation
+// cannot account for is loud. They share this package precisely so
+// the second cannot grow a quieter second vocabulary for exclusion.
 package population
 
 import (
