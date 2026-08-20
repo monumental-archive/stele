@@ -84,7 +84,8 @@ type Base struct {
 	Skipped []string
 }
 
-// LatestTag selects the base from a tag list.
+// Versions reads a tag list as one namespace: every version it carries,
+// and every tag that claimed it and could not be read.
 //
 // Tags outside the namespace are not skipped and not reported — they
 // belong to another component and were never candidates. Only a tag that
@@ -97,12 +98,17 @@ type Base struct {
 // when the prefix is followed by a digit, which is where every version
 // begins.
 //
-// An empty namespace yields a nil Version rather than a zero one: "this
-// project has never released" and "this project released 0.0.0" are
-// different facts, and the caller states which base an unreleased
-// project starts from.
-func LatestTag(prefix string, tags []string) Base {
-	var base Base
+// Both readers of a namespace go through here: LatestTag folds this to
+// a base, and Decision.Declare compares a declared version against it.
+// Which tags are a namespace's members is one question, so it has one
+// answer.
+//
+//nolint:gocritic // unnamedResult: the namespace's versions, then the tags it could not read
+func Versions(prefix string, tags []string) ([]*semver.Version, []string) {
+	var (
+		versions []*semver.Version
+		skipped  []string
+	)
 
 	for _, tag := range tags {
 		rest, found := strings.CutPrefix(tag, prefix)
@@ -112,11 +118,31 @@ func LatestTag(prefix string, tags []string) Base {
 
 		version, err := ParseTag(prefix, tag)
 		if err != nil {
-			base.Skipped = append(base.Skipped, tag)
+			skipped = append(skipped, tag)
 
 			continue
 		}
 
+		versions = append(versions, version)
+	}
+
+	return versions, skipped
+}
+
+// LatestTag selects the base from a tag list: the highest version the
+// namespace carries, plus every tag that claimed it and could not be
+// read.
+//
+// An empty namespace yields a nil Version rather than a zero one: "this
+// project has never released" and "this project released 0.0.0" are
+// different facts, and the caller states which base an unreleased
+// project starts from.
+func LatestTag(prefix string, tags []string) Base {
+	versions, skipped := Versions(prefix, tags)
+
+	base := Base{Skipped: skipped}
+
+	for _, version := range versions {
 		if base.Version == nil || version.GreaterThan(base.Version) {
 			base.Version = version
 		}
@@ -227,6 +253,7 @@ func NewRules(minor, silent []string, zeroMajorBumpsMinor bool) (Rules, error) {
 type Decision struct {
 	requested Bump
 	applied   Bump
+	declared  bool
 	base      *semver.Version
 	next      *semver.Version
 }
@@ -237,6 +264,13 @@ func (d *Decision) Requested() Bump { return d.requested }
 
 // Applied reports the bump actually made to the version.
 func (d *Decision) Applied() Bump { return d.applied }
+
+// Declared reports whether a human chose this version rather than the
+// commits deciding it. The third state beside requested and applied,
+// and reported everywhere they are: a release nobody derived is a
+// different fact from one the range called for, and a reader shown
+// only the number cannot tell them apart.
+func (d *Decision) Declared() bool { return d.declared }
 
 // Base reports the version the range was measured from.
 func (d *Decision) Base() *semver.Version { return d.base }
@@ -302,6 +336,84 @@ func (r Rules) Decide(base *semver.Version, commits []convcommit.Commit) (Decisi
 		base:      base,
 		next:      apply(base, applied),
 	}, nil
+}
+
+// Declare judges a caller-declared release version against this
+// decision and returns the decision that releases it. Derivation
+// stays the default; this is the road to a number the commits cannot
+// reach — a 1.0.0 that breaks nothing, a 2.0.0 chosen to match a
+// product line — without forging a breaking commit to get there,
+// which is a lie in the history and reads as one forever.
+//
+// Two refusals, both naming the base they compared against:
+//
+//   - the declaration must be a strict INCREASE over the base the
+//     range was measured from. A declaration chooses the next
+//     release; it is not a way to re-cut a published one or to walk
+//     a namespace backwards.
+//   - it must not be a version the namespace already carries. The
+//     base is the highest version reachable from the ref, so on a
+//     maintenance branch the namespace can carry a higher one the
+//     increase test cannot see: v2.0.0 exists, the 1.x branch bases
+//     at v1.4.2, and 2.0.0 passes the first test while colliding
+//     with a published release.
+//
+// The applied bump is recomputed from base to declaration, so a
+// reader is told what actually moved rather than what the commits
+// asked for; requested is left as the range voted, because that is
+// still what the range said. A declaration releases even when the
+// commits voted for nothing: choosing a number IS the decision to
+// cut, and a range with no version-bumping commits is exactly when
+// an org declares stability.
+func (d *Decision) Declare(version *semver.Version, taken []*semver.Version) (Decision, error) {
+	if d.base == nil {
+		return Decision{}, errors.New("derive: no derived base to judge a declared version against")
+	}
+
+	if version == nil {
+		return Decision{}, errors.New("derive: no version was declared")
+	}
+
+	if !version.GreaterThan(d.base) {
+		return Decision{}, fmt.Errorf(
+			"derive: declared version %s is not an increase over the derived base %s;"+
+				" a declaration chooses the next release, never a published one",
+			version, d.base)
+	}
+
+	for _, t := range taken {
+		if t.Equal(version) {
+			return Decision{}, fmt.Errorf(
+				"derive: the namespace already carries %s (derived base %s);"+
+					" a released version is a name, and a name is taken once",
+				version, d.base)
+		}
+	}
+
+	return Decision{
+		requested: d.requested,
+		applied:   bumpBetween(d.base, version),
+		declared:  true,
+		base:      d.base,
+		next:      version,
+	}, nil
+}
+
+// bumpBetween reports the size of the move from one version to
+// another: the largest component that changed. It describes a
+// declaration rather than deciding one, so a jump across several
+// components reports the largest, which is what moved.
+func bumpBetween(base, next *semver.Version) Bump {
+	switch {
+	case next.Major() != base.Major():
+		return BumpMajor
+	case next.Minor() != base.Minor():
+		return BumpMinor
+	case next.Patch() != base.Patch():
+		return BumpPatch
+	default:
+		return BumpNone
+	}
 }
 
 // vote reports what one commit calls for. The order is the contract: a
