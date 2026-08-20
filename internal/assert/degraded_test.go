@@ -231,7 +231,6 @@ func TestContinuousHalfTears(t *testing.T) {
 	}{
 		{"the stub cannot be read", "FileAt", "continuous stub"},
 		{"the registry cannot be read", "PackageVersionDigest", "package versions"},
-		{"the workflows cannot be read", "Workflows", "workflows of"},
 	}
 
 	for _, tc := range tests {
@@ -258,6 +257,33 @@ func TestContinuousHalfTears(t *testing.T) {
 				t.Fatalf("Evidence = %v, want it to name %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestContinuousReleasedTreeTears: the second hop is its own read of
+// another repository at a pinned commit, and a transport failure there
+// must refuse rather than derive a pin from a tree nobody read.
+func TestContinuousReleasedTreeTears(t *testing.T) {
+	t.Parallel()
+
+	f := continuousForge()
+	f.fileAtErr = map[string]error{contSharedPath: errTorn}
+
+	pol, err := assert.LoadPolicy(strings.NewReader(continuousOnlyPolicyJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
+
+	_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src,
+		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
+	if err == nil {
+		t.Fatal("Evidence passed with the released tree's read torn")
+	}
+
+	if !strings.Contains(err.Error(), sharedPin) {
+		t.Fatalf("Evidence = %v, want it to name the pin it could not read at", err)
 	}
 }
 

@@ -6,12 +6,13 @@
 // not enough: the bundle must VERIFY under a pinned identity, which
 // is why this file takes an Attestor seam rather than peeking bytes.
 //
-// The expected signer pin is derived from the producing repository's
-// own workflows, never taken from policy as a literal (#316 finding
-// 9): mid-bump a repo can carry one candidate per branch state and
-// the artifact must verify under one of them. Finding NO pins fails
-// closed — an org image the org signer cannot vouch for is the
-// finding, not a skip.
+// The expected signer pin is derived from the chain that actually
+// signs, never taken from policy as a literal (#316 finding 9): the
+// consumer's stub names a reusable workflow at a commit, and THAT
+// released tree names the signer pin. Both hops are the same release,
+// so the declared identity and the signing surface can never disagree
+// across a bump window (#230). Finding NO pins fails closed — an org
+// image the org signer cannot vouch for is the finding, not a skip.
 
 package assert
 
@@ -88,18 +89,19 @@ func (w *evidenceWalk) continuous(repo string) error {
 
 	w.checked++
 
-	pins, err := w.signerPins(repo, *c.SignerPinPattern)
+	derived, err := w.signerPins(stub, *c.StubUses, *c.SignerPinPattern)
 	if err != nil {
 		return err
 	}
+
+	pins := derived.Pins
 
 	subject := repo + "@" + *c.Tag
 	continuous := w.check(subject, assertContinuous)
 
 	if len(pins) == 0 {
 		continuous.Diverged(
-			"no signer pin found in the repository's workflows — the expected identity cannot be derived, so the " +
-				"image cannot be vouched for")
+			derived.Cause + " — the expected identity cannot be derived, so the image cannot be vouched for")
 
 		return nil
 	}
@@ -125,17 +127,50 @@ func (w *evidenceWalk) continuous(repo string) error {
 	return nil
 }
 
-// signerPins derives the commit pins the repository's own workflows
-// declare for the signer — the verify-signed derivation.
-func (w *evidenceWalk) signerPins(repo, pattern string) ([]string, error) {
-	re, err := regexp.Compile(pattern)
+// stubCallRE builds the matcher for the stub's own pinned call: the
+// reusable workflow it reaches, spelled owner/repo/path@sha. The
+// prefix comes from the policy's stubUses, so nothing org-shaped
+// enters this engine — the stub's uses: line already carries the
+// whole path.
+func stubCallRE(stubUses string) (*regexp.Regexp, error) {
+	re, err := regexp.Compile(regexp.QuoteMeta(stubUses) + `([A-Za-z0-9._/-]+\.ya?ml)@([0-9a-f]{40})`)
 	if err != nil {
-		return nil, fmt.Errorf("assert: signer pin pattern: %w", err)
+		return nil, fmt.Errorf("assert: continuous stub uses pattern: %w", err)
 	}
 
-	files, err := w.forge.Workflows(w.org, repo)
+	return re, nil
+}
+
+// signerPins derives the commit pins the CONSUMING chain declares for
+// the signer, two hops: the stub's own pinned uses: names a reusable
+// workflow at a sha, and THAT released tree carries the signer pin.
+//
+// The one-hop read this replaced regexed the consuming repository's
+// own workflows at default-branch HEAD, which is not the tree that
+// signs (.github#645): an unrelated workflow naming the signer became
+// the declared pin, and a bump on the shared repository's main
+// demanded an identity no consumer's release could yet have signed
+// under. Derived through the stub's pin, the declared set and the
+// signing surface move together, because they ARE the same release.
+func (w *evidenceWalk) signerPins(stub []byte, stubUses, pattern string) (derivedPins, error) {
+	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("assert: workflows of %s: %w", repo, err)
+		return derivedPins{}, fmt.Errorf("assert: signer pin pattern: %w", err)
+	}
+
+	callRE, err := stubCallRE(stubUses)
+	if err != nil {
+		return derivedPins{}, err
+	}
+
+	shared, ok := splitStubUses(stubUses)
+	if !ok {
+		return derivedPins{}, fmt.Errorf("assert: continuous stubUses %q names no owner and repository", stubUses)
+	}
+
+	calls := callRE.FindAllSubmatch(stub, -1)
+	if len(calls) == 0 {
+		return derivedPins{Cause: "the continuous stub declares no commit-pinned call to " + stubUses}, nil
 	}
 
 	// The pattern's first capture group is the pin; a pattern with no
@@ -145,10 +180,32 @@ func (w *evidenceWalk) signerPins(repo, pattern string) ([]string, error) {
 
 	seen := map[string]bool{}
 
-	var pins []string
+	var (
+		pins   []string
+		missed []string
+	)
 
-	for _, f := range files {
-		for _, m := range re.FindAllSubmatch(f.Content, -1) {
+	for _, call := range calls {
+		const (
+			pathGroup = 1
+			shaGroup  = 2
+		)
+
+		path, sha := string(call[pathGroup]), string(call[shaGroup])
+
+		content, found, ferr := w.forge.FileAt(shared.Owner, shared.Name, path, sha)
+		if ferr != nil {
+			return derivedPins{}, fmt.Errorf("assert: %s/%s %s at %s: %w",
+				shared.Owner, shared.Name, path, sha, ferr)
+		}
+
+		if !found {
+			missed = append(missed, path+"@"+sha)
+
+			continue
+		}
+
+		for _, m := range re.FindAllSubmatch(content, -1) {
 			if len(m) <= pinGroup {
 				continue
 			}
@@ -161,7 +218,48 @@ func (w *evidenceWalk) signerPins(repo, pattern string) ([]string, error) {
 		}
 	}
 
-	return pins, nil
+	if len(pins) > 0 {
+		return derivedPins{Pins: pins}, nil
+	}
+
+	if len(missed) > 0 {
+		return derivedPins{Cause: fmt.Sprintf(
+			"the pinned reusable workflow the stub calls is not readable at its pin (%s)",
+			strings.Join(missed, ", "))}, nil
+	}
+
+	return derivedPins{Cause: "no signer pin found in the released tree the stub's pin names"}, nil
+}
+
+// splitStubUses takes the owner and repository off the front of the
+// stubUses prefix: everything after them is the path INSIDE that
+// repository, which the stub's own uses: line spells out.
+func splitStubUses(stubUses string) (sharedRepo, bool) {
+	// owner, repository, and whatever path prefix follows them.
+	const segments = 3
+
+	parts := strings.SplitN(strings.TrimPrefix(stubUses, "/"), "/", segments)
+	if len(parts) < segments || parts[0] == "" || parts[1] == "" {
+		return sharedRepo{}, false
+	}
+
+	return sharedRepo{Owner: parts[0], Name: parts[1]}, true
+}
+
+// sharedRepo is the repository the consumer's stub calls into: the
+// one whose RELEASED tree carries the signer pin.
+type sharedRepo struct {
+	Owner string
+	Name  string
+}
+
+// derivedPins is the pin derivation's answer: the pins, or — when
+// there are none — the cause to report. Each fail-closed step names
+// which hop was missing, because a finding that cannot say that is a
+// finding nobody can act on.
+type derivedPins struct {
+	Pins  []string
+	Cause string
 }
 
 // baseRefRE finds pinned base references in the pin file: any
