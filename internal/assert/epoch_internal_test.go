@@ -1,5 +1,5 @@
 // The one epoch semantics, tested once at its shared definition
-// (stele#109): three obligations delegate here, so three guard
+// (stele#109): four obligations delegate here, so four guard
 // branches are these guard branches.
 
 package assert
@@ -35,21 +35,27 @@ func TestOwedFrom(t *testing.T) {
 	}
 }
 
-// TestEpochDelegation pins that all three obligations share the one
-// definition — a fourth copy of the semantics is the drift this
-// layout exists to make unrepresentable.
+// TestEpochDelegation pins that every obligation shares the one
+// definition — a second copy of the semantics is the drift this
+// layout exists to make unrepresentable. The manifest schema joined
+// them at stele#185: it governs a document's own FORMAT rather than
+// an obligation it carries, and delegates anyway, because a schema
+// retirement decided by a second reading would be a behaviour of the
+// reader rather than a fact the org declared.
 func TestEpochDelegation(t *testing.T) {
 	t.Parallel()
 
 	epoch := "1.13.0"
 	e := &EvidencePolicy{
-		StoreVSAFromVersion:   &epoch,
-		DecisionFromVersion:   &epoch,
-		EnrichmentFromVersion: &epoch,
+		StoreVSAFromVersion:       &epoch,
+		DecisionFromVersion:       &epoch,
+		EnrichmentFromVersion:     &epoch,
+		ManifestSchemaFromVersion: &epoch,
 	}
 
 	for name, f := range map[string]func(string) bool{
-		"storeVSA": e.storeVSA, "decision": e.decision, "enrichment": e.enrichment,
+		"storeVSA": e.storeVSA, "decision": e.decision,
+		"enrichment": e.enrichment, "manifestSchema": e.manifestSchema,
 	} {
 		if f("1.12.9") {
 			t.Fatalf("%s(1.12.9) = true, want the pre-epoch exemption", name)

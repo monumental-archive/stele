@@ -342,6 +342,22 @@ type EvidencePolicy struct {
 	// corpus walk is assert's — which already derives the machinery
 	// version this field is compared against.
 	EnrichmentFromVersion *string `json:"enrichmentFromVersion,omitempty"`
+	// ManifestSchemaFromVersion is the machinery version (inclusive)
+	// from which a release owes a manifest at the schema this build
+	// writes — the same epoch semantics once more, and the only one
+	// that governs a DOCUMENT'S OWN FORMAT rather than an obligation
+	// it carries. A manifest below the current schema published by
+	// machinery at or after this version is refused: the epoch excuses
+	// history, never the present. Before it, the manifest is read for
+	// exactly what its own schema promised, and whatever it could not
+	// say the walk derives from the vocabulary this policy already
+	// declares (Classify).
+	//
+	// Absent means every manifest owes the current schema — correct
+	// for an adopter with no history, and the reason an org that has
+	// published older manifests must declare the version its own
+	// machinery moved at (stele#185).
+	ManifestSchemaFromVersion *string `json:"manifestSchemaFromVersion,omitempty"`
 	// EvidenceSuffixes are additional asset-name suffixes that mark a
 	// checksum entry as an evidence document rather than an artifact
 	// (the org's per-release VEX documents, for one) — excluded from
@@ -644,6 +660,12 @@ func (e *EvidencePolicy) validateEpochs() error {
 		}
 	}
 
+	if e.ManifestSchemaFromVersion != nil {
+		if _, err := semver.NewVersion(*e.ManifestSchemaFromVersion); err != nil {
+			return fmt.Errorf("evidence.manifestSchemaFromVersion: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -685,6 +707,16 @@ func (e *EvidencePolicy) decision(machineryVersion string) bool {
 // consumes the answer lands with #86.
 func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
 	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
+}
+
+// manifestSchema reports whether a release under the given machinery
+// version owes an evidence manifest at the schema this build writes
+// (stele#185). The obligation shape is the same as every other epoch,
+// which is exactly why it is spelled through the same definition: a
+// schema retirement decided by a second reading here would be a
+// behaviour of the reader rather than a fact the org declared.
+func (e *EvidencePolicy) manifestSchema(machineryVersion string) bool {
+	return owedFrom(e.ManifestSchemaFromVersion, machineryVersion)
 }
 
 // owedPlannedPrefixes returns the plan-fulfilled prefix obligations a

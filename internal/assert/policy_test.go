@@ -27,24 +27,24 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 5`, schemaPlusOne(), 1), "schema"},
-		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 5`, `"schema": 5, "extra": true`, 1), "unknown"},
+		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 6`, schemaPlusOne(), 1), "schema"},
+		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 6`, `"schema": 6, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",
-			`{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "classes": {}}}`,
 			"classes is empty",
 		},
 		{
 			"a class requiring nothing",
-			`{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
 			  "classes": {"idle": {"bundles": []}}}}`,
 			"requires nothing",
 		},
 		{
 			"missing required string",
-			`{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			`{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl",
 			  "classes": {"a": {"bundles": ["b"]}}}}`,
 			"manifestAsset",
@@ -127,7 +127,7 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		{
 			"a pre-rename policy refuses as a version error",
 			strings.NewReplacer(
-				`"schema": 5`, `"schema": 1`,
+				`"schema": 6`, `"schema": 1`,
 				`"storeVsaFromVersion": "1.13.0"`, `"storeVsaFromCanon": "1.13.0"`,
 			).Replace(testPolicyJSON),
 			"not the implemented schema",
@@ -151,7 +151,7 @@ func TestLoadPolicyRefusals(t *testing.T) {
 func TestTagsPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	const base = `{"schema": 5, "issuer": "https://token.example.com",
+	const base = `{"schema": 6, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", 	    "classes": {"a": {"bundles": ["b"]}}},
 	  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",

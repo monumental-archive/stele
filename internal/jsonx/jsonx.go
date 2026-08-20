@@ -88,7 +88,7 @@ func DecodeForeign[T any](b []byte) (*T, error) {
 // derivation). Identifiers written into history — chain note
 // version, evidence-manifest schema — keep their own numbers and do
 // not reference this.
-const Epoch = 5
+const Epoch = 6
 
 // DecodeVersioned decodes one schema-versioned document under the
 // Decode contract, with the version gate structurally first: the

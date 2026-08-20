@@ -7,10 +7,13 @@
 package assert_test
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
@@ -45,19 +48,24 @@ func TestManifestSource(t *testing.T) {
 	// machineryVersion rows are the stele#109 point: without it the
 	// obligations cannot be derived, and deriving is the only mode.
 	for name, doc := range map[string]string{
-		"empty manifest":           `{"schema": 2}`,
-		"missing machineryVersion": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true}`,
-		"unparsable machineryVersion": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "not-a-version", "entries": [` + manifestEntry("a.tar.gz", "build-subject") + `]}`,
-		"no entries": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+		"empty manifest":           `{"schema": 3}`,
+		"missing machineryVersion": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true}`,
+		"unparsable machineryVersion": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "not-a-version", "entries": [` +
+			manifestEntry("a.tar.gz", "build-subject", "oci-image") + `]}`,
+		"no entries": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
 			`"machineryVersion": "1.0.0"}`,
-		"an entry typed outside the vocabulary": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "artefact") + `]}`,
-		// Pre-v1 there is no dual-version reader: the manifests
-		// published under schema 1 re-emit typed at the canon train,
-		// and this reader refuses them until they do (stele#156).
-		"the retired schema": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "1.0.0"}`,
+		"an entry typed outside the vocabulary": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "artefact", "") + `]}`,
+		"an artifact no class claims": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "build-subject", "") + `]}`,
+		// A policy declaring no schema epoch owes the current schema
+		// of every manifest — the right default for an adopter with
+		// no history, and the reason an org that has published older
+		// ones must declare when its machinery moved (stele#185).
+		// TestManifestSchemaEpoch below holds the declared side.
+		"an older schema with no epoch to excuse it": `{"schema": 1, "classes": ["oci-image"], ` +
+			`"storeVsa": true, "machineryVersion": "1.0.0"}`,
 	} {
 		f3 := completeRelease()
 		f3.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = doc
@@ -103,9 +111,9 @@ func TestManifestSourceEpochs(t *testing.T) {
 			pol.Evidence.EnrichmentFromVersion = tt.enrichmentFrom
 
 			f := completeRelease()
-			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 2, ` +
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 3, ` +
 				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `", ` +
-				`"entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject") + `]}`
+				`"entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject", "oci-image") + `]}`
 
 			c, ok, err := (assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
 				Contract("acme", "widget", "v1.0.0")
@@ -303,7 +311,7 @@ func TestSourcesOrder(t *testing.T) {
 // an unplanned prefix obligation beside its planned one, and one
 // bearing none at all.
 const plannedPolicyJSON = `{
-  "schema": 5,
+  "schema": 6,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -402,6 +410,117 @@ func TestPlannedInventories(t *testing.T) {
 
 			if strings.Join(names, ",") != strings.Join(tt.want, ",") {
 				t.Errorf("PlannedInventories = %v, want %v", names, tt.want)
+			}
+		})
+	}
+}
+
+// TestManifestSchemaEpoch holds the schema epoch at its boundary
+// (stele#185). A published manifest is an immutable release asset
+// attested by digest, so an older one cannot be re-emitted the way a
+// mutable note can — and a walk that refused it stopped at the first
+// and judged nothing. The epoch excuses HISTORY: below it the older
+// manifest is read for the facts it declared and named as what it is,
+// at it and above it the same document is a present-tense defect.
+func TestManifestSchemaEpoch(t *testing.T) {
+	t.Parallel()
+
+	epoch := "1.47.0"
+
+	older := func(schema int) string {
+		entries := ""
+		if schema >= 2 {
+			entries = `, "entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject", "") + `]`
+		}
+
+		return `{"schema": ` + strconv.Itoa(schema) + `, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "%s"` + entries + `}`
+	}
+
+	tests := []struct {
+		name       string
+		epoch      *string
+		machinery  string
+		doc        string
+		wantRefuse bool
+		wantOrigin string
+	}{
+		{
+			"the last pre-epoch version reads its history",
+			&epoch, "1.46.9", older(1), false, "before the schema epoch",
+		},
+		{
+			"the typed-but-classless schema is history too",
+			&epoch, "1.46.9", older(2), false, "before the schema epoch",
+		},
+		{
+			"the epoch itself owes the current schema (inclusive)",
+			&epoch, "1.47.0", older(1), true, "",
+		},
+		{
+			"a version past the epoch owes it too",
+			&epoch, "2.0.0", older(1), true, "",
+		},
+		{
+			"no epoch declared: every manifest owes the current schema",
+			nil, "1.0.0", older(1), true, "",
+		},
+		{
+			// The whole point of the move: the walk reaches a verdict
+			// over the population instead of stopping at the first
+			// manifest it could not read.
+			"a current manifest is unaffected by the epoch either way",
+			&epoch, "1.46.9",
+			`{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["oci-image"], "storeVsa": true, ` +
+				`"machineryVersion": "%s", "entries": [` +
+				manifestEntry("widget-x86_64.tar.gz", "build-subject", "oci-image") + `]}`,
+			false, "manifest evidence-manifest.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pol := loadTestPolicy(t)
+			pol.Evidence.ManifestSchemaFromVersion = tt.epoch
+
+			f := completeRelease()
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = fmt.Sprintf(tt.doc, tt.machinery)
+
+			c, ok, err := (assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
+				Contract("acme", "widget", "v1.0.0")
+
+			if tt.wantRefuse {
+				if err == nil {
+					t.Fatalf("Contract: ok=%v err=nil, want the in-epoch refusal", ok)
+				}
+
+				if !strings.Contains(err.Error(), "owes schema") {
+					t.Fatalf("Contract err = %v, want it to name the owed schema", err)
+				}
+
+				return
+			}
+
+			if err != nil || !ok {
+				t.Fatalf("Contract: ok=%v err=%v, want history to read", ok, err)
+			}
+
+			// What history CAN say, it still says: the classes and the
+			// layout are the four facts every schema has carried.
+			if len(c.Classes) != 1 || c.Classes[0] != "oci-image" || !c.StoreVSA {
+				t.Errorf("contract = %+v, want the manifest's own declared facts", c)
+			}
+
+			if c.MachineryVersion != tt.machinery {
+				t.Errorf("machineryVersion = %q, want %q", c.MachineryVersion, tt.machinery)
+			}
+
+			// Named in the report as what it is: nothing is quietly
+			// rewritten to look newer than it is.
+			if !strings.Contains(c.Origin, tt.wantOrigin) {
+				t.Errorf("origin = %q, want it to say %q", c.Origin, tt.wantOrigin)
 			}
 		})
 	}

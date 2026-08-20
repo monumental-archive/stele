@@ -1,5 +1,5 @@
 {
-  "schema": 5,
+  "schema": 6,
   "issuer": "https://token.actions.githubusercontent.com",
   "population": {
     "repositories": [

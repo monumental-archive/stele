@@ -136,6 +136,16 @@ type ContractSource interface {
 // facts (classes, layout, the machinery version that published it),
 // never obligations — those are always derived, through the same
 // epoch semantics the workflow adapter uses (stele#109).
+//
+// The manifest's own SCHEMA is judged through an epoch too
+// (stele#185). A published release asset is immutable and attested by
+// digest at its tag, so a manifest written under an older schema
+// cannot be re-emitted the way a mutable note can — and a walk that
+// refused it stopped at the first one and judged nothing at all. What
+// an older manifest promised, it still says; what it could not say,
+// this walk never asked it for, because the assets a release
+// published are classified from the vocabulary the policy declares
+// (Classify) and read from the checksum manifest, not from entries.
 type ManifestSource struct {
 	Forge  gh.Forge
 	Policy *EvidencePolicy
@@ -169,6 +179,25 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, fmt.Errorf("assert: manifest of %s/%s@%s: %w", owner, repo, tag, err)
 	}
 
+	origin := "manifest " + m.Asset
+
+	// A manifest below the schema this build writes is history, and
+	// history is admitted by the declared epoch or not at all. Inside
+	// the epoch's range it is a present-tense defect — machinery that
+	// owed the current schema wrote an old one — and refuses; before
+	// it, the release is read for what it declared and named in the
+	// report as what it is, so nothing is quietly rewritten to look
+	// newer than it is.
+	if !doc.Current() {
+		if m.Policy.manifestSchema(*doc.MachineryVersion) {
+			return nil, false, fmt.Errorf(
+				"assert: manifest of %s/%s@%s: schema %d, but machinery %s owes schema %d",
+				owner, repo, tag, *doc.Schema, *doc.MachineryVersion, evidence.Schema)
+		}
+
+		origin = fmt.Sprintf("%s (schema %d, before the schema epoch)", origin, *doc.Schema)
+	}
+
 	// The declared machinery version is the attested spelling of the
 	// fact the workflow adapter regexes out of a pin comment, and the
 	// obligations are DERIVED from it through the shared epochs —
@@ -182,7 +211,7 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		Decision:         m.Policy.decision(*doc.MachineryVersion),
 		Enrichment:       m.Policy.enrichment(*doc.MachineryVersion),
 		MachineryVersion: *doc.MachineryVersion,
-		Origin:           "manifest " + m.Asset,
+		Origin:           origin,
 	}, true, nil
 }
 

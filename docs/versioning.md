@@ -28,7 +28,7 @@ refusal share one definition.
 ## One epoch for live-read documents
 
 Every stele document that is **read live** carries the SAME number,
-`schema`, currently **5**:
+`schema`, currently **6**:
 
 | document | where |
 | --- | --- |
@@ -67,11 +67,26 @@ carrying them already exist and cannot be rewritten on demand:
 | identifier | why it is separate |
 | --- | --- |
 | chain note `version` (`internal/chain`, [chain-format.md](chain-format.md)) | Notes live in a walked ledger. Moving the number means re-emitting every link; under one epoch, a report field gaining a key would force a ledger re-emission. |
-| evidence-manifest `schema` (`internal/evidence`) | Manifests are published assets on releases that already shipped. Moving the number orphans every one of them until it is re-emitted, so under one epoch a report field gaining a key would force a re-emission across the corpus. It moved once, to 2, when entries gained their type (stele#156) — pre-v1 that is paid honestly at the canon train, never with a dual-version reader. |
+| evidence-manifest `schema` (`internal/evidence`) | Manifests are published assets on releases that already shipped. Moving the number orphans every one of them until it is re-emitted, so under one epoch a report field gaining a key would force a re-emission across the corpus. It moved to 2 when entries gained their type (stele#156) and to 3 when they gained the class that built them (stele#185). |
 
 Both therefore move only when their OWN shape moves, under the same
 rule. History is honest about what it holds; it is never renumbered
 to match a document it has nothing to do with.
+
+Where the two differ is what can be done about the documents already
+written. A chain note is mutable and unattested, so a number moving
+means re-emitting the ledger. **A published manifest cannot be
+re-emitted at all**: it is an immutable release asset, pinned by
+digest in the release's checksum manifest and attested under the
+signer's identity at release time. So the manifest's number is
+carried by a declared epoch instead — the assert policy's
+`manifestSchemaFromVersion` names the machinery version from which a
+release owes the current schema, below which an older manifest is
+read for exactly what its own schema promised (stele#185). That is
+still not a dual-version reader: every field is decoded one way, and
+the number selects which fields were PROMISED, never how any of them
+is read. The reader refuses a manifest carrying a field its schema
+never had as loudly as one missing a field its schema owed.
 
 ## Predicate type URIs
 

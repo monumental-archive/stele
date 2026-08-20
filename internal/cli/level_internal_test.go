@@ -257,7 +257,7 @@ func TestLevelOrgDeclaredPopulation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "assert-policy.json")
 	policy := `{
-	  "schema": 5,
+	  "schema": 6,
 	  "population": {"repositories": [
 	    {"repo": "widget"},
 	    {"repo": "signer", "tracks": ["source"], "reason": "publishes no releases"}

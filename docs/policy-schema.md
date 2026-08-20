@@ -47,7 +47,7 @@ loader's error message rather than against the doc.
 
 ```json policy
 {
-  "schema": 5,
+  "schema": 6,
 
   "issuer": "https://token.actions.githubusercontent.com",
 

@@ -14,7 +14,7 @@ import (
 )
 
 const plansTestPolicy = `{
-  "schema": 5,
+  "schema": 6,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

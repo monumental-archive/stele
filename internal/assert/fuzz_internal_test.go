@@ -26,7 +26,7 @@ func fuzzSeed(f *testing.F, path string) {
 
 func FuzzLoadPolicy(f *testing.F) {
 	fuzzSeed(f, "testdata/policy-seed.json")
-	f.Add([]byte(`{"schema": 5, "evidence": {}}`))
+	f.Add([]byte(`{"schema": 6, "evidence": {}}`))
 	f.Add([]byte(`null`))
 
 	f.Fuzz(func(_ *testing.T, data []byte) {

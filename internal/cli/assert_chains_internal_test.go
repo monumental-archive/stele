@@ -27,12 +27,12 @@ func chainsWorld(t *testing.T) (string, string, string, string) { //nolint:gocri
 		// The org listing: one repository, no notes captured for it —
 		// replay reads the absence as an empty chain.
 		"snap/acme/repos.json": `[{"name": "lab"}]`,
-		"policy.json": `{"schema": 5, ` +
+		"policy.json": `{"schema": 6, ` +
 			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
 			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
 			`"chains": {"exceptions": [{"repo": "lab", "reason": "lab-first activation"}]}}`,
-		"verify-policy.json": `{"schema": 5, "issuer": "https://token.example.com", ` +
+		"verify-policy.json": `{"schema": 6, "issuer": "https://token.example.com", ` +
 			`"trust": {"provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/source-attest.yml"}}, ` +
 			`"source": {` +
 			`"identity": "https://github.com/{owner}/{repo}/.github/workflows/source-attest.yml@refs/heads/main", ` +
@@ -251,7 +251,7 @@ func TestAssertChainsSectionGates(t *testing.T) {
 
 	t.Run("no source section in the verify policy", func(t *testing.T) {
 		bare := filepath.Join(t.TempDir(), "verify-policy.json")
-		doc := `{"schema": 5, "issuer": "https://token.example.com", ` +
+		doc := `{"schema": 6, "issuer": "https://token.example.com", ` +
 			`"trust": {"provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/source-attest.yml"}}}`
 
 		if err := os.WriteFile(bare, []byte(doc), 0o600); err != nil {
