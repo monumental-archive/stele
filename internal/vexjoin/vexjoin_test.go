@@ -69,6 +69,73 @@ func TestEmptySetDecidesNothing(t *testing.T) {
 	}
 }
 
+// TestNilSetAnswersEveryAccessor pins the ONE nil contract across all
+// four accessors, in both directions: the nil receiver takes the
+// guard and answers the empty set, and a set that actually holds the
+// key answers the decision — so a guard that swallowed every lookup
+// could not pass as success.
+func TestNilSetAnswersEveryAccessor(t *testing.T) {
+	t.Parallel()
+
+	held := vexjoin.KeyFromFinding("RUSTSEC-2021-0127", "crates.io", "serde_cbor", "0.11.2")
+
+	populated := &vexjoin.Decisions{}
+	if err := vexjoin.Parse(populated, []byte(vexDoc), "serde_cbor.openvex.json"); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		set      *vexjoin.Decisions
+		wantHas  bool
+		wantGot  bool
+		wantLen  int
+		wantAll  int
+		wantOrig string
+	}{
+		{name: "nil receiver takes the guard", set: nil},
+		{name: "empty but non-nil", set: &vexjoin.Decisions{}},
+		{
+			name: "populated answers the decision", set: populated,
+			wantHas: true, wantGot: true, wantLen: 1, wantAll: 1,
+			wantOrig: "serde_cbor.openvex.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.set.Has(held); got != tt.wantHas {
+				t.Errorf("Has = %v, want %v", got, tt.wantHas)
+			}
+
+			if got := tt.set.Len(); got != tt.wantLen {
+				t.Errorf("Len = %d, want %d", got, tt.wantLen)
+			}
+
+			if got := len(tt.set.All()); got != tt.wantAll {
+				t.Errorf("All = %d decisions, want %d", got, tt.wantAll)
+			}
+
+			dec, ok := tt.set.Get(held)
+			if ok != tt.wantGot {
+				t.Fatalf("Get ok = %v, want %v", ok, tt.wantGot)
+			}
+
+			if dec.Origin != tt.wantOrig {
+				t.Errorf("Get origin = %q, want %q", dec.Origin, tt.wantOrig)
+			}
+
+			// A miss must hand back the zero Decision, never a
+			// fabricated judgment.
+			if !tt.wantGot && dec != (vexjoin.Decision{}) {
+				t.Errorf("Get on a miss returned %+v, want the zero Decision", dec)
+			}
+		})
+	}
+}
+
 func TestParseRefusals(t *testing.T) {
 	t.Parallel()
 

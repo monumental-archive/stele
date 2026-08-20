@@ -20,7 +20,9 @@
 //
 // The empty-set semantics are explicit and tested by name: an empty
 // VEX directory means NOTHING decided, never everything — the grep -f
-// landmine this package exists to make unrepresentable. Shared by
+// landmine this package exists to make unrepresentable. A set that is
+// nil — no VEX directory at all — is empty, not undefined: every
+// accessor answers it, none of them panics. Shared by
 // `assert blast-radius`, `assert advisories` and the derive verb's
 // VEX leg (#40).
 package vexjoin
@@ -220,12 +222,19 @@ func (d *Decision) Excuses() bool {
 // cargo decision are not a stale pair, they are strangers.
 func (d *Decision) PurlType() string { return d.purlType }
 
-// Decisions is the decided set. The zero value decides nothing.
+// Decisions is the decided set. The zero value decides nothing, and
+// so does a nil *Decisions: EVERY accessor below answers a nil
+// receiver as the empty set — Has false, Get a miss, All nil, Len 0.
+// One nil contract, stated once here and repeated by each accessor,
+// because a law learnable correctly from one method and wrongly from
+// another is not a law. An absent VEX directory is the shape that
+// produces the nil, and it decides nothing rather than crashing.
 type Decisions struct {
 	byKey map[Key]Decision
 }
 
-// Has reports whether the exact triple is decided.
+// Has reports whether the exact triple is decided. A nil set decides
+// nothing.
 func (d *Decisions) Has(k Key) bool {
 	if d == nil || d.byKey == nil {
 		return false
@@ -240,13 +249,22 @@ func (d *Decisions) Has(k Key) bool {
 // The pair is the whole point: a lookup that answered a miss with a
 // zero Decision would hand the caller a fabricated judgment — a
 // decision nobody made, carrying no status and no moment.
+//
+// A nil set decides nothing, so it answers a miss — the same contract
+// its three siblings carry, and the same answer the pair already
+// exists to express.
 func (d *Decisions) Get(k Key) (Decision, bool) {
+	if d == nil {
+		return Decision{}, false
+	}
+
 	dec, ok := d.byKey[k]
 
 	return dec, ok
 }
 
-// All returns every decision, for stale-decision derivation.
+// All returns every decision, for stale-decision derivation. A nil
+// set enumerates nothing.
 func (d *Decisions) All() []Decision {
 	if d == nil {
 		return nil
@@ -260,7 +278,7 @@ func (d *Decisions) All() []Decision {
 	return out
 }
 
-// Len reports how many decisions are held.
+// Len reports how many decisions are held. A nil set holds none.
 func (d *Decisions) Len() int {
 	if d == nil {
 		return 0
