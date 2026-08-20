@@ -24,6 +24,7 @@ import (
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/trust"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 // The othername bundle is a real cosign blob signature over a sha256
@@ -151,6 +152,67 @@ func TestTrustAdapterRefusals(t *testing.T) {
 	if _, err := bv.Attestation(dsseBundle, id, othernameDigest); err == nil ||
 		!strings.Contains(err.Error(), "attestation") {
 		t.Errorf("Attestation over a foreign subject = %v, want the refusal", err)
+	}
+}
+
+// TestTrustAdapterMeasures is the measurement path over the same real
+// material the gating path uses, and the difference between them is
+// the whole point: Blob is TOLD an identity and checks the bundle
+// against it; MeasureBlob is told nothing and REPORTS what it found.
+//
+// That is what lets a stranger point `stele level` at a repository and
+// get an answer without first writing down whose signature to expect —
+// and it is also why the measurement leg must still prove the
+// signature cryptographically. A measurement that reported an identity
+// it had not verified would be a level minted from an unsigned claim.
+func TestTrustAdapterMeasures(t *testing.T) {
+	t.Parallel()
+
+	bv, err := newBundleVerifier(upstreamRoot(t, "scaffolding.json"))
+	if err != nil {
+		t.Fatalf("newBundleVerifier = %v", err)
+	}
+
+	m, ok := bv.(verify.Measurer)
+	if !ok {
+		t.Fatalf("the adapter %T does not serve the measurement path", bv)
+	}
+
+	verified, err := m.MeasureBlob(upstreamBundle(t, "othername.sigstore.json"), othernameDigest)
+	if err != nil {
+		t.Fatalf("MeasureBlob = %v", err)
+	}
+
+	// Nobody named this identity; the certificate did.
+	if verified.SAN != othernameSAN {
+		t.Errorf("MeasureBlob reported %q, want the signer the certificate names", verified.SAN)
+	}
+
+	// Asserting nothing is not the same as accepting anything. One
+	// digit changed is a different artifact, and the measurement must
+	// refuse rather than report a signer for bytes it did not cover.
+	other := "ac" + othernameDigest[2:]
+	if _, err := m.MeasureBlob(upstreamBundle(t, "othername.sigstore.json"), other); err == nil {
+		t.Error("MeasureBlob reported a signer for a digest the signature does not cover")
+	}
+
+	if _, err := m.MeasureAttestation(upstreamBundle(t, "dsse.sigstore.json"), othernameDigest); err == nil {
+		t.Error("MeasureAttestation reported a signer for a statement about another artifact")
+	}
+
+	// And the parse guard, on both legs, wearing the word that says a
+	// measurement asked rather than a gate.
+	for _, leg := range []struct {
+		name string
+		call func([]byte) error
+	}{
+		{"MeasureBlob", func(b []byte) error { _, err := m.MeasureBlob(b, othernameDigest); return err }},
+		{"MeasureAttestation", func(b []byte) error { _, err := m.MeasureAttestation(b, othernameDigest); return err }},
+	} {
+		err := leg.call([]byte("not a bundle"))
+		if err == nil || !strings.Contains(err.Error(), "measure") {
+			t.Errorf("%s(junk) = %v, want the measurement refusal", leg.name, err)
+		}
 	}
 }
 

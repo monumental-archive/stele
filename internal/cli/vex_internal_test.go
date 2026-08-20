@@ -177,6 +177,93 @@ func TestDeriveVEXIsPerArtifact(t *testing.T) {
 	}
 }
 
+// coveredRelease is the fixture the rows below break one fact of: one
+// artifact, one finding, and a recorded decision that covers it — so
+// the derivation reaches the renderer with something to say.
+//
+//nolint:gocritic // unnamedResult: the fixture dir and its one subject spec
+func coveredRelease(t *testing.T) (string, string) {
+	t.Helper()
+
+	dir := vexFixture(t, decidedLeftPad+"\n")
+	inv := inventory(t, dir, "npm.spdx.json", "NPM")
+
+	withScanner(t, fakeScanner{byInventory: map[string]string{
+		"NPM": finding("CVE-1", "left-pad", "1.0.0", "npm"),
+	}})
+
+	return dir, "pkg:npm/widget@1.0.0=" + inv
+}
+
+// TestDeriveVEXRefusesAnUnreadableDecisionSet: the decisions are the
+// human judgments this document exists to publish. A directory holding
+// one that will not parse must stop the run — deriving from the rest
+// would publish a coverage document that silently omits a decision
+// somebody made, and the finding it covered would resurface as
+// untriaged on the next release.
+func TestDeriveVEXRefusesAnUnreadableDecisionSet(t *testing.T) {
+	dir, subject := coveredRelease(t)
+
+	broken := filepath.Join(dir, "vex", "broken.openvex.json")
+	if err := os.WriteFile(broken, []byte("{not openvex"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	if got := deriveCmd(vexArgsFor(dir, subject), &stdout, &stderr); got != exitRefused {
+		t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "reading decisions from") {
+		t.Errorf("stderr = %q, want the decision set named", stderr.String())
+	}
+}
+
+// TestDeriveVEXRefusesTheZeroInstant: the zero time parses as RFC 3339
+// but is not a release instant. The document is dated by the release
+// it describes precisely so two renders agree; a document stamped with
+// the epoch is one whose date means nothing, and the renderer refuses
+// it rather than publishing a reproducible lie.
+func TestDeriveVEXRefusesTheZeroInstant(t *testing.T) {
+	dir, subject := coveredRelease(t)
+
+	args := vexArgsFor(dir, subject)
+	for i, a := range args {
+		if a == "2026-08-18T12:00:00Z" {
+			args[i] = "0001-01-01T00:00:00Z"
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	if got := deriveCmd(args, &stdout, &stderr); got != exitRefused {
+		t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "release instant is required") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+// TestDeriveVEXWriteFailure: a coverage document that could not be
+// written must fail the run. Reporting success would leave the
+// previous release's decisions in place while telling the release its
+// VEX had been refreshed.
+func TestDeriveVEXWriteFailure(t *testing.T) {
+	dir, subject := coveredRelease(t)
+
+	args := append(vexArgsFor(dir, subject),
+		"--out", filepath.Join(dir, "absent-dir", "v.openvex.json"))
+
+	var stdout, stderr bytes.Buffer
+
+	if got := deriveCmd(args, &stdout, &stderr); got == exitOK {
+		t.Fatalf("deriveCmd reported success writing into a directory that is not there (stderr: %s)",
+			stderr.String())
+	}
+}
+
 // A gate-class finding with no decision refuses the derivation: a
 // coverage document for an untriaged release would be a false claim.
 func TestDeriveVEXRefusesUndecided(t *testing.T) {
@@ -251,6 +338,28 @@ func TestDeriveVEXRefusals(t *testing.T) {
 			name:    "a scanner that died",
 			scanner: fakeScanner{err: errors.New("scanner exploded")},
 			want:    "scanner exploded",
+		},
+		{
+			// The list is assembled by a shell, so a bare comma is an
+			// empty entry rather than a subject at the empty path — but
+			// a list of NOTHING but empties names no subject, and a
+			// document describing nothing covers nothing.
+			name:    "a subject list that is all separators",
+			subject: " , ,",
+			scanner: fakeScanner{},
+			want:    "no subjects",
+		},
+		{
+			name:    "a subject with no product",
+			subject: "=/tmp/a.spdx.json",
+			scanner: fakeScanner{},
+			want:    "is not <product-id>=<inventory-path>",
+		},
+		{
+			name:    "a subject with no inventory",
+			subject: "p=",
+			scanner: fakeScanner{},
+			want:    "is not <product-id>=<inventory-path>",
 		},
 	}
 
