@@ -18,14 +18,15 @@
 // before this writer existed, which is why the fields were free to
 // require.
 //
-// The manifest also TYPES what the release published (stele#156) and
-// says which class BUILT each artifact (stele#185). Three legs needed
-// to know which released assets are build subjects — the level walk,
-// the reproducibility walk, the publish machinery's own resume guard
-// — and each derived its own answer, so agreement was maintained by
-// memory. Both facts are stamped once, here, at the only moment the
-// publisher holds them natively; downstream walks READ them. Deriving
-// them again at every walk is the defect, not the mechanism.
+// The manifest also TYPES what the release published (stele#156),
+// says which class BUILT each artifact (stele#185) and which TARGET
+// produced it (stele#223). Three legs needed to know which released
+// assets are build subjects — the level walk, the reproducibility
+// walk, the publish machinery's own resume guard — and each derived
+// its own answer, so agreement was maintained by memory. Every one of
+// those facts is stamped once, here, at the only moment the publisher
+// holds them natively; downstream walks READ them. Deriving them
+// again at every walk is the defect, not the mechanism.
 package evidence
 
 import (
@@ -43,8 +44,9 @@ import (
 // Schema is the manifest's own format number — outside the
 // live-document epoch (docs/versioning.md), because manifests are
 // published release assets, immutable once shipped. It moved to 2
-// when entries gained their type (stele#156) and to 3 when they
-// gained the class that built them (stele#185).
+// when entries gained their type (stele#156), to 3 when they gained
+// the class that built them (stele#185), and to 4 when they gained
+// the target that produced them (stele#223).
 //
 // A manifest below this number is HISTORY, and history is admitted by
 // a declared epoch or not at all: the reader answers what that
@@ -53,7 +55,7 @@ import (
 // `manifestSchemaFromVersion` to say (internal/assert). Absent an
 // epoch, only the current schema is admitted — which is the correct
 // default for an adopter with no history to excuse.
-const Schema = 3
+const Schema = 4
 
 // The schema each part of the document arrived at — the manifest's
 // own numbers, not the live-document epoch. firstSchema is the oldest
@@ -67,6 +69,9 @@ const (
 	// classFrom: the schema from which each artifact names the class
 	// that built it.
 	classFrom = 3
+	// targetFrom: the schema from which each artifact names the build
+	// target that produced it.
+	targetFrom = 4
 )
 
 // The entry types — what a released asset IS. The two carry opposite
@@ -98,8 +103,9 @@ var sha256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 //
 // It declares FACTS — the classes shipped, the verdict layout, the
 // machinery version that published the release, what it published,
-// what each asset is and which class built it — never obligations;
-// those are always derived by the reader through the policy epochs.
+// what each asset is, and which class and target built it — never
+// obligations; those are always derived by the reader through the
+// policy epochs.
 type Manifest struct {
 	Schema           *int     `json:"schema"`
 	Classes          []string `json:"classes"`
@@ -109,10 +115,10 @@ type Manifest struct {
 }
 
 // Entry is one asset the release published, pinned, typed, and — for
-// an artifact — attributed to the class that built it. Pointer fields
-// for the manifest's own reason: an entry whose type is ABSENT is
-// malformed, and absent must never decode into one of the two
-// populations.
+// an artifact — attributed to the class and target that built it.
+// Pointer fields for the manifest's own reason: an entry whose type
+// is ABSENT is malformed, and absent must never decode into one of
+// the two populations.
 //
 // A manifest cannot pin itself — a document carrying its own digest
 // is not a document — so the entries are the assets published BESIDE
@@ -130,24 +136,40 @@ type Entry struct {
 	// reported every other class as missing from its own rebuild
 	// (measured on release-lab v0.25.3, stele#185).
 	Class *string `json:"class,omitempty"`
+	// Target names what that leg built — the value the publisher's
+	// matrix varied to produce this artifact rather than its
+	// siblings. Required and absent on exactly the entries the class
+	// is, and for the same reason: a document ABOUT the release was
+	// produced by no leg.
+	//
+	// It scopes a rebuild one grain finer than the class does,
+	// because a rebuild's unit is a TARGET. A walk that judged every
+	// target of the class it rebuilt reported the artifacts nobody
+	// asked it to rebuild as missing from it — three of four on a
+	// healthy one-target rebuild, measured on release-lab v0.26.0
+	// (stele#223). The string is never interpreted here; it is joined
+	// by name to what a caller declared under test, so the target
+	// vocabulary stays the publisher's own.
+	Target *string `json:"target,omitempty"`
 }
 
 // NewSubject builds one build-subject entry — an artifact OF the
-// build, which always names the class whose leg produced it. Two
-// constructors rather than one with a nullable class: an entry the
-// reader must refuse is then unrepresentable on the writing side,
-// which is stronger than a writer that can build one and a validate
-// that catches it.
-func NewSubject(name, sha256, class string) Entry {
+// build, which always names the class whose leg produced it and the
+// target that leg built. Two constructors rather than one with
+// nullable attribution: an entry the reader must refuse is then
+// unrepresentable on the writing side, which is stronger than a
+// writer that can build one and a validate that catches it.
+func NewSubject(name, sha256, class, target string) Entry {
 	t := TypeBuildSubject
 
-	return Entry{Name: &name, SHA256: &sha256, Type: &t, Class: &class}
+	return Entry{Name: &name, SHA256: &sha256, Type: &t, Class: &class, Target: &target}
 }
 
 // NewEvidence builds one evidence entry — a document ABOUT the
-// release, which names no class. Which classes a document covers is
-// the release's declared set, and a per-entry answer here would be a
-// second vocabulary for a question nothing asks.
+// release, which names no class and no target. Which classes a
+// document covers is the release's declared set, and a per-entry
+// answer here would be a second vocabulary for a question nothing
+// asks; no build leg produced it, so no target did either.
 func NewEvidence(name, sha256 string) Entry {
 	t := TypeEvidence
 
@@ -156,9 +178,18 @@ func NewEvidence(name, sha256 string) Entry {
 
 // Asset is one entry read back as values — the shape a walk consumes
 // once Validate has proven every field present.
+//
+// Target is empty where the manifest's schema carries no target
+// answer at all. Whether that is the case is Targets()' single
+// spelling of the question, and a consumer must ask it rather than
+// read the empty string as a fact about the artifact: "this release
+// predates target typing" and "this artifact has no target" would
+// otherwise be one value, and the second of them is a state a
+// schema-4 manifest cannot contain.
 type Asset struct {
 	Name   string
 	SHA256 string
+	Target string
 }
 
 // New builds a valid manifest or refuses — the only constructor, so
@@ -205,6 +236,19 @@ func (m *Manifest) Subjects() []Asset {
 // defect the shared-definition law exists to remove.
 func (m *Manifest) Attributes() bool {
 	return m.Schema != nil && *m.Schema >= classFrom
+}
+
+// Targets reports whether this manifest's schema says which target
+// produced each artifact — Attributes' sibling, one grain finer, and
+// the ONE spelling of that question for the same reason.
+//
+// A walk asks it to tell "no artifact carries this target" apart from
+// "this document cannot say": the first is a declaration naming a
+// target the release did not build, the second is a release published
+// before targets were typed, and a caller that read them as one fact
+// would report a stale matrix value and an old release identically.
+func (m *Manifest) Targets() bool {
+	return m.Schema != nil && *m.Schema >= targetFrom
 }
 
 // SubjectsOf narrows Subjects to the artifacts ONE class built — the
@@ -385,7 +429,12 @@ func (m *Manifest) subjects(class *string) []Asset {
 			continue
 		}
 
-		out = append(out, Asset{Name: *e.Name, SHA256: *e.SHA256})
+		a := Asset{Name: *e.Name, SHA256: *e.SHA256}
+		if e.Target != nil {
+			a.Target = *e.Target
+		}
+
+		out = append(out, a)
 	}
 
 	return out
@@ -394,10 +443,11 @@ func (m *Manifest) subjects(class *string) []Asset {
 // validateEntries holds the typing rules, against what this
 // manifest's own schema promised. Every entry names an asset, pins
 // its bytes, says what it is, and — from schema 3 — says which
-// declared class built it; a manifest carrying an entry that fails
-// any of those is refused whole, because the failure mode this typing
-// exists to prevent is precisely an asset landing in a population it
-// does not belong to.
+// declared class built it and — from schema 4 — which target it was
+// built for; a manifest carrying an entry that fails any of those is
+// refused whole, because the failure mode this typing exists to
+// prevent is precisely an asset landing in a population it does not
+// belong to.
 func (m *Manifest) validateEntries(declared map[string]bool) error {
 	if *m.Schema < entriesFrom {
 		if len(m.Entries) != 0 {
@@ -454,7 +504,11 @@ func (m *Manifest) validateEntry(i int, e *Entry, declared map[string]bool) erro
 			" closed on purpose", i, *e.Name, *e.Type, TypeBuildSubject, TypeEvidence)
 	}
 
-	return m.validateEntryClass(i, e, declared)
+	if err := m.validateEntryClass(i, e, declared); err != nil {
+		return err
+	}
+
+	return m.validateEntryTarget(i, e)
 }
 
 // validateEntryClass holds the class rules. A class is owed by an
@@ -491,6 +545,46 @@ func (m *Manifest) validateEntryClass(i int, e *Entry, declared map[string]bool)
 		return fmt.Errorf("evidence: entries[%d] (%s): class %q is not one this release declared (%v)"+
 			" — an artifact built by a class the release does not ship places nothing",
 			i, *e.Name, *e.Class, m.Classes)
+	}
+
+	return nil
+}
+
+// validateEntryTarget holds the target rules: the class rules one
+// grain finer, deliberately the same shape — owed by an artifact,
+// refused on a document, and refused outright by a schema that never
+// had the field.
+//
+// There is no declared list to check the name against, and inventing
+// one would be this tool holding an opinion about the publisher's
+// build matrix. What a target IS belongs to the caller; that one is
+// STATED belongs to the manifest, because an artifact whose target
+// nobody wrote down falls out of every target-scoped rebuild in
+// silence — the same defect as an unattributed artifact one field
+// over.
+func (m *Manifest) validateEntryTarget(i int, e *Entry) error {
+	if *m.Schema < targetFrom {
+		if e.Target != nil {
+			return fmt.Errorf("evidence: entries[%d] (%s) carries a target, which schema %d does not have"+
+				" — a document that lies about its own format reads worse than an old one",
+				i, *e.Name, *m.Schema)
+		}
+
+		return nil
+	}
+
+	if *e.Type == TypeEvidence {
+		if e.Target != nil {
+			return fmt.Errorf("evidence: entries[%d] (%s) is %s and carries target %q — a document ABOUT the"+
+				" release was produced by no build leg", i, *e.Name, TypeEvidence, *e.Target)
+		}
+
+		return nil
+	}
+
+	if e.Target == nil || *e.Target == "" {
+		return fmt.Errorf("evidence: entries[%d] (%s) has no target — an artifact no target claims cannot be"+
+			" scoped by a rebuild that covers one, and would go unjudged in silence", i, *e.Name)
 	}
 
 	return nil

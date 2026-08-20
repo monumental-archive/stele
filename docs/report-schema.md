@@ -158,12 +158,27 @@ finding per artifact that failed to reproduce, typed in the
 assertion — `repro/diverged` (both digests carried in
 `expected`/`actual`), `repro/absent-from-rebuild`, and
 `repro/extra-in-rebuild` (the artifact SET diverged, a different
-defect from a byte difference). `rebuiltArtifacts` rides as a fact,
-beside `subjectTyping`: `manifest` where the released manifest typed
-its own entries, `policy` where an untyped one was classified through
-the org's declared evidence vocabulary (stele#156). The release's
-evidence documents are never in the population — a Sigstore bundle
-cannot rebuild bit-for-bit, and that is a security property.
+defect from a byte difference). An artifact the release published
+outside the scope under test is neither: it produces nothing, because
+"not under test" and "never shipped" are different facts (stele#223).
+`rebuiltArtifacts` rides as a fact, beside `subjectTyping`: `manifest`
+where the released manifest typed its own entries, `policy` where an
+untyped one was classified through the org's declared evidence
+vocabulary (stele#156). The release's evidence documents are never in
+the population — a Sigstore bundle cannot rebuild bit-for-bit, and
+that is a security property.
+
+A run that declares its rebuild targets (`--targets`) seals a
+**declared** population instead: `size` is how many declared targets
+the release could place, `expected` is how many were declared, and the
+shortfall between them is `CANNOT_JUDGE` through law 1 rather than
+through a rule of its own. Each unplaceable target is named in a
+`repro/target-not-typed` finding — a count cannot say which target
+went unjudged — and `targetScope` carries the declaration while
+`judgedArtifacts` carries what it resolved to, since the size now
+counts targets and a reader must not have to infer the artifacts. A
+target nobody declared reaches none of these: no finding, no count, no
+cell.
 
 The rebuild itself is orchestration and stays with the caller; SLSA
 v1.2 names verified reproducibility only as a future-directions

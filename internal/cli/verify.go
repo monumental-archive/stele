@@ -22,6 +22,7 @@ import (
 	"github.com/monumental-archive/stele/internal/ghstore"
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/policy"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
@@ -294,10 +295,22 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 // narrowed only where the released manifest can answer it; where it
 // cannot, the population stays the whole release and the verdict says
 // which of the two it is.
+//
+// A rebuild's unit is finer than a class, though: it is a TARGET, and
+// --targets is where the caller declares which ones it covered
+// (stele#223). The judged population is then that declaration —
+// reconciled against the manifest's own typing through
+// internal/population, never derived from what the rebuild happened
+// to produce, because a population drawn from output passes a rebuild
+// that silently produced nothing. A target nobody declared produces
+// nothing at all; a declared target this release cannot place is
+// CANNOT_JUDGE by name. Measured on release-lab v0.26.0: a healthy
+// one-target rebuild of a four-artifact class returned FAIL over the
+// three artifacts nobody asked it to rebuild.
 func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	var (
-		repo, tag, released, rebuilt, policyPath, class string
-		jsonOut                                         bool
+		repo, tag, released, rebuilt, policyPath, class, targets string
+		jsonOut                                                  bool
 	)
 
 	fs := flag.NewFlagSet("stele verify repro", flag.ContinueOnError)
@@ -316,6 +329,12 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		"the evidence class this rebuild covers — the population narrows to the artifacts the released "+
 			"manifest says that class built. Omit when the rebuild covers the whole release. A manifest "+
 			"carrying no class answer keeps the whole-release population and reports that it did")
+	fs.StringVar(&targets, "targets", "",
+		"the build targets this rebuild covered, comma-separated — the declaration the judged population "+
+			"IS. The artifacts the released manifest says those targets produced are judged; a target "+
+			"nobody declared produces no finding and no count; a declared target this release cannot "+
+			"place is CANNOT_JUDGE, named. Omit when the rebuild covered every target of its scope. An "+
+			"empty element is refused rather than dropped — a declaration with a hole in it is not one")
 	fs.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -342,7 +361,7 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		return fail("--rebuilt is required")
 	}
 
-	pop, err := reproSubjects(released, policyPath, class)
+	pop, err := reproSubjects(released, policyPath, reproScope{class: class, targets: declaredTargets(targets)})
 	if err != nil {
 		return fail("released: " + err.Error())
 	}
@@ -352,21 +371,22 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		return fail("rebuilt: " + err.Error())
 	}
 
-	subjects := pop.subjects
+	subjects := pop.comparison()
 
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
 	}
 
-	// Loud, never inferred: a caller that asked for one class and got
-	// the whole release must read it here, not deduce it from a count.
+	// Loud, never inferred: a caller that asked for one class and did
+	// not get it must read what the population became, not deduce it
+	// from a count.
 	if pop.unmet != "" {
-		out.logf("repro: the released manifest carries no class answer, so %s cannot be scoped:"+
-			" judging every build subject the release published", class)
+		out.logf("repro: %s", pop.unmetSaid(class))
 	}
 
-	divergences := verify.Repro(subjects, built, out.logf)
+	divergences := verify.Repro(
+		verify.ReproSets{Judged: subjects, Rebuilt: built, Published: pop.published()}, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
@@ -385,11 +405,39 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 			DivergedFrom(d.Released, d.Rebuilt, "the rebuild did not reproduce the release")
 	}
 
-	rep := report.Seal("verify repro", repo+"@"+tag,
-		report.PopulationFromEvidence(len(subjects), pop.describe()),
+	// A declared target this release's own typing cannot place is a
+	// target the run could not judge, and it is reported BY NAME: the
+	// population's shortfall seals CANNOT_JUDGE, and the finding says
+	// which target and why. A count could say neither.
+	for _, t := range pop.unanswered() {
+		j.Check(t, "repro/"+verify.ReproUntypedTarget).Diverged(pop.untypedCause())
+	}
+
+	rep := report.Seal("verify repro", repo+"@"+tag, pop.population(),
 		j, report.NoCanary(), report.NoJudgedSet(), pop.facts(len(built))...)
 
 	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// declaredTargets splits the --targets declaration WITHOUT dropping
+// blanks. splitTypes, which reads a vocabulary list one verb over, is
+// right there and wrong here: a caller whose matrix rendered an empty
+// element has a declaration with a hole in it, and a split that
+// swallowed the hole would narrow the judged population by exactly the
+// value nobody noticed was missing. An empty FLAG is the absence of a
+// declaration and stays that.
+func declaredTargets(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+
+	var out []string
+
+	for part := range strings.SplitSeq(s, ",") {
+		out = append(out, strings.TrimSpace(part))
+	}
+
+	return out
 }
 
 // The two ways a released manifest's build subjects become known,
@@ -429,31 +477,154 @@ const scopeWholeRelease = "whole-release"
 // defect one field over.
 const unmetNoClassAnswer = "no-class-answer"
 
+// reproScope is what the caller asked to have judged: the class its
+// rebuild covered, the targets it declared, or neither. One value,
+// because a population is described by the whole of it — a reader of
+// half of it cannot say what was under test.
+type reproScope struct {
+	class   string
+	targets []string
+}
+
+// reproTyping is what the released manifest could ANSWER for this
+// run. Both answers are read from the document's own schema doors,
+// never inferred from the data it carries: "no artifact carries this
+// target" and "this document has no target field" are different
+// facts, and a run that conflated them would report a stale matrix
+// value and an old release identically.
+type reproTyping struct {
+	// source names which typing drew the build subjects, reported as
+	// a fact: typingManifest or typingPolicy.
+	source string
+	// classScoped: the class the caller asked for was honoured.
+	classScoped bool
+	// targetsTyped: this document says which target produced each
+	// artifact.
+	targetsTyped bool
+}
+
 // reproPopulation is the released set a rebuild is judged against and
 // how it was drawn: which typing answered, what the set covers, and
 // why that is not what was asked for where it is not. One value,
 // because they travel together into one sealed report and a caller
 // holding some of them has a verdict it cannot describe.
 type reproPopulation struct {
-	subjects []verify.Subject
-	typing   string
-	scope    string
-	unmet    string
+	artifacts []population.Artifact
+	// release is every build subject the release published, before any
+	// narrowing. It answers a different question from the judged set —
+	// what the release SHIPPED, not what is under test — and an
+	// artifact outside the scope must reach the comparison as neither
+	// absent nor extra, but as nothing at all.
+	release []population.Artifact
+	typing  string
+	scope   string
+	unmet   string
+	// declared is the resolved rebuild-target population, nil when the
+	// caller declared no targets. Non-nil, it — not the artifact count
+	// — is what the seal's coverage rests on: the run judges what was
+	// declared to be under test.
+	declared *population.TargetSet
+	// targetsTyped carries the released manifest's own answer to
+	// whether it types targets at all, which is the CAUSE a reader
+	// needs when a declared target could not be placed.
+	targetsTyped bool
+}
+
+// comparison renders the judged population as the subjects the
+// reproducibility comparison takes.
+func (p *reproPopulation) comparison() []verify.Subject { return asSubjects(p.artifacts) }
+
+// published renders every build subject the release shipped, which is
+// what an extra artifact is measured against.
+func (p *reproPopulation) published() []verify.Subject { return asSubjects(p.release) }
+
+// asSubjects is the one rendering of released artifacts as comparison
+// subjects, shared by both sets so they cannot become two readings of
+// one shape.
+func asSubjects(artifacts []population.Artifact) []verify.Subject {
+	out := make([]verify.Subject, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, verify.Subject{Name: a.Name, SHA256: a.SHA256})
+	}
+
+	return out
+}
+
+// unanswered names the declared targets this release could not place.
+func (p *reproPopulation) unanswered() []string {
+	if p.declared == nil {
+		return nil
+	}
+
+	return p.declared.Unanswered()
+}
+
+// unmetSaid is the sentence a caller that asked for a class and did
+// not get it must read. What the population BECAME is half of it, and
+// a declaration of targets changes that half: a manifest that cannot
+// say which class built an artifact cannot say which target did
+// either, so the run holds a declaration it can place nothing in
+// rather than widening to every build subject the release published.
+func (p *reproPopulation) unmetSaid(class string) string {
+	if p.declared != nil {
+		return fmt.Sprintf("the released manifest carries no class answer, so %s cannot be scoped —"+
+			" and it can place no declared target either", class)
+	}
+
+	return fmt.Sprintf("the released manifest carries no class answer, so %s cannot be scoped:"+
+		" judging every build subject the release published", class)
+}
+
+// untypedCause says WHY a declared target could not be placed, and
+// the two causes are opposite: a release published before targets
+// were typed cannot answer for any target, while a release that types
+// them and does not carry this one was never built for it. The first
+// is fixed by the publisher, the second by the caller's matrix.
+func (p *reproPopulation) untypedCause() string {
+	if !p.targetsTyped {
+		return "the released manifest types no targets, so no declared target can be placed in it"
+	}
+
+	return "no artifact in the judged scope was built for this target"
+}
+
+// population is the coverage claim the seal rests on. Where targets
+// were declared it counts THEM — the declaration is the population,
+// and a declared target that could not be placed short-covers the run
+// into CANNOT_JUDGE. Where none were, it counts the artifacts the
+// released manifest enumerated, unchanged.
+func (p *reproPopulation) population() report.Population {
+	if p.declared == nil {
+		return report.PopulationFromEvidence(len(p.artifacts), p.describe())
+	}
+
+	return p.declared.Population(p.describe())
 }
 
 // describe names the population for the report — the scope in words,
 // beside the count the seal carries.
 func (p *reproPopulation) describe() string {
-	if p.scope == scopeWholeRelease {
-		return "released build subjects under rebuild"
+	scope := ""
+	if p.scope != scopeWholeRelease {
+		scope = p.scope + " "
 	}
 
-	return "released " + p.scope + " build subjects under rebuild"
+	if p.declared != nil {
+		return "declared " + scope + "rebuild targets"
+	}
+
+	return "released " + scope + "build subjects under rebuild"
 }
 
-// facts renders what this population is, for the seal. The unmet
-// reason appears only when there is one: a fact whose absence is the
+// facts renders what this population is, for the seal. The target
+// facts appear only where targets were declared, and the unmet reason
+// only where a request went unhonoured: a fact whose absence is the
 // answer beats a fact carrying a word for "nothing to report".
+//
+// judgedArtifacts rides only beside a declared target population,
+// where the count in the seal is targets rather than artifacts. Where
+// it is artifacts already, repeating it here would be one fact spelled
+// twice.
 func (p *reproPopulation) facts(rebuilt int) []report.Fact {
 	facts := []report.Fact{
 		{Name: "rebuiltArtifacts", Value: strconv.Itoa(rebuilt)},
@@ -465,7 +636,13 @@ func (p *reproPopulation) facts(rebuilt int) []report.Fact {
 		facts = append(facts, report.Fact{Name: "classScopeUnmet", Value: p.unmet})
 	}
 
-	return facts
+	if p.declared == nil {
+		return facts
+	}
+
+	return append(facts,
+		report.Fact{Name: "targetScope", Value: strings.Join(p.declared.Declared(), ",")},
+		report.Fact{Name: "judgedArtifacts", Value: strconv.Itoa(len(p.artifacts))})
 }
 
 // reproSubjects reads the released manifest whole and returns the
@@ -477,14 +654,14 @@ func (p *reproPopulation) facts(rebuilt int) []report.Fact {
 // shape this build refuses must refuse the walk, and a fallback would
 // launder that refusal into a text parse that happens to fail
 // differently.
-func reproSubjects(path, policyPath, class string) (*reproPopulation, error) {
+func reproSubjects(path, policyPath string, scope reproScope) (*reproPopulation, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the manifest path is operator-supplied by design
 	if err != nil {
 		return nil, err //nolint:wrapcheck // reported under the flag's own name by the caller
 	}
 
 	if bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("{")) {
-		return reproFromManifest(raw, class)
+		return reproFromManifest(raw, scope)
 	}
 
 	listed, err := parseManifest(string(raw))
@@ -508,25 +685,26 @@ func reproSubjects(path, policyPath, class string) (*reproPopulation, error) {
 		return nil, err
 	}
 
-	var subjects []verify.Subject
+	var subjects []population.Artifact
 
 	for _, s := range listed {
 		if pol.Evidence.Classify(s.Name) == evidence.TypeBuildSubject {
-			subjects = append(subjects, s)
+			subjects = append(subjects, population.Artifact{Name: s.Name, SHA256: s.SHA256})
 		}
 	}
 
 	// A sha256sum manifest names assets and nothing else. It cannot
-	// say which class built one, and it does not carry the release's
-	// declared class list either — so a class asked for here is
-	// neither honoured nor refused, it is unanswerable, and the
-	// verdict says exactly that.
-	return newReproPopulation(subjects, typingPolicy, class, false), nil
+	// say which class built one or which target produced it, and it
+	// does not carry the release's declared class list either — so a
+	// narrowing asked for here is neither honoured nor refused, it is
+	// unanswerable, and the verdict says exactly that. Nothing narrows,
+	// so what it published and what is under test are one set.
+	return newReproPopulation(subjects, subjects, scope, reproTyping{source: typingPolicy})
 }
 
 // reproFromManifest draws the population from a typed evidence
 // manifest — its own answer, read rather than re-derived.
-func reproFromManifest(raw []byte, class string) (*reproPopulation, error) {
+func reproFromManifest(raw []byte, scope reproScope) (*reproPopulation, error) {
 	doc, err := evidence.Parse(raw)
 	if err != nil {
 		return nil, err
@@ -537,45 +715,82 @@ func reproFromManifest(raw []byte, class string) (*reproPopulation, error) {
 	// honest CANNOT_JUDGE for a class that built nothing, and a
 	// misspelling that seals the same way is a verdict nobody asked
 	// for.
-	if class != "" && !doc.Declares(class) {
+	if scope.class != "" && !doc.Declares(scope.class) {
 		return nil, fmt.Errorf("this release declared no class %q — it shipped %s",
-			class, strings.Join(doc.Classes, ", "))
+			scope.class, strings.Join(doc.Classes, ", "))
 	}
 
-	typed, scoped := doc.Subjects(), false
+	released := doc.Subjects()
+	typed := released
+	typing := reproTyping{source: typingManifest, targetsTyped: doc.Targets()}
 
-	if class != "" {
-		if of, ok := doc.SubjectsOf(class); ok {
-			typed, scoped = of, true
+	if scope.class != "" {
+		if of, ok := doc.SubjectsOf(scope.class); ok {
+			typed, typing.classScoped = of, true
 		}
 	}
 
-	subjects := make([]verify.Subject, 0, len(typed))
-	for _, a := range typed {
-		subjects = append(subjects, verify.Subject{Name: a.Name, SHA256: a.SHA256})
+	return newReproPopulation(asArtifacts(released), asArtifacts(typed), scope, typing)
+}
+
+// asArtifacts renders manifest assets for the population door — the
+// one conversion, so the released set and the narrowed one cannot
+// arrive shaped differently.
+func asArtifacts(assets []evidence.Asset) []population.Artifact {
+	out := make([]population.Artifact, 0, len(assets))
+	for _, a := range assets {
+		out = append(out, population.Artifact{Name: a.Name, SHA256: a.SHA256, Target: a.Target})
 	}
 
-	return newReproPopulation(subjects, typingManifest, class, scoped), nil
+	return out
 }
 
 // newReproPopulation assembles the judged set and names what it
-// covers. The ONE constructor, so the scope and the unmet reason
-// cannot be set apart from the subjects they describe — they are two
-// facts, but they answer one question and a caller holding a
-// half-filled pair has a verdict it cannot state.
-func newReproPopulation(subjects []verify.Subject, typing, class string, scoped bool) *reproPopulation {
-	p := &reproPopulation{subjects: subjects, typing: typing, scope: scopeWholeRelease}
+// covers. The ONE constructor, so the scope, the unmet reason and the
+// declared targets cannot be set apart from the artifacts they
+// describe — they are several facts, but they answer one question and
+// a caller holding a half-filled set has a verdict it cannot state.
+//
+// released is every build subject the release published; scoped is
+// what the class narrowing left of it, which is the same slice where
+// no class was asked for or none could be honoured. The two
+// narrowings then compose in the order they were built: the declared
+// targets are resolved against the class's artifacts — class ∩
+// declared targets, which is the set the caller said was under test.
+func newReproPopulation(
+	released, scoped []population.Artifact, scope reproScope, typing reproTyping,
+) (*reproPopulation, error) {
+	p := &reproPopulation{
+		artifacts:    scoped,
+		release:      released,
+		typing:       typing.source,
+		scope:        scopeWholeRelease,
+		targetsTyped: typing.targetsTyped,
+	}
 
 	switch {
-	case class == "":
-		return p
-	case scoped:
-		p.scope = class
+	case scope.class == "":
+	case typing.classScoped:
+		p.scope = scope.class
 	default:
 		p.unmet = unmetNoClassAnswer
 	}
 
-	return p
+	if len(scope.targets) == 0 {
+		return p, nil
+	}
+
+	// The declared population is enumerated in ONE place (stele#153,
+	// at release grain stele#223): this verb holds the resolved set,
+	// never the means to build a second one beside it.
+	set, err := population.TargetScope{Targets: scope.targets}.Resolve(scoped)
+	if err != nil {
+		return nil, err
+	}
+
+	p.declared, p.artifacts = set, set.Artifacts()
+
+	return p, nil
 }
 
 // verifyOutcome carries what a completed mode proved, for the report:

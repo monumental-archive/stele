@@ -9,10 +9,12 @@
 package assert_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/report"
 )
 
@@ -20,11 +22,14 @@ import (
 // disagreement itself.
 const otherDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-// pinningManifest renders a schema-3 manifest over the given entry
-// JSON — the fixture's control over what the evidence manifest pins.
+// pinningManifest renders a current-schema manifest over the given
+// entry JSON — the fixture's control over what the evidence manifest
+// pins. Current, not pinned to a number: the cross-check is a
+// present-tense obligation, and a fixture one schema behind would
+// exercise the epoch's history path instead of the check under test.
 func pinningManifest(entries ...string) string {
-	return `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9",` +
-		` "entries": [` + strings.Join(entries, ", ") + `]}`
+	return `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["oci-image"], "storeVsa": true,` +
+		` "machineryVersion": "9.9.9", "entries": [` + strings.Join(entries, ", ") + `]}`
 }
 
 // findingsFor narrows a sealed report's findings to one assertion.
@@ -63,7 +68,7 @@ func TestChecksumAgreement(t *testing.T) {
 			name: "one name carrying two digests is the finding",
 			arrange: func(f *fakeForge) {
 				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = pinningManifest(
-					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", otherDigest))
+					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64", otherDigest))
 			},
 			want: []string{"widget-v1.0.0.tar.gz", subjectDigest, otherDigest},
 		},
@@ -71,8 +76,8 @@ func TestChecksumAgreement(t *testing.T) {
 			name: "every disagreeing name is named, in one finding",
 			arrange: func(f *fakeForge) {
 				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = pinningManifest(
-					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", otherDigest),
-					manifestEntryPinned("app.spdx.json", "evidence", "", otherDigest))
+					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64", otherDigest),
+					manifestEntryPinned("app.spdx.json", "evidence", "", "", otherDigest))
 			},
 			want: []string{"widget-v1.0.0.tar.gz", "app.spdx.json", strings.Repeat("d", 64)},
 		},
@@ -89,8 +94,9 @@ func TestChecksumAgreement(t *testing.T) {
 			name: "a name only the evidence manifest carries is not judged",
 			arrange: func(f *fakeForge) {
 				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = pinningManifest(
-					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", subjectDigest),
-					manifestEntryPinned("unshipped.json", "evidence", "", otherDigest))
+					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64",
+						subjectDigest),
+					manifestEntryPinned("unshipped.json", "evidence", "", "", otherDigest))
 			},
 		},
 		{

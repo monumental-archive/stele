@@ -52,13 +52,13 @@ func TestManifestSource(t *testing.T) {
 		"missing machineryVersion": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true}`,
 		"unparsable machineryVersion": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
 			`"machineryVersion": "not-a-version", "entries": [` +
-			manifestEntry("a.tar.gz", "build-subject", "oci-image") + `]}`,
+			manifestEntry("a.tar.gz", "build-subject", "oci-image", "") + `]}`,
 		"no entries": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
 			`"machineryVersion": "1.0.0"}`,
 		"an entry typed outside the vocabulary": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "artefact", "") + `]}`,
+			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "artefact", "", "") + `]}`,
 		"an artifact no class claims": `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "build-subject", "") + `]}`,
+			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "build-subject", "", "") + `]}`,
 		// A policy declaring no schema epoch owes the current schema
 		// of every manifest — the right default for an adopter with
 		// no history, and the reason an org that has published older
@@ -111,9 +111,10 @@ func TestManifestSourceEpochs(t *testing.T) {
 			pol.Evidence.EnrichmentFromVersion = tt.enrichmentFrom
 
 			f := completeRelease()
-			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 3, ` +
-				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `", ` +
-				`"entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject", "oci-image") + `]}`
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": ` +
+				strconv.Itoa(evidence.Schema) + `, "classes": ["oci-image"], "storeVsa": true, ` +
+				`"machineryVersion": "` + tt.machinery + `", "entries": [` +
+				manifestEntry("widget-x86_64.tar.gz", "build-subject", "oci-image", "linux-amd64") + `]}`
 
 			c, ok, err := (assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
 				Contract("acme", "widget", "v1.0.0")
@@ -430,7 +431,7 @@ func TestManifestSchemaEpoch(t *testing.T) {
 	older := func(schema int) string {
 		entries := ""
 		if schema >= 2 {
-			entries = `, "entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject", "") + `]`
+			entries = `, "entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject", "", "") + `]`
 		}
 
 		return `{"schema": ` + strconv.Itoa(schema) + `, "classes": ["oci-image"], "storeVsa": true, ` +
@@ -473,7 +474,7 @@ func TestManifestSchemaEpoch(t *testing.T) {
 			&epoch, "1.46.9",
 			`{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["oci-image"], "storeVsa": true, ` +
 				`"machineryVersion": "%s", "entries": [` +
-				manifestEntry("widget-x86_64.tar.gz", "build-subject", "oci-image") + `]}`,
+				manifestEntry("widget-x86_64.tar.gz", "build-subject", "oci-image", "linux-amd64") + `]}`,
 			false, "manifest evidence-manifest.json",
 		},
 	}

@@ -438,11 +438,11 @@ publisher's CI. Writer and reader share one definition
 this reader admits cannot drift apart:
 
 ```json
-{ "schema": 3, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+{ "schema": 4, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
   "machineryVersion": "1.40.0",
   "entries": [
     { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject",
-      "class": "rust-crate" },
+      "class": "rust-crate", "target": "x86_64-unknown-linux-musl" },
     { "name": "attestations-image.intoto.jsonl", "sha256": "2222…", "type": "evidence" }
   ] }
 ```
@@ -512,40 +512,45 @@ exists to retire. The classifier's other job is a manifest that
 arrives untyped — a legacy release, or a foreign one this org never
 wrote — where it classifies a plain sha256sum manifest instead.
 
-### The class that built each artifact
+### The leg that built each artifact
 
 Every `build-subject` entry names the evidence **class** whose build
-leg produced it; an `evidence` entry names none, because a document
-about the release belongs to no one class and a per-entry answer
-there would be a second vocabulary. The name must be one the
-manifest's own `classes` already declares — an entry claiming a class
-the release did not ship is incoherent about its own document, and
-the check needs no policy to make it.
+leg produced it and the **target** that leg built; an `evidence` entry
+names neither, because a document about the release belongs to no one
+class, was produced by no leg, and a per-entry answer there would be a
+second vocabulary. The class must be one the manifest's own `classes`
+already declares — an entry claiming a class the release did not ship
+is incoherent about its own document, and the check needs no policy to
+make it. The target is not checked against anything: what a target IS
+belongs to the publisher — a platform triple, a runtime major,
+whatever its matrix varies — and a tool holding a vocabulary of them
+would be asserting a fact about the world from one organisation's
+build configuration.
 
 This is the one fact `emit manifest` cannot compute: no declared
 vocabulary names a release's build artifacts by the leg that produced
-them. It arrives as one subject manifest per class —
-`--class-subjects <class>=<path>`, repeatable — which is the shape a
-publisher already holds, since every build leg emits the digests of
-what it produced. The join is checked in both directions against
-`--assets`, because a caller's split is a second statement about the
-same release: an artifact named by a class but absent from the
+them. It arrives as one subject manifest per leg —
+`--leg-subjects <class>:<target>=<path>`, repeatable — which is the
+shape a publisher already holds, since every matrix job emits the
+digests of what it produced. The join is checked in both directions
+against `--assets`, because a caller's split is a second statement
+about the same release: an artifact named by a leg but absent from the
 release did not ship, one whose digest disagrees is not the same
-bytes, one claimed by two classes has no answer, and a document is
-not an artifact any class built. **An artifact no class claims
-refuses the manifest**, rather than shipping unattributed — a
-per-class rebuild would then scope a population that silently omitted
-it, which is the same defect as an untyped entry one field over.
+bytes, one claimed by two legs has no answer, and a document is not an
+artifact any leg built. **An artifact no leg claims refuses the
+manifest**, rather than shipping unattributed — a scoped rebuild would
+then judge a population that silently omitted it, which is the same
+defect as an untyped entry one field over.
 
-What it buys is scope. `stele verify repro --class <name>` narrows
-its population to the artifacts that class built, so a rebuild
-covering one class stops reporting every other class as absent from
-it. Measured on release-lab v0.25.3: one artifact reproduced,
-thirteen falsely reported missing, two supply-chain issues filed for
-a release that was fine. Narrowing does not mute — an artifact *of
-the class under rebuild* that the rebuild failed to produce is still
-a finding — and where the released manifest carries no class answer,
-the population stays the whole release rather than wearing the class's
+What it buys is scope, at both grains. `stele verify repro --class
+<name>` narrows its population to the artifacts that class built, so a
+rebuild covering one class stops reporting every other class as absent
+from it. Measured on release-lab v0.25.3: one artifact reproduced,
+thirteen falsely reported missing, two supply-chain issues filed for a
+release that was fine. Narrowing does not mute — an artifact *of the
+class under rebuild* that the rebuild failed to produce is still a
+finding — and where the released manifest carries no class answer, the
+population stays the whole release rather than wearing the class's
 name.
 
 The verdict says which it is in **two** facts, never one string a
@@ -556,6 +561,23 @@ absence is the answer in the honoured case. Which KIND of manifest
 could not answer — one below the schema that types it, or one with no
 typing at all — is already the `subjectTyping` fact beside them.
 
+A rebuild's own unit is finer than a class: it is a target, and
+`--targets <a>,<b>` is where the caller declares which ones it
+covered. That declaration IS the judged population — reconciled
+against the manifest's typing, never derived from what the rebuild
+produced, because a population drawn from output passes a rebuild that
+silently produced nothing. Measured on release-lab v0.26.0: a healthy
+rebuild of one target of a four-artifact class returned FAIL over the
+three artifacts nobody asked it to rebuild. The reconciliation runs
+both ways, and the two directions may never share a vocabulary: a
+target nobody declared produces **nothing** — no finding, no count, no
+cell — while a declared target this release cannot place is
+`CANNOT_JUDGE`, named in a `repro/target-not-typed` finding that
+carries the cause (a release published before targets were typed, or a
+target it never built). Inside the declaration nothing is muted: an
+artifact of a declared target that the rebuild did not produce, or
+produced to other bytes, is as loud as it ever was.
+
 A manifest cannot pin itself: a document carrying its own digest is
 not a document. The entries are therefore the assets published
 *beside* it, and nothing is lost — the manifest is an evidence
@@ -565,8 +587,8 @@ The manifest's `schema` is its own number, outside the live-document
 epoch ([versioning.md](versioning.md)): manifests are published
 release assets, immutable once shipped, so the number moves only
 when this format's own key set changes against documents that exist.
-It moved to `2` when entries gained their type and to `3` when they
-gained their class.
+It moved to `2` when entries gained their type, to `3` when they
+gained their class, and to `4` when they gained their target.
 
 A published manifest cannot be re-emitted. It is an immutable release
 asset, pinned by digest in `checksums.txt` and attested under the

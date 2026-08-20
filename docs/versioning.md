@@ -113,7 +113,7 @@ carrying them already exist and cannot be rewritten on demand:
 | identifier | why it is separate |
 | --- | --- |
 | chain note `version` (`internal/chain`, [chain-format.md](chain-format.md)) | Notes live in a walked ledger. Moving the number means re-emitting every link; under one epoch, a report field gaining a key would force a ledger re-emission. |
-| evidence-manifest `schema` (`internal/evidence`) | Manifests are published assets on releases that already shipped. Moving the number orphans every one of them until it is re-emitted, so under one epoch a report field gaining a key would force a re-emission across the corpus. It moved to 2 when entries gained their type (stele#156) and to 3 when they gained the class that built them (stele#185). |
+| evidence-manifest `schema` (`internal/evidence`) | Manifests are published assets on releases that already shipped. Moving the number orphans every one of them until it is re-emitted, so under one epoch a report field gaining a key would force a re-emission across the corpus. It moved to 2 when entries gained their type (stele#156), to 3 when they gained the class that built them (stele#185), and to 4 when they gained the target that produced them (stele#223). |
 
 Both therefore move only when their OWN shape moves, under the same
 rule. History is honest about what it holds; it is never renumbered
