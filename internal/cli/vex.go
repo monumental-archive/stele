@@ -234,7 +234,7 @@ func coverageOf(product string, d *triage.Decided) vex.Coverage {
 	return vex.Coverage{
 		Product:         product,
 		Subcomponent:    d.Decision.Purl,
-		Advisory:        d.Finding.Key.Advisory,
+		Advisory:        d.Finding.Key.Advisory(),
 		Status:          d.Decision.Status,
 		Justification:   d.Decision.Justification,
 		ImpactStatement: d.Decision.ImpactStatement,

@@ -207,8 +207,13 @@ func (w *blastWalk) judge(subject string, out []byte) error {
 // record adds one finding as a fact carrying no verdict of its own;
 // Seal decides what the set of facts amounts to.
 func (w *blastWalk) record(subject string, f *triage.Finding) {
+	// The finding's ID is the canonical triple — the spelling a
+	// decision must use to join it. The detail names the package as
+	// the scanner reported it, which is the spelling a reader will
+	// find in the manifest; for all but a case-folded ecosystem the
+	// two are one string (docs/vex-join.md).
 	w.j.Check(subject, f.String()).Diverged(
-		fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory, f.Key.Package, f.Key.Version, f.Ecosystem))
+		fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory(), f.Package, f.Key.Version(), f.Ecosystem))
 }
 
 // noteCanary records whether this scan reproduced the declared
@@ -227,7 +232,7 @@ func (w *blastWalk) noteCanary(repo, tag string, out []byte) {
 	}
 
 	for i := range findings {
-		if findings[i].Key.Advisory == *w.pol.Canary.Advisory {
+		if findings[i].Key.Advisory() == *w.pol.Canary.Advisory {
 			w.canarySeen = true
 
 			return

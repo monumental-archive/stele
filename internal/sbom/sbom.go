@@ -424,6 +424,10 @@ func linkedInto(linked, all []string) string {
 // lowercases namespace and name (the spec's rule, not a convenience);
 // a Go module path's charset is a purl-safe ASCII subset, so no
 // further escaping applies.
+//
+// This is the canonical form, so it is also the form a decision
+// copied out of this document joins a finding under — the same rule
+// read from the consumer's end in docs/vex-join.md.
 func purlRef(path, version string) ExternalRef {
 	return ExternalRef{
 		ReferenceCategory: "PACKAGE-MANAGER",

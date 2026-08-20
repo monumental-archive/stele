@@ -913,6 +913,12 @@ type scanReport struct {
 			Package struct {
 				Name    string `json:"name"`
 				Version string `json:"version"`
+				// Read for the join, not for classification: the
+				// ecosystem decides whether the name compares
+				// case-insensitively (docs/vex-join.md), so a report
+				// decoded without it would join a mixed-case package
+				// differently from the evidence walk.
+				Ecosystem string `json:"ecosystem"`
 			} `json:"package"`
 			Vulnerabilities []struct {
 				ID string `json:"id"`
@@ -940,9 +946,9 @@ func joinFindings(report []byte, decisions *vexjoin.Decisions) (int, int) {
 			for _, vuln := range pkg.Vulnerabilities {
 				found++
 
-				if decisions.Has(vexjoin.Key{
-					Advisory: vuln.ID, Package: pkg.Package.Name, Version: pkg.Package.Version,
-				}) {
+				if decisions.Has(vexjoin.KeyFromFinding(
+					vuln.ID, pkg.Package.Ecosystem, pkg.Package.Name, pkg.Package.Version,
+				)) {
 					decided++
 				}
 			}

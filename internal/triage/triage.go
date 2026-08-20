@@ -54,7 +54,13 @@ const (
 
 // Finding is one advisory against one package, classified.
 type Finding struct {
-	Key       vexjoin.Key
+	Key vexjoin.Key
+	// Package is the name the scanner reported, carried verbatim so a
+	// report can name the package a reader will find in their manifest.
+	// The key's copy is canonical for the ecosystem and the two differ
+	// wherever that canonical form is not the spelling in use — a Go
+	// module path with an uppercase letter, say (docs/vex-join.md).
+	Package   string
 	Ecosystem string
 	// Fixable reports whether any published version fixes it.
 	Fixable bool
@@ -138,10 +144,9 @@ func (p *Policy) Findings(report []byte) ([]Finding, error) {
 	for _, res := range decoded.Results {
 		for _, pkg := range res.Packages {
 			for _, vuln := range pkg.Vulnerabilities {
-				key := vexjoin.Key{
-					Advisory: vuln.ID, Package: pkg.Package.Name, Version: pkg.Package.Version,
-				}
-				if key.Advisory == "" || seen[key] {
+				key := vexjoin.KeyFromFinding(
+					vuln.ID, pkg.Package.Ecosystem, pkg.Package.Name, pkg.Package.Version)
+				if key.Advisory() == "" || seen[key] {
 					continue
 				}
 
@@ -150,6 +155,7 @@ func (p *Policy) Findings(report []byte) ([]Finding, error) {
 				fix := vuln.fixable()
 				out = append(out, Finding{
 					Key:       key,
+					Package:   pkg.Package.Name,
 					Ecosystem: pkg.Package.Ecosystem,
 					Fixable:   fix,
 					Class:     p.classify(pkg.Package.Ecosystem, fix),
@@ -229,7 +235,7 @@ func Stale(findings []Finding, decisions *vexjoin.Decisions) []vexjoin.Decision 
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Key.Advisory+out[i].Key.Package < out[j].Key.Advisory+out[j].Key.Package
+		return out[i].Key.Advisory()+out[i].Key.Package() < out[j].Key.Advisory()+out[j].Key.Package()
 	})
 
 	return out

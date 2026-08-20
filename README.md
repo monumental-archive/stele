@@ -90,6 +90,7 @@ by the test suite), the real couplings, what to skip. The rest of
 [chain note format](docs/chain-format.md), the
 [report document](docs/report-schema.md) every judging verb speaks,
 [how `level` judges](docs/level.md), the
+[VEX join's identity rules](docs/vex-join.md), the
 [trust anchor stance](docs/trusted-root.md),
 [versioning](docs/versioning.md) and the
 [binary SBOM design](docs/binary-sbom.md). `stele help` carries the
