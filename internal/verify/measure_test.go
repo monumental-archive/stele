@@ -132,6 +132,130 @@ func TestMeasureChainRefusals(t *testing.T) {
 			t.Error("MeasureChain accepted a branch whose tip could not be resolved")
 		}
 	})
+
+	t.Run("a note the store will not serve refuses", func(t *testing.T) {
+		t.Parallel()
+
+		// A link that exists and cannot be read is not a chain that
+		// ends here: measuring the shorter chain would report a genesis
+		// at the revision the store happened to choke on.
+		h := defaultChain(t)
+		h.noteErr = map[string]error{revC1: errors.New("object store unavailable")}
+
+		_, err := measure(t, h, fakeMeasurer{})
+		if err == nil || !strings.Contains(err.Error(), "object store unavailable") {
+			t.Errorf("MeasureChain = %v, want the store's own failure carried through", err)
+		}
+	})
+
+	t.Run("a parent the store will not serve refuses", func(t *testing.T) {
+		t.Parallel()
+
+		h := defaultChain(t)
+		h.readErr = map[string]error{"parent": errors.New("history unavailable")}
+
+		_, err := measure(t, h, fakeMeasurer{})
+		if err == nil || !strings.Contains(err.Error(), "history unavailable") {
+			t.Errorf("MeasureChain = %v, want the history read's failure carried through", err)
+		}
+	})
+}
+
+// TestMeasureChainRefusesMalformedLinks. Each row is a link that
+// verifies cryptographically and is still not a link — the note's
+// bytes were signed, so the signature proves only that whoever holds
+// the key wrote THESE bytes, not that the bytes say what a chain
+// needs. Measurement asserts no identity, which makes the structural
+// reading the only thing standing between a malformed ledger and a
+// level computed from it.
+func TestMeasureChainRefusesMalformedLinks(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		note func(cw chainWorld) []byte
+		want string
+	}{
+		{
+			// The provenance half is about a different revision than
+			// the one the note hangs on: a link that describes somebody
+			// else's commit says nothing about this branch.
+			name: "a provenance half naming another revision",
+			note: func(cw chainWorld) []byte {
+				return cw.note(3,
+					cw.linkStmt(revC1, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
+					cw.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"}))
+			},
+			want: "link at",
+		},
+		{
+			// The summary half is not a summary. Without the type check
+			// any signed statement at all would pass for a VSA.
+			name: "a summary half that is not a verification summary",
+			note: func(cw chainWorld) []byte {
+				return cw.note(3,
+					cw.linkStmt(revC2, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
+					cw.linkStmt(revC2, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false))
+			},
+			want: "not a verification summary",
+		},
+		{
+			// A summary claiming no level is a summary that summarises
+			// nothing, and a chain of them would walk clean.
+			name: "a summary half claiming no level",
+			note: func(cw chainWorld) []byte {
+				return cw.note(3,
+					cw.linkStmt(revC2, "ledgerPrev", nil, []string{"ORG_SOURCE_GATED"}, false),
+					cw.vsaStmt(revC2, nil))
+			},
+			want: "link at",
+		},
+		{
+			// Signed bytes that are not a statement. The signature
+			// proves the bytes were written by the key holder and
+			// nothing about what they say, so the decode is the only
+			// thing between a signed blob and a link.
+			name: "a half whose signed bytes are not an in-toto statement",
+			note: func(cw chainWorld) []byte {
+				return cw.note(3,
+					map[string]any{"this": "is signed, and is not a statement"},
+					cw.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"}))
+			},
+			want: "link at",
+		},
+		{
+			// A statement shaped right and carrying nothing: it decodes,
+			// and it still names no subject, so it attests to no bytes.
+			name: "a half whose statement names no subject",
+			note: func(cw chainWorld) []byte {
+				return cw.note(3,
+					map[string]any{
+						"_type":         "https://in-toto.io/Statement/v1",
+						"subject":       []any{},
+						"predicateType": sourceType,
+						"predicate":     map[string]any{},
+					},
+					cw.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"}))
+			},
+			want: "link at",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cw := chainWorld{t: t}
+			h := fakeHistory{
+				tips:    map[string]string{"refs/heads/main": revC2},
+				parents: map[string]string{},
+				notes:   map[string][]byte{revC2: tt.note(cw)},
+			}
+
+			_, err := measure(t, h, fakeMeasurer{})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("MeasureChain = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
 }
 
 // TestMeasureChainRecordsHoles: a revision between links carrying none
