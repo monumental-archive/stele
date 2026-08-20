@@ -17,10 +17,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/sbomwalk"
 	"github.com/monumental-archive/stele/internal/triage"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 )
@@ -77,15 +77,17 @@ func BlastRadius(
 	}
 
 	w := &blastWalk{
-		pol: pol.BlastRadius, evidence: pol.Evidence, org: org,
-		forge: forge, scanner: scanner, decisions: decisions, log: log,
+		pol: pol.BlastRadius, org: org,
+		decisions: decisions, log: log,
 		used: map[vexjoin.Key]bool{},
 	}
 
-	for _, repo := range repos {
-		if err := w.repo(repo); err != nil {
-			return nil, err
-		}
+	walk := &sbomwalk.Walk{
+		Org: org, SBOMSuffix: *pol.Evidence.SBOMSuffix, Forge: forge, Scanner: scanner,
+	}
+
+	if err := walk.Releases(repos, w.inventory); err != nil {
+		return nil, err
 	}
 
 	w.staleDecisions()
@@ -103,10 +105,7 @@ func BlastRadius(
 
 type blastWalk struct {
 	pol        *BlastRadiusPolicy
-	evidence   *EvidencePolicy
 	org        string
-	forge      gh.Forge
-	scanner    osv.Scanner
 	decisions  *vexjoin.Decisions
 	log        Logf
 	scanned    int
@@ -117,98 +116,39 @@ type blastWalk struct {
 	canarySeen bool
 }
 
-func (w *blastWalk) repo(repo string) error {
-	tags, err := w.forge.ReleaseTags(w.org, repo)
-	if err != nil {
-		return fmt.Errorf("assert: releases of %s/%s: %w", w.org, repo, err)
-	}
-
-	for _, tag := range tags {
-		if err := w.release(repo, tag); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (w *blastWalk) release(repo, tag string) error {
-	subject := repo + "@" + tag
-
-	assets, err := w.forge.ReleaseAssets(w.org, repo, tag)
-	if err != nil {
-		return fmt.Errorf("assert: assets of %s: %w", subject, err)
-	}
-
-	var sboms []string
-
-	for _, a := range assets {
-		if strings.HasSuffix(a, *w.evidence.SBOMSuffix) {
-			sboms = append(sboms, a)
-		}
-	}
-
-	if len(sboms) == 0 {
-		// Pre-standup releases are recorded, not failed — they predate
-		// the obligation. The evidence walk owns the completeness
-		// question; this walk scans what exists.
-		w.missing = append(w.missing, subject)
+// inventory answers for one thing the shared walk found — the
+// blast-radius reading of it. A release with no inventory is recorded
+// rather than failed: pre-standup releases predate the obligation,
+// and the evidence walk owns the completeness question. A defect the
+// walk DID reach is a finding: bytes nothing attests, or a scan that
+// read nothing, must never pass for a clean release.
+func (w *blastWalk) inventory(inv *sbomwalk.Inventory) error {
+	switch inv.Defect {
+	case sbomwalk.DefectNoInventory:
+		w.missing = append(w.missing, inv.Subject())
 
 		return nil
-	}
-
-	for _, name := range sboms {
-		if err := w.scanSBOM(repo, tag, name); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// scanSBOM downloads, trust-checks and scans one SBOM asset.
-func (w *blastWalk) scanSBOM(repo, tag, name string) error {
-	subject := repo + "@" + tag
-
-	sbom, err := w.forge.Asset(w.org, repo, tag, name)
-	if err != nil {
-		return fmt.Errorf("assert: sbom of %s: %w", subject, err)
-	}
-
-	// Trust nothing downloaded: the asset must be one the attestation
-	// store vouches for. Presence depth, like the evidence walk; the
-	// cryptographic judgment is the full-depth leg.
-	stored, err := w.forge.Attestations(w.org, repo, chain.SHA256Hex(sbom))
-	if err != nil {
-		return fmt.Errorf("assert: store for %s sbom: %w", subject, err)
-	}
-
-	if len(stored) == 0 {
-		w.finding(subject, name+":unattested", "no attestation in the store covers the downloaded SBOM bytes")
+	case sbomwalk.DefectUnattested:
+		w.finding(inv.Subject(), inv.Asset+":unattested",
+			"no attestation in the store covers the downloaded SBOM bytes")
 
 		return nil
-	}
-
-	out, err := w.scanner.Scan(sbom)
-	if errors.Is(err, osv.ErrZeroPackages) {
-		w.finding(subject, name+":empty-scan",
+	case sbomwalk.DefectZeroPackages:
+		w.finding(inv.Subject(), inv.Asset+":empty-scan",
 			"the SBOM parsed to zero packages — a scan that reads nothing must not report clean")
 
 		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("assert: scanning %s: %w", subject, err)
+	case sbomwalk.DefectNone:
 	}
 
 	w.scanned++
-	w.log("assert: blast-radius: %s scanned", subject)
+	w.log("assert: blast-radius: %s scanned", inv.Subject())
 
-	if err := w.judge(subject, out); err != nil {
+	if err := w.judge(inv.Subject(), inv.Report); err != nil {
 		return err
 	}
 
-	w.noteCanary(repo, tag, out)
+	w.noteCanary(inv.Repo, inv.Tag, inv.Report)
 
 	return nil
 }
