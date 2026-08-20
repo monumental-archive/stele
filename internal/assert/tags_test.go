@@ -158,8 +158,8 @@ func conformantTags() *fakeTags {
 func runTags(t *testing.T, f *fakeTags, tv assert.TagVerifier) *report.Report {
 	t.Helper()
 
-	rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-		&fakeForge{}, f, tv, report.NewJournal(), func(string, ...any) {})
+	rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+		f, tv, report.NewJournal(), func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
 	}
@@ -226,8 +226,8 @@ func TestTagsDefects(t *testing.T) {
 			f, tv := conformantTags(), &fakeTagVerifier{}
 			tt.mutate(f, tv)
 
-			rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-				&fakeForge{}, f, tv, report.NewJournal(), func(string, ...any) {})
+			rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+				f, tv, report.NewJournal(), func(string, ...any) {})
 			if err != nil {
 				t.Fatalf("Tags: %v", err)
 			}
@@ -297,8 +297,8 @@ func TestTagsBounds(t *testing.T) {
 
 		tv := &fakeTagVerifier{}
 
-		rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/gadget"},
-			&fakeForge{}, f, tv, report.NewJournal(), func(string, ...any) {})
+		rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/gadget"),
+			f, tv, report.NewJournal(), func(string, ...any) {})
 		if err != nil {
 			t.Fatalf("Tags: %v", err)
 		}
@@ -315,8 +315,8 @@ func TestTagsBounds(t *testing.T) {
 		f := conformantTags()
 		f.refs["mystery"] = f.refs["widget"]
 
-		rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/mystery"},
-			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
+		rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/mystery"),
+			f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
 		if err != nil {
 			t.Fatalf("Tags: %v", err)
 		}
@@ -335,8 +335,8 @@ func TestTagsBounds(t *testing.T) {
 		f := conformantTags()
 		f.refsErr = errors.New("listing torn")
 
-		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
+		if _, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+			f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "listing torn") {
 			t.Fatalf("error = %v, want the torn listing", err)
 		}
@@ -345,8 +345,8 @@ func TestTagsBounds(t *testing.T) {
 	t.Run("a policy without a tags section refuses", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := assert.Tags(loadTestPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, conformantTags(), &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
+		if _, err := assert.Tags(loadTestPolicy(t), repoPop(t, "acme/widget"),
+			conformantTags(), &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "no tags section") {
 			t.Fatalf("error = %v, want the section refusal", err)
 		}
@@ -366,8 +366,8 @@ func TestTagsWalkEdges(t *testing.T) {
 		f := conformantTags()
 		delete(f.objects, tagObjSHA)
 
-		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
+		if _, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+			f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "tag object") {
 			t.Fatalf("error = %v, want the object read failure", err)
 		}
@@ -379,8 +379,8 @@ func TestTagsWalkEdges(t *testing.T) {
 		f := conformantTags()
 		delete(f.meta, genesisRev)
 
-		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
+		if _, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+			f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "commit") {
 			t.Fatalf("error = %v, want the commit read failure", err)
 		}
@@ -409,16 +409,6 @@ func TestTagsWalkEdges(t *testing.T) {
 		rep := runTags(t, f, &fakeTagVerifier{})
 		if rep.Verdict() != report.VerdictCannotJudge {
 			t.Fatalf("verdict = %s — zero release tags is an empty population", rep.Verdict())
-		}
-	})
-
-	t.Run("a broken population refuses before any walk", func(t *testing.T) {
-		t.Parallel()
-
-		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "solo"},
-			&fakeForge{}, conformantTags(), &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
-			!strings.Contains(err.Error(), "owner/name") {
-			t.Fatalf("error = %v, want the population refusal", err)
 		}
 	})
 }
@@ -480,8 +470,8 @@ func TestTagsDebtExcusesOneCheck(t *testing.T) {
 			f := conformantTags()
 			tt.mutate(f)
 
-			rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-				&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
+			rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+				f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
 			if err != nil {
 				t.Fatalf("Tags: %v", err)
 			}
@@ -515,8 +505,8 @@ func TestTagsDebtStalenessFollowsWhatWasChecked(t *testing.T) {
 	}
 	f.objects[tagObjSHA2] = &gh.TagObject{Tagger: "release-mint[bot]", Target: linkedRev}
 
-	rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-		&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
+	rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+		f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
 	}

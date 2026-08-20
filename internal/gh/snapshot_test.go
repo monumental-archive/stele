@@ -26,7 +26,9 @@ func (scriptedForge) TagCommit(_, _, _ string) (string, error) {
 	return strings.Repeat("c", 40), nil
 }
 
-func (scriptedForge) Repos(string) ([]string, error) { return []string{"widget", "gadget"}, nil }
+func (scriptedForge) ListRepos(string) ([]gh.Repo, error) {
+	return []gh.Repo{{Name: "widget"}, {Name: "gadget"}}, nil
+}
 
 func (scriptedForge) ReleaseTags(_, repo string) ([]string, error) {
 	if repo == "widget" {
@@ -91,7 +93,7 @@ func TestCaptureThenReplay(t *testing.T) {
 	rec := gh.Capture{Live: scriptedForge{}, Dir: dir}
 
 	// Drive every read once through the capture.
-	if _, err := rec.Repos("acme"); err != nil {
+	if _, err := rec.ListRepos("acme"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,9 +117,9 @@ func TestCaptureThenReplay(t *testing.T) {
 
 	snap := gh.Snapshot{Dir: dir}
 
-	repos, err := snap.Repos("acme")
-	if err != nil || !reflect.DeepEqual(repos, []string{"widget", "gadget"}) {
-		t.Fatalf("Repos = %v, %v", repos, err)
+	repos, err := snap.ListRepos("acme")
+	if err != nil || !reflect.DeepEqual(repos, []gh.Repo{{Name: "widget"}, {Name: "gadget"}}) {
+		t.Fatalf("ListRepos = %v, %v", repos, err)
 	}
 
 	tags, err := snap.ReleaseTags("acme", "widget")
@@ -201,7 +203,7 @@ func TestSnapshotMissingListing(t *testing.T) {
 
 	snap := gh.Snapshot{Dir: t.TempDir()}
 
-	if _, err := snap.Repos("acme"); err == nil {
+	if _, err := snap.ListRepos("acme"); err == nil {
 		t.Fatal("an uncaptured listing did not refuse")
 	}
 
@@ -254,7 +256,7 @@ func TestCaptureUnwritableDir(t *testing.T) {
 
 	rec := gh.Capture{Live: scriptedForge{}, Dir: filepath.Join(blocker, "nested")}
 
-	if _, err := rec.Repos("acme"); err == nil {
+	if _, err := rec.ListRepos("acme"); err == nil {
 		t.Fatal("Repos capture into an unwritable dir did not refuse")
 	}
 
@@ -305,7 +307,7 @@ func TestSnapshotCorruptFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := (gh.Snapshot{Dir: dir}).Repos("acme"); err == nil {
+	if _, err := (gh.Snapshot{Dir: dir}).ListRepos("acme"); err == nil {
 		t.Fatal("a corrupt snapshot listing did not refuse")
 	}
 }
@@ -345,8 +347,6 @@ func TestCaptureOverNonTagReader(t *testing.T) {
 
 // onlyForge narrows a Forge to exactly the Forge interface.
 type onlyForge struct{ f gh.Forge }
-
-func (o onlyForge) Repos(org string) ([]string, error) { return o.f.Repos(org) }
 
 func (o onlyForge) ReleaseDate(a, b, c string) (time.Time, error) {
 	return o.f.ReleaseDate(a, b, c)
@@ -448,7 +448,7 @@ type snapshotRead struct {
 // everySnapshotRead is the whole replay surface, once each.
 func everySnapshotRead() []snapshotRead {
 	return []snapshotRead{
-		{"Repos", func(s gh.Snapshot) error { _, err := s.Repos("acme"); return err }},
+		{"ListRepos", func(s gh.Snapshot) error { _, err := s.ListRepos("acme"); return err }},
 		{"ReleaseTags", func(s gh.Snapshot) error { _, err := s.ReleaseTags("acme", "widget"); return err }},
 		{"ReleaseAssets", func(s gh.Snapshot) error {
 			_, err := s.ReleaseAssets("acme", "widget", "v1.0.0")
@@ -489,7 +489,7 @@ func captureWholeSeam(t *testing.T) string {
 	rec := gh.Capture{Live: wholeSeam{}, Dir: dir}
 
 	for _, call := range []func() error{
-		func() error { _, err := rec.Repos("acme"); return err },
+		func() error { _, err := rec.ListRepos("acme"); return err },
 		func() error { _, err := rec.ReleaseTags("acme", "widget"); return err },
 		func() error { _, err := rec.ReleaseAssets("acme", "widget", "v1.0.0"); return err },
 		func() error { _, err := rec.Attestations("acme", "widget", "aa"); return err },
@@ -640,7 +640,7 @@ type failingForge struct{}
 
 var errForgeDown = errors.New("the forge is down")
 
-func (failingForge) Repos(string) ([]string, error)                 { return nil, errForgeDown }
+func (failingForge) ListRepos(string) ([]gh.Repo, error)            { return nil, errForgeDown }
 func (failingForge) ReleaseTags(_, _ string) ([]string, error)      { return nil, errForgeDown }
 func (failingForge) ReleaseAssets(_, _, _ string) ([]string, error) { return nil, errForgeDown }
 func (failingForge) Asset(_, _, _, _ string) ([]byte, error)        { return nil, errForgeDown }
@@ -673,7 +673,7 @@ func TestCaptureRecordsNoFailures(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{"Repos", func() error { _, err := rec.Repos("acme"); return err }},
+		{"ListRepos", func() error { _, err := rec.ListRepos("acme"); return err }},
 		{"ReleaseTags", func() error { _, err := rec.ReleaseTags("acme", "widget"); return err }},
 		{"ReleaseAssets", func() error { _, err := rec.ReleaseAssets("acme", "widget", "v1.0.0"); return err }},
 		{"Asset", func() error { _, err := rec.Asset("acme", "widget", "v1.0.0", "checksums.txt"); return err }},
@@ -758,7 +758,7 @@ func TestCaptureFileInTheWayOfAFile(t *testing.T) {
 
 	rec := gh.Capture{Live: scriptedForge{}, Dir: dir}
 
-	if _, err := rec.Repos("acme"); err == nil {
+	if _, err := rec.ListRepos("acme"); err == nil {
 		t.Fatal("the capture wrote a file over a directory")
 	}
 }

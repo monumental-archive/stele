@@ -20,6 +20,13 @@ laws it encodes, so a schema change is a reviewed edit here first.
    that mismatches its expectation in either direction is
    `CANNOT_JUDGE`: an unseen subject is unchecked, not clean; a
    surplus one means the declaration is stale.
+
+   For the org-corpus verbs the subject set is repositories, and it is
+   resolved once — by name, in both directions — before any walk
+   begins ([the `population` section](assert-policy-schema.md#population)).
+   A divergence there is not a finding inside a walk but a refusal to
+   start one, sealed `CANNOT_JUDGE` with the repositories named: a run
+   that does not know its own population cannot judge one.
 2. **Canary**: a run that declares a known-positive and does not
    reproduce it cannot see, and reports `CANNOT_JUDGE` regardless of
    everything else it found.

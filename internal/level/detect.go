@@ -423,10 +423,15 @@ func summarise(outcomes []levelOutcome) string {
 // is level 2" without saying which repository held it there is a
 // number nobody can act on.
 //
-// The population itself is evidence, not a declaration: a listing is
-// what the forge says exists. Which members are PERMITTED to fall
-// short is a different question, asked by a verb that compares
-// evidence to a declaration, and deliberately not asked here.
+// The members arrive already enumerated, and this package never asks
+// where from. Which repositories BEAR evidence on a track is the
+// organisation's own shape to state (stele#153) and the caller
+// resolves it; which members are PERMITTED to fall short is a
+// different question again, asked by a verb that compares evidence to
+// a declaration, and deliberately not asked here. What reaches this
+// function is a subject list, and every subject on it is judged the
+// same way — no declaration reaches a rung, because none reaches this
+// package at all.
 func AssessPopulation(t Track, members []*Evidence, now time.Time) *Assessment {
 	if len(members) == 0 {
 		lad := NewLadder(t)

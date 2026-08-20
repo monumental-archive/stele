@@ -274,11 +274,28 @@ member**. An organisation is not at a level because most of it is, and
 the report names the weakest member, because a number nobody can trace
 to a repository is a number nobody can act on.
 
-The population is the forge's listing — what the forge says exists —
-so no declaration decides who is counted. Which members are
-*permitted* to fall short is a different question, asked by a verb
-that compares evidence to a declaration, and deliberately not asked
-here.
+By default the population is the forge's listing — what the forge says
+exists, archived repositories and forks aside. `--policy` narrows it
+to what an organisation declared about itself
+([the assert policy's `population` section](assert-policy-schema.md#population)),
+per repository AND per track: a repository that will never publish a
+release is measured on `source` and is simply not on the board for
+`build` and `dependency`.
+
+That is a statement about who is ASKED, and it can never touch what
+the answer is. A cell outside the population was never measured — no
+number, no grey, no finding — which is a different claim from a cell
+that should have been measurable and could not be read this time, and
+that second one stays loud. Which members are *permitted to fall
+short* is a third question again, asked by a verb that compares
+evidence to a declaration, and still not asked here: a repository in
+the population is judged on the platform's own facts, and nothing
+written down can lift its rung or hide a shortfall it established.
+
+`--policy` is meaningful only with `--org`. Over the one repository
+`--repo` names, a declared population could do nothing but veto the
+question that was asked, so the combination is refused rather than
+reinterpreted.
 
 ## Output
 

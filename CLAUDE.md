@@ -21,6 +21,15 @@ never a hardcoded name. Four verbs, which are the command surface:
   across a workflow tree (#148 — what a shared workflow's jobs ask
   for is what its callers must grant, computed through the one
   workflow reader in `internal/workflow`).
+  Every one of them enumerates its subjects through
+  `internal/population` and NOWHERE else (#153): the population is a
+  declared object — per repository and per SLSA track, with the
+  archived/fork rule demoted from code to its default expression —
+  reconciled against the listing by name in both directions, and a
+  forbidigo rule keeps the listing read out of every other package.
+  Exclusion and exception may never share a vocabulary: an exclusion
+  produces NOTHING (no finding, no count, no cell), an exception is
+  dated and loud until resolved.
   Repo-settings drift was in the original charter and is DROPPED by
   written decision: rulesets enforce; a setting that matters to
   evidence surfaces as a consequence in the evidence walk, and a
@@ -32,7 +41,9 @@ never a hardcoded name. Four verbs, which are the command surface:
   source chain walk, the VSA verdict, the reproducibility rebuild's
   typed verdict (#96); beside it `level`, its own verb since #125:
   the honest current level measured from live evidence, taking no
-  declaration
+  declaration — `--org` reads one, and only to decide WHO IS ASKED;
+  `internal/level` still imports no policy, so nothing written down
+  can reach a rung
 
 Born from `.github#392`: it replaces ~8000 lines of bash spread across
 the canon's scripts, workflow `run:` blocks and belt task bodies. The

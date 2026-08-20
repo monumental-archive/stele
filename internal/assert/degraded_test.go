@@ -26,7 +26,7 @@ func TestEvidenceForgeTears(t *testing.T) {
 	t.Parallel()
 
 	for _, read := range []string{
-		"Repos", "ReleaseTags", "ReleaseAssets", "Asset", "Attestations", "FailedRuns",
+		"ReleaseTags", "ReleaseAssets", "Asset", "Attestations", "FailedRuns",
 	} {
 		t.Run(read, func(t *testing.T) {
 			t.Parallel()
@@ -43,7 +43,7 @@ func TestEvidenceForgeTears(t *testing.T) {
 			pol := loadTestPolicy(t)
 			src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-			_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+			_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 			if err == nil {
 				t.Fatalf("Evidence passed with %s torn — a walk that cannot read is not a clean walk", read)
@@ -81,7 +81,7 @@ func TestEvidenceContractSourceTears(t *testing.T) {
 			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 1, "classes": []}`
 			f.torn = map[string]error{read: errTorn}
 
-			_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+			_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 			if err == nil {
 				t.Fatalf("Evidence passed with %s torn", read)
@@ -96,14 +96,14 @@ func TestEvidenceContractSourceTears(t *testing.T) {
 func TestBlastRadiusForgeTears(t *testing.T) {
 	t.Parallel()
 
-	for _, read := range []string{"Repos", "ReleaseTags", "ReleaseAssets", "Asset", "Attestations"} {
+	for _, read := range []string{"ReleaseTags", "ReleaseAssets", "Asset", "Attestations"} {
 		t.Run(read, func(t *testing.T) {
 			t.Parallel()
 
 			f := blastForge()
 			f.torn = map[string]error{read: errTorn}
 
-			_, err := assert.BlastRadius(loadBlastPolicy(t), assert.Population{Org: "acme"}, f,
+			_, err := assert.BlastRadius(loadBlastPolicy(t), orgPop(t, f, nil), f,
 				fakeScanner{out: scanResult(canaryScan, "serde", "1.0.0", "crates.io", false)},
 				&vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
 			if err == nil {
@@ -122,7 +122,7 @@ func TestBlastRadiusForgeTears(t *testing.T) {
 func TestBlastRadiusScannerTears(t *testing.T) {
 	t.Parallel()
 
-	_, err := assert.BlastRadius(loadBlastPolicy(t), assert.Population{Org: "acme"}, blastForge(),
+	_, err := assert.BlastRadius(loadBlastPolicy(t), orgPop(t, blastForge(), nil), blastForge(),
 		fakeScanner{err: errTorn}, &vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
 	if err == nil || !errors.Is(err, errTorn) {
 		t.Fatalf("BlastRadius = %v, want the scanner failure carried out", err)
@@ -134,18 +134,6 @@ func TestBlastRadiusScannerTears(t *testing.T) {
 func TestTagsForgeTears(t *testing.T) {
 	t.Parallel()
 
-	t.Run("the repository listing", func(t *testing.T) {
-		t.Parallel()
-
-		forge := &fakeForge{repos: []string{"widget"}, torn: map[string]error{"Repos": errTorn}}
-
-		_, err := assert.Tags(loadTagsPolicy(t), assert.Population{Org: "acme"},
-			forge, conformantTags(), &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
-		if err == nil || !errors.Is(err, errTorn) {
-			t.Fatalf("Tags = %v, want the listing tear", err)
-		}
-	})
-
 	for _, read := range []string{"ChainNotes", "IsAncestor"} {
 		t.Run(read, func(t *testing.T) {
 			t.Parallel()
@@ -153,8 +141,8 @@ func TestTagsForgeTears(t *testing.T) {
 			tags := conformantTags()
 			tags.torn = map[string]error{read: errTorn}
 
-			_, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-				&fakeForge{}, tags, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
+			_, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+				tags, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
 			if err == nil {
 				t.Fatalf("Tags passed with %s torn", read)
 			}
@@ -175,7 +163,7 @@ func TestNoCanaryWhenUndeclared(t *testing.T) {
 	pol := loadBlastPolicy(t)
 	pol.BlastRadius.Canary = nil
 
-	rep, err := assert.BlastRadius(pol, assert.Population{Org: "acme"}, blastForge(),
+	rep, err := assert.BlastRadius(pol, orgPop(t, blastForge(), nil), blastForge(),
 		fakeScanner{out: `{"results": []}`}, &vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("BlastRadius = %v", err)
@@ -195,7 +183,7 @@ func TestShortDigestKeepsShortInputWhole(t *testing.T) {
 	f := blastForge()
 	f.store = map[string][]string{} // no attestation over the SBOM digest
 
-	rep, err := assert.BlastRadius(loadBlastPolicy(t), assert.Population{Org: "acme"}, f,
+	rep, err := assert.BlastRadius(loadBlastPolicy(t), orgPop(t, f, nil), f,
 		fakeScanner{out: scanResult(canaryScan, "serde", "1.0.0", "crates.io", false)},
 		&vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
 	if err != nil {
@@ -245,7 +233,7 @@ func TestContinuousHalfTears(t *testing.T) {
 
 			src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-			_, err = assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+			_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src,
 				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 			if err == nil {
 				t.Fatalf("Evidence passed with %s torn", tc.torn)
@@ -277,7 +265,7 @@ func TestSignerPinPatternWithoutACaptureGroup(t *testing.T) {
 	f := continuousForge()
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence = %v", err)
@@ -478,7 +466,7 @@ func TestSubjectDigestsSeenOnce(t *testing.T) {
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 	att := &fakeAttestor{}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, att,
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, att,
 		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err != nil {
@@ -502,7 +490,7 @@ func TestContractManifestThatIsNotOne(t *testing.T) {
 	pol := loadTestPolicy(t)
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+	_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
 		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "manifest of") {
@@ -568,7 +556,7 @@ func TestWorkflowContractSource(t *testing.T) {
 			pol := loadTestPolicy(t)
 			src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-			_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+			_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 
 			if tc.want == "" {
@@ -601,7 +589,7 @@ func TestReleaseAssetsTearAfterTheContract(t *testing.T) {
 	pol := loadTestPolicy(t)
 	src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+	_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "assets of") {
 		t.Fatalf("Evidence = %v, want the asset-listing refusal", err)
@@ -613,7 +601,7 @@ func TestReleaseAssetsTearAfterTheContract(t *testing.T) {
 func TestScannerReportThatIsNotOne(t *testing.T) {
 	t.Parallel()
 
-	_, err := assert.BlastRadius(loadBlastPolicy(t), assert.Population{Org: "acme"}, blastForge(),
+	_, err := assert.BlastRadius(loadBlastPolicy(t), orgPop(t, blastForge(), nil), blastForge(),
 		fakeScanner{out: "not json"}, &vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "scanner report") {
 		t.Fatalf("BlastRadius = %v, want the report refusal", err)
@@ -637,7 +625,7 @@ func TestSelfSignedPinsTear(t *testing.T) {
 	pol := loadTestPolicy(t)
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
 		report.NewJournal(), nil, full,
 		func(string, ...any) {})
 	if err != nil {
@@ -674,7 +662,7 @@ func TestSignerPinPatternThatDoesNotCompile(t *testing.T) {
 	f := continuousForge()
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	_, err = assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+	_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "signer pin pattern") {
 		t.Fatalf("Evidence = %v, want the pattern refusal", err)
@@ -697,7 +685,7 @@ func TestShortDigestSurvivesWhole(t *testing.T) {
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	if _, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+	if _, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {}); err != nil {
 		t.Fatalf("Evidence = %v", err)
 	}
@@ -773,7 +761,7 @@ func TestEpochsAgainstAnUnreadableMachineryVersion(t *testing.T) {
 
 	src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence = %v", err)
@@ -809,7 +797,7 @@ func TestNoEpochMeansAlways(t *testing.T) {
 
 	src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src,
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
 		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence = %v", err)

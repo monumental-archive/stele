@@ -26,7 +26,7 @@ func chainsWorld(t *testing.T) (string, string, string, string) { //nolint:gocri
 	files := map[string]string{
 		// The org listing: one repository, no notes captured for it —
 		// replay reads the absence as an empty chain.
-		"snap/acme/repos.json": `["lab"]`,
+		"snap/acme/repos.json": `[{"name": "lab"}]`,
 		"policy.json": `{"schema": 5, ` +
 			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
 			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +

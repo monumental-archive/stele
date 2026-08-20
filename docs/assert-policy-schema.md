@@ -25,13 +25,24 @@ version mismatch, never as an unknown-field error.
 {
   "schema": 5,
   "debtFile": "security/attestation-debt.txt",
+  "population": {
+    "repositories": [
+      { "repo": ".github" },
+      { "repo": "release-lab" },
+      { "repo": "stele" },
+      {
+        "repo": "signer",
+        "tracks": ["source"],
+        "reason": "publishes no releases; it is the signing workflow repository"
+      }
+    ]
+  },
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
-    "expectedRepos": 4,
     "publishWorkflows": ["publish", "self-publish"],
     "classes": {
       "rust-crate": {
@@ -147,14 +158,109 @@ version mismatch, never as an unknown-field error.
   itself. The policy-known documents (bundles, the umbrella, the
   contract manifest, prefixed assets) are always excluded; this field
   covers what only the org can name.
-- `expectedRepos` — optional declared population. A listing that sees
-  a different count refuses to judge: an unseen repo is unchecked,
-  not clean, and a surplus one means this declaration is stale.
 - `publishWorkflows` — the workflows whose failure can burn a release.
   Absent means ANY failed run on the tag counts, which is too broad:
   one flaky unrelated workflow would excuse a genuinely missing
   verdict, and the burned category must never become a mute button.
   Declare them.
+
+## `population`
+
+Which repositories bear evidence, and on which SLSA tracks. Optional,
+at the ROOT rather than inside a section, because EVERY target
+enumerates through it — a population declared inside one walk's
+section would be a second population for the other five.
+
+**Absent means the default predicate**: archived repositories and
+forks are out, everything the listing shows is in, on every track.
+That is what a uniform organisation needs and what a stranger gets
+with no configuration at all.
+
+```json
+"population": {
+  "repositories": [
+    { "repo": ".github" },
+    { "repo": "signer", "tracks": ["source"],
+      "reason": "publishes no releases; it is the signing workflow repository" },
+    { "repo": "www", "tracks": [],
+      "reason": "the product site; it bears no evidence" }
+  ]
+}
+```
+
+- `repo` — the bare repository name within the population's owner.
+  The owner is the population's, named once at the command line.
+- `tracks` — the tracks this repository bears evidence on, spelled
+  `build`, `source`, `dependency`. **Absent means every track,
+  present and future** — the ordinary case, and the one that needs no
+  words. An empty list means none of them. A name that is no track
+  this release judges is REFUSED at load: `tracks` is stated
+  positively, so a typo would otherwise narrow a population silently,
+  and a repository must only ever leave a walk's sight by a statement
+  that parsed.
+- `reason` — why the membership is narrower than everything.
+  Required whenever `tracks` is present. A narrowing nobody wrote a
+  reason for is indistinguishable from a mistake, and this is the one
+  field that tells a later reader which it was.
+
+Which target reads which track is a fact about the MECHANISM, not
+about any organisation: the evidence walk and the permissions join
+measure `build`; chains and tags measure `source`; blast-radius (and
+`derive vex-subjects`, which sweeps the same SBOMs) measures
+`dependency`.
+
+### Exclusions are not exceptions
+
+The two vocabularies mean opposite things and the schema keeps them
+apart on purpose. An **exclusion** here says a repository owes
+nothing: it produces no member, no finding, no stale entry, no count
+and no board cell — silence, because there is nothing to say. An
+**exception** (`chains.exceptions`, the debt file) says a repository
+owes something it has not got: dated, removal-conditioned, and loud
+until resolved. There is no way to spell the second in this section,
+which is what keeps "outside the scope" from decaying into "behind on
+the work".
+
+An exclusion is also not an excuse. It decides who is ASKED, never
+what the answer is — a repository that is in the population is judged
+on the evidence and nothing a policy says can lift its verdict.
+
+### The roster is closed
+
+Declaring this section replaces the default predicate's open listing
+with a roster, and a roster is reconciled against the listing in both
+directions, **by name**:
+
+- a repository the listing shows that the roster does not account for
+  refuses the run — that is the onboarding signal working, not a
+  defect to swallow;
+- a repository the roster names that the listing does not show
+  refuses the run — either a credential that cannot see it or a
+  roster nobody updated when it was archived or deleted, and an
+  unseen repository is unchecked, never clean.
+
+A count cannot say which repository went missing, and the repository
+that went missing is the whole finding. The declared population's
+cardinality IS the expectation — nothing declares a total beside it,
+because a derived number typed a second time is a number that drifts.
+
+A roster entry OVERRIDES the default predicate for its repository, so
+an organisation that keeps auditing a repository it archived says so
+by naming it, and needs no change to this tool to do it.
+
+Pointing a walk at a track the policy declares nobody in is a
+contradiction, and it is refused by name rather than answered: a
+walk with nothing to judge would otherwise seal `CANNOT_JUDGE` with
+no cause, which reads exactly like a credential that could not look.
+A listing that merely came back EMPTY is the opposite case and stays
+`CANNOT_JUDGE` with the population at zero — an outage is not a usage
+error.
+
+Single-repository runs (`--repo owner/name`) read the roster only
+where it names that repository. A closed roster scopes an
+organisation's listing; it has no standing to veto a target a caller
+named explicitly, which is what lets the same walk point at a
+repository the roster never heard of.
 
 ## `debtFile`
 

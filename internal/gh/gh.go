@@ -51,10 +51,13 @@ const (
 // give each caller a different partial view of one service — which is
 // how two callers come to disagree about what the forge said.
 //
-//nolint:interfacebloat // one service, one surface; see above
+// Enumerating a population is deliberately NOT on this interface: it
+// is RepoLister's, which internal/population alone holds (stele#153).
+// A walk that could list an org from the same handle it reads with
+// would be a second population beside the declared one, and the two
+// disagree in exactly the degraded states the population rule exists
+// to catch.
 type Forge interface {
-	// Repos lists the org's repositories, archived and forks excluded.
-	Repos(org string) ([]string, error)
 	// ReleaseTags lists the non-draft release tags of one repository.
 	ReleaseTags(owner, repo string) ([]string, error)
 	// ReleaseAssets lists the asset names of one release.
@@ -97,6 +100,28 @@ type Forge interface {
 	// not a count: whether a failure is the PUBLISHING one decides
 	// whether a release is burned, and a count cannot answer that.
 	FailedRuns(owner, repo, branch string) ([]string, error)
+}
+
+// Repo is one repository as the forge reports it: its name and the
+// two facts a membership rule reads. The FACTS travel, not a verdict
+// about them — deciding that an archived repository owes no evidence
+// is a policy call, and a listing that had already made it would have
+// put one organisation's convention inside the forge seam where no
+// policy could reach it (stele#153).
+type Repo struct {
+	Name     string `json:"name"`
+	Archived bool   `json:"archived"`
+	Fork     bool   `json:"fork"`
+}
+
+// RepoLister is the org-listing seam, separate from Forge on purpose:
+// enumerating a population is internal/population's job alone, and a
+// walk holding a Forge structurally cannot do it. The lint rule beside
+// this (.golangci.yml, forbidigo) closes the remaining door — a caller
+// that asserts its way to this method is refused by name.
+type RepoLister interface {
+	// ListRepos lists an organisation's repositories, verdict-free.
+	ListRepos(org string) ([]Repo, error)
 }
 
 // maxBody bounds one response read.
@@ -154,14 +179,14 @@ type repoEntry struct {
 	Fork     bool   `json:"fork"`
 }
 
-// Repos implements Forge.
-func (c *Client) Repos(org string) ([]string, error) {
+// ListRepos implements RepoLister.
+func (c *Client) ListRepos(org string) ([]Repo, error) {
 	pages, err := c.paged("/orgs/" + url.PathEscape(org) + "/repos")
 	if err != nil {
 		return nil, err
 	}
 
-	var out []string
+	var out []Repo
 
 	for _, page := range pages {
 		entries, err := jsonx.DecodeForeign[[]repoEntry](page)
@@ -170,9 +195,7 @@ func (c *Client) Repos(org string) ([]string, error) {
 		}
 
 		for _, e := range *entries {
-			if !e.Archived && !e.Fork {
-				out = append(out, e.Name)
-			}
+			out = append(out, Repo(e))
 		}
 	}
 

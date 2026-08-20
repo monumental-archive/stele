@@ -99,7 +99,7 @@ func runStoreWalk(t *testing.T, policyJSON string, f *fakeForge, att assert.Atte
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, att,
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, att,
 		report.NewJournal(), pinFile, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)

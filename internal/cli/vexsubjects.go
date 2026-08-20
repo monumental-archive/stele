@@ -15,6 +15,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/triage"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 	"github.com/monumental-archive/stele/internal/vexsubjects"
@@ -103,13 +104,22 @@ func runDeriveVEXSubjects(va *vexSubjectsArgs, doc io.Writer, out *latch) error 
 		forge = gh.Snapshot{Dir: va.snapshotDir}
 	}
 
-	org, repos, err := assert.Population{Org: va.org, Repo: va.repo}.Resolve(forge)
+	pop, err := resolvePopulation(population.Scope{Org: va.org, Repo: va.repo}, forge, pol.Population)
+	if err != nil {
+		return fmt.Errorf("derive vex-subjects: %w", err)
+	}
+
+	// The same track the blast-radius walk covers, and for the same
+	// reason: this mode derives which releases an advisory reaches
+	// from their SBOMs, so a repository declared outside the
+	// dependency track has nothing here to be affected.
+	repos, err := pop.Members(assert.TrackBlastRadius)
 	if err != nil {
 		return fmt.Errorf("derive vex-subjects: %w", err)
 	}
 
 	d := &vexsubjects.Deriver{
-		Org:        org,
+		Org:        pop.Owner(),
 		SBOMSuffix: *pol.Evidence.SBOMSuffix,
 		Checksums:  *pol.Evidence.Checksums,
 		Triage:     &triage.Policy{BaseEcosystems: pol.BlastRadius.OSEcosystems},

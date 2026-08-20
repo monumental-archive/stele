@@ -34,7 +34,7 @@ func vexSubjectsSnapshot(t *testing.T) (string, string, string) {
 		strings.Repeat("b", 64) + "  app.spdx.json\n"
 
 	files := map[string]string{
-		"snap/acme/repos.json":                                  `["widget"]`,
+		"snap/acme/repos.json":                                  `[{"name": "widget"}]`,
 		"snap/acme/widget/tags.json":                            `["v1.0.0"]`,
 		"snap/acme/widget/releases/v1.0.0/assets.json":          `["app.spdx.json", "checksums.txt"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,

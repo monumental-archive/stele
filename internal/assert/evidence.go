@@ -26,59 +26,12 @@ import (
 	"github.com/monumental-archive/stele/internal/dsse"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/vsa"
 )
 
 var hex64OnlyRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
-// Population names what the evidence walk covers: an organisation's
-// listing, or exactly one repository. Exactly one field is set — the
-// CLI enforces the exclusivity, the walk refuses the impossible
-// combinations it can still see.
-type Population struct {
-	// Org is the organisation whose listing is the population.
-	Org string
-	// Repo is a single owner/name population — the single-repo
-	// consumer (#79): the same walk, the population enumeration
-	// replaced by the one repository named.
-	Repo string
-}
-
-// Subject is the report subject the population walks under.
-func (p Population) Subject() string {
-	if p.Repo != "" {
-		return p.Repo
-	}
-
-	return p.Org
-}
-
-// Resolve turns the population into the owner and its repositories —
-// a listing for an org, the one named repository otherwise. Exported
-// because a mode that builds its own per-repository inputs before the
-// walk must enumerate through this, not beside it: a second
-// enumeration is a second population, and the two would disagree in
-// exactly the degraded states the population rule exists to catch.
-//
-//nolint:gocritic // unnamedResult: the doc line names the results
-func (p Population) Resolve(forge gh.Forge) (string, []string, error) {
-	if p.Repo == "" {
-		repos, err := forge.Repos(p.Org)
-		if err != nil {
-			return "", nil, fmt.Errorf("assert: listing %s: %w", p.Org, err)
-		}
-
-		return p.Org, repos, nil
-	}
-
-	owner, name, ok := strings.Cut(p.Repo, "/")
-	if !ok || owner == "" || name == "" {
-		return "", nil, fmt.Errorf("assert: population %q is not owner/name", p.Repo)
-	}
-
-	return owner, []string{name}, nil
-}
 
 // Evidence walks the population's releases and seals the
 // completeness verdict. The journal arrives carrying the committed
@@ -88,35 +41,18 @@ func (p Population) Resolve(forge gh.Forge) (string, []string, error) {
 // — the trust material it held, which the walk cannot know and the
 // document must record.
 func Evidence(
-	pol *Policy, pop Population, forge gh.Forge, src ContractSource, att Attestor,
+	pol *Policy, pop *population.Set, forge gh.Forge, src ContractSource, att Attestor,
 	j *report.Journal, pinFile []byte, full *FullDepth, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
-	// A declared org population is meaningless over a single
-	// repository, and silently ignoring it would let one policy mean
-	// two things (#79): refused, never reinterpreted.
-	if pop.Repo != "" && e.ExpectedRepos != nil {
-		return nil, errors.New(
-			"assert: expectedRepos is declared but the population is one repository — the declaration cannot apply")
-	}
-
-	org, repos, err := pop.Resolve(forge)
+	repos, err := pop.Members(TrackEvidence)
 	if err != nil {
 		return nil, err
 	}
 
-	// The declared-population guard, before anything else: a token
-	// that sees a partial org makes the walk run short and pass —
-	// a clean check indistinguishable from no check.
-	if e.ExpectedRepos != nil && len(repos) != *e.ExpectedRepos {
-		return nil, fmt.Errorf(
-			"assert: the listing sees %d repos, the declared population is %d — an unseen repo is unchecked, not clean",
-			len(repos), *e.ExpectedRepos)
-	}
-
 	w := &evidenceWalk{
-		pol: e, org: org, subject: pop.Subject(),
+		pol: e, org: pop.Owner(), subject: pop.Subject(),
 		forge: forge, src: src, attestor: att, full: full, j: j, log: log,
 	}
 

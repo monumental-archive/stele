@@ -60,6 +60,36 @@ const (
 	dependencyCeiling  = 4
 )
 
+// Tracks is the judgeable track set, in the order a board reads them.
+// The ONE enumeration: a caller that needs "every track" asks here
+// rather than writing the three names down again, so a fourth track
+// reaches every consumer in the release that adds it.
+//
+// The set is deliberately open upward: a track this verb does not YET
+// judge is absent from it, never refused as a concept.
+func Tracks() []Track { return []Track{TrackBuild, TrackSource, TrackDependency} }
+
+// TrackByName resolves the lower-case spelling — the one a command
+// line and a policy document both use — to the track it names. Second
+// result false means no track goes by that name HERE; a caller
+// deciding what to do about that is deciding about its own document,
+// which is not this package's judgment to make.
+func TrackByName(name string) (Track, bool) {
+	for _, t := range Tracks() {
+		if t.Key() == name {
+			return t, true
+		}
+	}
+
+	return Track{}, false
+}
+
+// Key is the track's lower-case spelling, derived from the spec name
+// rather than written twice: the flag value, the policy token and the
+// SlsaResult name are one fact in three places, and a second literal
+// is a second fact waiting to disagree.
+func (t Track) Key() string { return strings.ToLower(t.name) }
+
 // Name is the track's SlsaResult name (BUILD, SOURCE, DEPENDENCY).
 func (t Track) Name() string { return t.name }
 

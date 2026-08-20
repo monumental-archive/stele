@@ -147,6 +147,17 @@ Stated honestly rather than discovered:
   adopter can run it with `--repo`, and mostly doesn't want it on
   day one.
 
+  **You do not have to be uniform.** By default the population is
+  every repository the listing shows, archived repositories and forks
+  aside — no configuration. When your repositories are not all the
+  same shape, the policy's `population` section says so per
+  repository and per track, and a repository declared outside a track
+  produces nothing there: no finding, no count, no cell. It is a
+  statement about what you OWN, never an excuse for what you owe —
+  see [assert-policy-schema.md](assert-policy-schema.md#population).
+  The same section scopes a single repository that chases one track
+  and not the others.
+
   The exception is **`assert permissions`**, which needs neither a
   forge nor a release: pointed at a checkout it reads workflow files
   off disk and holds every caller to what the workflow it calls asks
