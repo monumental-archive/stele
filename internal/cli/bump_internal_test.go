@@ -367,3 +367,67 @@ func write2(t *testing.T, files map[string]string) string {
 
 	return dir
 }
+
+// A declared version reaches the mirrors by the existing path: bump
+// takes the same decision `derive version` reported, so the number is
+// never spelled a second time on its way to disk (stele#146).
+func TestBumpWritesADeclaredVersion(t *testing.T) {
+	dir := bumpTree(t, "0.9.0")
+
+	r := runBump(t, dir, bumpHistory(), "--release-as", "1.0.0")
+	if r.code != exitOK {
+		t.Fatalf("bump = %d, stderr: %s", r.code, r.stderr)
+	}
+
+	for _, want := range []string{"release=true", "version=1.0.0", "tag=v1.0.0", "files=Cargo.toml"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("stdout misses %q:\n%s", want, r.stdout)
+		}
+	}
+
+	cargo, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")) //nolint:gosec // a path this test just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(cargo), "version = \"1.0.0\"") {
+		t.Errorf("the mirror did not move to the declared version:\n%s", cargo)
+	}
+}
+
+// The drift gate reads the same declaration: mirrors already carrying
+// the declared version are the release being cut, not drift. Without
+// this the tree that `derive bump --release-as` just wrote would fail
+// the very check that runs after it.
+func TestBumpCheckAcceptsADeclaredPendingVersion(t *testing.T) {
+	dir := bumpTree(t, "1.0.0")
+
+	r := runBump(t, dir, bumpHistory(), "--release-as", "1.0.0", "--check")
+	if r.code != exitOK {
+		t.Fatalf("bump --check = %d, stderr: %s", r.code, r.stderr)
+	}
+
+	if !strings.Contains(r.stdout, "check=pending") {
+		t.Errorf("stdout misses check=pending:\n%s", r.stdout)
+	}
+}
+
+// A declaration the judgment refuses stops before the mirrors: the
+// tree a refused run leaves must be the tree it found.
+func TestBumpRefusedDeclarationWritesNothing(t *testing.T) {
+	dir := bumpTree(t, "0.9.0")
+
+	r := runBump(t, dir, bumpHistory(), "--release-as", "0.8.0")
+	if r.code != exitRefused {
+		t.Fatalf("bump = %d, want %d:\n%s", r.code, exitRefused, r.stdout)
+	}
+
+	cargo, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")) //nolint:gosec // a path this test just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(cargo), "version = \"0.9.0\"") {
+		t.Errorf("a refused declaration moved the mirrors:\n%s", cargo)
+	}
+}

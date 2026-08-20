@@ -89,6 +89,37 @@ func (r *Repo) Tags(ref string) ([]string, error) {
 	return tags, nil
 }
 
+// AllTags lists every tag in the repository, unqualified, reachability
+// deliberately ignored.
+//
+// The opposite question from Tags, and the reason both exist: measuring
+// a RANGE asks which release this line of history descends from, where
+// a tag on another branch describes a different line; minting a NEW
+// name asks which names the repository has already taken, where a tag
+// on another branch has taken one just as firmly. A 1.x maintenance
+// branch bases at v1.4.2 with v2.0.0 published elsewhere — reachability
+// is right for the first question and blind for the second.
+func (r *Repo) AllTags() ([]string, error) {
+	if err := r.requireFullHistory(); err != nil {
+		return nil, err
+	}
+
+	out, err := r.git("for-each-ref", "--format=%(refname:strip=2)", "refs/tags")
+	if err != nil {
+		return nil, fmt.Errorf("gitrepo: listing tags: %w", err)
+	}
+
+	var tags []string
+
+	for line := range strings.Lines(string(out)) {
+		if tag := strings.TrimSpace(line); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+
+	return tags, nil
+}
+
 // Message returns rev's full commit message — subject, body and
 // trailers — as the author wrote it.
 //

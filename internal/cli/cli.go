@@ -97,7 +97,9 @@ usage:
 
   stele derive <mode>    turn facts into claims; modes:
     version   the release this history's conventional commits call
-              for, measured within one tag namespace
+              for, measured within one tag namespace; --release-as
+              declares a version instead, judged against the derived
+              base and the names the namespace has taken
     notes     that release's changelog section, in the Keep a
               Changelog shape, printed or spliced into a file
     bump      that release's version written into the tree's version
@@ -187,7 +189,7 @@ takes --subjects --vex --author --id --released [--base-ecosystems
 --out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
---silent-types --zero-major-bumps-minor]; notes adds [--groups
+--silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
 --date --changelog]; bump adds [--check --date].
 

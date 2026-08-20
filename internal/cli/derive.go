@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/monumental-archive/stele/internal/convcommit"
 	"github.com/monumental-archive/stele/internal/derive"
 	"github.com/monumental-archive/stele/internal/gitrepo"
@@ -37,6 +39,7 @@ var openDeriveGit = func(dir string) (deriveHistory, error) {
 // the ledger, and a seam that could is a seam that will.
 type deriveHistory interface {
 	Tags(ref string) ([]string, error)
+	AllTags() ([]string, error)
 	Commits(from, to string, paths ...string) ([]string, error)
 	Message(rev string) (string, error)
 	CommitTime(rev string) (string, error)
@@ -83,13 +86,14 @@ func (d *derived) date() (string, error) {
 
 // deriveArgs is everything `derive version` reads.
 type deriveArgs struct {
-	gitDir string
-	ref    string
-	prefix string
-	minor  string
-	silent string
-	paths  string
-	zeroX  bool
+	gitDir    string
+	ref       string
+	prefix    string
+	minor     string
+	silent    string
+	paths     string
+	releaseAs string
+	zeroX     bool
 }
 
 // deriveCmd dispatches `stele derive <mode>`.
@@ -209,6 +213,9 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 	fs.StringVar(&da.minor, "minor-types", "feat", "comma-separated commit types that raise the minor")
 	fs.StringVar(&da.silent, "silent-types", "chore,ci,docs,style,test",
 		"comma-separated commit types that release nothing; every other type is a patch")
+	fs.StringVar(&da.releaseAs, "release-as", "",
+		"release this exact version instead of the derived one; refused unless it is an increase over the "+
+			"derived base and a name the namespace has not taken. The decision reports as declared")
 	fs.BoolVar(&da.zeroX, "zero-major-bumps-minor", true,
 		"below 1.0.0, raise the minor for a breaking change rather than declaring 1.0.0")
 
@@ -345,7 +352,48 @@ func deriveRelease(da *deriveArgs, out *latch) (*derived, error) {
 
 	out.logf("base %s, %d commit(s) in range", start, len(commits))
 
+	if da.releaseAs != "" {
+		if decision, err = declare(da, history, decision, out); err != nil {
+			return nil, err
+		}
+	}
+
 	return &derived{history: history, base: base, decision: decision, commits: commits, ref: da.ref}, nil
+}
+
+// declare judges the caller's declared version against the derivation.
+// The names already taken come from every tag in the repository, not
+// from the ones this ref descends from: reachability is the right
+// question for measuring a range and the wrong one for minting a name
+// (gitrepo.AllTags).
+func declare(da *deriveArgs, history deriveHistory, decision derive.Decision, out *latch) (derive.Decision, error) {
+	version, err := semver.StrictNewVersion(da.releaseAs)
+	if err != nil {
+		return derive.Decision{}, fmt.Errorf("derive: --release-as %q: %w", da.releaseAs, err)
+	}
+
+	all, err := history.AllTags()
+	if err != nil {
+		return derive.Decision{}, err
+	}
+
+	taken, skipped := derive.Versions(da.prefix, all)
+
+	// Named for the same reason LatestTag's are: a name checked against
+	// a set something was quietly dropped from is a weaker check than
+	// the reader is being shown.
+	for _, tag := range skipped {
+		out.logf("skipped %q: in the %q namespace but not a version", tag, da.prefix)
+	}
+
+	declared, err := decision.Declare(version, taken)
+	if err != nil {
+		return derive.Decision{}, err
+	}
+
+	out.logf("declared %s over the derived base %s", version, declared.Base())
+
+	return declared, nil
 }
 
 // runDeriveVersion reports the decision.
@@ -405,14 +453,19 @@ func reportVersion(prefix string, d *derived, out *latch) error {
 	}
 
 	// Requested and applied are both stated. They differ exactly when a
-	// 0.x line absorbed a breaking change into its minor, and a reader
-	// told only the applied bump would conclude nothing broke.
-	if decision.Requested() != decision.Applied() {
+	// 0.x line absorbed a breaking change into its minor, or when a
+	// human declared the number, and a reader told only the applied
+	// bump would conclude the range asked for it.
+	switch {
+	case decision.Declared():
+		out.logf("bump=%s (declared; the range requested %s)", decision.Applied(), decision.Requested())
+	case decision.Requested() != decision.Applied():
 		out.logf("bump=%s (requested %s, absorbed by the 0.x rule)", decision.Applied(), decision.Requested())
-	} else {
+	default:
 		out.logf("bump=%s", decision.Applied())
 	}
 
+	out.logf("declared=%t", decision.Declared())
 	out.logf("release=true")
 	out.logf("version=%s", next)
 	out.logf("tag=%s", derive.Tag(prefix, next))
