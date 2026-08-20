@@ -63,23 +63,6 @@ func parseGroups(s string) (map[string]string, error) {
 // runDeriveNotes derives the release, renders its section, and either
 // prints it or splices it into a changelog.
 func runDeriveNotes(da *deriveArgs, na *notesArgs, out *latch) error {
-	groups, err := parseGroups(na.groups)
-	if err != nil {
-		return err
-	}
-
-	notes, err := derive.NewNotes(&derive.NotesOptions{
-		Groups:        groups,
-		Order:         splitTypes(na.order),
-		BreakingGroup: na.breaking,
-		CompareURL:    na.compareURL,
-		ReleaseURL:    na.releaseURL,
-		PullURL:       na.pullURL,
-	})
-	if err != nil {
-		return err
-	}
-
 	d, err := deriveRelease(da, out)
 	if err != nil {
 		return err
@@ -92,23 +75,7 @@ func runDeriveNotes(da *deriveArgs, na *notesArgs, out *latch) error {
 		return nil
 	}
 
-	date := na.date
-	if date == "" {
-		// The ref's own committer date, never a wall clock: a renderer
-		// that reads the time renders a different document every run, and
-		// the release date IS the date of what is being released.
-		date, err = d.date()
-		if err != nil {
-			return err
-		}
-	}
-
-	section, err := notes.Render(derive.Release{
-		Version:   next,
-		Previous:  d.base.Version,
-		TagPrefix: da.prefix,
-		Date:      date,
-	}, d.commits)
+	section, err := renderNotes(da, na, d)
 	if err != nil {
 		return err
 	}
@@ -120,6 +87,56 @@ func runDeriveNotes(da *deriveArgs, na *notesArgs, out *latch) error {
 	}
 
 	return splice(na.changelog, section, next.String(), derive.Tag(da.prefix, next), out)
+}
+
+// renderNotes renders one release's changelog section. Shared with the
+// release plan (stele#155): the section a changelog carries and the
+// notes a plan hands an executor are one rendering, so the text a
+// reviewer approves and the text a release publishes cannot be two
+// descriptions of the same range written at different moments.
+//
+// A range that releases nothing renders nothing, and says so through
+// the empty string rather than an error: there is no defect in a quiet
+// range.
+func renderNotes(da *deriveArgs, na *notesArgs, d *derived) (string, error) {
+	next, releases := d.decision.Next()
+	if !releases {
+		return "", nil
+	}
+
+	groups, err := parseGroups(na.groups)
+	if err != nil {
+		return "", err
+	}
+
+	notes, err := derive.NewNotes(&derive.NotesOptions{
+		Groups:        groups,
+		Order:         splitTypes(na.order),
+		BreakingGroup: na.breaking,
+		CompareURL:    na.compareURL,
+		ReleaseURL:    na.releaseURL,
+		PullURL:       na.pullURL,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	date := na.date
+	if date == "" {
+		// The ref's own committer date, never a wall clock: a renderer
+		// that reads the time renders a different document every run, and
+		// the release date IS the date of what is being released.
+		if date, err = d.date(); err != nil {
+			return "", err
+		}
+	}
+
+	return notes.Render(derive.Release{
+		Version:   next,
+		Previous:  d.base.Version,
+		TagPrefix: da.prefix,
+		Date:      date,
+	}, d.commits)
 }
 
 // splice inserts the section above the newest one already in the file.

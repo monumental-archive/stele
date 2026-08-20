@@ -112,6 +112,11 @@ usage:
               internal path-dependency constraints, CITATION.cff),
               parsed and re-read, never pattern-matched; --check
               instead asserts the mirrors carry the released version
+    release-plan  the release decisions as one document a forge
+              executor runs: the version, the notes, the commit's
+              contents, the branch it lands on and the tag that
+              follows — safe to compute twice, and --prepare writes
+              the tree it names
     sbom      an artifact's inventory (SPDX 2.3), from one of three
               sources: the shipped binaries' embedded module lists,
               a Cargo package's own resolved closure scoped to the
@@ -214,7 +219,8 @@ derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
---date --changelog]; bump adds [--check --date].
+--date --changelog]; bump adds [--check --date]; release-plan takes the
+notes flags plus [--branch --staging --subject --also --prepare --out].
 
 exit codes: 0 success; 1 refused — a judgment that found divergence,
 or a derivation that will not stand; 2 usage error; 3 output-stream

@@ -100,7 +100,7 @@ type deriveArgs struct {
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele derive: a mode is required: version, notes, bump, sbom, claims, facts, vex or"+
+			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex or"+
 				" vex-subjects"); err != nil {
 			return exitIO
 		}
@@ -110,11 +110,11 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims, deriveFacts, deriveVEX,
-		deriveVEXSubjects:
+	case deriveVersion, deriveNotes, deriveBump, deriveReleasePlan, deriveSBOM, deriveClaims, deriveFacts,
+		deriveVEX, deriveVEXSubjects:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele derive: unknown mode %q (version, notes, bump, sbom, claims, facts, vex,"+
+			"stele derive: unknown mode %q (version, notes, bump, release-plan, sbom, claims, facts, vex,"+
 				" vex-subjects)\n", mode); err != nil {
 			return exitIO
 		}
@@ -184,9 +184,16 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 			func(doc io.Writer, log *latch) error { return runDeriveSBOM(sa, doc, log) })
 	}
 
-	da, na, bump, code := parseDeriveArgs(mode, args[1:], stderr)
+	da, na, bump, plan, code := parseDeriveArgs(mode, args[1:], stderr)
 	if code != exitOK {
 		return code
+	}
+
+	// The plan writes a document, so it owns stdout the way every other
+	// document mode does: the payload alone when no --out is named.
+	if mode == deriveReleasePlan {
+		return runDeriveMode(plan.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveReleasePlan(da, na, plan, doc, log) })
 	}
 
 	out := &latch{w: stdout}
@@ -214,8 +221,10 @@ func finishDerive(err error, out *latch, stderr io.Writer) int {
 }
 
 // parseDeriveArgs reads the flag surface.
-func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs, *notesArgs, *bumpArgs, int) {
-	da, na, bump := &deriveArgs{}, &notesArgs{}, &bumpArgs{}
+func parseDeriveArgs(
+	mode string, args []string, stderr io.Writer,
+) (*deriveArgs, *notesArgs, *bumpArgs, *planArgs, int) {
+	da, na, bump, plan := &deriveArgs{}, &notesArgs{}, &bumpArgs{}, &planArgs{}
 
 	fs := flag.NewFlagSet("stele derive "+mode, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -235,7 +244,7 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 	fs.BoolVar(&da.zeroX, "zero-major-bumps-minor", true,
 		"below 1.0.0, raise the minor for a breaking change rather than declaring 1.0.0")
 
-	if mode == deriveNotes {
+	if mode == deriveNotes || mode == deriveReleasePlan {
 		fs.StringVar(&na.groups, "groups", "feat=Added,fix=Fixed,perf=Changed,docs=Documentation",
 			"comma-separated type=Heading pairs, scoped keys like chore(deps)=Deps win over the bare type;"+
 				" a type with no heading writes no entry, and an explicit empty heading (chore(canon)=)"+
@@ -255,6 +264,10 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 			"changelog to splice the section into, above its newest section; empty prints instead")
 	}
 
+	if mode == deriveReleasePlan {
+		registerPlanFlags(fs, plan)
+	}
+
 	if mode == deriveBump {
 		fs.BoolVar(&bump.check, "check", false,
 			"assert every mirror carries the version last released, rewriting nothing; "+
@@ -266,18 +279,18 @@ func parseDeriveArgs(mode string, args []string, stderr io.Writer) (*deriveArgs,
 	}
 
 	if err := fs.Parse(args); err != nil {
-		return da, na, bump, exitUsage
+		return da, na, bump, plan, exitUsage
 	}
 
 	if da.gitDir == "" {
 		if _, err := fmt.Fprintf(stderr, "stele derive %s: --git-dir is required\n", mode); err != nil {
-			return da, na, bump, exitIO
+			return da, na, bump, plan, exitIO
 		}
 
-		return da, na, bump, exitUsage
+		return da, na, bump, plan, exitUsage
 	}
 
-	return da, na, bump, exitOK
+	return da, na, bump, plan, exitOK
 }
 
 // runDerive dispatches the mode onto the shared derivation.
