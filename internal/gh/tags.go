@@ -41,9 +41,20 @@ type TagObject struct {
 }
 
 // ChainNote is one note blob keyed by the revision it annotates.
+//
+// Note is the blob's BYTES, and the type says so (stele#193). A note
+// is whatever git stores at that path: chain links are JSON, and the
+// same ledgers carry plain-text scaffolding notes beside them — one
+// per ledger in this org, measured. Typing the field as JSON was a
+// second opinion about a shape nothing guarantees, and it held only
+// because the live walk never re-encodes what it read. The capture
+// leg does, and it died on the first note that was not JSON.
+//
+// Every consumer takes these bytes and decides for itself whether
+// they parse (a link) or not (scaffolding); none may assume.
 type ChainNote struct {
 	Rev  string
-	Note jsonx.Raw
+	Note []byte
 }
 
 // CommitMeta is what genesis derivation needs of one commit: its

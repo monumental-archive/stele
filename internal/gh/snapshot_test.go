@@ -846,3 +846,96 @@ func TestRefCaptureAndReplay(t *testing.T) {
 		t.Fatal("Capture.Ref did not refuse a Forge with no ref surface")
 	}
 }
+
+// The two note shapes a real ledger holds (stele#193). The link is a
+// chain note; the scaffolding note is the LIVE bytes measured off
+// monumental-archive/.github and release-lab on 2026-08-20 — one per
+// ledger, plain text, and the byte that broke the capture is its
+// leading 's'.
+const (
+	scriptedLinkNote        = `{"version": 3, "provenance": {"bundle": {}}}`
+	scriptedScaffoldingNote = "seed: scaffolding note (#202 pattern) " +
+		"— the chain re-founds on v3 above this\n"
+)
+
+// scriptedTagForge is the scripted forge plus the tag surface, so the
+// capture's tag reads are driven at all — the ChainNotes leg had no
+// test, which is how a capture that could not record a real ledger
+// shipped.
+type scriptedTagForge struct{ scriptedForge }
+
+func (scriptedTagForge) TagRefs(_, _ string) ([]gh.TagRef, error) {
+	return []gh.TagRef{{Name: "v1.0.0", ObjectSHA: strings.Repeat("a", 40), Annotated: true}}, nil
+}
+
+func (scriptedTagForge) TagObject(_, _, _ string) (*gh.TagObject, error) {
+	return &gh.TagObject{
+		Tagger: "release-mint[bot]", Target: strings.Repeat("b", 40),
+		Payload: []byte("object x\n"), Signature: []byte("sig"),
+	}, nil
+}
+
+func (scriptedTagForge) ChainNotes(_, _, _ string) ([]gh.ChainNote, error) {
+	return []gh.ChainNote{
+		{Rev: strings.Repeat("b", 40), Note: []byte(scriptedLinkNote)},
+		{Rev: strings.Repeat("c", 40), Note: []byte(scriptedScaffoldingNote)},
+	}, nil
+}
+
+func (scriptedTagForge) CommitMeta(_, _, _ string) (*gh.CommitMeta, error) {
+	return &gh.CommitMeta{Parents: nil, CommitEpoch: 100, Subject: "seed"}, nil
+}
+
+func (scriptedTagForge) IsAncestor(_, _, _, _ string) (bool, error) { return true, nil }
+
+// TestCaptureThenReplayChainNotes: a note is BYTES, and both shapes a
+// ledger actually holds survive the round trip unchanged.
+//
+// The JSON row alone would pass under the old typing; the scaffolding
+// row is the one that refused to record at all, because a note that
+// is not JSON cannot be laundered through a JSON-typed field. The
+// capture holds no opinion about which it got.
+func TestCaptureThenReplayChainNotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	rec := gh.Capture{Live: scriptedTagForge{}, Dir: dir}
+
+	live, err := rec.ChainNotes("acme", "widget", "refs/notes/commits")
+	if err != nil {
+		t.Fatalf("capture ChainNotes = %v", err)
+	}
+
+	replayed, err := gh.Snapshot{Dir: dir}.ChainNotes("acme", "widget", "refs/notes/commits")
+	if err != nil {
+		t.Fatalf("replay ChainNotes = %v", err)
+	}
+
+	if !reflect.DeepEqual(live, replayed) {
+		t.Fatalf("replayed = %+v, want the captured %+v", replayed, live)
+	}
+
+	for i, want := range []string{scriptedLinkNote, scriptedScaffoldingNote} {
+		if string(replayed[i].Note) != want {
+			t.Errorf("note %d = %q, want %q", i, replayed[i].Note, want)
+		}
+	}
+}
+
+// TestCaptureChainNotesUnwritableDir: the write-failure branch on the
+// notes leg — a capture that cannot record refuses rather than
+// silently serving live-only.
+func TestCaptureChainNotesUnwritableDir(t *testing.T) {
+	t.Parallel()
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := gh.Capture{Live: scriptedTagForge{}, Dir: filepath.Join(blocker, "nested")}
+
+	if _, err := rec.ChainNotes("acme", "widget", "refs/notes/commits"); err == nil {
+		t.Fatal("ChainNotes capture into an unwritable dir did not refuse")
+	}
+}

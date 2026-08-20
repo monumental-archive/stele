@@ -143,8 +143,11 @@ func TestAssertChainsFoundedButRefusedFails(t *testing.T) {
 
 	files := map[string]string{
 		"acme/lab/refs/refs%2Fheads%2Fmain.json": `"` + tip + `"`,
+		// A note is BYTES in the snapshot, base64 like every other
+		// byte field beside it (stele#193) — a captured ledger holds
+		// scaffolding notes that are not JSON at all.
 		"acme/lab/notes/refs%2Fnotes%2Fcommits.json": `[{"Rev": "` + tip +
-			`", "Note": {"version": 2, "provenance": {"bundle": {}}}}]`,
+			`", "Note": "` + snapshotNote(linkNoteJSON) + `"}]`,
 		"acme/lab/commits/" + tip + ".json": `{"Parents": [], "CommitEpoch": 100}`,
 	}
 
