@@ -106,9 +106,22 @@ version mismatch, never as an unknown-field error.
   release must claim its base images, a `go-binary` release owes
   nothing extra, and subject shape cannot decide this — only the
   declaration from the class that ran the matrix can. The full-depth
-  walk unions the declared classes' lists into the demand it hands
-  the engine, sorted and deduplicated, so the demand is independent
-  of declaration order. Every name must already live inside the
+  walk hands the engine a demand keyed PER ARTIFACT, each artifact
+  owing the names of the class the release's evidence manifest says
+  built it, sorted so what one artifact owes has one spelling
+  (stele#206). A release's classes are a set of what it SHIPPED, not
+  a property of every artifact in it: holding each artifact to the
+  whole set asks a binary to answer for a database extension's build.
+  Where the manifest cannot attribute — a schema below the class
+  split, or no manifest at all — the artifact owes its
+  class-independent obligations IN FULL and nothing class-specific,
+  and every excused name is named in the walk's output. Never the
+  reverse: an unknowable class owes nothing extra, because a judge
+  that guesses upward invents an obligation the evidence never
+  carried. Where the manifest COULD attribute and did not, the walk
+  reds `manifest:attribution` and the artifact stays held to the
+  whole declared set — omission must not buy the leniency that only
+  structural silence earns. Every name must already live inside the
   verify policy's `required` ∪ `permitted` — one vocabulary, no
   second truth. This file cannot see that one, so the load only
   refuses empty and duplicated names; the subset rule is enforced by
@@ -569,7 +582,7 @@ target's vocabulary is its own:
 
 | target | assertions |
 | --- | --- |
-| `evidence` | `sbom`, the checksum or bundle asset name, an `assetPrefixes` prefix, `class:<name>`, `<asset>:unreadable`, `vsa:<first 12 digest hex>`, `continuous-digest`, `base-image-approval`, and at full depth `deep` and `vsa:deep` |
+| `evidence` | `sbom`, the checksum or bundle asset name, an `assetPrefixes` prefix, `class:<name>`, `<asset>:unreadable`, `vsa:<first 12 digest hex>`, `continuous-digest`, `base-image-approval`, and at full depth `deep`, `vsa:deep` and `manifest:attribution` |
 | `tags` | `tag:epoch`, `tag:annotated`, `tag:tagger`, `tag:signature`, `tag:link` |
 | `chains` | `chains` — a founded chain's defect is never excusable; absence is excused by the policy's `chains.exceptions`, never here |
 | `blast-radius` | `<advisory>:<package>@<version>`, `<asset>:unattested`, `<asset>:empty-scan` |

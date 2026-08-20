@@ -7,6 +7,7 @@ package assert_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -409,9 +410,197 @@ func TestDepthClassDemand(t *testing.T) {
 		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
 	}
 
+	// Keyed by artifact, not by release (stele#206): the demand names
+	// the tarball the manifest attributed to oci-image, and nothing
+	// else in the release is asked for that class's names.
 	if len(deep.demands) != 1 || deep.demands[0] == nil ||
-		!slices.Equal(deep.demands[0].AlsoRequired, []string{"base-images"}) {
-		t.Fatalf("demands = %+v, want the oci-image class's base-images", deep.demands)
+		!slices.Equal(deep.demands[0].ByArtifact["widget-v1.0.0.tar.gz"], []string{"base-images"}) {
+		t.Fatalf("demands = %+v, want the oci-image class's base-images on the attributed artifact", deep.demands)
+	}
+}
+
+// enrichedDeepPolicy is the deep-walk policy with an enrichment name
+// on oci-image and the manifest-schema epoch pushed past the fixture's
+// machinery version, so a pre-class-split manifest is admitted as the
+// history it is rather than refused.
+func enrichedDeepPolicy(t *testing.T) *assert.Policy {
+	t.Helper()
+
+	polJSON := strings.Replace(testPolicyJSON,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}`,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": ["base-images"]}`, 1)
+	polJSON = strings.Replace(polJSON,
+		`"storeVsaFromVersion": "1.13.0"`,
+		`"storeVsaFromVersion": "1.13.0", "manifestSchemaFromVersion": "10.0.0"`, 1)
+
+	pol, err := assert.LoadPolicy(strings.NewReader(polJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return pol
+}
+
+// classlessManifest renders a pre-class-split manifest: typed entries
+// that carry no class, which is everything schema 2 could say.
+func classlessManifest() string {
+	return `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9",` +
+		` "entries": [{"name": "widget-v1.0.0.tar.gz", "sha256": "` + strings.Repeat("a", 64) +
+		`", "type": "build-subject"}]}`
+}
+
+// runDeepDemand walks one release at full depth, returning the sealed
+// report and everything the walk said out loud.
+//
+//nolint:gocritic // unnamedResult: the report, then its transcript — named in the doc
+func runDeepDemand(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert.Policy, declared ...report.Exception,
+) (*report.Report, string) {
+	t.Helper()
+
+	full, err := assert.NewFullDepth(deep,
+		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
+
+	var said strings.Builder
+
+	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
+		report.NewJournal(declared...), nil, full,
+		func(format string, args ...any) { fmt.Fprintf(&said, format+"\n", args...) })
+	if err != nil {
+		t.Fatalf("Evidence: %v", err)
+	}
+
+	return rep, said.String()
+}
+
+// encoded renders a sealed report as the document a consumer reads —
+// the only place staleness and unexercised-ness are observable, and
+// the difference between them is the whole point of judging the
+// attribution obligation only where a manifest could meet it.
+func encoded(t *testing.T, rep *report.Report) string {
+	t.Helper()
+
+	var doc strings.Builder
+	if err := rep.Encode(&doc); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	return doc.String()
+}
+
+// TestDepthClasslessManifestNarrows is the stele#206 fix at the walk:
+// a manifest that predates the class split cannot say which artifact
+// belongs to which class, so every artifact is held to its
+// class-independent obligations IN FULL and to no class-specific one —
+// and the narrowing is stated per artifact, naming what it excused.
+// The pre-fix behaviour held every artifact to the release's whole
+// class set, which reds pre-epoch releases forever.
+func TestDepthClasslessManifestNarrows(t *testing.T) {
+	t.Parallel()
+
+	pol := enrichedDeepPolicy(t)
+	f := deepForge()
+	f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = classlessManifest()
+
+	deep := &fakeDeep{}
+	rep, said := runDeepDemand(t, f, deep, pol,
+		report.Declared("widget@v1.0.0", "manifest:attribution", "debt.txt:1"))
+
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	if len(deep.demands) != 1 || deep.demands[0] == nil || len(deep.demands[0].ByArtifact) != 0 {
+		t.Fatalf("demands = %+v, want nothing class-specific asked of an unattributable artifact", deep.demands)
+	}
+
+	want := "widget-v1.0.0.tar.gz: class unknowable under schema 2 — excused: base-images"
+	if !strings.Contains(said, want) {
+		t.Fatalf("the walk did not state the narrowing:\n%s\nwant substring %q", said, want)
+	}
+
+	// The obligation is not judged where the manifest could never meet
+	// it, so an excuse written against it is unexercised — never stale,
+	// which would claim this run watched it run clean.
+	if doc := encoded(t, rep); !strings.Contains(doc, "unexercisedExceptions") ||
+		strings.Contains(doc, "staleExceptions") {
+		t.Fatalf("attribution was judged on a manifest that cannot attribute:\n%s", doc)
+	}
+}
+
+// TestDepthAttributionDefects is ruling (a) on stele#206: post-epoch,
+// attribution is OWED. A manifest that could attribute and did not is
+// broken derived state — a finding, and the artifact stays held to the
+// whole declared set, because narrowing there would let omission buy
+// the leniency only structural silence earns.
+func TestDepthAttributionDefects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		manifest string
+		want     string
+	}{
+		{
+			name: "an artifact the manifest does not list",
+			manifest: `{"schema": 3, "classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9",` +
+				` "entries": [{"name": "somewhere-else.tar.gz", "sha256": "` + strings.Repeat("a", 64) +
+				`", "type": "build-subject", "class": "oci-image"}]}`,
+			want: "attributes every artifact to a class and this one to none",
+		},
+		{
+			name: "an artifact attributed to a class the policy does not define",
+			manifest: `{"schema": 3, "classes": ["conjured"], "storeVsa": true, "machineryVersion": "9.9.9",` +
+				` "entries": [{"name": "widget-v1.0.0.tar.gz", "sha256": "` + strings.Repeat("a", 64) +
+				`", "type": "build-subject", "class": "conjured"}]}`,
+			want: `built by class "conjured", which the policy does not define`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pol := enrichedDeepPolicy(t)
+			f := deepForge()
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = tt.manifest
+
+			rep, said := runDeepDemand(t, f, &fakeDeep{}, pol)
+
+			if rep.Verdict() != report.VerdictFail {
+				t.Fatalf("verdict = %s, want a finding on a manifest that could attribute and did not", rep.Verdict())
+			}
+
+			found := rep.Findings()
+
+			var got *report.Finding
+
+			for i := range found {
+				if found[i].Assertion == "manifest:attribution" {
+					got = &found[i]
+
+					break
+				}
+			}
+
+			if got == nil {
+				t.Fatalf("no manifest:attribution finding, findings: %+v", found)
+			}
+
+			if !strings.Contains(got.Detail, tt.want) || !strings.Contains(got.Detail, "widget-v1.0.0.tar.gz") {
+				t.Fatalf("finding = %q, want it to name the artifact and %q", got.Detail, tt.want)
+			}
+
+			// A defect is never an excusal: the walk must not also have
+			// told the reader it narrowed anything.
+			if strings.Contains(said, "class unknowable") {
+				t.Fatalf("a broken attribution was reported as a narrowing:\n%s", said)
+			}
+		})
 	}
 }
 

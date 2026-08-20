@@ -121,14 +121,58 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		return nil
 	}
 
+	demand := w.enrichmentDemand(subject, contract, subjects)
+
 	vc := w.check(subject, "vsa:deep")
-	if verr := w.full.Verifier.VSA(c, subjects, pins, w.pol.EnrichmentDemand(contract)); verr != nil {
+	if verr := w.full.Verifier.VSA(c, subjects, pins, demand); verr != nil {
 		vc.Diverged(verr.Error())
 	}
 
 	w.log("assert: evidence: %s re-verified at full depth", subject)
 
 	return nil
+}
+
+// enrichmentDemand derives what this release's artifacts owe their
+// enrichment claims and states everything the derivation had to say
+// (stele#206).
+//
+// The two things it says are different in kind, so they are said
+// differently. A NARROWING — an artifact whose class no manifest can
+// state — is not a defect in the release: it is this walk declining to
+// overclaim, and it is logged per artifact with the names it did not
+// ask for, because a narrowing nobody can read is indistinguishable
+// from a walk that never noticed. A DEFECT — a manifest that could
+// attribute and did not — is a finding, because post-epoch attribution
+// is owed, and letting omission narrow anything would hand a broken
+// manifest the leniency that only structural silence earns.
+//
+// The attribution obligation is judged only where the manifest could
+// meet it: recording the check for a release whose schema predates
+// attribution would put a permanently unmeetable obligation in the
+// journal, and an exception written against it would read as stale
+// forever.
+func (w *evidenceWalk) enrichmentDemand(
+	subject string, contract *Contract, subjects []verify.Subject,
+) *verify.EnrichmentDemand {
+	ad := w.pol.EnrichmentDemand(contract, subjects)
+
+	for _, n := range ad.Excused {
+		w.log("assert: evidence: %s: %s: %s", subject, n.Artifact, n.Detail)
+	}
+
+	if contract.Attributed {
+		if c := w.check(subject, "manifest:attribution"); len(ad.Defects) > 0 {
+			details := make([]string, 0, len(ad.Defects))
+			for _, n := range ad.Defects {
+				details = append(details, n.Artifact+": "+n.Detail)
+			}
+
+			c.Diverged(strings.Join(details, "; "))
+		}
+	}
+
+	return ad.Demand
 }
 
 // checksumSubjects reads the release's checksum manifest into the

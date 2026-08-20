@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 // schemaPlusOne renders the epoch this build does NOT implement —
@@ -266,13 +267,12 @@ func TestTagsPolicyRefusals(t *testing.T) {
 	}
 }
 
-// TestEnrichmentDemand pins the one derivation of what a release owes
-// its enrichment claim (stele#122): nil when the obligation is not
-// owed, the empty demand when its classes declare nothing extra, and
-// a sorted, deduplicated union otherwise — independent of class
-// declaration order, because what a release owes is a set.
-func TestEnrichmentDemand(t *testing.T) {
-	t.Parallel()
+// enrichedPolicy is the test policy with enrichment names hung off two
+// of its three classes: oci-image owes one, pgrx-extension owes two
+// (declared out of order, so sorting is observable), rust-crate owes
+// none.
+func enrichedPolicy(t *testing.T) *assert.Policy {
+	t.Helper()
 
 	enriched := strings.Replace(testPolicyJSON,
 		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},`,
@@ -286,38 +286,202 @@ func TestEnrichmentDemand(t *testing.T) {
 		t.Fatalf("policy: %v", err)
 	}
 
-	t.Run("not owed is nil, never the empty demand", func(t *testing.T) {
-		t.Parallel()
+	return p
+}
 
-		if d := p.Evidence.EnrichmentDemand(&assert.Contract{
-			Classes: []string{"pgrx-extension"}, Enrichment: false,
-		}); d != nil {
-			t.Fatalf("demand = %+v, want nil for pre-epoch history", d)
+// app and ext are one artifact of each enriched class.
+var demandSubjects = []verify.Subject{
+	{Name: "app.tar.gz", SHA256: strings.Repeat("a", 64)},
+	{Name: "ext.tar.gz", SHA256: strings.Repeat("b", 64)},
+}
+
+// TestEnrichmentDemandAttributed pins the derivation where the
+// manifest says which class built what (stele#206): each artifact owes
+// exactly its own class's names, in full, and nothing is excused.
+// Holding every artifact to the release's whole class set is the
+// defect this replaced — it asks a rust binary to answer for a pgrx
+// tarball's build.
+func TestEnrichmentDemandAttributed(t *testing.T) {
+	t.Parallel()
+
+	p := enrichedPolicy(t)
+
+	ad := p.Evidence.EnrichmentDemand(&assert.Contract{
+		Classes:    []string{"oci-image", "pgrx-extension"},
+		Enrichment: true, Attributed: true, ManifestSchema: 3,
+		ArtifactClasses: map[string]string{"app.tar.gz": "oci-image", "ext.tar.gz": "pgrx-extension"},
+	}, demandSubjects)
+
+	if ad.Demand == nil {
+		t.Fatal("demand = nil, want a per-artifact demand")
+	}
+
+	want := map[string][]string{
+		"app.tar.gz": {"base-images"},
+		"ext.tar.gz": {"base-images", "pgrx-base"},
+	}
+	for artifact, names := range want {
+		if got := ad.Demand.ByArtifact[artifact]; !slices.Equal(got, names) {
+			t.Fatalf("%s owes %v, want %v", artifact, got, names)
 		}
-	})
+	}
 
-	t.Run("owed with no class extras is the empty demand", func(t *testing.T) {
-		t.Parallel()
+	if len(ad.Excused) != 0 {
+		t.Fatalf("excused = %+v, want nothing excused where the class is knowable", ad.Excused)
+	}
 
-		d := p.Evidence.EnrichmentDemand(&assert.Contract{Classes: []string{"rust-crate"}, Enrichment: true})
-		if d == nil || len(d.AlsoRequired) != 0 {
-			t.Fatalf("demand = %+v, want the empty demand", d)
-		}
-	})
+	if len(ad.Defects) != 0 {
+		t.Fatalf("defects = %+v, want none", ad.Defects)
+	}
+}
 
-	t.Run("the union is sorted, deduplicated and order-independent", func(t *testing.T) {
-		t.Parallel()
+// TestEnrichmentDemandBranches walks every other branch of the
+// derivation: the obligation not owed at all, the classless narrowing
+// and its loud line, a narrowing with nothing to narrow, and the two
+// ways an attributing manifest can be broken — which are DEFECTS held
+// to the whole declared set, never narrowings (stele#206, ruling (a)).
+func TestEnrichmentDemandBranches(t *testing.T) {
+	t.Parallel()
 
-		want := []string{"base-images", "pgrx-base"}
+	p := enrichedPolicy(t)
 
-		for _, classes := range [][]string{
-			{"oci-image", "pgrx-extension"},
-			{"pgrx-extension", "oci-image"},
-		} {
-			d := p.Evidence.EnrichmentDemand(&assert.Contract{Classes: classes, Enrichment: true})
-			if d == nil || !slices.Equal(d.AlsoRequired, want) {
-				t.Fatalf("demand for %v = %+v, want %v", classes, d, want)
+	tests := []struct {
+		name string
+		c    *assert.Contract
+		// nilDemand asserts the obligation is not owed at all.
+		nilDemand bool
+		// owed is what each artifact must owe; absent means nothing.
+		owed map[string][]string
+		// excused and defect are substrings every note must carry, and
+		// the count of artifacts they must cover.
+		excused, defect string
+		notes           int
+	}{
+		{
+			name:      "not owed is nil, never the empty demand",
+			c:         &assert.Contract{Classes: []string{"pgrx-extension"}, Enrichment: false},
+			nilDemand: true,
+		},
+		{
+			name: "classless narrows every artifact and names what it excused",
+			c: &assert.Contract{
+				Classes: []string{"oci-image", "pgrx-extension"}, Enrichment: true,
+				Attributed: false, ManifestSchema: 2,
+			},
+			excused: "class unknowable under schema 2 — excused: base-images, pgrx-base",
+			notes:   2,
+		},
+		{
+			name: "no manifest at all names its own cause, never a schema it never carried",
+			c: &assert.Contract{
+				Classes: []string{"pgrx-extension"}, Enrichment: true,
+				Attributed: false, ManifestSchema: 0,
+			},
+			excused: "class unknowable: no manifest attributes this release's artifacts",
+			notes:   2,
+		},
+		{
+			name: "a classless release owing no class extras excuses nothing and says nothing",
+			c: &assert.Contract{
+				Classes: []string{"rust-crate"}, Enrichment: true,
+				Attributed: false, ManifestSchema: 2,
+			},
+		},
+		{
+			name: "an attributed artifact the manifest omits is a defect, held to the whole set",
+			c: &assert.Contract{
+				Classes: []string{"oci-image", "pgrx-extension"}, Enrichment: true,
+				Attributed: true, ManifestSchema: 3,
+				ArtifactClasses: map[string]string{"app.tar.gz": "oci-image"},
+			},
+			owed: map[string][]string{
+				"app.tar.gz": {"base-images"},
+				"ext.tar.gz": {"base-images", "pgrx-base"},
+			},
+			defect: "attributes every artifact to a class and this one to none" +
+				" — held to the whole declared set (base-images, pgrx-base)",
+			notes: 1,
+		},
+		{
+			name: "an artifact attributed to a class the policy does not define is a defect",
+			c: &assert.Contract{
+				Classes: []string{"oci-image", "pgrx-extension"}, Enrichment: true,
+				Attributed: true, ManifestSchema: 3,
+				ArtifactClasses: map[string]string{"app.tar.gz": "oci-image", "ext.tar.gz": "conjured"},
+			},
+			owed: map[string][]string{
+				"app.tar.gz": {"base-images"},
+				"ext.tar.gz": {"base-images", "pgrx-base"},
+			},
+			defect: `built by class "conjured", which the policy does not define`,
+			notes:  1,
+		},
+		{
+			name: "a broken attribution with nothing to name still refuses to narrow",
+			c: &assert.Contract{
+				Classes: []string{"rust-crate"}, Enrichment: true,
+				Attributed: true, ManifestSchema: 3,
+			},
+			defect: "attributes every artifact to a class and this one to none",
+			notes:  2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ad := p.Evidence.EnrichmentDemand(tt.c, demandSubjects)
+
+			if tt.nilDemand {
+				if ad.Demand != nil {
+					t.Fatalf("demand = %+v, want nil for pre-epoch history", ad.Demand)
+				}
+
+				return
 			}
+
+			if ad.Demand == nil {
+				t.Fatal("demand = nil, want a demand where the obligation is owed")
+			}
+
+			for _, s := range demandSubjects {
+				if got := ad.Demand.ByArtifact[s.Name]; !slices.Equal(got, tt.owed[s.Name]) {
+					t.Fatalf("%s owes %v, want %v", s.Name, got, tt.owed[s.Name])
+				}
+			}
+
+			assertNotes(t, "excused", ad.Excused, tt.excused, tt.notes)
+			assertNotes(t, "defect", ad.Defects, tt.defect, tt.notes)
+		})
+	}
+}
+
+// assertNotes holds one note list to its expected substring and count.
+// want empty means the list must be empty: a narrowing or a defect
+// that says nothing is the silence this mechanism exists to prevent.
+func assertNotes(t *testing.T, kind string, notes []assert.ArtifactNote, want string, count int) {
+	t.Helper()
+
+	if want == "" {
+		if len(notes) != 0 {
+			t.Fatalf("%s notes = %+v, want none", kind, notes)
 		}
-	})
+
+		return
+	}
+
+	if len(notes) != count {
+		t.Fatalf("%s notes = %+v, want %d", kind, notes, count)
+	}
+
+	for _, n := range notes {
+		if n.Artifact == "" {
+			t.Fatalf("%s note %+v names no artifact — an unattributable note cannot be audited", kind, n)
+		}
+
+		if !strings.Contains(n.Detail, want) {
+			t.Fatalf("%s note for %s = %q, want substring %q", kind, n.Artifact, n.Detail, want)
+		}
+	}
 }

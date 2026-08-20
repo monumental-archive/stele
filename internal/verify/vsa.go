@@ -88,8 +88,8 @@ func (s *SubjectLevels) AttesterID() string { return s.attesterID }
 // split, and `stele level build` passes the empty demand: a
 // stranger's read owes the whole universal obligation.
 //
-// demand carries what this release owes its enrichment claim (three
-// states, documented on EnrichmentDemand).
+// demand carries what this release's artifacts owe their enrichment
+// claims (three states, documented on EnrichmentDemand).
 func VSALevels(
 	p *policy.Policy, c Coords, subjects []Subject, pins Pins,
 	store Store, bv BundleVerifier, log Logf, demand *EnrichmentDemand,
@@ -305,7 +305,7 @@ func vsaForSubject(
 		return levels, nil, nil
 	}
 
-	pred, err := judgeEnrichment(p, c, s, enriched, root, resource, demand.AlsoRequired, bv)
+	pred, err := judgeEnrichment(p, c, s, enriched, root, resource, demand.forArtifact(s.Name), bv)
 	if err != nil {
 		return nil, nil, err
 	}

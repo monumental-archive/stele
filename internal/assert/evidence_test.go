@@ -82,6 +82,11 @@ func manifestEntry(name, entryType, class string) string {
 	return entry + `}`
 }
 
+// manifestAsset renders the fixture release's manifest. It attributes
+// the artifact the checksum manifest pins, because a release's two
+// documents describe one release: an evidence manifest naming an
+// artifact the checksums do not is the disagreement the attribution
+// finding exists to report (stele#206), not the fixture's baseline.
 func manifestAsset(classes []string, storeVSA bool) string {
 	sv := "false"
 	if storeVSA {
@@ -90,7 +95,7 @@ func manifestAsset(classes []string, storeVSA bool) string {
 
 	return `{"schema": ` + strconv.Itoa(evidence.Schema) + `, "classes": ["` + strings.Join(classes, `", "`) +
 		`"], "storeVsa": ` + sv + `, "machineryVersion": "9.9.9", "entries": [` +
-		manifestEntry("widget-x86_64.tar.gz", "build-subject", classes[0]) + `]}`
+		manifestEntry("widget-v1.0.0.tar.gz", "build-subject", classes[0]) + `]}`
 }
 
 // fakeForge scripts the whole forge for one org.

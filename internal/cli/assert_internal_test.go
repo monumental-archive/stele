@@ -225,6 +225,18 @@ func TestAssertOutputFailures(t *testing.T) {
 func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot dir, policy path
 	t.Helper()
 
+	return evidenceSnapshotWith(t, nil)
+}
+
+// evidenceSnapshotWith stages the same world, letting a caller rewrite
+// the fixture files BEFORE they are written. A variant is built, never
+// patched afterwards: a fixture read back and rewritten is a second
+// derivation of the same document, and the two drift.
+//
+//nolint:gocritic // unnamedResult: snapshot dir, policy path — as evidenceSnapshot
+func evidenceSnapshotWith(t *testing.T, rewrite func(files map[string]string)) (string, string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	digest := strings.Repeat("5", 64)
 	stmt := `{"_type": "https://in-toto.io/Statement/v1",` +
@@ -239,7 +251,7 @@ func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snap
 			`"checksums.txt", "attestations-image.intoto.jsonl"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json": `{"schema": 3, ` +
 			`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9", "entries": [` +
-			`{"name": "app.tar.gz", "sha256": "` + strings.Repeat("a", 64) + `", "type": "build-subject", ` +
+			`{"name": "app.tar.gz", "sha256": "` + digest + `", "type": "build-subject", ` +
 			`"class": "oci-image"}]}`,
 		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
 		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
@@ -247,6 +259,10 @@ func evidenceSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snap
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
+	}
+
+	if rewrite != nil {
+		rewrite(files)
 	}
 
 	for path, content := range files {

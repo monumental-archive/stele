@@ -452,8 +452,11 @@ supply one, so the CLI passes the empty demand and gets the whole
 universal obligation. That half of the obligation is declared where
 the class declaration already lives: the release's own evidence
 manifest, read by `assert`, joined against `assert-policy.json`'s
-`classes.<name>.enrichment` lists into the demand's extra names. The
-extras extend only what is REQUIRED, never what is allowed: every
+`classes.<name>.enrichment` lists into a demand keyed PER ARTIFACT —
+each artifact owing the names of the class the manifest says built
+it, and an artifact whose class nothing states owing none of them
+(stele#206). The extras extend only what is REQUIRED, never what is
+allowed: every
 class name must already live inside this policy's `required` ∪
 `permitted`, or class expectations and the closed set would be two
 truths about one vocabulary. Neither policy file can see the other,
