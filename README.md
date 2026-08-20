@@ -3,9 +3,9 @@
 <!-- badges:begin -->
 [![ci](https://github.com/monumental-archive/stele/actions/workflows/ci.yml/badge.svg)](https://github.com/monumental-archive/stele/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/monumental-archive/stele/badge)](https://scorecard.dev/viewer/?uri=github.com/monumental-archive/stele)
-[![SLSA build](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2F.github%2Flevels%2Fstele%2Fbuild.shield.json)](https://raw.githubusercontent.com/monumental-archive/.github/levels/stele/build.report.json)
-[![SLSA source](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2F.github%2Flevels%2Fstele%2Fsource.shield.json)](https://raw.githubusercontent.com/monumental-archive/.github/levels/stele/source.report.json)
-[![SLSA dependency](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2F.github%2Flevels%2Fstele%2Fdependency.shield.json)](https://raw.githubusercontent.com/monumental-archive/.github/levels/stele/dependency.report.json)
+[![SLSA build](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2Fstele%2Flevels%2Fstele%2Fbuild.shield.json)](https://raw.githubusercontent.com/monumental-archive/stele/levels/stele/build.report.json)
+[![SLSA source](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2Fstele%2Flevels%2Fstele%2Fsource.shield.json)](https://raw.githubusercontent.com/monumental-archive/stele/levels/stele/source.report.json)
+[![SLSA dependency](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2Fstele%2Flevels%2Fstele%2Fdependency.shield.json)](https://raw.githubusercontent.com/monumental-archive/stele/levels/stele/dependency.report.json)
 <!-- pending (human step): OpenSSF Best Practices — answer the form from docs/best-practices.md, then set 'bestpractices <BP_ID>' in .badge-states and re-run fix:badges -->
 <!-- pending (human step): REUSE — register at https://api.reuse.software/register (no account: name, email, project URL, confirmation link), then set 'reuse registered' in .badge-states and re-run fix:badges -->
 [![coverage](https://codecov.io/gh/monumental-archive/stele/branch/main/graph/badge.svg)](https://codecov.io/gh/monumental-archive/stele)
