@@ -10,6 +10,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.17.0](https://github.com/monumental-archive/stele/compare/v0.16.0...v0.17.0) - 2026-08-20
+
+### Breaking
+
+- `stele emit manifest` requires `--class-subjects`
+covering every build subject, and the live-document epoch moves to 6
+for the new policy field. The canon's stele pin bump must land with
+the workflow edit that passes the flag, and before the policy edit
+that declares the epoch. ([#191](https://github.com/monumental-archive/stele/pull/191))
+- declare the tag proof floor and the tag it binds from ([#194](https://github.com/monumental-archive/stele/pull/194))
+
+### Changed
+
+- split the repro class scope into two facts ([#192](https://github.com/monumental-archive/stele/pull/192))
+
+### Fixed
+
+- enumerate the permissions join through the roster ([#187](https://github.com/monumental-archive/stele/pull/187))
+- rebuild the rekor body a gitsign offline mint omits ([#188](https://github.com/monumental-archive/stele/pull/188))
+- record a chain note as the bytes it is, not as JSON ([#195](https://github.com/monumental-archive/stele/pull/195))
+
+### CI
+
+- scope wrapcheck by the package boundary, not by test files ([#190](https://github.com/monumental-archive/stele/pull/190))
+
+### Dependencies
+
+- update github/codeql-action action to v4.37.7 ([#184](https://github.com/monumental-archive/stele/pull/184))
+
 ## [0.16.0](https://github.com/monumental-archive/stele/compare/v0.15.0...v0.16.0) - 2026-08-20
 
 ### Breaking
