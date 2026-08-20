@@ -5,6 +5,7 @@
 package assert_test
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -78,9 +79,17 @@ func blastForge() *fakeForge {
 func decided(t *testing.T, advisory, pkg, version string) *vexjoin.Decisions {
 	t.Helper()
 
+	return decidedAs(t, "not_affected", advisory, pkg, version)
+}
+
+// decidedAs records one decision under an arbitrary status, so a row
+// can vary the ONE thing that decides whether a decision is an exit.
+func decidedAs(t *testing.T, status, advisory, pkg, version string) *vexjoin.Decisions {
+	t.Helper()
+
 	d := &vexjoin.Decisions{}
 	doc := `{"timestamp": "2026-01-01T00:00:00Z",
-	  "statements": [{"vulnerability": {"name": "` + advisory + `"}, "status": "not_affected",
+	  "statements": [{"vulnerability": {"name": "` + advisory + `"}, "status": "` + status + `",
 	  "products": [{"@id": "pkg:cargo/` + pkg + `@` + version + `"}]}]}`
 
 	if err := vexjoin.Parse(d, []byte(doc), "test.openvex.json"); err != nil {
@@ -141,6 +150,24 @@ func TestBlastRadiusVerdicts(t *testing.T) {
 			scanResult(canaryScan, "serde_cbor", "0.11.2", "crates.io", false),
 			&vexjoin.Decisions{},
 			report.VerdictFail,
+		},
+		{
+			"an affected decision admits the finding and does not excuse it",
+			scanResult(canaryScan, "serde_cbor", "0.11.2", "crates.io", false),
+			decidedAs(t, "affected", canaryScan, "serde_cbor", "0.11.2"),
+			report.VerdictFail,
+		},
+		{
+			"an under_investigation decision is an unfinished judgment, not an exit",
+			scanResult(canaryScan, "serde_cbor", "0.11.2", "crates.io", false),
+			decidedAs(t, "under_investigation", canaryScan, "serde_cbor", "0.11.2"),
+			report.VerdictFail,
+		},
+		{
+			"a false_positive decision is the same denial in another dialect",
+			scanResult(canaryScan, "serde_cbor", "0.11.2", "crates.io", false),
+			decidedAs(t, "false_positive", canaryScan, "serde_cbor", "0.11.2"),
+			report.VerdictPass,
 		},
 		{
 			"a decision for another version does not extend",
@@ -233,6 +260,48 @@ func TestBlastRadiusLoudFaults(t *testing.T) {
 			t.Fatalf("verdict = %s, want CANNOT_JUDGE", rep.Verdict())
 		}
 	})
+}
+
+// TestBlastRadiusReportsDecisionsSeenNotExcusing pins the other half
+// of the status rule (#222): a decision that is not an exit is still
+// a judgment a human made, so it is STATED. A non-excusing decision
+// dropped in silence would read exactly like one nobody ever wrote.
+func TestBlastRadiusReportsDecisionsSeenNotExcusing(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		status string
+		stated bool
+	}{
+		{"affected", true},
+		{"under_investigation", true},
+		{"fixed", true},
+		{"not_affected", false},
+		{"false_positive", false},
+	} {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+
+			rep := runBlast(t, blastForge(),
+				fakeScanner{out: scanResult(canaryScan, "serde_cbor", "0.11.2", "crates.io", false)},
+				decidedAs(t, tt.status, canaryScan, "serde_cbor", "0.11.2"))
+
+			var buf bytes.Buffer
+			if err := rep.Encode(&buf); err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+
+			got := strings.Contains(buf.String(), "decisionsSeenNotExcusing")
+			if got != tt.stated {
+				t.Fatalf("decisionsSeenNotExcusing present = %v for status %q, want %v\n%s",
+					got, tt.status, tt.stated, buf.String())
+			}
+
+			if tt.stated && !strings.Contains(buf.String(), tt.status) {
+				t.Fatalf("the fact does not name the status seen:\n%s", buf.String())
+			}
+		})
+	}
 }
 
 // TestBlastRadiusStaleDecision pins the retirement rule: a decision

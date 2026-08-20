@@ -154,10 +154,14 @@ side is built through `KeyFromPurl` or `KeyFromFinding` so no caller
 can spell the identity rule a second way.
 
 Both `stele assert advisories` and `stele assert blast-radius` join on
-that identity. The status rule currently has ONE adopter — `assert
-advisories` — because blast-radius excuses on any matching decision
-regardless of status, which is a defect recorded at stele#222 rather
-than a second reading of this document. Stated here rather than
-smoothed over: a doc claiming two conforming implementations where
-there is one would be the same kind of unverified confidence this
-document exists to correct.
+that identity, and both ask `Decision.Excuses` the status question —
+blast-radius since stele#222, which is why the status set is written
+down in exactly one place and read from there by both.
+
+**Every producer of an assertion that must meet a decision's exception
+builds that assertion from `Key.String()`** — the report layer matches
+exceptions to findings by string, so the invariant holds by sharing
+the one definition of the identity, never by two sites spelling it
+alike. A hand-spelled assertion is the stele#201 defect class in a new
+seam; a mismatch there can only fail to excuse, loudly, and no
+near-match heuristic belongs in the report layer to soften it.

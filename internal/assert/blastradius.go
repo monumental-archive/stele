@@ -10,6 +10,12 @@
 // matching no current finding surfaces as a stale exception: a
 // retirement candidate, never an archaeology project.
 //
+// A decision excuses on its STATUS, never its existence (#222): only
+// one that denies the advisory applies is an exit, and that question
+// is asked of `vexjoin.Decision.Excuses()` alone. A decision that is
+// not an exit is reported as seen — a judgment a human made, stated
+// and not silent — over a finding that stays red.
+//
 // A decision is registered SUBJECT-AGNOSTICALLY (#147): it judges a
 // package version, not the release that happens to carry it, so it
 // excuses its triple wherever the scan meets it. That is also what
@@ -95,8 +101,28 @@ func BlastRadius(
 	// version, not the release that happens to carry it, so it excuses
 	// its triple wherever the scan meets it. One that meets nothing is
 	// answered by what the walk swept.
+	//
+	// Whether it excuses is the DECISION's property, answered by
+	// vexjoin's one door (#222): excusing on a decision's existence
+	// would let a statement whose status ADMITS the advisory clear the
+	// finding it admits. A non-excusing decision is still a judgment a
+	// human made and recorded, so it is stated rather than dropped —
+	// the finding stays red and the report names the decision seen.
+	// The status set is not re-derived here; this asks Excuses().
+	var notExcusing []string
+
 	all := decisions.All()
+
 	for i := range all {
+		if !all[i].Excuses() {
+			notExcusing = append(notExcusing, all[i].Key.String()+"="+all[i].Status)
+
+			continue
+		}
+
+		// The assertion an exception must meet is DERIVED from the key,
+		// never spelled by hand beside the producer of the finding it
+		// excuses (docs/vex-join.md).
 		j.Except(report.Declared("", all[i].Key.String(), all[i].Origin))
 	}
 
@@ -111,6 +137,12 @@ func BlastRadius(
 	covered := report.PopulationFromListing(w.scanned, "SBOMs scanned")
 
 	facts := []report.Fact{}
+	if len(notExcusing) > 0 {
+		facts = append(facts, report.Fact{
+			Name: "decisionsSeenNotExcusing", Value: strings.Join(notExcusing, " "),
+		})
+	}
+
 	if len(w.missing) > 0 {
 		facts = append(facts, report.Fact{Name: "releasesWithoutSBOM", Value: strings.Join(w.missing, " ")})
 	}
