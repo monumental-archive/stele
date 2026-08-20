@@ -258,6 +258,26 @@ func TestRevisionsRefusesAnUnreadableCommitTime(t *testing.T) {
 	}
 }
 
+// TestRevisionsRefusesARefThatIsNotThere: a branch nobody has is not
+// a branch with no history. Returning an empty list would report a
+// repository whose protected branch carries no revisions — which every
+// source requirement then reads as nothing to judge rather than as a
+// question that was never answered.
+func TestRevisionsRefusesARefThatIsNotThere(t *testing.T) {
+	t.Parallel()
+
+	r := openHistory(t, mergedRepo(t))
+
+	got, err := r.Revisions("refs/heads/no-such-branch", time.Time{})
+	if err == nil {
+		t.Fatalf("Revisions = %v, want a refusal naming the ref", subjects(got))
+	}
+
+	if !strings.Contains(err.Error(), "no-such-branch") {
+		t.Errorf("Revisions error = %v, want it to name the ref it could not read", err)
+	}
+}
+
 // TestRevisionsRefusesAShallowClone: the same trap the other two
 // history reads refuse. A shallow clone answers with a truncated past
 // and nothing about the answer looks wrong — here it would report a
