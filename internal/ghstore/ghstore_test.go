@@ -118,17 +118,23 @@ func TestBundlesRetries(t *testing.T) {
 		if calls.Load() != 5 {
 			t.Errorf("calls = %d, want all attempts", calls.Load())
 		}
+
+		// The other direction of stele#216: a caller branching on the
+		// credential must not catch the empty store here.
+		if errors.Is(err, gh.ErrForbidden) {
+			t.Error("an empty store typed as a refusal — that is the other fact")
+		}
 	})
 
 	t.Run("server error surfaces as status", func(t *testing.T) {
 		t.Parallel()
 
 		c, _ := client(t, func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "secret prose", http.StatusForbidden)
+			http.Error(w, "secret prose", http.StatusInternalServerError)
 		})
 
 		_, err := c.Bundles("acme/widget", digest)
-		if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 			t.Errorf("Bundles = %v, want the status", err)
 		}
 
@@ -149,6 +155,31 @@ func TestBundlesRetries(t *testing.T) {
 			t.Errorf("Bundles = %v, want the decode refusal", err)
 		}
 	})
+}
+
+// TestPropagationSignalIsUnchanged holds the boundary stele#216 drew
+// from the other side: the 404 that a just-published attestation
+// answers with is the reason the ladder exists, so it still rides every
+// attempt and is still typed as no refusal at all.
+func TestPropagationSignalIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	c, calls := client(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not yet", http.StatusNotFound)
+	})
+
+	_, err := c.Bundles("acme/widget", digest)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("Bundles = %v, want the propagation refusal", err)
+	}
+
+	if calls.Load() != 5 {
+		t.Errorf("calls = %d, want all attempts — 404 is the propagation signal", calls.Load())
+	}
+
+	if errors.Is(err, gh.ErrForbidden) {
+		t.Error("a 404 typed as a refusal — the propagation signal is not one")
+	}
 }
 
 // TestBundlesFailFast pins the auditor stance (#19 item 4): a
@@ -297,6 +328,10 @@ func bare403(w http.ResponseWriter) {
 	http.Error(w, "Resource not accessible by personal access token", http.StatusForbidden)
 }
 
+func unauthorized401(w http.ResponseWriter) {
+	http.Error(w, "Bad credentials", http.StatusUnauthorized)
+}
+
 // throttleProbe is the store's ladder under a scripted rate limit: the
 // reads it made, and the pauses it took between them.
 type throttleProbe struct {
@@ -360,9 +395,10 @@ func TestThrottleIsNotAFactAboutTheDigest(t *testing.T) {
 		// found is whether the store answers at all.
 		found bool
 		// throttled is whether the refusal types as the host's, not the
-		// digest's; says and never are fragments it must and must not
-		// carry.
+		// digest's; forbidden whether it types as the credential's;
+		// says and never are fragments it must and must not carry.
 		throttled   bool
+		forbidden   bool
 		says, never string
 	}{
 		{
@@ -392,16 +428,26 @@ func TestThrottleIsNotAFactAboutTheDigest(t *testing.T) {
 			never:     "no attestations",
 		},
 		{
-			// The boundary held: this leg's stance on a REFUSED read is
-			// unchanged by stele#209 — it still rides the propagation
-			// ladder — but it must never be typed as the host's doing.
-			name:    "a bare 403 is the subject's, and is typed as neither the host's nor an empty store",
-			respond: bare403,
-			refuse:  99,
-			calls:   5,
-			waits:   ladder,
-			says:    "HTTP 403",
-			never:   "throttled this walk",
+			// stele#216: a bare 403 is the credential's, typed as neither
+			// the host's pace nor an empty store — and it leaves the
+			// propagation ladder at once, because no wait turns a refused
+			// credential into a permitted one.
+			name:      "a bare 403 is the credential's, refused after one attempt",
+			respond:   bare403,
+			refuse:    99,
+			calls:     1,
+			forbidden: true,
+			says:      "HTTP 403",
+			never:     "throttled this walk",
+		},
+		{
+			name:      "a 401 is the same fact and the same refusal",
+			respond:   unauthorized401,
+			refuse:    99,
+			calls:     1,
+			forbidden: true,
+			says:      "HTTP 401",
+			never:     "no attestations",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -432,6 +478,10 @@ func TestThrottleIsNotAFactAboutTheDigest(t *testing.T) {
 
 			if is := errors.Is(err, gh.ErrThrottled); is != tc.throttled {
 				t.Fatalf("errors.Is(%v, ErrThrottled) = %v, want %v", err, is, tc.throttled)
+			}
+
+			if is := errors.Is(err, gh.ErrForbidden); is != tc.forbidden {
+				t.Fatalf("errors.Is(%v, ErrForbidden) = %v, want %v", err, is, tc.forbidden)
 			}
 
 			if !strings.Contains(err.Error(), tc.says) {

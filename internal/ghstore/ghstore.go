@@ -75,6 +75,10 @@ type response struct {
 // budget ran out on the host's pace, not on this digest's evidence, so
 // the refusal names the throttle and the caller reads "the run could
 // not see" rather than "the evidence is absent" (stele#209).
+//
+// A store the credential cannot read is the third fact, and the ladder
+// is not its answer: a 403 or a 401 returns gh.ErrForbidden after one
+// attempt (stele#216). Only the 404 is the propagation signal.
 func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) {
 	url := fmt.Sprintf("%s/repos/%s/attestations/sha256:%s?per_page=100", c.Base, slug, sha256Hex)
 
@@ -98,6 +102,14 @@ func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) 
 		bundles, err := c.fetch(url)
 		if err == nil && len(bundles) > 0 {
 			return bundles, nil
+		}
+
+		// An unreadable store is not a propagating one: the ladder exists
+		// because a just-published attestation 404s, and no wait turns a
+		// refused credential into a permitted one. Leave at once, in the
+		// refusal's own vocabulary (stele#216).
+		if errors.Is(err, gh.ErrForbidden) {
+			return nil, fmt.Errorf("ghstore: %s: %w", url, err)
 		}
 
 		if err == nil {
@@ -144,6 +156,14 @@ func (c *Client) fetch(url string) ([]verify.StoredBundle, error) {
 		// this leg's way would be "the evidence is not there".
 		if wait, ok := gh.Throttled(resp.StatusCode, resp.Header, body); ok {
 			return nil, gh.ThrottleRefusal(fmt.Sprintf("HTTP %d", resp.StatusCode), wait)
+		}
+
+		// A credential that cannot read this store is not an absence of
+		// evidence, and it is not this caller's pace either: it is the
+		// third fact internal/gh already has a word for, so this leg says
+		// it in that word rather than inventing a second one (stele#216).
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("HTTP %d: %w", resp.StatusCode, gh.ErrForbidden)
 		}
 
 		// The status alone: the body is server-controlled prose.
