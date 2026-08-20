@@ -697,6 +697,85 @@ func TestChainHealedContinuity(t *testing.T) {
 	}
 }
 
+// TestChainHealedContinuityRefusedByPolicy: whether a healed link may
+// carry the target level at all is the ORGANISATION's call, not this
+// tool's. An org that declares healedContinuity false is saying a link
+// written after the fact never establishes its target however provable
+// the gap turns out to be — so the horizon is not even consulted, and
+// the under-claim lands on a chain the previous test showed keeping
+// its target under the same inputs.
+func TestChainHealedContinuityRefusedByPolicy(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	w.p = loadPolicyWith(t, `"healedContinuity": true`, `"healedContinuity": false`)
+	w.found(t)
+
+	// The horizon that TestChainHealedContinuity proves is enough to
+	// keep the target: the refusal is the policy's, not the evidence's.
+	w.in.Claims = claimsPayload([]int64{1000000}, "ORG_SOURCE_GATED")
+
+	if err := w.emit(t); err != nil {
+		t.Fatalf("emit = %v", err)
+	}
+
+	if got := claimedSourceLevel(t, w.g.notes[rev2]); got != "SLSA_SOURCE_LEVEL_2" {
+		t.Errorf("healed link level = %s, want the under-claim the policy demands", got)
+	}
+
+	// The pushed revision is not a healed link and keeps its target:
+	// the stance is about links written after the fact, not about the
+	// branch.
+	if got := claimedSourceLevel(t, w.g.notes[rev4]); got != "SLSA_SOURCE_LEVEL_3" {
+		t.Errorf("pushed link level = %s, want the target", got)
+	}
+}
+
+// TestChainLevelWithNoDeclaredProperties: a branch whose target level
+// has no entry under `levels` declares no property for it. That is an
+// organisation claiming a level it requires nothing for, and the
+// emitter claims it — the policy is the one place the org says what
+// establishes what, and inventing a requirement here would be this
+// tool asserting a fact about the world from its own configuration.
+func TestChainLevelWithNoDeclaredProperties(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	// The branch still targets L3; its levels table now speaks only
+	// about L2, so nothing is required at the level being claimed.
+	w.p = loadPolicyWith(t, `"level": "SLSA_SOURCE_LEVEL_3"`, `"level": "SLSA_SOURCE_LEVEL_2"`)
+	w.found(t)
+
+	// No property is live at all: with nothing declared at L3 there is
+	// nothing for their absence to under-claim.
+	w.in.Claims = claimsPayload([]int64{1000000})
+
+	if err := w.emit(t); err != nil {
+		t.Fatalf("emit = %v", err)
+	}
+
+	if got := claimedSourceLevel(t, w.g.notes[rev4]); got != "SLSA_SOURCE_LEVEL_3" {
+		t.Errorf("level = %s, want the target a policy requires nothing for", got)
+	}
+}
+
+// loadPolicyWith loads the fixture policy with one substitution, so a
+// row states the single fact it changed.
+func loadPolicyWith(t *testing.T, from, to string) *policy.Policy {
+	t.Helper()
+
+	if n := strings.Count(policyJSON, from); n != 1 {
+		t.Fatalf("substitution target %q occurs %d times, want exactly 1", from, n)
+	}
+
+	p, err := policy.Load(strings.NewReader(strings.Replace(policyJSON, from, to, 1)))
+	if err != nil {
+		t.Fatalf("policy.Load = %v", err)
+	}
+
+	return p
+}
+
 func TestChainRefusals(t *testing.T) {
 	t.Parallel()
 
