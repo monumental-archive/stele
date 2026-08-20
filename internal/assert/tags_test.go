@@ -210,7 +210,7 @@ func TestTagsDefects(t *testing.T) {
 		{
 			"a refusing signature reddens",
 			func(_ *fakeTags, tv *fakeTagVerifier) { tv.err = errors.New("chains to no trusted authority") },
-			"does not verify",
+			"signature refused: chains to no trusted authority",
 		},
 		{
 			"an unlinked target reddens",

@@ -138,6 +138,26 @@ func newLeaf(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, san, i
 func signCMS(t *testing.T, payload []byte, leaf *x509.Certificate, key *ecdsa.PrivateKey) []byte {
 	t.Helper()
 
+	return buildCMS(t, payload, func(sd *pkcs7.SignedData) error {
+		return sd.AddSigner(leaf, key, pkcs7.SignerInfoConfig{})
+	})
+}
+
+// signCMSWithoutAttributes signs with no authenticated attributes at
+// all — the shape a signature takes when it declares no signing
+// time. pkcs7 accepts it and silently skips its own window check,
+// which is why requireSigningTime exists.
+func signCMSWithoutAttributes(t *testing.T, payload []byte, leaf *x509.Certificate, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+
+	return buildCMS(t, payload, func(sd *pkcs7.SignedData) error {
+		return sd.SignWithoutAttr(leaf, key, pkcs7.SignerInfoConfig{})
+	})
+}
+
+func buildCMS(t *testing.T, payload []byte, sign func(*pkcs7.SignedData) error) []byte {
+	t.Helper()
+
 	sd, err := pkcs7.NewSignedData(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +165,7 @@ func signCMS(t *testing.T, payload []byte, leaf *x509.Certificate, key *ecdsa.Pr
 
 	sd.SetDigestAlgorithm(pkcs7.OIDDigestAlgorithmSHA256)
 
-	if serr := sd.AddSigner(leaf, key, pkcs7.SignerInfoConfig{}); serr != nil {
+	if serr := sign(sd); serr != nil {
 		t.Fatal(serr)
 	}
 
@@ -269,8 +289,7 @@ func TestVerifyTagRefusals(t *testing.T) {
 }
 
 // TestVerifyTagUntrustedCA: a signature chaining to a CA the trusted
-// root does not carry refuses, and a tagger time outside the leaf's
-// validity refuses — the offline window bound.
+// root does not carry refuses.
 func TestVerifyTagUntrustedCA(t *testing.T) {
 	t.Parallel()
 
@@ -282,18 +301,28 @@ func TestVerifyTagUntrustedCA(t *testing.T) {
 		!strings.Contains(err.Error(), "chains to no trusted authority") {
 		t.Fatalf("error = %v, want the chain refusal", err)
 	}
+}
 
-	// A payload whose tagger time is outside the certificate window:
-	// re-sign a late payload with w's leaf world — the signature is
-	// valid CMS, but the observation time falls outside validity.
-	late := tagPayload(tagTaggerEpoch + 7200)
+// TestVerifyTagCertificateAuthorityGeneration: the observation
+// instant selects WHICH CA generation is asked to vouch, so a leaf
+// issued before the trusted root says that authority began refuses.
+// This is the question chainToFulcio exists to ask, and the only one
+// its instant decides.
+func TestVerifyTagCertificateAuthorityGeneration(t *testing.T) {
+	t.Parallel()
 
 	ca, caKey := newCA(t)
 	leaf, leafKey := newLeaf(t, ca, caKey, tagSAN, "https://token.example.com",
 		time.Unix(tagTaggerEpoch-300, 0), time.Unix(tagTaggerEpoch+300, 0))
 
+	// The authority's declared period opens AFTER the leaf was
+	// issued: this generation did not exist to issue it.
 	m := &material{cas: []root.CertificateAuthority{
-		&root.FulcioCertificateAuthority{Root: ca, ValidityPeriodStart: ca.NotBefore, ValidityPeriodEnd: ca.NotAfter},
+		&root.FulcioCertificateAuthority{
+			Root:                ca,
+			ValidityPeriodStart: time.Unix(tagTaggerEpoch-100, 0),
+			ValidityPeriodEnd:   ca.NotAfter,
+		},
 	}}
 
 	v, err := trust.NewVerifier(m)
@@ -301,17 +330,107 @@ func TestVerifyTagUntrustedCA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, verr := v.VerifyTag(late, signCMS(t, late, leaf, leafKey), tagID()); verr == nil ||
+	payload := tagPayload(tagTaggerEpoch)
+
+	if _, verr := v.VerifyTag(payload, signCMS(t, payload, leaf, leafKey), tagID()); verr == nil ||
 		!strings.Contains(verr.Error(), "chains to no trusted authority") {
-		t.Fatalf("error = %v, want the window refusal", verr)
+		t.Fatalf("error = %v, want the authority-generation refusal", verr)
+	}
+}
+
+// TestVerifyTagIssuanceAfterTheTaggerClock is stele#167's regression,
+// stated as the live defect stated it: git stamps the tag object and
+// only then does the mint request a certificate, so an honest tag is
+// routinely stamped one second BEFORE its certificate was issued.
+// Every failure measured against the org's live tags was exactly this
+// one second. It must verify.
+func TestVerifyTagIssuanceAfterTheTaggerClock(t *testing.T) {
+	t.Parallel()
+
+	w := newTagWorld(t)
+
+	// The leaf opens at tagTaggerEpoch-300; stamp the tag one second
+	// before that instant, the shape the mint actually produces.
+	payload := tagPayload(tagTaggerEpoch - 301)
+
+	san, err := w.verifier.VerifyTag(payload, signCMS(t, payload, w.leaf, w.leafKey), tagID())
+	if err != nil {
+		t.Fatalf("VerifyTag = %v, want a tag stamped one second before issuance to verify", err)
+	}
+
+	if san != tagSAN {
+		t.Fatalf("san = %q, want %q", san, tagSAN)
+	}
+}
+
+// TestVerifyTagTaggerWindow walks the whole bound
+// taggerWithinCertificate derives from the certificate: a tag may sit
+// anywhere from one certificate lifetime before issuance to the
+// certificate's expiry, and nowhere else. The world's leaf runs
+// [epoch-300, epoch+300], so its lifetime is 600s and the earliest
+// admissible stamp is epoch-900.
+func TestVerifyTagTaggerWindow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		tagger int64
+		want   string
+	}{
+		{"one second before issuance — the #167 shape", tagTaggerEpoch - 301, ""},
+		{"the same second as issuance", tagTaggerEpoch - 300, ""},
+		{"exactly one certificate lifetime before issuance", tagTaggerEpoch - 900, ""},
+		{"a second beyond one certificate lifetime", tagTaggerEpoch - 901, "outside the window"},
+		{"exactly at expiry", tagTaggerEpoch + 300, ""},
+		{"a second past expiry", tagTaggerEpoch + 301, "outside the window"},
+		{"far past expiry", tagTaggerEpoch + 7200, "outside the window"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newTagWorld(t)
+			payload := tagPayload(tt.tagger)
+
+			_, err := w.verifier.VerifyTag(payload, signCMS(t, payload, w.leaf, w.leafKey), tagID())
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("VerifyTag = %v, want the tag to verify", err)
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestVerifyTagWithoutSigningTime: pkcs7 holds the CMS signing time
+// against the certificate window only when the attribute is PRESENT,
+// and returns success when it is absent. A guard a forger deletes by
+// deleting a field is not a guard, so presence is required here.
+func TestVerifyTagWithoutSigningTime(t *testing.T) {
+	t.Parallel()
+
+	w := newTagWorld(t)
+	sig := signCMSWithoutAttributes(t, w.payload, w.leaf, w.leafKey)
+
+	if _, err := w.verifier.VerifyTag(w.payload, sig, tagID()); err == nil ||
+		!strings.Contains(err.Error(), "declares no signing time") {
+		t.Fatalf("error = %v, want the absent-signing-time refusal", err)
 	}
 }
 
 // TestVerifyTagTaggerLineShapes: the tagger line is git's own format
-// and supplies the observation time the certificate window is held
-// against, so every shape that cannot yield one refuses. A default time
-// here would hold a certificate against the wrong window — which is the
-// whole reason the time comes from the SIGNED payload.
+// and carries the tag's own account of when it was made, which
+// taggerWithinCertificate holds against the signing certificate, so
+// every shape that cannot yield one refuses. Defaulting the time here
+// would hold a certificate against an instant no evidence states.
 func TestVerifyTagTaggerLineShapes(t *testing.T) {
 	t.Parallel()
 

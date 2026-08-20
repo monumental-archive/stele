@@ -270,8 +270,13 @@ func (w *tagsWalk) signature(subject string, obj *gh.TagObject) {
 		return
 	}
 
+	// The detail names the obligation, never the cause: the verifier
+	// refuses over the signature, the certificate chain, the declared
+	// signing time and the identity, and a prefix that picks one of
+	// them misreports the other three (stele#167, where a clock
+	// disagreement surfaced as an untrusted chain).
 	if _, err := w.tv.Verify(obj.Payload, obj.Signature); err != nil {
-		c.Diverged("signature does not verify against the declared identity: " + err.Error())
+		c.Diverged("signature refused: " + err.Error())
 	}
 }
 
