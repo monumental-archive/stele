@@ -5,17 +5,19 @@
 package assert_test
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/report"
 )
 
 const tagsPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "issuer": "https://token.example.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",
@@ -23,7 +25,6 @@ const tagsPolicyJSON = `{
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
   },
   "tags": {
@@ -158,7 +159,7 @@ func runTags(t *testing.T, f *fakeTags, tv assert.TagVerifier) *report.Report {
 	t.Helper()
 
 	rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-		&fakeForge{}, f, tv, func(string, ...any) {})
+		&fakeForge{}, f, tv, report.NewJournal(), func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestTagsDefects(t *testing.T) {
 			tt.mutate(f, tv)
 
 			rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-				&fakeForge{}, f, tv, func(string, ...any) {})
+				&fakeForge{}, f, tv, report.NewJournal(), func(string, ...any) {})
 			if err != nil {
 				t.Fatalf("Tags: %v", err)
 			}
@@ -297,7 +298,7 @@ func TestTagsBounds(t *testing.T) {
 		tv := &fakeTagVerifier{}
 
 		rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/gadget"},
-			&fakeForge{}, f, tv, func(string, ...any) {})
+			&fakeForge{}, f, tv, report.NewJournal(), func(string, ...any) {})
 		if err != nil {
 			t.Fatalf("Tags: %v", err)
 		}
@@ -315,7 +316,7 @@ func TestTagsBounds(t *testing.T) {
 		f.refs["mystery"] = f.refs["widget"]
 
 		rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/mystery"},
-			&fakeForge{}, f, &fakeTagVerifier{}, func(string, ...any) {})
+			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
 		if err != nil {
 			t.Fatalf("Tags: %v", err)
 		}
@@ -335,7 +336,7 @@ func TestTagsBounds(t *testing.T) {
 		f.refsErr = errors.New("listing torn")
 
 		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, f, &fakeTagVerifier{}, func(string, ...any) {}); err == nil ||
+			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "listing torn") {
 			t.Fatalf("error = %v, want the torn listing", err)
 		}
@@ -345,7 +346,7 @@ func TestTagsBounds(t *testing.T) {
 		t.Parallel()
 
 		if _, err := assert.Tags(loadTestPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, conformantTags(), &fakeTagVerifier{}, func(string, ...any) {}); err == nil ||
+			&fakeForge{}, conformantTags(), &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "no tags section") {
 			t.Fatalf("error = %v, want the section refusal", err)
 		}
@@ -366,7 +367,7 @@ func TestTagsWalkEdges(t *testing.T) {
 		delete(f.objects, tagObjSHA)
 
 		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, f, &fakeTagVerifier{}, func(string, ...any) {}); err == nil ||
+			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "tag object") {
 			t.Fatalf("error = %v, want the object read failure", err)
 		}
@@ -379,7 +380,7 @@ func TestTagsWalkEdges(t *testing.T) {
 		delete(f.meta, genesisRev)
 
 		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
-			&fakeForge{}, f, &fakeTagVerifier{}, func(string, ...any) {}); err == nil ||
+			&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "commit") {
 			t.Fatalf("error = %v, want the commit read failure", err)
 		}
@@ -415,9 +416,150 @@ func TestTagsWalkEdges(t *testing.T) {
 		t.Parallel()
 
 		if _, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "solo"},
-			&fakeForge{}, conformantTags(), &fakeTagVerifier{}, func(string, ...any) {}); err == nil ||
+			&fakeForge{}, conformantTags(), &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {}); err == nil ||
 			!strings.Contains(err.Error(), "owner/name") {
 			t.Fatalf("error = %v, want the population refusal", err)
 		}
 	})
+}
+
+// TestTagsDebtExcusesOneCheck is #147's subject: a defect on an
+// immutable tag inside the signed epoch is writable-down. The line
+// excuses THAT check on THAT tag — the tag stays defective forever,
+// recorded rather than healed — and nothing else it might have.
+func TestTagsDebtExcusesOneCheck(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		line   string
+		mutate func(*fakeTags)
+		want   report.Verdict
+	}{
+		{
+			"a signature line excuses the signature defect it names",
+			"widget@v1.1.0(tag:signature)",
+			func(f *fakeTags) { f.objects[tagObjSHA].Signature = nil },
+			report.VerdictPass,
+		},
+		{
+			"the same line excuses nothing else on that tag",
+			"widget@v1.1.0(tag:signature)",
+			func(f *fakeTags) { f.objects[tagObjSHA].Tagger = "mallory" },
+			report.VerdictFail,
+		},
+		{
+			"a line for another tag excuses nothing",
+			"widget@v9.9.9(tag:signature)",
+			func(f *fakeTags) { f.objects[tagObjSHA].Signature = nil },
+			report.VerdictFail,
+		},
+		{
+			"a tagger line excuses the tagger defect",
+			"widget@v1.1.0(tag:tagger)",
+			func(f *fakeTags) { f.objects[tagObjSHA].Tagger = "mallory" },
+			report.VerdictPass,
+		},
+		{
+			"a link line excuses the missing chain link",
+			"widget@v1.1.0(tag:link)",
+			func(f *fakeTags) { f.objects[tagObjSHA].Target = unlinkedRev },
+			report.VerdictPass,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			debt, err := report.ParseDebt([]byte(tt.line+"\n"), "debt.txt")
+			if err != nil {
+				t.Fatalf("debt: %v", err)
+			}
+
+			f := conformantTags()
+			tt.mutate(f)
+
+			rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
+				&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
+			if err != nil {
+				t.Fatalf("Tags: %v", err)
+			}
+
+			if rep.Verdict() != tt.want {
+				t.Fatalf("verdict = %s, want %s — findings: %+v", rep.Verdict(), tt.want, rep.Findings())
+			}
+		})
+	}
+}
+
+// A line whose check the walk PERFORMED and found clean is stale — a
+// retirement candidate. A line whose check the walk never performed
+// (the epoch exempts a pre-epoch tag from signing) is unexercised:
+// this run looked at that tag and never asked the question, so it has
+// nothing to say about the excuse. Calling that one stale would
+// retire an excuse on evidence nobody gathered.
+func TestTagsDebtStalenessFollowsWhatWasChecked(t *testing.T) {
+	t.Parallel()
+
+	debt, err := report.ParseDebt(
+		[]byte("widget@v1.1.0(tag:signature)\nwidget@v1.0.0(tag:signature)\n"), "debt.txt")
+	if err != nil {
+		t.Fatalf("debt: %v", err)
+	}
+
+	f := conformantTags()
+	f.refs["widget"] = []gh.TagRef{
+		{Name: "v1.1.0", ObjectSHA: tagObjSHA, Annotated: true},
+		{Name: "v1.0.0", ObjectSHA: tagObjSHA2, Annotated: true},
+	}
+	f.objects[tagObjSHA2] = &gh.TagObject{Tagger: "release-mint[bot]", Target: linkedRev}
+
+	rep, err := assert.Tags(loadTagsPolicy(t), assert.Population{Repo: "acme/widget"},
+		&fakeForge{}, f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+
+	doc := encodeReport(t, rep)
+
+	if len(doc.Stale) != 1 || doc.Stale[0].Origin != "debt.txt:1" {
+		t.Fatalf("staleExceptions = %+v, want the post-epoch line whose check ran clean", doc.Stale)
+	}
+
+	if len(doc.Unexercised) != 1 || doc.Unexercised[0].Origin != "debt.txt:2" {
+		t.Fatalf("unexercisedExceptions = %+v, want the pre-epoch line nobody could answer", doc.Unexercised)
+	}
+}
+
+// reportDoc is the wire shape this package's tests read back — the
+// report package exports no decoder by design, so a consumer that
+// needs one owns it.
+type reportDoc struct {
+	Verdict     *string        `json:"verdict"`
+	Stale       []exceptionDoc `json:"staleExceptions"`
+	Unexercised []exceptionDoc `json:"unexercisedExceptions"`
+}
+
+type exceptionDoc struct {
+	Kind      string `json:"kind"`
+	Subject   string `json:"subject"`
+	Assertion string `json:"assertion"`
+	Origin    string `json:"origin"`
+}
+
+func encodeReport(t *testing.T, rep *report.Report) *reportDoc {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := rep.Encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	doc, err := jsonx.DecodeForeign[reportDoc](buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	return doc
 }

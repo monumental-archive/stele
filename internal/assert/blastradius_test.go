@@ -16,13 +16,12 @@ import (
 )
 
 const blastPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
   },
   "blastRadius": {
@@ -109,7 +108,8 @@ func runBlast(t *testing.T, f *fakeForge, scanner osv.Scanner, d *vexjoin.Decisi
 
 	pol := loadBlastPolicy(t)
 
-	rep, err := assert.BlastRadius(pol, assert.Population{Org: "acme"}, f, scanner, d, func(string, ...any) {})
+	rep, err := assert.BlastRadius(pol, assert.Population{Org: "acme"}, f, scanner, d,
+		report.NewJournal(), func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("BlastRadius: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestBlastRadiusPolicyRefusals(t *testing.T) {
 	}
 
 	if _, err := assert.BlastRadius(noSection, assert.Population{Org: "acme"}, blastForge(), fakeScanner{out: "{}"},
-		&vexjoin.Decisions{}, func(string, ...any) {}); err == nil {
+		&vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {}); err == nil {
 		t.Fatal("a policy with no blastRadius section did not refuse")
 	}
 }

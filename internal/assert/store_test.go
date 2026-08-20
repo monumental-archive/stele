@@ -16,14 +16,13 @@ import (
 )
 
 const storePolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "issuer": "https://token.actions.githubusercontent.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
     "continuous": {
       "stubPath": ".github/workflows/continuous.yml",
@@ -96,8 +95,8 @@ func runStoreWalk(t *testing.T, policyJSON string, f *fakeForge, att assert.Atte
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, att, nil, pinFile, nil,
-		func(string, ...any) {})
+	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, att,
+		report.NewJournal(), pinFile, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}

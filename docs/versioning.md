@@ -28,7 +28,7 @@ refusal share one definition.
 ## One epoch for live-read documents
 
 Every stele document that is **read live** carries the SAME number,
-`schema`, currently **4**:
+`schema`, currently **5**:
 
 | document | where |
 | --- | --- |

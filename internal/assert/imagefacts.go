@@ -72,7 +72,9 @@ type platformDoc struct {
 // seals the verdict. The facts values re-pass the hygiene rules
 // independently of whoever resolved them — a resolver bug cannot
 // self-certify.
-func ImageFacts(image, digest string, factsJSON []byte, r oci.Reader, log Logf) (*report.Report, error) {
+func ImageFacts(
+	image, digest string, factsJSON []byte, r oci.Reader, j *report.Journal, log Logf,
+) (*report.Report, error) {
 	if image == "" {
 		return nil, errors.New("assert: IMAGE is required")
 	}
@@ -88,9 +90,7 @@ func ImageFacts(image, digest string, factsJSON []byte, r oci.Reader, log Logf) 
 
 	subject := image + "@" + digest
 
-	var findings []report.Finding
-
-	findings = append(findings, hygieneFindings(subject, *facts)...)
+	hygieneChecks(j, subject, *facts)
 
 	raw, err := r.Index(image, digest)
 	if err != nil {
@@ -102,71 +102,53 @@ func ImageFacts(image, digest string, factsJSON []byte, r oci.Reader, log Logf) 
 		return nil, fmt.Errorf("assert: index at %s: %w", subject, err)
 	}
 
-	findings = append(findings, indexFindings(subject, idx, *facts)...)
+	indexChecks(j, subject, idx, *facts)
 
 	children := platformChildren(idx)
 
 	for _, child := range children {
-		f, cerr := labelFindings(image, child, *facts, r)
-		if cerr != nil {
+		if cerr := labelChecks(j, image, child, *facts, r); cerr != nil {
 			return nil, cerr
 		}
-
-		findings = append(findings, f...)
 
 		log("assert: image-facts: %s labels checked", child.platform)
 	}
 
 	pop := report.PopulationFromEvidence(len(children), "platform manifests in the index")
 
-	return report.Seal("assert image-facts", subject, pop, findings, nil, report.NoCanary()), nil
+	return report.Seal("assert image-facts", subject, pop, j, report.NoCanary()), nil
 }
 
-// hygieneFindings re-checks every fact value: non-empty, no control
+// hygieneChecks re-checks every fact value: non-empty, no control
 // characters. Independent of the registry read by design.
-func hygieneFindings(subject string, facts map[string]string) []report.Finding {
-	var out []report.Finding
+func hygieneChecks(j *report.Journal, subject string, facts map[string]string) {
+	c := j.Check(subject, assertHygiene)
 
 	for _, k := range sortedKeys(facts) {
 		v := facts[k]
 		switch {
 		case v == "":
-			out = append(out, report.Finding{
-				Subject: subject, Assertion: assertHygiene, Actual: "",
-				Detail: fmt.Sprintf("fact %q is empty", k),
-			})
+			c.Diverged(fmt.Sprintf("fact %q is empty", k))
 		case controlRE.MatchString(v):
-			out = append(out, report.Finding{
-				Subject: subject, Assertion: assertHygiene,
-				Detail: fmt.Sprintf("fact %q carries control characters", k),
-			})
+			c.Diverged(fmt.Sprintf("fact %q carries control characters", k))
 		}
 	}
-
-	return out
 }
 
-// indexFindings judges the index document: media type, then the
+// indexChecks judges the index document: media type, then the
 // annotations map against the facts map, drift named per key.
-func indexFindings(subject string, idx *indexDoc, facts map[string]string) []report.Finding {
-	var out []report.Finding
-
+func indexChecks(j *report.Journal, subject string, idx *indexDoc, facts map[string]string) {
 	mt := ""
 	if idx.MediaType != nil {
 		mt = *idx.MediaType
 	}
 
-	if mt != ociIndexMediaType {
-		out = append(out, report.Finding{
-			Subject: subject, Assertion: assertMediaType,
-			Expected: ociIndexMediaType, Actual: mt,
-			Detail: "not an OCI index — annotations were dropped (oci-mediatypes=false somewhere)",
-		})
+	if c := j.Check(subject, assertMediaType); mt != ociIndexMediaType {
+		c.DivergedFrom(ociIndexMediaType, mt,
+			"not an OCI index — annotations were dropped (oci-mediatypes=false somewhere)")
 	}
 
-	out = append(out, mapFindings(subject, assertIndexAnn, idx.Annotations, facts)...)
-
-	return out
+	mapChecks(j, subject, assertIndexAnn, idx.Annotations, facts)
 }
 
 // child pairs one platform manifest's digest with its platform name.
@@ -199,50 +181,42 @@ func platformChildren(idx *indexDoc) []child {
 	return out
 }
 
-// labelFindings judges one per-architecture config's labels — what
+// labelChecks judges one per-architecture config's labels — what
 // `docker inspect` shows a consumer, and what the smoke test ran
 // against.
-func labelFindings(image string, c child, facts map[string]string, r oci.Reader) ([]report.Finding, error) {
+func labelChecks(j *report.Journal, image string, c child, facts map[string]string, r oci.Reader) error {
 	labels, err := r.ConfigLabels(image, c.digest)
 	if err != nil {
-		return nil, fmt.Errorf("assert: %w", err)
+		return fmt.Errorf("assert: %w", err)
 	}
 
-	return mapFindings(image+"@"+c.digest+" ("+c.platform+")", assertLabels, labels, facts), nil
+	mapChecks(j, image+"@"+c.digest+" ("+c.platform+")", assertLabels, labels, facts)
+
+	return nil
 }
 
-// mapFindings compares got against want key by key, both directions —
+// mapChecks compares got against want key by key, both directions —
 // a drifted value, a missing key and a surplus key are three findings
-// that each name themselves.
-func mapFindings(subject, assertion string, got, want map[string]string) []report.Finding {
-	var out []report.Finding
+// that each name themselves. The comparison is one recorded check
+// whether or not it finds anything.
+func mapChecks(j *report.Journal, subject, assertion string, got, want map[string]string) {
+	c := j.Check(subject, assertion)
 
 	for _, k := range sortedKeys(want) {
 		gv, ok := got[k]
 		switch {
 		case !ok:
-			out = append(out, report.Finding{
-				Subject: subject, Assertion: assertion, Expected: want[k],
-				Detail: fmt.Sprintf("key %q is absent", k),
-			})
+			c.DivergedFrom(want[k], "", fmt.Sprintf("key %q is absent", k))
 		case gv != want[k]:
-			out = append(out, report.Finding{
-				Subject: subject, Assertion: assertion, Expected: want[k], Actual: gv,
-				Detail: fmt.Sprintf("key %q diverges", k),
-			})
+			c.DivergedFrom(want[k], gv, fmt.Sprintf("key %q diverges", k))
 		}
 	}
 
 	for _, k := range sortedKeys(got) {
 		if _, ok := want[k]; !ok {
-			out = append(out, report.Finding{
-				Subject: subject, Assertion: assertion, Actual: got[k],
-				Detail: fmt.Sprintf("key %q is not in the facts map", k),
-			})
+			c.DivergedFrom("", got[k], fmt.Sprintf("key %q is not in the facts map", k))
 		}
 	}
-
-	return out
 }
 
 func sortedKeys(m map[string]string) []string {

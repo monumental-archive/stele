@@ -3,7 +3,7 @@
 // Its design rule is the verify engine's #208 made general: a Report
 // has unexported fields and exactly one constructor, Seal, which
 // computes the verdict — so a green report that skipped the coverage
-// question is unrepresentable. The three laws the canon's audit bash
+// question is unrepresentable. The four laws the canon's audit bash
 // re-proved script by script live here once, in types:
 //
 //   - a walk that judged zero subjects cannot pass (the population
@@ -14,8 +14,15 @@
 //   - an exception is either DECLARED by a human in a committed file
 //     or DERIVED by engine logic from evidence — the constructors are
 //     asymmetric, so a hand-written "burned" is unrepresentable, and
-//     a declared exception matching no finding is reported stale
-//     rather than silently carried.
+//     a declared exception matching no finding is reported rather
+//     than silently carried;
+//   - what that unmatched exception is reported AS follows from
+//     coverage, never from a naming convention (#147): a run that
+//     performed the check and found it clean reports the excuse
+//     STALE, a run that never performed it reports it UNEXERCISED.
+//     Staleness is a retirement claim, and a claim needs sight — so
+//     walks record every check through the Journal, not only the
+//     checks that failed.
 package report
 
 import (
@@ -79,19 +86,6 @@ func (p Population) covered() bool {
 	return p.expected == nil || *p.expected == p.size
 }
 
-// Finding is one observed divergence — a fact, carrying no verdict of
-// its own; Seal decides what the set of facts amounts to. Fields are
-// exported because a finding hides nothing: Subject names what
-// diverged, Assertion which check saw it, Expected/Actual the two
-// sides where a comparison has two sides, Detail the prose.
-type Finding struct {
-	Subject   string `json:"subject"`
-	Assertion string `json:"assertion"`
-	Expected  string `json:"expected,omitempty"`
-	Actual    string `json:"actual,omitempty"`
-	Detail    string `json:"detail,omitempty"`
-}
-
 // Exception excuses findings on one subject. The two kinds are the
 // asymmetry that makes this type worth having: Declared is parsed
 // from a committed file a human edited under review; Derived is
@@ -115,6 +109,12 @@ const (
 // one assertion (empty excuses every assertion on the subject), with
 // origin naming the committed file and line that asserted it — so
 // the report points at the review that approved the excuse.
+//
+// An empty SUBJECT excuses the assertion wherever it appears — the
+// shape a triage decision has, since an advisory decision is about a
+// package version and not about the release that happens to carry
+// it. ParseDebt refuses both blanks, so a committed line can never
+// spell either wildcard: engine vocabulary, not file vocabulary.
 func Declared(subject, assertion, origin string) Exception {
 	return Exception{kind: kindDeclared, subject: subject, assertion: assertion, origin: origin}
 }
@@ -126,9 +126,11 @@ func Derived(subject, assertion, origin string) Exception {
 	return Exception{kind: kindDerived, subject: subject, assertion: assertion, origin: origin}
 }
 
-// matches reports whether this exception excuses the finding.
+// matches reports whether this exception excuses the finding. An
+// empty field on the exception's side is the wildcard for that side.
 func (e *Exception) matches(f *Finding) bool {
-	return e.subject == f.Subject && (e.assertion == "" || e.assertion == f.Assertion)
+	return (e.subject == "" || e.subject == f.Subject) &&
+		(e.assertion == "" || e.assertion == f.Assertion)
 }
 
 // Canary is a known-positive the run must reproduce, or the run
@@ -170,6 +172,7 @@ type Report struct {
 	unexcused []Finding
 	excused   []excusedFinding
 	stale     []Exception
+	unlooked  []Exception
 }
 
 // excusedFinding pairs a finding with the exception that excused it,
@@ -180,24 +183,25 @@ type excusedFinding struct {
 }
 
 // Seal computes the one verdict the inputs support. target names the
-// judging mode; subject what was judged. The order of judgment:
-// coverage first (population, canary — no coverage, no judgment),
-// then findings against exceptions. Findings sealed under a
-// CANNOT_JUDGE are still carried: partial sight is reported, never
+// judging mode; subject what was judged; the journal carries what the
+// run checked, what diverged, and what may excuse it. The order of
+// judgment: coverage first (population, canary — no coverage, no
+// judgment), then findings against exceptions. Findings sealed under
+// a CANNOT_JUDGE are still carried: partial sight is reported, never
 // laundered into either verdict.
 func Seal(
-	target, subject string, pop Population, findings []Finding, exceptions []Exception, canary Canary, facts ...Fact,
+	target, subject string, pop Population, j *Journal, canary Canary, facts ...Fact,
 ) *Report {
 	r := &Report{target: target, subject: subject, pop: pop, canary: canary, facts: facts}
 
-	used := make([]bool, len(exceptions))
+	used := make([]bool, len(j.exceptions))
 
-	for fi := range findings {
+	for fi := range j.findings {
 		excused := false
 
-		for ei := range exceptions {
-			if exceptions[ei].matches(&findings[fi]) {
-				r.excused = append(r.excused, excusedFinding{finding: findings[fi], exception: exceptions[ei]})
+		for ei := range j.exceptions {
+			if j.exceptions[ei].matches(&j.findings[fi]) {
+				r.excused = append(r.excused, excusedFinding{finding: j.findings[fi], exception: j.exceptions[ei]})
 				used[ei] = true
 				excused = true
 
@@ -206,13 +210,20 @@ func Seal(
 		}
 
 		if !excused {
-			r.unexcused = append(r.unexcused, findings[fi])
+			r.unexcused = append(r.unexcused, j.findings[fi])
 		}
 	}
 
-	for i, e := range exceptions {
-		if !used[i] {
+	// An unmatched exception is sorted by what the run could SEE, not
+	// by what it was called: the check ran clean (retire the excuse),
+	// or it never ran here (this run has nothing to say about it).
+	for i, e := range j.exceptions {
+		switch {
+		case used[i]:
+		case j.exercised(&e):
 			r.stale = append(r.stale, e)
+		default:
+			r.unlooked = append(r.unlooked, e)
 		}
 	}
 
@@ -272,6 +283,7 @@ type reportDoc struct {
 	Findings   []Finding      `json:"findings,omitempty"`
 	Excused    []excusedDoc   `json:"excused,omitempty"`
 	Stale      []exceptionDoc `json:"staleExceptions,omitempty"`
+	Unlooked   []exceptionDoc `json:"unexercisedExceptions,omitempty"`
 }
 
 type populationDoc struct {
@@ -333,6 +345,10 @@ func (r *Report) Encode(w io.Writer) error {
 
 	for _, e := range r.stale {
 		doc.Stale = append(doc.Stale, exceptionAsDoc(e))
+	}
+
+	for _, e := range r.unlooked {
+		doc.Unlooked = append(doc.Unlooked, exceptionAsDoc(e))
 	}
 
 	if err := jsonx.Encode(w, doc); err != nil {

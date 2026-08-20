@@ -61,9 +61,10 @@ type Finding struct {
 	Class   Class
 }
 
-// String renders the finding the way a report names it.
+// String renders the finding the way a report names it — the key's
+// own rendering, never a second copy of it.
 func (f Finding) String() string {
-	return f.Key.Advisory + ":" + f.Key.Package + "@" + f.Key.Version
+	return f.Key.String()
 }
 
 // Policy is the only org-shaped input: which ecosystems are base

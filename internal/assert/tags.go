@@ -11,6 +11,13 @@
 // machinery existed — legacy by construction, reported by name,
 // never red. Genesis is the oldest link-noted revision whose first
 // parent carries no link.
+//
+// Each obligation is its own assertion (`tag:tagger`, `tag:signature`,
+// `tag:link`…) rather than one blanket `tags` (#147): an assertion
+// names the check that saw the divergence, so a written-down defect
+// excuses THAT check on THAT tag and nothing else. A tag the epoch
+// exempts records no signature check at all, which is what keeps an
+// excuse for it from being called stale by a run that never looked.
 
 package assert
 
@@ -37,6 +44,16 @@ type TagVerifier interface {
 	Verify(payload, signature []byte) (string, error)
 }
 
+// The tag audit's assertions: one per obligation, so an exception can
+// name the single check it excuses.
+const (
+	assertTagEpoch     = "tag:epoch"
+	assertTagAnnotated = "tag:annotated"
+	assertTagTagger    = "tag:tagger"
+	assertTagSignature = "tag:signature"
+	assertTagLink      = "tag:link"
+)
+
 // linkNote is the shape test distinguishing a chain link from
 // scaffolding notes: version and a provenance bundle, both present.
 type linkNote struct {
@@ -50,7 +67,7 @@ type linkNote struct {
 // runFacts are the caller's facts about the run itself — the trust
 // material it held, which the walk cannot know.
 func Tags(
-	pol *Policy, pop Population, forge gh.Forge, tags gh.TagReader, tv TagVerifier, log Logf,
+	pol *Policy, pop Population, forge gh.Forge, tags gh.TagReader, tv TagVerifier, j *report.Journal, log Logf,
 	runFacts ...report.Fact,
 ) (*report.Report, error) {
 	tp := pol.Tags
@@ -64,7 +81,7 @@ func Tags(
 	}
 
 	w := &tagsWalk{
-		pol: tp, org: org, tags: tags, tv: tv, log: log,
+		pol: tp, org: org, tags: tags, tv: tv, j: j, log: log,
 		tagRE: regexp.MustCompile(*tp.TagPattern),
 	}
 
@@ -82,23 +99,19 @@ func Tags(
 
 	pop2 := report.PopulationFromListing(w.checked, "release tags")
 
-	return report.Seal("assert tags", pop.Subject(), pop2, w.findings, nil, report.NoCanary(), facts...), nil
+	return report.Seal("assert tags", pop.Subject(), pop2, j, report.NoCanary(), facts...), nil
 }
 
 type tagsWalk struct {
-	pol      *TagsPolicy
-	org      string
-	tags     gh.TagReader
-	tv       TagVerifier
-	log      Logf
-	tagRE    *regexp.Regexp
-	checked  int
-	legacy   []string
-	findings []report.Finding
-}
-
-func (w *tagsWalk) finding(subject, detail string) {
-	w.findings = append(w.findings, report.Finding{Subject: subject, Assertion: "tags", Detail: detail})
+	pol     *TagsPolicy
+	org     string
+	tags    gh.TagReader
+	tv      TagVerifier
+	j       *report.Journal
+	log     Logf
+	tagRE   *regexp.Regexp
+	checked int
+	legacy  []string
 }
 
 func (w *tagsWalk) repo(repo string) error {
@@ -120,9 +133,8 @@ func (w *tagsWalk) repo(repo string) error {
 	}
 
 	epoch, declared := w.pol.Epochs[repo]
-	if !declared {
-		w.finding(w.org+"/"+repo,
-			"the repository releases tags but the policy declares no signing epoch for it")
+	if c := w.j.Check(w.org+"/"+repo, assertTagEpoch); !declared {
+		c.Diverged("the repository releases tags but the policy declares no signing epoch for it")
 
 		return nil
 	}
@@ -206,23 +218,25 @@ func (w *tagsWalk) tag(repo string, ref gh.TagRef, epoch string, noted map[strin
 		}
 	}
 
-	if obj == nil {
-		w.finding(subject, "lightweight tag — the mint always annotates")
+	if c := w.j.Check(subject, assertTagAnnotated); obj == nil {
+		c.Diverged("lightweight tag — the mint always annotates")
 
 		return nil
 	}
 
-	if obj.Tagger != *w.pol.TaggerName {
-		w.finding(subject,
-			fmt.Sprintf("tagger %q is not the minting identity %q", obj.Tagger, *w.pol.TaggerName))
+	if c := w.j.Check(subject, assertTagTagger); obj.Tagger != *w.pol.TaggerName {
+		c.Diverged(fmt.Sprintf("tagger %q is not the minting identity %q", obj.Tagger, *w.pol.TaggerName))
 	}
 
+	// Outside the declared epoch the signature check is not performed
+	// at all — not performed and passed, which is the distinction an
+	// excuse for such a tag rests on.
 	if epoch != EpochPending && tagAtOrAfter(ref.Name, epoch) {
 		w.signature(subject, obj)
 	}
 
-	if !noted[target] {
-		w.finding(subject, fmt.Sprintf("target %s carries no source chain link", target))
+	if c := w.j.Check(subject, assertTagLink); !noted[target] {
+		c.Diverged(fmt.Sprintf("target %s carries no source chain link", target))
 	}
 
 	w.log("assert: tags: %s", subject)
@@ -247,14 +261,16 @@ func (w *tagsWalk) resolveTarget(repo string, ref gh.TagRef) (string, *gh.TagObj
 
 // signature judges the signing obligation on one annotated tag.
 func (w *tagsWalk) signature(subject string, obj *gh.TagObject) {
+	c := w.j.Check(subject, assertTagSignature)
+
 	if len(obj.Signature) == 0 {
-		w.finding(subject, "unsigned tag inside the declared signing epoch")
+		c.Diverged("unsigned tag inside the declared signing epoch")
 
 		return
 	}
 
 	if _, err := w.tv.Verify(obj.Payload, obj.Signature); err != nil {
-		w.finding(subject, "signature does not verify against the declared identity: "+err.Error())
+		c.Diverged("signature does not verify against the declared identity: " + err.Error())
 	}
 }
 

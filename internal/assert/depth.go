@@ -55,16 +55,20 @@ var uses40RE = regexp.MustCompile(`uses:\s*\S*/(?:publish|release)\.ya?ml@([0-9a
 func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 	subject := repo + "@" + tag
 
+	// One check for the deep release leg, taken before its outcome is
+	// known: the three ways it can fail are one obligation.
+	deep := w.check(subject, "deep")
+
 	subjects, sboms, err := w.checksumSubjects(repo, tag)
 	if err != nil {
-		w.finding(subject, "deep", err.Error())
+		deep.Diverged(err.Error())
 
 		return nil
 	}
 
 	pins, err := w.resolvePins(repo, tag)
 	if err != nil {
-		w.finding(subject, "deep", err.Error())
+		deep.Diverged(err.Error())
 
 		return nil
 	}
@@ -76,7 +80,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 	}
 
 	if rerr := w.full.Verifier.Release(c, subjects, sboms, pins, contract.Decision); rerr != nil {
-		w.finding(subject, "deep", rerr.Error())
+		deep.Diverged(rerr.Error())
 	}
 
 	if !contract.StoreVSA {
@@ -109,8 +113,9 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		return nil
 	}
 
+	vc := w.check(subject, "vsa:deep")
 	if verr := w.full.Verifier.VSA(c, subjects, pins, w.pol.EnrichmentDemand(contract)); verr != nil {
-		w.finding(subject, "vsa:deep", verr.Error())
+		vc.Diverged(verr.Error())
 	}
 
 	w.log("assert: evidence: %s re-verified at full depth", subject)

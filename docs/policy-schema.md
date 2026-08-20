@@ -36,7 +36,7 @@ never vocabulary: nothing in this schema knows those names.
 
 ```json
 {
-  "schema": 4,
+  "schema": 5,
 
   "issuer": "https://token.actions.githubusercontent.com",
 

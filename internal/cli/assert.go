@@ -223,7 +223,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&repo, "repo", "",
 		"owner/name whose releases are walked — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
-	flags.StringVar(&debtPath, "debt", "", "path to the committed evidence-debt file (defaults to the policy's debtFile)")
+	debtFlag(flags, &debtPath)
 	root.register(flags)
 	flags.StringVar(&pinPath, "base-pins", "",
 		"path to the committed base-image pin file (defaults to the policy's baseImages.pinFile)")
@@ -282,11 +282,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		return usageFail(err.Error())
 	}
 
-	if debtPath == "" {
-		debtPath = *pol.Evidence.DebtFile
-	}
-
-	debt, code := loadDebt(debtPath, stderr)
+	j, code := openJournal(debtPathFor(pol, debtPath), targetEvidence, stderr)
 	if code != exitOK {
 		return code
 	}
@@ -341,16 +337,14 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 
 	pop := assert.Population{Org: org, Repo: repo}
 
-	rep, err := assert.Evidence(pol, pop, forge, src, attestor, debt, pinFile, full, out.logf, root.facts()...)
+	rep, err := assert.Evidence(pol, pop, forge, src, attestor, j, pinFile, full, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = report.Seal("assert "+targetEvidence, pop.Subject(),
-			report.PopulationFromListing(0, "walk incomplete"),
-			[]report.Finding{{Subject: pop.Subject(), Assertion: targetEvidence, Detail: err.Error()}},
-			nil, report.NoCanary())
+		rep = refusal(targetEvidence, pop.Subject(), err.Error(),
+			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -368,8 +362,8 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 // about what a release owes.
 func assertPlans(args []string, stdout, stderr io.Writer) int {
 	var (
-		jsonOut                     bool
-		policyPath, classes, machin string
+		jsonOut                               bool
+		policyPath, classes, machin, debtPath string
 	)
 
 	flags := flag.NewFlagSet("stele assert plans", flag.ContinueOnError)
@@ -377,6 +371,7 @@ func assertPlans(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&classes, "classes", "",
 		"comma-separated evidence classes this release declares (required)")
+	debtFlag(flags, &debtPath)
 	flags.StringVar(&machin, "machinery-version", "",
 		"machinery version the release rides — the owedFrom epochs are judged against it (required)")
 	flags.BoolVar(&jsonOut, "json", false,
@@ -428,12 +423,17 @@ func assertPlans(args []string, stdout, stderr io.Writer) int {
 		files = append(files, assert.PlanFile{Name: path, Content: content})
 	}
 
+	j, code := openJournal(debtPathFor(pol, debtPath), targetPlans, stderr)
+	if code != exitOK {
+		return code
+	}
+
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
 	}
 
-	rep := assert.Plans(pol, strings.Split(classes, ","), machin, files, out.logf)
+	rep := assert.Plans(pol, strings.Split(classes, ","), machin, files, j, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
@@ -441,42 +441,92 @@ func assertPlans(args []string, stdout, stderr io.Writer) int {
 	return emitReport(rep, jsonOut, stdout, stderr)
 }
 
-// loadDebt parses the committed debt file. An absent file is no debt
-// — the walk owes nothing to a file nobody wrote; a malformed one is
-// a usage refusal, because a reviewed file that parses as nothing
-// would excuse nothing silently.
+// openJournal opens the run's judgment journal, carrying the
+// committed debt file's declared exceptions. EVERY target opens one
+// through here (#147): the file holds the org's written-down defects,
+// and which walk finds a defect has nothing to do with whether the
+// org may write it down.
+//
+// An absent file is no debt — a run owes nothing to a file nobody
+// wrote, and a policy declaring no debtFile has declared no
+// exceptions at all; a malformed one is a usage refusal, because a
+// reviewed file that parses as nothing would excuse nothing silently.
 //
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
-func loadDebt(path string, stderr io.Writer) ([]report.Exception, int) {
+func openJournal(path, target string, stderr io.Writer) (*report.Journal, int) {
+	if path == "" {
+		return report.NewJournal(), exitOK
+	}
+
 	content, err := os.ReadFile(path) //nolint:gosec // the debt path is operator-supplied by design
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, exitOK
+		return report.NewJournal(), exitOK
 	}
 
 	if err == nil {
-		parsed, perr := assert.ParseDebt(content, path)
+		parsed, perr := report.ParseDebt(content, path)
 		if perr == nil {
-			return parsed, exitOK
+			return report.NewJournal(parsed...), exitOK
 		}
 
 		err = perr
 	}
 
-	if _, werr := fmt.Fprintf(stderr, "stele assert evidence: %v\n", err); werr != nil {
+	if _, werr := fmt.Fprintf(stderr, "stele assert %s: %v\n", target, err); werr != nil {
 		return nil, exitIO
 	}
 
 	return nil, exitUsage
 }
 
+// debtFlag declares the override every target carries: the policy
+// names the file, and a caller may point one run somewhere else.
+func debtFlag(flags *flag.FlagSet, path *string) {
+	flags.StringVar(path, "debt", "",
+		"path to the committed debt file (defaults to the policy's debtFile)")
+}
+
+// debtPathFor resolves which file this run's exceptions come from:
+// the caller's override, else the policy's declaration, else none —
+// an org that declared no debtFile has declared no exceptions.
+func debtPathFor(pol *assert.Policy, override string) string {
+	if override != "" {
+		return override
+	}
+
+	if pol.DebtFile == nil {
+		return ""
+	}
+
+	return *pol.DebtFile
+}
+
+// refusal seals the report a walk that could not finish still owes.
+// The refusal is itself a finding, recorded through the same door
+// every other finding passes through — and over an empty population,
+// so it seals CANNOT_JUDGE rather than FAIL: infrastructure that
+// refused says nothing about the subject.
+func refusal(target, subject, detail string, pop report.Population) *report.Report {
+	j := report.NewJournal()
+	j.Check(subject, target).Diverged(detail)
+
+	return report.Seal("assert "+target, subject, pop, j, report.NoCanary())
+}
+
 // assertImageFacts runs the image-facts target: env contract read and
 // refused by name (#82 — a missing input fails by its name, never by
 // expanding to nothing), the engine judged, the report sealed out.
 func assertImageFacts(args []string, stdout, stderr io.Writer) int {
-	var jsonOut bool
+	var (
+		jsonOut  bool
+		debtPath string
+	)
 
 	flags := flag.NewFlagSet("stele assert image-facts", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	// This target reads no policy — the env contract is its whole
+	// input — so the debt file is named here or not at all.
+	flags.StringVar(&debtPath, "debt", "", "path to the committed debt file (this target reads no policy)")
 	flags.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -496,12 +546,17 @@ func assertImageFacts(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	j, code := openJournal(debtPath, targetImageFacts, stderr)
+	if code != exitOK {
+		return code
+	}
+
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.ImageFacts(image, digest, []byte(facts), newOCIReader(), out.logf)
+	rep, err := assert.ImageFacts(image, digest, []byte(facts), newOCIReader(), j, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
@@ -510,10 +565,8 @@ func assertImageFacts(args []string, stdout, stderr io.Writer) int {
 		// Infrastructure refused before the engine could judge: sealed
 		// as CANNOT_JUDGE over an empty population, the error carried
 		// as the finding — partial sight is reported, never a verdict.
-		rep = report.Seal("assert "+targetImageFacts, image+"@"+digest,
-			report.PopulationFromEvidence(0, "registry read incomplete"),
-			[]report.Finding{{Subject: image + "@" + digest, Assertion: targetImageFacts, Detail: err.Error()}},
-			nil, report.NoCanary())
+		rep = refusal(targetImageFacts, image+"@"+digest, err.Error(),
+			report.PopulationFromEvidence(0, "registry read incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -582,7 +635,7 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 	var (
 		jsonOut                 bool
 		org, policyPath, vexDir string
-		repo                    string
+		repo, debtPath          string
 		snapshotDir, captureDir string
 	)
 
@@ -593,6 +646,7 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 		"owner/name whose SBOMs are scanned — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&vexDir, "vex", "", "directory of committed *.openvex.json decisions (required)")
+	debtFlag(flags, &debtPath)
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
 	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
 	flags.BoolVar(&jsonOut, "json", false,
@@ -655,16 +709,19 @@ func assertBlastRadius(args []string, stdout, stderr io.Writer) int {
 
 	pop := assert.Population{Org: org, Repo: repo}
 
-	rep, err := assert.BlastRadius(pol, pop, forge, newScanner(), decisions, out.logf)
+	j, code := openJournal(debtPathFor(pol, debtPath), targetBlastRadius, stderr)
+	if code != exitOK {
+		return code
+	}
+
+	rep, err := assert.BlastRadius(pol, pop, forge, newScanner(), decisions, j, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = report.Seal("assert "+targetBlastRadius, pop.Subject(),
-			report.PopulationFromListing(0, "walk incomplete"),
-			[]report.Finding{{Subject: pop.Subject(), Assertion: targetBlastRadius, Detail: err.Error()}},
-			nil, report.NoCanary())
+		rep = refusal(targetBlastRadius, pop.Subject(), err.Error(),
+			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -733,6 +790,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 	var (
 		jsonOut                 bool
 		org, repo, policyPath   string
+		debtPath                string
 		root                    rootFlags
 		snapshotDir, captureDir string
 	)
@@ -743,6 +801,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&repo, "repo", "",
 		"owner/name whose tags are audited — the single-repository population (this or --org)")
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	debtFlag(flags, &debtPath)
 	root.register(flags)
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
 	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
@@ -808,21 +867,24 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 
 	pop := assert.Population{Org: org, Repo: repo}
 
+	j, code := openJournal(debtPathFor(pol, debtPath), targetTags, stderr)
+	if code != exitOK {
+		return code
+	}
+
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
 	}
 
-	rep, err := assert.Tags(pol, pop, forge, tags, tv, out.logf, root.facts()...)
+	rep, err := assert.Tags(pol, pop, forge, tags, tv, j, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = report.Seal("assert "+targetTags, pop.Subject(),
-			report.PopulationFromListing(0, "walk incomplete"),
-			[]report.Finding{{Subject: pop.Subject(), Assertion: targetTags, Detail: err.Error()}},
-			nil, report.NoCanary())
+		rep = refusal(targetTags, pop.Subject(), err.Error(),
+			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO
@@ -842,6 +904,7 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 		jsonOut                 bool
 		org, repo, policyPath   string
 		verifyPolicyPath        string
+		debtPath                string
 		root                    rootFlags
 		snapshotDir, captureDir string
 	)
@@ -854,6 +917,7 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	flags.StringVar(&verifyPolicyPath, "verify-policy", "",
 		"path to the committed verify policy (required: it names the ledger, the branches and the identities)")
+	debtFlag(flags, &debtPath)
 	root.register(flags)
 	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
 	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
@@ -937,16 +1001,19 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 	cv := chainWalker{vpol: vpol, tags: tags, bv: bv, log: out.logf}
 	pop := assert.Population{Org: org, Repo: repo}
 
-	rep, err := assert.Chains(pol, pop, forge, tags, cv, notesRef, refs, out.logf, root.facts()...)
+	j, code := openJournal(debtPathFor(pol, debtPath), targetChains, stderr)
+	if code != exitOK {
+		return code
+	}
+
+	rep, err := assert.Chains(pol, pop, forge, tags, cv, notesRef, refs, j, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
 
 	if err != nil {
-		rep = report.Seal("assert "+targetChains, pop.Subject(),
-			report.PopulationFromListing(0, "walk incomplete"),
-			[]report.Finding{{Subject: pop.Subject(), Assertion: targetChains, Detail: err.Error()}},
-			nil, report.NoCanary())
+		rep = refusal(targetChains, pop.Subject(), err.Error(),
+			report.PopulationFromListing(0, "walk incomplete"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 			return exitIO

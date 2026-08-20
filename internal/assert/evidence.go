@@ -77,13 +77,15 @@ func (p Population) resolve(forge gh.Forge) (string, []string, error) {
 }
 
 // Evidence walks the population's releases and seals the
-// completeness verdict. debt carries the committed file's declared
-// exceptions; burned exceptions are derived inside the walk. runFacts
-// are the caller's facts about the run itself — the trust material it
-// held, which the walk cannot know and the document must record.
+// completeness verdict. The journal arrives carrying the committed
+// file's declared exceptions and leaves carrying every check this
+// walk performed; burned exceptions are derived into it as the walk
+// derives them. runFacts are the caller's facts about the run itself
+// — the trust material it held, which the walk cannot know and the
+// document must record.
 func Evidence(
 	pol *Policy, pop Population, forge gh.Forge, src ContractSource, att Attestor,
-	debt []report.Exception, pinFile []byte, full *FullDepth, log Logf, runFacts ...report.Fact,
+	j *report.Journal, pinFile []byte, full *FullDepth, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
@@ -111,7 +113,7 @@ func Evidence(
 
 	w := &evidenceWalk{
 		pol: e, org: org, subject: pop.Subject(),
-		forge: forge, src: src, attestor: att, full: full, log: log,
+		forge: forge, src: src, attestor: att, full: full, j: j, log: log,
 	}
 
 	for _, repo := range repos {
@@ -126,10 +128,6 @@ func Evidence(
 
 	w.baseImages(pinFile)
 
-	exceptions := make([]report.Exception, 0, len(debt)+len(w.burned))
-	exceptions = append(exceptions, debt...)
-	exceptions = append(exceptions, w.burned...)
-
 	facts := append(append([]report.Fact{}, runFacts...),
 		report.Fact{Name: "releasesChecked", Value: strconv.Itoa(w.checked)})
 	if len(w.legacy) > 0 {
@@ -138,7 +136,7 @@ func Evidence(
 
 	covered := report.PopulationFromListing(w.checked, "subjects with a declared evidence contract")
 
-	return report.Seal("assert evidence", w.subject, covered, w.findings, exceptions, report.NoCanary(), facts...), nil
+	return report.Seal("assert evidence", w.subject, covered, j, report.NoCanary(), facts...), nil
 }
 
 type evidenceWalk struct {
@@ -149,11 +147,10 @@ type evidenceWalk struct {
 	src      ContractSource
 	attestor Attestor
 	full     *FullDepth
+	j        *report.Journal
 	log      Logf
 	checked  int
 	legacy   []string
-	findings []report.Finding
-	burned   []report.Exception
 }
 
 func (w *evidenceWalk) repo(repo string) error {
@@ -223,20 +220,20 @@ func (w *evidenceWalk) release(repo, tag string) error {
 func (w *evidenceWalk) requiredAssets(
 	subject string, contract *Contract, assets []string, have map[string]bool,
 ) []string {
-	if !anySuffix(assets, *w.pol.SBOMSuffix) {
-		w.finding(subject, "sbom", "no asset carries the SBOM suffix "+*w.pol.SBOMSuffix)
+	if c := w.check(subject, "sbom"); !anySuffix(assets, *w.pol.SBOMSuffix) {
+		c.Diverged("no asset carries the SBOM suffix " + *w.pol.SBOMSuffix)
 	}
 
-	if !have[*w.pol.Checksums] {
-		w.finding(subject, *w.pol.Checksums, "the checksum manifest is absent")
+	if c := w.check(subject, *w.pol.Checksums); !have[*w.pol.Checksums] {
+		c.Diverged("the checksum manifest is absent")
 	}
 
 	var required []string
 
 	for _, class := range contract.Classes {
 		cp, ok := w.pol.Classes[class]
-		if !ok {
-			w.finding(subject, "class:"+class, "the contract names a class the policy does not define")
+		if c := w.check(subject, "class:"+class); !ok {
+			c.Diverged("the contract names a class the policy does not define")
 
 			continue
 		}
@@ -248,8 +245,8 @@ func (w *evidenceWalk) requiredAssets(
 		}
 
 		for _, prefix := range cp.owedPrefixes(contract.MachineryVersion) {
-			if !anyPrefix(assets, prefix) {
-				w.finding(subject, prefix, "no asset carries the required prefix")
+			if c := w.check(subject, prefix); !anyPrefix(assets, prefix) {
+				c.Diverged("no asset carries the required prefix")
 			}
 		}
 	}
@@ -261,13 +258,15 @@ func (w *evidenceWalk) requiredAssets(
 	var present []string
 
 	for _, b := range required {
+		c := w.check(subject, b)
+
 		switch {
 		case have[b]:
 			present = append(present, b)
 		case umbrella:
 			present = append(present, *w.pol.UmbrellaBundle)
 		default:
-			w.finding(subject, b, "the class bundle is absent")
+			c.Diverged("the class bundle is absent")
 		}
 	}
 
@@ -299,16 +298,18 @@ func (w *evidenceWalk) storeVerdicts(repo, tag string, bundles []string) error {
 	seen := map[string]bool{}
 
 	for _, asset := range bundles {
+		readable := w.check(subject, asset+":unreadable")
+
 		raw, err := w.forge.Asset(w.org, repo, tag, asset)
 		if err != nil {
-			w.finding(subject, asset+":unreadable", err.Error())
+			readable.Diverged(err.Error())
 
 			continue
 		}
 
 		digests, err := subjectDigests(raw)
 		if err != nil {
-			w.finding(subject, asset+":unreadable", err.Error())
+			readable.Diverged(err.Error())
 
 			continue
 		}
@@ -325,8 +326,8 @@ func (w *evidenceWalk) storeVerdicts(repo, tag string, bundles []string) error {
 				return err
 			}
 
-			if !ok {
-				w.finding(subject, "vsa:"+d[:12], "no verification summary in the attestation store for sha256:"+d)
+			if c := w.check(subject, "vsa:"+d[:12]); !ok {
+				c.Diverged("no verification summary in the attestation store for sha256:" + d)
 			}
 		}
 	}
@@ -352,7 +353,7 @@ func (w *evidenceWalk) storeVerdicts(repo, tag string, bundles []string) error {
 	}
 
 	for _, f := range w.vsaFindings(subject) {
-		w.burned = append(w.burned, report.Derived(subject, f,
+		w.j.Except(report.Derived(subject, f,
 			fmt.Sprintf("burned release: the %s run failed on %s (#378)", culprit, tag)))
 	}
 
@@ -380,7 +381,7 @@ func (w *evidenceWalk) burnedBy(failed []string) (string, bool) {
 func (w *evidenceWalk) vsaFindings(subject string) []string {
 	var out []string
 
-	for _, f := range w.findings {
+	for _, f := range w.j.Findings() {
 		if f.Subject == subject && strings.HasPrefix(f.Assertion, "vsa:") {
 			out = append(out, f.Assertion)
 		}
@@ -473,8 +474,12 @@ func decodeStatement(payloadB64 string) (*stmtSubjects, error) {
 	return stmt, nil
 }
 
-func (w *evidenceWalk) finding(subject, assertion, detail string) {
-	w.findings = append(w.findings, report.Finding{Subject: subject, Assertion: assertion, Detail: detail})
+// check records one obligation this walk judged and returns the
+// handle its divergence — if any — is reported through. Every
+// obligation goes through here whether it holds or not: an excuse for
+// a check this run never performed must never read as stale.
+func (w *evidenceWalk) check(subject, assertion string) report.Check {
+	return w.j.Check(subject, assertion)
 }
 
 func anySuffix(items []string, suffix string) bool {

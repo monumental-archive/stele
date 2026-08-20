@@ -78,11 +78,10 @@ func (w *evidenceWalk) continuous(repo string) error {
 		return fmt.Errorf("assert: package versions of %s: %w", repo, err)
 	}
 
-	if digest == "" {
+	if cc := w.check(repo+"@"+*c.Tag, assertContinuous); digest == "" {
 		// The stub says this repo publishes, and the registry says it
 		// has nothing under the rolling tag. That is a gap, not a skip.
-		w.finding(repo+"@"+*c.Tag, assertContinuous,
-			"the repository publishes continuous digests but no image carries the rolling tag")
+		cc.Diverged("the repository publishes continuous digests but no image carries the rolling tag")
 
 		return nil
 	}
@@ -95,10 +94,11 @@ func (w *evidenceWalk) continuous(repo string) error {
 	}
 
 	subject := repo + "@" + *c.Tag
+	continuous := w.check(subject, assertContinuous)
 
 	if len(pins) == 0 {
-		w.finding(subject, assertContinuous,
-			"no signer pin found in the repository's workflows — the expected identity cannot be derived, so the "+
+		continuous.Diverged(
+			"no signer pin found in the repository's workflows — the expected identity cannot be derived, so the " +
 				"image cannot be vouched for")
 
 		return nil
@@ -115,7 +115,7 @@ func (w *evidenceWalk) continuous(repo string) error {
 	}
 
 	if verr := w.attestor.Verify(w.org, repo, digest, candidates, ""); verr != nil {
-		w.finding(subject, assertContinuous,
+		continuous.Diverged(
 			fmt.Sprintf("%s@%s carries no attestation verifying under %s at any of the %d declared pin(s): %v",
 				*c.Registry, shortDigest(digest), *c.SignerWorkflow, len(pins), verr))
 	}
@@ -178,11 +178,15 @@ func (w *evidenceWalk) baseImages(pinFileContent []byte) {
 		return
 	}
 
+	// The pin file itself is one check: declared and unreadable, or
+	// declared and pinning nothing, are both defects in the file.
+	file := w.check(*b.PinFile, assertBaseImage)
+
 	if pinFileContent == nil {
 		// The policy declares base images and the walk was handed no
 		// pin file: whatever the caller's reason, the half would be
 		// checking nothing, and that may never look like PASS.
-		w.finding(*b.PinFile, assertBaseImage, "the declared pin file was not provided to the walk")
+		file.Diverged("the declared pin file was not provided to the walk")
 
 		return
 	}
@@ -191,7 +195,7 @@ func (w *evidenceWalk) baseImages(pinFileContent []byte) {
 	if len(matches) == 0 {
 		// A pin file that pins nothing is a defect in the file, not a
 		// clean answer: the walk was told to check something.
-		w.finding(*b.PinFile, assertBaseImage, "the pin file carries no digest-pinned base references")
+		file.Diverged("the pin file carries no digest-pinned base references")
 
 		return
 	}
@@ -204,11 +208,13 @@ func (w *evidenceWalk) baseImages(pinFileContent []byte) {
 
 		w.checked++
 
+		pin := w.check(ref, assertBaseImage)
+
 		if err := w.attestor.Verify(
 			w.org, *b.AttestorRepo, digest,
 			[]Candidate{{Identity: *b.AttestorIdentity}}, *b.PredicateType,
 		); err != nil {
-			w.finding(ref, assertBaseImage,
+			pin.Diverged(
 				fmt.Sprintf("no %s attestation verifies for this pinned base: %v", *b.PredicateType, err))
 		}
 

@@ -28,6 +28,14 @@ type Key struct {
 	Version  string
 }
 
+// String renders the triple the way a report names it — one
+// definition, shared by the finding that carries the key and by the
+// decision that excuses it, so the two can never disagree about what
+// they are talking about.
+func (k Key) String() string {
+	return k.Advisory + ":" + k.Package + "@" + k.Version
+}
+
 // Decision is one parsed VEX decision: the triple it matches, the
 // origin so a report can point at the reviewed statement, and the
 // judgment itself so a DERIVED document can carry the human's words

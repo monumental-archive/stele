@@ -9,6 +9,14 @@
 // WITH a shipped fix gates like everything else), and a decision
 // matching no current finding surfaces as a stale exception: a
 // retirement candidate, never an archaeology project.
+//
+// A decision is registered SUBJECT-AGNOSTICALLY (#147): it judges a
+// package version, not the release that happens to carry it, so it
+// excuses its triple wherever the scan meets it. That is also what
+// makes staleness honest here — this walk DISCOVERS rather than
+// enumerating obligations, so it records each scanned subject as
+// swept, and a decision that met nothing across a swept corpus is
+// stale by evidence rather than by a fabricated subject.
 
 package assert
 
@@ -65,7 +73,8 @@ func (b *BlastRadiusPolicy) validate() error {
 
 // BlastRadius walks one org's SBOMs and seals the triage verdict.
 func BlastRadius(
-	pol *Policy, pop Population, forge gh.Forge, scanner osv.Scanner, decisions *vexjoin.Decisions, log Logf,
+	pol *Policy, pop Population, forge gh.Forge, scanner osv.Scanner, decisions *vexjoin.Decisions,
+	j *report.Journal, log Logf,
 ) (*report.Report, error) {
 	if pol.BlastRadius == nil {
 		return nil, errors.New("assert: the policy declares no blastRadius section")
@@ -78,8 +87,15 @@ func BlastRadius(
 
 	w := &blastWalk{
 		pol: pol.BlastRadius, evidence: pol.Evidence, org: org,
-		forge: forge, scanner: scanner, decisions: decisions, log: log,
-		used: map[vexjoin.Key]bool{},
+		forge: forge, scanner: scanner, decisions: decisions, j: j, log: log,
+	}
+
+	// Every recorded decision enters the judgment once, before the
+	// scan: one that meets its triple excuses it, one that meets
+	// nothing is answered by what the walk swept.
+	all := decisions.All()
+	for i := range all {
+		j.Except(report.Declared("", all[i].Key.String(), all[i].Origin))
 	}
 
 	for _, repo := range repos {
@@ -88,8 +104,6 @@ func BlastRadius(
 		}
 	}
 
-	w.staleDecisions()
-
 	covered := report.PopulationFromListing(w.scanned, "SBOMs scanned")
 
 	facts := []report.Fact{}
@@ -97,7 +111,7 @@ func BlastRadius(
 		facts = append(facts, report.Fact{Name: "releasesWithoutSBOM", Value: strings.Join(w.missing, " ")})
 	}
 
-	return report.Seal("assert blast-radius", pop.Subject(), covered, w.findings, w.exceptions, w.canary(), facts...), nil
+	return report.Seal("assert blast-radius", pop.Subject(), covered, j, w.canary(), facts...), nil
 }
 
 type blastWalk struct {
@@ -107,12 +121,10 @@ type blastWalk struct {
 	forge      gh.Forge
 	scanner    osv.Scanner
 	decisions  *vexjoin.Decisions
+	j          *report.Journal
 	log        Logf
 	scanned    int
 	missing    []string
-	findings   []report.Finding
-	exceptions []report.Exception
-	used       map[vexjoin.Key]bool
 	canarySeen bool
 }
 
@@ -182,16 +194,15 @@ func (w *blastWalk) scanSBOM(repo, tag, name string) error {
 		return fmt.Errorf("assert: store for %s sbom: %w", subject, err)
 	}
 
-	if len(stored) == 0 {
-		w.finding(subject, name+":unattested", "no attestation in the store covers the downloaded SBOM bytes")
+	if c := w.j.Check(subject, name+":unattested"); len(stored) == 0 {
+		c.Diverged("no attestation in the store covers the downloaded SBOM bytes")
 
 		return nil
 	}
 
 	out, err := w.scanner.Scan(sbom)
-	if errors.Is(err, osv.ErrZeroPackages) {
-		w.finding(subject, name+":empty-scan",
-			"the SBOM parsed to zero packages — a scan that reads nothing must not report clean")
+	if c := w.j.Check(subject, name+":empty-scan"); errors.Is(err, osv.ErrZeroPackages) {
+		c.Diverged("the SBOM parsed to zero packages — a scan that reads nothing must not report clean")
 
 		return nil
 	}
@@ -206,6 +217,11 @@ func (w *blastWalk) scanSBOM(repo, tag, name string) error {
 	if err := w.judge(subject, out); err != nil {
 		return err
 	}
+
+	// The inventory was read whole: every advisory on this subject
+	// was observed, so one a decision names and the scan did not meet
+	// was observed to be absent.
+	w.j.Swept(subject)
 
 	w.noteCanary(repo, tag, out)
 
@@ -236,14 +252,8 @@ func (w *blastWalk) judge(subject string, out []byte) error {
 		// so remediation is the next build on a refreshed base digest
 		// and a per-advisory decision would decide nothing. DERIVED, so
 		// a human cannot widen it.
-		w.exceptions = append(w.exceptions, report.Derived(subject, split.Rebuild[i].String(),
+		w.j.Except(report.Derived(subject, split.Rebuild[i].String(),
 			"unfixed OS base-layer package: remediation is the next release on a refreshed base digest"))
-	}
-
-	for i := range split.Decided {
-		d := &split.Decided[i]
-		w.used[d.Finding.Key] = true
-		w.exceptions = append(w.exceptions, report.Declared(subject, d.Finding.String(), d.Decision.Origin))
 	}
 
 	return nil
@@ -252,10 +262,8 @@ func (w *blastWalk) judge(subject string, out []byte) error {
 // record adds one finding as a fact carrying no verdict of its own;
 // Seal decides what the set of facts amounts to.
 func (w *blastWalk) record(subject string, f *triage.Finding) {
-	w.findings = append(w.findings, report.Finding{
-		Subject: subject, Assertion: f.String(),
-		Detail: fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory, f.Key.Package, f.Key.Version, f.Ecosystem),
-	})
+	w.j.Check(subject, f.String()).Diverged(
+		fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory, f.Key.Package, f.Key.Version, f.Ecosystem))
 }
 
 // noteCanary records whether this scan reproduced the declared
@@ -282,22 +290,6 @@ func (w *blastWalk) noteCanary(repo, tag string, out []byte) {
 	}
 }
 
-// staleDecisions surfaces every decision that matched no current
-// finding — retirement candidates by name. The exception's subject
-// matches nothing, so Seal lists it stale.
-func (w *blastWalk) staleDecisions() {
-	all := w.decisions.All()
-	for i := range all {
-		d := &all[i]
-		if !w.used[d.Key] {
-			w.exceptions = append(w.exceptions, report.Declared(
-				"(no current finding)",
-				d.Key.Advisory+":"+d.Key.Package+"@"+d.Key.Version,
-				d.Origin))
-		}
-	}
-}
-
 func (w *blastWalk) canary() report.Canary {
 	if w.pol.Canary == nil {
 		return report.NoCanary()
@@ -309,8 +301,4 @@ func (w *blastWalk) canary() report.Canary {
 	}
 
 	return report.CanaryMissed(key)
-}
-
-func (w *blastWalk) finding(subject, assertion, detail string) {
-	w.findings = append(w.findings, report.Finding{Subject: subject, Assertion: assertion, Detail: detail})
 }

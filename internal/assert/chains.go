@@ -54,7 +54,7 @@ const assertionUnactivated = "unactivated"
 // material it held, which the walk cannot know.
 func Chains(
 	pol *Policy, pop Population, forge gh.Forge, tags gh.TagReader, cv ChainVerifier,
-	notesRef string, refs []string, log Logf, runFacts ...report.Fact,
+	notesRef string, refs []string, j *report.Journal, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	cp := pol.Chains
 	if cp == nil {
@@ -70,18 +70,21 @@ func Chains(
 		return nil, err
 	}
 
-	w := &chainsWalk{org: org, tags: tags, cv: cv, notesRef: notesRef, refs: refs, log: log}
+	// The declared opt-outs enter before the walk: an entry whose
+	// repository has since founded its chain then meets a check that
+	// ran clean, which is what makes the stale report a removal
+	// condition rather than a guess.
+	for _, e := range cp.Exceptions {
+		j.Except(
+			report.Declared(org+"/"+*e.Repo, assertionUnactivated, "assert policy chains.exceptions: "+*e.Reason))
+	}
+
+	w := &chainsWalk{org: org, tags: tags, cv: cv, notesRef: notesRef, refs: refs, j: j, log: log}
 
 	for _, repo := range repos {
 		if err := w.repo(repo); err != nil {
 			return nil, err
 		}
-	}
-
-	exceptions := make([]report.Exception, 0, len(cp.Exceptions))
-	for _, e := range cp.Exceptions {
-		exceptions = append(exceptions,
-			report.Declared(org+"/"+*e.Repo, assertionUnactivated, "assert policy chains.exceptions: "+*e.Reason))
 	}
 
 	facts := append(append([]report.Fact{}, runFacts...),
@@ -90,7 +93,7 @@ func Chains(
 
 	pop2 := report.PopulationFromListing(len(repos), "repositories in the population")
 
-	return report.Seal("assert chains", pop.Subject(), pop2, w.findings, exceptions, report.NoCanary(), facts...), nil
+	return report.Seal("assert chains", pop.Subject(), pop2, j, report.NoCanary(), facts...), nil
 }
 
 type chainsWalk struct {
@@ -99,10 +102,10 @@ type chainsWalk struct {
 	cv       ChainVerifier
 	notesRef string
 	refs     []string
+	j        *report.Journal
 	log      Logf
 	verified int
 	links    int
-	findings []report.Finding
 }
 
 func (w *chainsWalk) repo(repo string) error {
@@ -113,21 +116,16 @@ func (w *chainsWalk) repo(repo string) error {
 		return fmt.Errorf("assert: chain notes of %s: %w", subject, err)
 	}
 
-	if !founded {
-		w.findings = append(w.findings, report.Finding{
-			Subject: subject, Assertion: assertionUnactivated,
-			Detail: "no chain founded — an unactivated repository is silent by construction, not clean (#266)",
-		})
+	if c := w.j.Check(subject, assertionUnactivated); !founded {
+		c.Diverged("no chain founded — an unactivated repository is silent by construction, not clean (#266)")
 
 		return nil
 	}
 
 	for _, ref := range w.refs {
 		links, verr := w.cv.Verify(w.org, repo, ref)
-		if verr != nil {
-			w.findings = append(w.findings, report.Finding{
-				Subject: subject, Assertion: "chains", Detail: ref + ": " + verr.Error(),
-			})
+		if c := w.j.Check(subject, "chains"); verr != nil {
+			c.Diverged(ref + ": " + verr.Error())
 
 			continue
 		}

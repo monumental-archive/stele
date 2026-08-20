@@ -18,7 +18,7 @@ import (
 )
 
 const testPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -26,7 +26,6 @@ const testPolicyJSON = `{
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
     "evidenceSuffixes": [".openvex.json"],
-    "debtFile": "security/attestation-debt.txt",
     "classes": {
       "rust-crate": {
         "bundles": ["attestations-crates.intoto.jsonl"],
@@ -243,6 +242,7 @@ func runEvidence(t *testing.T, f *fakeForge, debt []report.Exception) *report.Re
 
 func runEvidenceWith(t *testing.T, f *fakeForge, debt []report.Exception, policyJSON string) *report.Report {
 	t.Helper()
+	t.Helper()
 
 	pol, err := assert.LoadPolicy(strings.NewReader(policyJSON))
 	if err != nil {
@@ -253,8 +253,8 @@ func runEvidenceWith(t *testing.T, f *fakeForge, debt []report.Exception, policy
 		assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
 	}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, debt, nil, nil,
-		func(string, ...any) {})
+	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+		report.NewJournal(debt...), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestEvidenceDebtExcusesExactly(t *testing.T) {
 	f := completeRelease()
 	f.assets["widget@v1.0.0"] = drop(f.assets["widget@v1.0.0"], "app.spdx.json")
 
-	debt, err := assert.ParseDebt([]byte("widget@v1.0.0(sbom)\n"), "debt.txt")
+	debt, err := report.ParseDebt([]byte("widget@v1.0.0(sbom)\n"), "debt.txt")
 	if err != nil {
 		t.Fatalf("debt: %v", err)
 	}
@@ -421,7 +421,8 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	pol.Evidence.PublishWorkflows = []string{"publish", "self-publish"}
 	src4 := assert.Sources{assert.ManifestSource{Forge: f4, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep4, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f4, src4, &fakeAttestor{}, nil, nil, nil,
+	rep4, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f4, src4, &fakeAttestor{},
+		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +438,8 @@ func TestEvidenceBurnedIsNarrow(t *testing.T) {
 	f5.failedRuns = map[string][]string{"widget@v1.0.0": {"scorecard", "publish"}}
 	src5 := assert.Sources{assert.ManifestSource{Forge: f5, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep5, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f5, src5, &fakeAttestor{}, nil, nil, nil,
+	rep5, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f5, src5, &fakeAttestor{},
+		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
@@ -529,7 +531,7 @@ func TestEvidenceSingleRepoPopulation(t *testing.T) {
 	}
 
 	rep, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src,
-		&fakeAttestor{}, nil, nil, nil, func(string, ...any) {})
+		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -553,7 +555,8 @@ func TestEvidenceSingleRepoRefusals(t *testing.T) {
 	expected := 1
 	pol.Evidence.ExpectedRepos = &expected
 
-	_, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src, &fakeAttestor{}, nil, nil, nil, silent)
+	_, err := assert.Evidence(pol, assert.Population{Repo: "acme/widget"}, f, src, &fakeAttestor{},
+		report.NewJournal(), nil, nil, silent)
 	if err == nil || !strings.Contains(err.Error(), "expectedRepos") {
 		t.Fatalf("error = %v, want the expectedRepos-over-one-repo refusal", err)
 	}
@@ -562,7 +565,7 @@ func TestEvidenceSingleRepoRefusals(t *testing.T) {
 
 	for _, bad := range []string{"solo", "/name", "owner/"} {
 		if _, err := assert.Evidence(pol, assert.Population{Repo: bad}, f, src,
-			&fakeAttestor{}, nil, nil, nil, silent); err == nil ||
+			&fakeAttestor{}, report.NewJournal(), nil, nil, silent); err == nil ||
 			!strings.Contains(err.Error(), "owner/name") {
 			t.Fatalf("population %q: error = %v, want the owner/name refusal", bad, err)
 		}
@@ -580,7 +583,8 @@ func TestEvidenceRefusals(t *testing.T) {
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, nil,
+	_, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+		report.NewJournal(), nil, nil,
 		func(string, ...any) {})
 	if err == nil || !strings.Contains(err.Error(), "declared population") {
 		t.Fatalf("error = %v, want the population guard", err)

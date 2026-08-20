@@ -145,7 +145,7 @@ func TestEmitInputRefusals(t *testing.T) {
 	px := files(t)
 
 	notAPolicy := filepath.Join(t.TempDir(), "not-a-policy.json")
-	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 4}`), 0o600); err != nil {
+	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 5}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
