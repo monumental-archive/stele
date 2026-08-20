@@ -336,6 +336,17 @@ func (w *world) sctExtension(t *testing.T, pre *x509.Certificate, at time.Time) 
 // rekorEntry writes one canonical Rekor v1 entry over the artifact
 // (kind hashedrekord) or envelope (kind dsse) and countersigns it
 // with the world's Rekor key — the testing/ca recipe.
+//
+// This helper goes through Rekor's KIND REGISTRY on purpose, which is
+// the one thing rekorbody.go deliberately does not (stele#197: the
+// registry links a PGP format stele has no use for). Two kinds are
+// minted here and the registry is how a caller reaches both — but the
+// standing value is that the log side of every offline-mint test
+// renders its bytes by a DIFFERENT route than the rebuild under test.
+// A rebuild checked against its own construction would pass its own
+// exam; these bodies are the log's, and the rebuild has to match them.
+// Keeping the registry here costs nothing: govulncheck's source
+// analysis does not walk test files, measured on this tree.
 func (w *world) rekorEntry(t *testing.T, kind string, blob, sig []byte, leaf *x509.Certificate,
 	integrated time.Time,
 ) *tlog.Entry {
