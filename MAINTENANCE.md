@@ -36,6 +36,7 @@ the same statement as this one and tested against it.
 | `stele derive version` | the release a history's conventional commits call for, within one tag namespace; `--release-as` declares one instead, judged against the derived base and the names the namespace has taken |
 | `stele derive notes` | that release's changelog section, printed or spliced into a file |
 | `stele derive bump` | that release's version written into the tree's version mirrors; `--check` asserts them instead |
+| `stele derive release-plan` | the release decisions as one document a forge executor runs: version, notes, commit contents, branch, tag; `--prepare` writes the tree it names |
 | `stele derive sbom` | an artifact's inventory (SPDX 2.3), or the release view folded from per-artifact documents |
 | `stele derive facts` | the OCI image metadata one release asserts on its images |
 | `stele derive vex` | this release's coverage document, findings joined to recorded decisions |
@@ -119,6 +120,7 @@ breaking change costs the most.
 | the release evidence manifest | [docs/assert-policy-schema.md](docs/assert-policy-schema.md) |
 | the report document (`--json`) | [docs/report-schema.md](docs/report-schema.md) |
 | the judged plan set (`assert plans --out`) | [docs/assert-policy-schema.md](docs/assert-policy-schema.md#the-inventory-plan) |
+| the release plan (`derive release-plan`) | [docs/release-plan.md](docs/release-plan.md) |
 | the shields.io endpoint document (`level --shield`) | [docs/level.md](docs/level.md) |
 
 ## Not part of the surface
