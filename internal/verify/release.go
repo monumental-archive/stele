@@ -117,15 +117,45 @@ type decisionPredicate struct {
 	Proofs     jsonx.Raw `json:"proofs"`
 }
 
+// SBOMs is the release's SBOM evidence as the decision judgment sees
+// it: every SBOM asset the release carries, and among them the
+// planned inventories the release's own plan named.
+//
+// The two lists answer two different questions. Assets is what a
+// decision may LEGALLY cover; Planned is the denominator the
+// obligation is measured against — one decision per planned
+// inventory, which is what a release shipping per-artifact
+// inventories owes (stele#158). Planned is a caller DECLARATION
+// derived from the plan (.github#544/stele#142), never inferred here
+// from an asset's spelling: which documents a release planned is a
+// per-release fact, and a naming rule in this engine would be one
+// org's file convention asserted as a fact about every adopter's
+// world.
+//
+// Planned empty declares a release with no plan, and the
+// whole-release invariant applies: exactly one SBOM asset carries the
+// decision. That is every release published before per-artifact
+// inventories existed — grandfathered history proving what it CAN
+// prove, with the epoch that decides which releases plan their
+// inventories being policy data, exactly as the decision obligation
+// itself is.
+type SBOMs struct {
+	// Assets is every SBOM asset on the release — the decision
+	// candidates, a separate list from the build subjects because a
+	// class manifest need not contain the release's SBOMs.
+	Assets []Subject
+	// Planned is the release's inventory plan as digests: a subset of
+	// Assets, each of which owes its own decision.
+	Planned []Subject
+}
+
 // Release verifies one published release like a stranger: subjects
-// are the manifest the release claims, sboms are the release's SBOM
-// assets (the decision candidates — a separate list because a class
-// manifest need not contain the release SBOM), and everything else
-// is fetched through store and proven through bv. It fails closed at
-// the first refusal; the returned verdict exists only on a fully
-// clean pass.
+// are the manifest the release claims, sboms carries the release's
+// SBOM assets and its inventory plan, and everything else is fetched
+// through store and proven through bv. It fails closed at the first
+// refusal; the returned verdict exists only on a fully clean pass.
 func Release(
-	p *policy.Policy, c Coords, subjects, sboms []Subject, pins Pins,
+	p *policy.Policy, c Coords, subjects []Subject, sboms SBOMs, pins Pins,
 	store Store, bv BundleVerifier, log Logf,
 ) (*ReleaseVerdict, error) {
 	if p.Build == nil {
@@ -139,8 +169,8 @@ func Release(
 		return ReleaseProvenance(p, c, subjects, pins, store, bv, log)
 	}
 
-	if err := validateSubjects(sboms); err != nil {
-		return nil, fmt.Errorf("%w — the decision has no subject to verify against", err)
+	if err := validateSBOMs(sboms); err != nil {
+		return nil, err
 	}
 
 	verdict, prov, err := releaseProvenance(p, c, subjects, pins, store, bv, log)
@@ -148,12 +178,12 @@ func Release(
 		return nil, err
 	}
 
-	decisionRef, err := verifyDecision(p, c, sboms, pins, store, bv, log)
+	decisionRefs, err := verifyDecision(p, c, sboms, pins, store, bv, log)
 	if err != nil {
 		return nil, err
 	}
 
-	prov.opened = append(prov.opened, *decisionRef)
+	prov.opened = append(prov.opened, decisionRefs...)
 	verdict.opened = prov.opened
 
 	log("verify: release %s@%s: %d attestation(s) opened over %d subject(s), source revision %s",
@@ -577,34 +607,166 @@ func splitConfigURI(uri, slug string) (*buildConfig, error) {
 	return &buildConfig{path: path, ref: ref}, nil
 }
 
-// verifyDecision finds and proves the release decision: among the
-// release's SBOM assets, exactly one must carry a decision
-// attestation verifying under the decision identity, and that
-// decision must name the required conclusion for this tag. Selection
-// is by verification, never by filename — a candidate only wins by
-// carrying a decision signed over its own bytes (#354).
-func verifyDecision(
-	p *policy.Policy, c Coords, sboms []Subject, pins Pins,
-	store Store, bv BundleVerifier, log Logf,
-) (*Ref, error) {
-	id := trust.Identity{
-		SAN: workflowSAN(expandWorkflow(*p.Trust.Decision.SignerWorkflow, c),
-			identityRef(expandWorkflow(*p.Trust.Decision.SignerWorkflow, c), c, pins.Machinery)),
-		Issuer: *p.Issuer,
+// validateSBOMs refuses a decision judgment that could not be one:
+// no candidates at all, or a plan naming a document the release does
+// not carry. The plan is the DENOMINATOR — a denominator naming
+// bytes nobody published measures the obligation against a document
+// no consumer can hold, which is a caller defect, not a verdict.
+func validateSBOMs(s SBOMs) error {
+	if err := validateSubjects(s.Assets); err != nil {
+		return fmt.Errorf("%w — the decision has no subject to verify against", err)
 	}
 
-	var (
-		winner  *Ref
-		verdict *decisionPredicate
-	)
+	if len(s.Planned) == 0 {
+		return nil
+	}
 
-	for _, s := range sboms {
-		ref, pred, err := decisionFor(p, c.Slug(), s, id, pins.Machinery, store, bv)
+	if err := validateSubjects(s.Planned); err != nil {
+		return fmt.Errorf("%w — the plan is the decision's denominator", err)
+	}
+
+	carried := map[string]bool{}
+	for _, a := range s.Assets {
+		carried[subjectKey(a)] = true
+	}
+
+	for _, inv := range s.Planned {
+		if !carried[subjectKey(inv)] {
+			return fmt.Errorf(
+				"verify: the plan names inventory %s, which is not among the release's SBOM assets — "+
+					"a planned document that did not ship decides nothing", inv.Name)
+		}
+	}
+
+	return nil
+}
+
+// subjectKey renders a subject as one comparable line — digest and
+// name together, the manifest form, so a plan entry matches an asset
+// only when BOTH agree.
+func subjectKey(s Subject) string { return s.SHA256 + "  " + s.Name }
+
+// verifyDecision proves the release decision against the plan. Two
+// obligations, one for each direction the plan can be defeated
+// (stele#158):
+//
+//   - every planned inventory carries a decision attestation that
+//     verifies under the decision identity over its own bytes and
+//     names the required conclusion for this tag;
+//   - no decision names anything the plan does not — a decision over
+//     the union view (a view is aggregated from the per-artifact
+//     documents, .github#492, and decides nothing of its own) or over
+//     a document no plan produced is machinery deciding something the
+//     release never planned.
+//
+// The second direction is read from the decisions' own signed
+// subject lists, never by asking the store about assets the plan does
+// not name: absence is not a question the attestation API answers —
+// it retries a just-published digest and then errors — so a probe
+// there would read "this view has no decision, correctly" and "the
+// forge is degraded" as the same byte. It is the same rule the
+// provenance pass holds against the release manifest, pointed at the
+// plan.
+//
+// Selection is by verification throughout, never by filename (#354):
+// a decision counts by being signed over a candidate's own bytes
+// under the pinned identity. Nothing is SELECTED at all in the
+// planned world — every decision found is judged, so "which one is
+// the decision" cannot be asked, which is what makes the ambiguity
+// this replaces (one decision, N candidates) unrepresentable rather
+// than merely refused.
+//
+// A release with no plan falls to the whole-release invariant it was
+// published under.
+func verifyDecision(
+	p *policy.Policy, c Coords, sboms SBOMs, pins Pins,
+	store Store, bv BundleVerifier, log Logf,
+) ([]Ref, error) {
+	dp := &decisionPass{
+		p: p,
+		c: c,
+		id: trust.Identity{
+			SAN: workflowSAN(expandWorkflow(*p.Trust.Decision.SignerWorkflow, c),
+				identityRef(expandWorkflow(*p.Trust.Decision.SignerWorkflow, c), c, pins.Machinery)),
+			Issuer: *p.Issuer,
+		},
+		pin:    pins.Machinery,
+		store:  store,
+		bv:     bv,
+		opened: map[string]bool{},
+	}
+
+	if len(sboms.Planned) == 0 {
+		return dp.wholeRelease(sboms.Assets, log)
+	}
+
+	return dp.perInventory(sboms, log)
+}
+
+// decisionPass carries the decision judgment's shared state: the
+// identity every candidate is proven against, and the bundles
+// already opened, so one attestation covering several subjects is
+// listed once however many times it is met.
+type decisionPass struct {
+	p      *policy.Policy
+	c      Coords
+	id     trust.Identity
+	pin    string
+	store  Store
+	bv     BundleVerifier
+	opened map[string]bool
+	refs   []Ref
+}
+
+// perInventory runs the plan-shaped obligation: one decision per
+// planned inventory, and nothing decided that the plan never named.
+func (dp *decisionPass) perInventory(sboms SBOMs, log Logf) ([]Ref, error) {
+	planned := map[string]bool{}
+	for _, inv := range sboms.Planned {
+		planned[subjectKey(inv)] = true
+	}
+
+	for _, inv := range sboms.Planned {
+		found, err := dp.decisions(inv)
 		if err != nil {
 			return nil, err
 		}
 
-		if pred == nil {
+		if len(found) == 0 {
+			return nil, fmt.Errorf(
+				"verify: %s: the release plans this inventory but no verified decision covers it — "+
+					"refusing the verdict", inv.Name)
+		}
+
+		for _, d := range found {
+			if aerr := dp.accept(inv, d, planned); aerr != nil {
+				return nil, aerr
+			}
+		}
+	}
+
+	log("verify: release decision verified: %s for %s over %d planned inventory document(s)",
+		*dp.p.Trust.Decision.RequiredConclusion, dp.c.Tag, len(sboms.Planned))
+
+	return dp.refs, nil
+}
+
+// wholeRelease runs the invariant every release without a plan was
+// published under: among the SBOM assets, EXACTLY one carries a
+// decision. Two bearers are ambiguous — here a decision must still be
+// selected, because the release declared no denominator to judge them
+// against, and picking arbitrarily would be the verifier inventing
+// the answer it was asked for.
+func (dp *decisionPass) wholeRelease(assets []Subject, log Logf) ([]Ref, error) {
+	var winner *Subject
+
+	for i, a := range assets {
+		found, err := dp.decisions(a)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(found) == 0 {
 			continue
 		}
 
@@ -613,86 +775,179 @@ func verifyDecision(
 				"verify: more than one SBOM asset carries a release decision — ambiguous, refusing the verdict")
 		}
 
-		winner, verdict = ref, pred
+		winner = &assets[i]
+
+		for _, d := range found {
+			if aerr := dp.accept(a, d, nil); aerr != nil {
+				return nil, aerr
+			}
+		}
 	}
 
 	if winner == nil {
 		return nil, errors.New("verify: no SBOM asset carries a verifiable release decision — refusing the verdict")
 	}
 
-	want := *p.Trust.Decision.RequiredConclusion
-	if verdict.Conclusion == nil || *verdict.Conclusion != want {
-		return nil, fmt.Errorf("verify: the release decision does not name conclusion %s — refusing the verdict", want)
-	}
+	log("verify: release decision verified: %s for %s", *dp.p.Trust.Decision.RequiredConclusion, dp.c.Tag)
 
-	if verdict.Tag == nil || *verdict.Tag != c.Tag {
-		return nil, fmt.Errorf("verify: the release decision does not name tag %s — refusing the verdict", c.Tag)
-	}
-
-	log("verify: release decision verified: %s for %s", want, c.Tag)
-
-	return winner, nil
+	return dp.refs, nil
 }
 
-// decisionFor examines one SBOM candidate: a decision-typed bundle
-// that verifies under the decision identity over the candidate's own
-// digest makes it a winner; a candidate carrying none is simply not
-// the decided SBOM. A decision-typed bundle that FAILS verification
-// is a refusal, not a pass-over — a forged decision must never read
-// as an absent one.
-func decisionFor(
-	p *policy.Policy, slug string, s Subject, id trust.Identity, pin string, store Store, bv BundleVerifier,
-) (*Ref, *decisionPredicate, error) {
-	bundles, err := store.Bundles(slug, s.SHA256)
-	if err != nil {
-		return nil, nil, fmt.Errorf("verify: %s: no attestation retrievable: %w", s.Name, err)
+// accept holds one verified decision against the policy and the plan,
+// then records it as evidence this verdict rests on. Every decision
+// opened is asked the same questions — a second decision agreeing
+// with the first is not an ambiguity, and a second one disagreeing
+// must never be the one nobody read — but only once per attestation:
+// one bundle covering several inventories is judged where it is first
+// met and listed once.
+//
+// planned nil is the release that declared no plan: there is no
+// denominator to hold coverage against, and inventing one from the
+// asset list would be this engine deciding what the release planned.
+func (dp *decisionPass) accept(s Subject, d decision, planned map[string]bool) error {
+	if dp.opened[d.ref.SHA256] {
+		return nil
 	}
 
+	want := *dp.p.Trust.Decision.RequiredConclusion
+	if d.pred.Conclusion == nil || *d.pred.Conclusion != want {
+		return fmt.Errorf("verify: %s: the release decision does not name conclusion %s — refusing the verdict",
+			s.Name, want)
+	}
+
+	if d.pred.Tag == nil || *d.pred.Tag != dp.c.Tag {
+		return fmt.Errorf("verify: %s: the release decision does not name tag %s — refusing the verdict",
+			s.Name, dp.c.Tag)
+	}
+
+	if planned != nil {
+		if cerr := coversPlanOnly(d, planned); cerr != nil {
+			return cerr
+		}
+	}
+
+	dp.opened[d.ref.SHA256] = true
+	dp.refs = append(dp.refs, d.ref)
+
+	return nil
+}
+
+// coversPlanOnly holds one decision's own subject list against the
+// plan: a decision may name planned inventories and nothing else.
+// The release view, the evidence manifest, a VEX document — each is
+// a document ABOUT the release that no plan produced, and a decision
+// reaching them is one decision standing in for the per-artifact
+// decisions the plan owes.
+func coversPlanOnly(d decision, planned map[string]bool) error {
+	for _, sub := range d.subjects {
+		line, err := subjectLine(sub)
+		if err != nil {
+			return fmt.Errorf("verify: release decision: %w", err)
+		}
+
+		if !planned[line] {
+			name := "an unnamed subject"
+			if sub.Name != nil {
+				name = *sub.Name
+			}
+
+			return fmt.Errorf(
+				"verify: a release decision names %s, which the release's plan does not — refusing the verdict", name)
+		}
+	}
+
+	return nil
+}
+
+// decision is one release decision proven over a candidate's bytes:
+// the bundle it was read from, the claim it carries, and everything
+// it names — the subject list read from the VERIFIED statement, so
+// what a decision covers is evidence rather than a second fetch.
+type decision struct {
+	ref      Ref
+	pred     *decisionPredicate
+	subjects []intoto.ResourceDescriptor
+}
+
+// decisions examines one SBOM candidate and returns every decision
+// the store holds over its bytes. A candidate carrying none is simply
+// not decided; a decision-typed bundle that FAILS verification is a
+// refusal, never a pass-over — a forged decision must never read as
+// an absent one.
+func (dp *decisionPass) decisions(s Subject) ([]decision, error) {
+	bundles, err := dp.store.Bundles(dp.c.Slug(), s.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("verify: %s: no attestation retrievable: %w", s.Name, err)
+	}
+
+	var found []decision
+
+	seen := map[string]bool{}
+
 	for _, sb := range bundles {
-		stmtPeek, perr := bv.Peek(sb.Bundle)
+		stmtPeek, perr := dp.bv.Peek(sb.Bundle)
 		if perr != nil {
-			return nil, nil, fmt.Errorf("verify: %s: unreadable bundle in the store: %w", s.Name, perr)
+			return nil, fmt.Errorf("verify: %s: unreadable bundle in the store: %w", s.Name, perr)
 		}
 
 		peek, derr := jsonx.DecodeBytes[intoto.Statement](stmtPeek)
 		if derr != nil {
-			return nil, nil, fmt.Errorf("verify: %s: bundle payload is not a statement: %w", s.Name, derr)
+			return nil, fmt.Errorf("verify: %s: bundle payload is not a statement: %w", s.Name, derr)
 		}
 
-		if peek.PredicateType == nil || *peek.PredicateType != *p.Trust.Decision.PredicateType {
+		if peek.PredicateType == nil || *peek.PredicateType != *dp.p.Trust.Decision.PredicateType {
 			continue
 		}
 
-		verified, err := bv.Attestation(sb.Bundle, id, s.SHA256)
-		if err != nil {
-			return nil, nil, fmt.Errorf("verify: %s: decision bundle refused: %w", s.Name, err)
+		bsha := sha256Hex(sb.Bundle)
+		if seen[bsha] {
+			continue
 		}
 
-		// The commit-level binding, independent of the SAN's ref form.
-		if got := verified.Extensions.BuildSignerDigest; got != pin {
-			return nil, nil, fmt.Errorf("verify: %s: decision signed at %q, pin is %q", s.Name, got, pin)
+		seen[bsha] = true
+
+		d, verr := dp.verified(s, sb, bsha)
+		if verr != nil {
+			return nil, verr
 		}
 
-		stmt, serr := jsonx.DecodeBytes[intoto.Statement](verified.Payload)
-		if serr != nil {
-			return nil, nil, fmt.Errorf("verify: %s: verified payload is not a statement: %w", s.Name, serr)
-		}
-
-		if verr := stmt.Validate(); verr != nil {
-			return nil, nil, fmt.Errorf("verify: %s: %w", s.Name, verr)
-		}
-
-		if *stmt.PredicateType != *p.Trust.Decision.PredicateType {
-			return nil, nil, fmt.Errorf("verify: %s: verified payload is not a release decision", s.Name)
-		}
-
-		pred, err := jsonx.DecodeBytes[decisionPredicate](stmt.Predicate)
-		if err != nil {
-			return nil, nil, fmt.Errorf("verify: %s: decision predicate: %w", s.Name, err)
-		}
-
-		return &Ref{URI: sb.URI, SHA256: sha256Hex(sb.Bundle)}, pred, nil
+		found = append(found, *d)
 	}
 
-	return nil, nil, nil
+	return found, nil
+}
+
+// verified proves one decision-typed bundle over the candidate's own
+// digest and decodes the claim from the VERIFIED bytes — the peek
+// above selected, this judges.
+func (dp *decisionPass) verified(s Subject, sb StoredBundle, bsha string) (*decision, error) {
+	v, err := dp.bv.Attestation(sb.Bundle, dp.id, s.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("verify: %s: decision bundle refused: %w", s.Name, err)
+	}
+
+	// The commit-level binding, independent of the SAN's ref form.
+	if got := v.Extensions.BuildSignerDigest; got != dp.pin {
+		return nil, fmt.Errorf("verify: %s: decision signed at %q, pin is %q", s.Name, got, dp.pin)
+	}
+
+	stmt, serr := jsonx.DecodeBytes[intoto.Statement](v.Payload)
+	if serr != nil {
+		return nil, fmt.Errorf("verify: %s: verified payload is not a statement: %w", s.Name, serr)
+	}
+
+	if verr := stmt.Validate(); verr != nil {
+		return nil, fmt.Errorf("verify: %s: %w", s.Name, verr)
+	}
+
+	if *stmt.PredicateType != *dp.p.Trust.Decision.PredicateType {
+		return nil, fmt.Errorf("verify: %s: verified payload is not a release decision", s.Name)
+	}
+
+	pred, perr := jsonx.DecodeBytes[decisionPredicate](stmt.Predicate)
+	if perr != nil {
+		return nil, fmt.Errorf("verify: %s: decision predicate: %w", s.Name, perr)
+	}
+
+	return &decision{ref: Ref{URI: sb.URI, SHA256: bsha}, pred: pred, subjects: stmt.Subject}, nil
 }

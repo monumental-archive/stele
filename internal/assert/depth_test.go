@@ -31,12 +31,16 @@ type fakeDeep struct {
 	vsaPins            []verify.Pins
 	demands            []*verify.EnrichmentDemand
 	subjects           int
+	sboms              []verify.SBOMs
 }
 
-func (d *fakeDeep) Release(_ verify.Coords, subjects, _ []verify.Subject, pins verify.Pins, decision bool) error {
+func (d *fakeDeep) Release(
+	_ verify.Coords, subjects []verify.Subject, sboms verify.SBOMs, pins verify.Pins, decision bool,
+) error {
 	d.releasePins = append(d.releasePins, pins)
 	d.subjects = len(subjects)
 	d.decisions = append(d.decisions, decision)
+	d.sboms = append(d.sboms, sboms)
 
 	return d.releaseErr
 }
@@ -80,13 +84,18 @@ func deepForge() *fakeForge {
 func runDeepWalk(t *testing.T, f *fakeForge, deep *fakeDeep) *report.Report {
 	t.Helper()
 
+	return runDeepWalkPolicy(t, f, deep, loadTestPolicy(t))
+}
+
+func runDeepWalkPolicy(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert.Policy) *report.Report {
+	t.Helper()
+
 	full, err := assert.NewFullDepth(deep,
 		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	pol := loadTestPolicy(t)
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
@@ -473,4 +482,47 @@ func TestDepthSelfAttesting(t *testing.T) {
 			t.Fatalf("verdict = %s — underivable pins must red, not pass silently", rep.Verdict())
 		}
 	})
+}
+
+// TestDepthFullPlan pins the join the per-inventory decision rests on
+// (stele#158): the walk hands the verify engine the release's
+// SBOM assets AND, among them, the documents its classes' planned
+// obligations owed at its own machinery version. The denominator is
+// derived where the class list meets the policy — a caller restating
+// it would be the second source of truth .github#544 was filed about.
+func TestDepthFullPlan(t *testing.T) {
+	t.Parallel()
+
+	planned, err := assert.LoadPolicy(strings.NewReader(strings.Replace(testPolicyJSON,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},`,
+		`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"],`+
+			`"assetPrefixes": [{"prefix": "sbom-image-", "planned": true}]},`, 1)))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	f := deepForge()
+	f.assets["widget@v1.0.0"] = append(f.assets["widget@v1.0.0"], "sbom-image-widget-1.0.0.spdx.json")
+	f.assetBytes["widget@v1.0.0"]["checksums.txt"] += strings.Repeat("f", 64) +
+		"  sbom-image-widget-1.0.0.spdx.json\n"
+
+	deep := &fakeDeep{}
+
+	rep := runDeepWalkPolicy(t, f, deep, planned)
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	if len(deep.sboms) != 1 {
+		t.Fatalf("release leg called %d time(s), want once", len(deep.sboms))
+	}
+
+	got := deep.sboms[0]
+	if len(got.Assets) != 2 {
+		t.Errorf("assets = %+v, want both SBOM documents as decision candidates", got.Assets)
+	}
+
+	if len(got.Planned) != 1 || got.Planned[0].Name != "sbom-image-widget-1.0.0.spdx.json" {
+		t.Errorf("planned = %+v, want the one document the class's planned obligation claims", got.Planned)
+	}
 }

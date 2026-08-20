@@ -227,13 +227,37 @@ the claimed verifier URI is constant across both epochs.
 
 ### `trust.decision` (optional)
 
-The release-decision gate: a release's SBOM must carry a decision
-attestation, signed by this workflow, whose predicate names
+The release-decision gate: a release's SBOM documents must carry a
+decision attestation, signed by this workflow, whose predicate names
 `conclusion == requiredConclusion` for the release tag. The
-predicate type is an org URI, so it lives here, not in code. The
-selection rule (the decision-bearing SBOM is found by verifying
-candidates, never by filename; two winners is a refusal) is
-verifier logic, not policy — it stays in code.
+predicate type is an org URI, so it lives here, not in code. What
+carries a decision, and how many, is verifier logic against the
+release's own INVENTORY PLAN — it stays in code, and the plan
+arrives as an input, not a policy field:
+
+- a release that declares **no plan** owes one decision for the
+  whole release: exactly one SBOM asset carries it, found by
+  verifying candidates and never by filename, and two bearers is a
+  refusal. This is the invariant every release published before
+  per-artifact inventories existed shipped under.
+- a release that declares a **plan** — the documents its build legs
+  planned to inventory (stele#158, the `planned` obligations of
+  [assert-policy-schema.md](assert-policy-schema.md#the-inventory-plan))
+  — owes one decision per planned document, and the verdict
+  aggregates over the plan. A planned inventory no decision covers
+  is a refusal; so is a decision naming anything the plan does not,
+  read from the decision's own signed subject list. The per-release
+  view aggregated from those documents bears no decision of its own:
+  it is a view, and nothing plans it.
+
+Which documents a release planned is per-release data, so it is
+never declared here: `verify release` and `emit vsa` take it as
+`--inventories`, a sha256sum manifest of the planned documents, and
+the evidence walk derives it from the planned obligations each
+declared class owed at that release's machinery version. Absent is a
+declaration — "this release planned no inventories" — not a default
+that softens the gate: the whole-release invariant then applies in
+full.
 
 **The whole section is optional**: a release decision is an
 obligation an org declares, not a precondition of using the

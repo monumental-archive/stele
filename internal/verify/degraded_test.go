@@ -615,7 +615,7 @@ func TestReleaseProvenanceContentRefusals(t *testing.T) {
 			}).bytes(t)
 			w.store.bundles[w.appSHA] = []verify.StoredBundle{{URI: "u", Bundle: bundle}}
 
-			_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+			_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 			if err == nil {
 				t.Fatalf("Release accepted verified content it cannot judge, want %q", tc.want)
 			}
@@ -735,7 +735,7 @@ func TestReleaseDecisionStoreRefusals(t *testing.T) {
 				w.store.bundles[extraSHA] = at
 			}
 
-			_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+			_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 			if err == nil {
 				t.Fatalf("Release accepted a degraded decision read, want %q", tc.want)
 			}

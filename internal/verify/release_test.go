@@ -18,6 +18,7 @@ type releaseWorld struct {
 	appSHA, sbomSHA string
 	subjects        []verify.Subject
 	sboms           []verify.Subject
+	planned         []verify.Subject
 	provStmt        map[string]any
 	provExt         certificate.Extensions
 	provSAN         string
@@ -132,11 +133,20 @@ func (w *releaseWorld) build(t *testing.T) {
 	}}
 }
 
+// plan renders the world's SBOM evidence as the engine takes it:
+// every asset, and the planned inventories among them. Default
+// worlds plan nothing — the whole-release invariant every release
+// before per-artifact inventories was published under — and the plan
+// rows below set w.planned to enter the other world.
+func (w *releaseWorld) plan() verify.SBOMs {
+	return verify.SBOMs{Assets: w.sboms, Planned: w.planned}
+}
+
 func (w *releaseWorld) run(t *testing.T) (*verify.ReleaseVerdict, error) {
 	t.Helper()
 	w.build(t)
 
-	return verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+	return verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 }
 
 // mutate reaches into the provenance statement by path — the rows
@@ -182,7 +192,7 @@ func TestReleaseWithoutDecisionPolicy(t *testing.T) {
 	p := loadPolicy(t)
 	p.Trust.Decision = nil
 
-	verdict, err := verify.Release(p, coords, w.subjects, nil, pins, w.store, fakeBV{}, discardLog)
+	verdict, err := verify.Release(p, coords, w.subjects, verify.SBOMs{}, pins, w.store, fakeBV{}, discardLog)
 	if err != nil {
 		t.Fatalf("Release without a decision policy = %v", err)
 	}
@@ -453,7 +463,7 @@ func TestReleaseInputRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := verify.Release(loadPolicy(t), tt.coords, tt.subjects, w.sboms, tt.pins, w.store, fakeBV{}, discardLog)
+			_, err := verify.Release(loadPolicy(t), tt.coords, tt.subjects, w.plan(), tt.pins, w.store, fakeBV{}, discardLog)
 			if err == nil {
 				t.Fatal("Release accepted what it must refuse")
 			} else if !strings.Contains(err.Error(), tt.want) {
@@ -476,7 +486,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 		w.build(t)
 		delete(w.store.bundles, w.appSHA)
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "no attestation retrievable") {
 			t.Errorf("Release error = %v, want the fetch refusal", err)
 		}
@@ -489,7 +499,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 		w.build(t)
 		w.store.bundles[w.appSHA] = []verify.StoredBundle{{URI: "u", Bundle: []byte("not a bundle")}}
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "unreadable bundle") {
 			t.Errorf("Release error = %v, want the unreadable-bundle refusal", err)
 		}
@@ -503,7 +513,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 		bad := (&fakeBundle{Stmt: []byte(`[]`), SAN: w.provSAN, Issuer: issuer}).bytes(t)
 		w.store.bundles[w.appSHA] = []verify.StoredBundle{{URI: "u", Bundle: bad}}
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "not a statement") {
 			t.Errorf("Release error = %v, want the not-a-statement refusal", err)
 		}
@@ -530,7 +540,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 			w.sbomSHA: w2.store.bundles[w.sbomSHA],
 		}}
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "disagrees on the source revision") {
 			t.Errorf("Release error = %v, want the revision-fold refusal", err)
 		}
@@ -564,7 +574,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 		}).bytes(t)
 		w.store.bundles[w.appSHA] = append(w.store.bundles[w.appSHA], verify.StoredBundle{URI: "d2", Bundle: dec2})
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "more than one SBOM asset carries a release decision") {
 			t.Errorf("Release error = %v, want the ambiguity refusal", err)
 		}
@@ -577,7 +587,7 @@ func TestReleaseStoreAndBundleFailures(t *testing.T) {
 		w.build(t)
 		w.store.bundles[w.sbomSHA] = w.store.bundles[w.sbomSHA][:1] // drop the decision bundle
 
-		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.sboms, pins, w.store, fakeBV{}, discardLog)
+		_, err := verify.Release(loadPolicy(t), coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog)
 		if err == nil || !strings.Contains(err.Error(), "no SBOM asset carries a verifiable release decision") {
 			t.Errorf("Release error = %v, want the missing-decision refusal", err)
 		}
