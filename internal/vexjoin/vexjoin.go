@@ -11,11 +11,18 @@
 // else compares as written. The rule is written once in
 // docs/vex-join.md and implemented once below: anything joining these
 // decisions a second time has to reach the same answers, and two
-// dialects decide different things about one finding. The empty-set semantics are
-// explicit and tested by name: an empty VEX directory means NOTHING
-// decided, never everything — the grep -f landmine this package
-// exists to make unrepresentable. Shared by `assert blast-radius`
-// and the derive verb's VEX leg (#40).
+// dialects decide different things about one finding.
+//
+// Whether a decision EXCUSES is a second question, asked of its
+// status and answered here for the same reason (Excuses): a caller
+// that asked only "is there a decision?" would clear a finding on the
+// strength of a statement admitting it.
+//
+// The empty-set semantics are explicit and tested by name: an empty
+// VEX directory means NOTHING decided, never everything — the grep -f
+// landmine this package exists to make unrepresentable. Shared by
+// `assert blast-radius`, `assert advisories` and the derive verb's
+// VEX leg (#40).
 package vexjoin
 
 import (
@@ -69,7 +76,7 @@ func (k Key) String() string {
 // ecosystem is the label the scanner reports it under — OSV's
 // vocabulary ("Go", "crates.io", "Debian:12"), not a purl type.
 func KeyFromFinding(advisory, ecosystem, name, version string) Key {
-	return Key{advisory: advisory, pkg: canonicalName(ecosystem, name), version: version}
+	return newKey(ecosystem, advisory, name, version)
 }
 
 // KeyFromPurl mints the key one VEX product identifies, and reports
@@ -85,7 +92,13 @@ func KeyFromPurl(advisory, purl string) (Key, bool) {
 		return Key{}, false
 	}
 
-	return Key{advisory: advisory, pkg: canonicalName(typ, name), version: version}, true
+	return newKey(typ, advisory, name, version), true
+}
+
+// newKey is the ONE place a Key is built. Both doors delegate here so
+// the fold happens once in the code, not once per entry point.
+func newKey(ecosystem, advisory, name, version string) Key {
+	return Key{advisory: advisory, pkg: canonicalName(ecosystem, name), version: version}
 }
 
 // canonicalName renders a package name in the form both sides of the
@@ -147,6 +160,10 @@ type Decision struct {
 	// subcomponent the human named rather than one reassembled from
 	// the parsed name and version.
 	Purl string
+	// purlType is the product's purl type, parsed once here rather
+	// than re-derived by a caller: a second purl parser outside this
+	// package is a second opinion about what a statement covers.
+	purlType string
 
 	Status          string
 	Justification   string
@@ -154,6 +171,54 @@ type Decision struct {
 	ActionStatement string
 	Decided         time.Time
 }
+
+// The statuses that EXCUSE a finding. The rule is one question asked
+// of the status: does it DENY that the advisory applies to the
+// product? Only a denial excuses; everything else is a decision that
+// was made and reported, never one that clears a gate.
+//
+//   - not_affected — OpenVEX's denial. Excuses.
+//   - false_positive — the spelling other VEX dialects use for the
+//     same denial, accepted so a decision written in one does not
+//     silently decide nothing. It is not OpenVEX v0.2.0 vocabulary;
+//     accepting it is a reading choice, and a document using it is
+//     still read as denying.
+//   - affected — an ADMISSION. Excusing on it would let a statement
+//     saying "this product is affected" clear the finding it admits.
+//   - under_investigation — a judgment not yet made. A gate held open
+//     by an unfinished judgment is the finding, not an exception to it.
+//   - fixed — asserts the product was remediated, which is not a
+//     denial that the advisory applies. It is also contradicted by
+//     the evidence in hand: this join meets a decision only where a
+//     scan CURRENTLY reports that exact triple, so a `fixed`
+//     statement matching a live finding is a remediation claim the
+//     scanner just disproved. Excusing on it would let a stale claim
+//     silence the scan that refutes it.
+//
+// A status this list does not name is not a denial either — an
+// unrecognised judgment is not a judgment this code may act on — so
+// it does not excuse, and the caller reports it like any other
+// non-excusing decision.
+const (
+	statusNotAffected   = "not_affected"
+	statusFalsePositive = "false_positive"
+)
+
+// Excuses reports whether this decision's status denies that the
+// advisory applies, which is the only ground on which a decision
+// clears a finding. One door: a caller that asked "is there a
+// decision?" instead would excuse a finding on the strength of a
+// statement admitting it.
+func (d *Decision) Excuses() bool {
+	return d.Status == statusNotAffected || d.Status == statusFalsePositive
+}
+
+// PurlType is the purl type of the product this decision names,
+// lowercased. It says which ecosystem's rules the product's name is
+// read under, and lets a caller scanning ONE ecosystem tell a
+// decision it could meet from one it never could — a Go scan and a
+// cargo decision are not a stale pair, they are strangers.
+func (d *Decision) PurlType() string { return d.purlType }
 
 // Decisions is the decided set. The zero value decides nothing.
 type Decisions struct {
@@ -311,10 +376,12 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 				continue
 			}
 
-			k, ok := KeyFromPurl(*stmt.Vulnerability.Name, *p.ID)
+			typ, name, version, ok := parsePurl(*p.ID)
 			if !ok {
 				continue // a product that is not a versioned purl cannot join
 			}
+
+			k := newKey(typ, *stmt.Vulnerability.Name, name, version)
 
 			// Two decisions for one triple is a contradiction to
 			// surface, never a race the parse order settles: the files
@@ -327,7 +394,7 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 			}
 
 			d.byKey[k] = Decision{
-				Key: k, Origin: origin, Purl: *p.ID,
+				Key: k, Origin: origin, Purl: *p.ID, purlType: strings.ToLower(typ),
 				Status:          *stmt.Status,
 				Justification:   deref(stmt.Justification),
 				ImpactStatement: deref(stmt.ImpactStatement),

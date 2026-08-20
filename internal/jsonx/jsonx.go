@@ -80,6 +80,39 @@ func DecodeForeign[T any](b []byte) (*T, error) {
 	return value, nil
 }
 
+// DecodeForeignStream decodes a CONCATENATED stream of JSON values
+// from r, tolerating unknown fields, under DecodeForeign's contract
+// for each value. It is the shape a streaming producer writes when it
+// emits one value per event with no enclosing array — govulncheck
+// -json is the case this exists for.
+//
+// Trailing data is not an error here; it is the next value, which is
+// the whole difference from DecodeForeign. What IS an error is a
+// value that fails to decode: a truncated stream is a producer that
+// stopped, and returning the values read so far would report a
+// partial run as a complete one. The caller gets everything or the
+// failure, never a prefix it cannot tell from the whole.
+func DecodeForeignStream[T any](r io.Reader) ([]T, error) {
+	dec := json.NewDecoder(r)
+
+	var out []T
+
+	for {
+		var value T
+
+		err := dec.Decode(&value)
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("jsonx: decode stream: value %d: %w", len(out)+1, err)
+		}
+
+		out = append(out, value)
+	}
+}
+
 // Epoch is the one document epoch every live-read stele document
 // carries — both policies and the report reference this constant,
 // never a local copy, so the "one number" of docs/versioning.md is
