@@ -877,7 +877,7 @@ func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot
 		tagObj  = "4444444444444444444444444444444444444444"
 	)
 
-	link := `{"Rev": "%s", "Note": {"version": 2, "provenance": {"bundle": {}}}}`
+	link := `{"Rev": "%s", "Note": "` + snapshotNote(linkNoteJSON) + `"}`
 
 	files := map[string]string{
 		"snap/acme/widget/tagrefs.json": `[{"Name": "v1.0.0", "ObjectSHA": "` + tagObj + `", "Annotated": true}]`,
@@ -912,6 +912,16 @@ func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot
 	}
 
 	return filepath.Join(dir, "snap"), filepath.Join(dir, "policy.json")
+}
+
+// linkNoteJSON is the chain-link note the snapshot fixtures carry.
+const linkNoteJSON = `{"version": 2, "provenance": {"bundle": {}}}`
+
+// snapshotNote renders one note the way a capture records it: the
+// blob's bytes, base64, because a note is bytes and the snapshot
+// keeps no second opinion about whether they parse (stele#193).
+func snapshotNote(note string) string {
+	return base64.StdEncoding.EncodeToString([]byte(note))
 }
 
 // scriptedTagVerifier accepts every signature — the trust boundary is
