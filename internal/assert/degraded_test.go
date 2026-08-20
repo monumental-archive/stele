@@ -134,11 +134,26 @@ func TestBlastRadiusScannerTears(t *testing.T) {
 func TestTagsForgeTears(t *testing.T) {
 	t.Parallel()
 
-	for _, read := range []string{"ChainNotes", "IsAncestor"} {
+	tears := []struct {
+		read   string
+		mutate func(*fakeTags)
+	}{
+		{"ChainNotes", func(*fakeTags) {}},
+		// The ancestry read happens only where a link is MISSING: the
+		// horizon is consulted to decide whether the ledger could have
+		// witnessed one at all, so a conformant tag never reaches it and
+		// a tear scripted over a conformant fixture would prove nothing.
+		{"IsAncestor", func(f *fakeTags) { f.objects[tagObjSHA].Target = unlinkedRev }},
+	}
+
+	for _, tear := range tears {
+		read := tear.read
+
 		t.Run(read, func(t *testing.T) {
 			t.Parallel()
 
 			tags := conformantTags()
+			tear.mutate(tags)
 			tags.torn = map[string]error{read: errTorn}
 
 			_, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),

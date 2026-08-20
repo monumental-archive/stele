@@ -788,9 +788,19 @@ precondition. Declared means every field, validated strictly:
     floor states the minimum that passes.
   - `proofFloor.from` — each repository's first tag owing `floor`,
     for the case a mint gains the capability partway through a
-    repository's history. A repository absent from a declared map has
-    not raised its floor and every one of its tags owes `before` —
-    the correct reading for a rollout partway through a population.
+    repository's history. The key has three readings, and each is a
+    stated rule a stranger's policy can rely on rather than an
+    accident of map access:
+    - **absent entirely** — `floor` binds every tag of every
+      repository. `before` is then refused: a floor for tags before a
+      point nobody named binds nothing.
+    - **present, naming this repository** — its tags owe `floor` from
+      the named tag onward, and `before` beneath it.
+    - **present, not naming this repository** — it has not raised its
+      floor, and every one of its tags owes `before`. That is the
+      correct reading for a rollout partway through a population, and
+      the one that keeps a partial switch from reddening the
+      repositories that have not switched yet.
   - `proofFloor.before` — what tags earlier than the `from` tag owe.
 
   `from` and `before` are declared together or not at all: a rise
@@ -826,26 +836,80 @@ precondition. Declared means every field, validated strictly:
   did not verify proves no regime, and its finding says so.
 - `notesRef` — the source chain's notes ref, fully qualified.
 - `epochs` — each releasing repository's first signed tag, or
-  `pending` for declared-unsigned. A repository that releases tags
-  without a line here seals CANNOT_JUDGE: an undeclared population
-  member is unchecked, not clean.
+  `pending` for declared-unsigned. **This is the population**
+  (stele#208): the walk judges every release tag from the epoch
+  onward, and a tag below it is an EXCLUSION — no check, no finding,
+  no count, no line. A repository that releases tags without a line
+  here seals CANNOT_JUDGE: an undeclared population member is
+  unchecked, not clean.
 
-The walk (`stele assert tags --org|--repo`): for every matching tag,
-the tagger is the declared role, the tag from the epoch onward
-carries a gitsign signature verified natively against the trusted
-root to at least the declared floor — CMS over the tag payload, the
-certificate's embedded SCT countersigned by a trusted CT log, the
-chain to the root's certificate authorities observed at that
-countersigned instant, SAN and issuer held to the policy, and the
-tagger clock consistent with the countersigned issuance (no gitsign
-binary, and the forge's own verification verdict is never consulted:
-it cannot judge x509-in-the-PGP-slot). A tag carrying its mint's own
-Rekor receipt is judged through the full observer stance — the same
-verifier every bundle passes — regardless of floor, so a receipt
-that does not prove refuses loudly. And the tag's target carries a
-source chain link. The legacy bound is derived from the chain
-itself: a target that does not descend from the chain genesis
-predates the machinery and owes nothing, reported by name.
+  `pending` admits the whole listing. It says a repository signs no
+  tags YET, which is a statement about ONE obligation — the tagger
+  role and the chain link are owed whatever the mint has begun doing
+  — and reading it as an empty population would let a declaration of
+  scope quietly remove a repository from sight. A tag whose version
+  does not parse is admitted, the same direction it fails in for the
+  signing obligation.
+
+The walk (`stele assert tags --org|--repo`): for every member, the
+tagger is the declared role, the tag carries a gitsign signature
+verified natively against the trusted root to at least the declared
+floor — CMS over the tag payload, the certificate's embedded SCT
+countersigned by a trusted CT log, the chain to the root's
+certificate authorities observed at that countersigned instant, SAN
+and issuer held to the policy, and the tagger clock consistent with
+the countersigned issuance (no gitsign binary, and the forge's own
+verification verdict is never consulted: it cannot judge
+x509-in-the-PGP-slot). A tag carrying its mint's own Rekor receipt is
+judged through the full observer stance — the same verifier every
+bundle passes — regardless of floor, so a receipt that does not prove
+refuses loudly. And the tag's target carries a source chain link.
+
+### What the tag walk covered, and how it says so
+
+Every member is judged or is **loudly unjudgeable**; a member is
+never silently absent. The one obligation that can be unjudgeable is
+the chain link, and the bound there is the LEDGER's rather than the
+declaration's: a source ledger witnesses from its founded genesis —
+the oldest link-noted revision whose first parent carries no link —
+and says nothing before it. Where the genesis does not reach a tag's
+target, the missing link is recorded as a finding carrying a DERIVED
+exception naming that horizon, so the tag stays visible, stays
+counted and never reddens. A missing link INSIDE the horizon is a
+defect. A repository whose ledger founds no chain witnesses nothing
+at all, and that absence is `assert chains`' finding (#266) — made
+once, there, rather than reddening a whole listing here.
+
+The distinction is load-bearing, and stele#208 is what it cost when
+it was missing. The same genesis bounded the POPULATION until then: a
+derived bound doing a declaration's job, and one that moves. When the
+org's ledgers were re-emitted in note-format v3 on 2026-08-18, each
+derived genesis moved forward by weeks and the judged set fell to 21
+of 158 release tags while the run still printed `assert: PASS` and
+nothing else. A derived bound may narrow an OBLIGATION; only a
+declaration may narrow a population.
+
+So the run reconciles the counts, per repository and in total, in its
+own output and as facts beside the verdict:
+
+```text
+assert: tags: widget: 82 tag(s) listed, 41 excluded before epoch v1.23.1, 41 in population: 12 judged, 29 unjudgeable
+assert: tags: widget@v1.29.0: tag:link unjudgeable — the ledger's founded genesis ecb42d6… does not reach target 8f3a1c…
+```
+
+| fact | |
+| --- | --- |
+| `tagsListed:<repo>` | release tags the forge listed |
+| `tagsExcluded:<repo>` | tags below the declared epoch |
+| `tagsJudged:<repo>` | members every obligation reached a verdict on |
+| `tagsUnjudgeable:<repo>` | members the ledger could not answer for |
+
+`listed = excluded + judged + unjudgeable` closes for every
+repository whose epoch is declared, and the report's population is
+`judged + unjudgeable` — what the declaration holds, never what the
+walk managed to judge. A green naming its own scope is the whole
+point: `PASS` over 21 of 158 tags is otherwise indistinguishable from
+`PASS` over all of them.
 
 ## The chains section
 

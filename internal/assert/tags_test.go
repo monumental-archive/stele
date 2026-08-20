@@ -59,7 +59,20 @@ const (
 	unlinkedRev   = "0000000000000000000000000000000000000004"
 	tagObjSHA     = "00000000000000000000000000000000000000aa"
 	tagObjSHA2    = "00000000000000000000000000000000000000bb"
+	tagObjSHA3    = "00000000000000000000000000000000000000cc"
 )
+
+// signedTagObject is one conformant annotated tag object over a
+// target: the minting tagger, a payload and a signature. One
+// definition, so a fixture that differs from another differs in the
+// fact under test and nowhere else.
+func signedTagObject(target string) *gh.TagObject {
+	return &gh.TagObject{
+		Tagger: "release-mint[bot]", Target: target,
+		Payload:   []byte("object x\ntagger release-mint[bot] <m@e> 1755000000 +0000\n"),
+		Signature: []byte("-----BEGIN SIGNED MESSAGE-----\nx\n-----END SIGNED MESSAGE-----\n"),
+	}
+}
 
 const link = `{"version": 2, "provenance": {"bundle": {}}}`
 
@@ -150,13 +163,7 @@ func conformantTags() *fakeTags {
 		refs: map[string][]gh.TagRef{
 			"widget": {{Name: "v1.1.0", ObjectSHA: tagObjSHA, Annotated: true}},
 		},
-		objects: map[string]*gh.TagObject{
-			tagObjSHA: {
-				Tagger: "release-mint[bot]", Target: linkedRev,
-				Payload:   []byte("object x\ntagger release-mint[bot] <m@e> 1755000000 +0000\n"),
-				Signature: []byte("-----BEGIN SIGNED MESSAGE-----\nx\n-----END SIGNED MESSAGE-----\n"),
-			},
-		},
+		objects: map[string]*gh.TagObject{tagObjSHA: signedTagObject(linkedRev)},
 		notes: map[string][]gh.ChainNote{
 			"widget": {
 				{Rev: genesisRev, Note: []byte(link)},
@@ -214,18 +221,50 @@ func spanningTags() *fakeTags {
 	objects := map[string]*gh.TagObject{}
 
 	for i, name := range []string{"v1.1.0", "v1.2.0", "v1.3.0", "v1.4.0"} {
-		sha := fmt.Sprintf("00000000000000000000000000000000000000c%d", i)
+		sha := fmt.Sprintf("00000000000000000000000000000000000000d%d", i)
 		refs = append(refs, gh.TagRef{Name: name, ObjectSHA: sha, Annotated: true})
-		objects[sha] = &gh.TagObject{
-			Tagger: "release-mint[bot]", Target: linkedRev,
-			Payload:   []byte("object x\ntagger release-mint[bot] <m@e> 1755000000 +0000\n"),
-			Signature: []byte("-----BEGIN SIGNED MESSAGE-----\nx\n-----END SIGNED MESSAGE-----\n"),
-		}
+		objects[sha] = signedTagObject(linkedRev)
 	}
 
 	f := conformantTags()
 	f.refs = map[string][]gh.TagRef{"widget": refs}
 	f.objects = objects
+
+	return f
+}
+
+// preGenesisTags scripts widget's one member on a target the ledger's
+// founded genesis does not reach: conformant in every other way, so
+// what the walk says about it is about the horizon alone.
+func preGenesisTags() *fakeTags {
+	f := conformantTags()
+	f.objects[tagObjSHA].Target = preGenesisRev
+	f.ancestry[genesisRev+"..."+preGenesisRev] = false
+
+	return f
+}
+
+// mixedTags scripts one tag in each disposition the reconciliation
+// counts: below the epoch (excluded), on a linked revision (judged),
+// and on a target the genesis does not reach (unjudgeable).
+func mixedTags() *fakeTags {
+	f := preGenesisTags()
+	f.refs["widget"] = []gh.TagRef{
+		{Name: "v1.0.0", ObjectSHA: tagObjSHA2, Annotated: true},
+		{Name: "v1.1.0", ObjectSHA: tagObjSHA3, Annotated: true},
+		{Name: "v1.2.0", ObjectSHA: tagObjSHA, Annotated: true},
+	}
+	f.objects[tagObjSHA2] = signedTagObject(preGenesisRev)
+	f.objects[tagObjSHA3] = signedTagObject(linkedRev)
+
+	return f
+}
+
+// unfoundedTags scripts a ledger of scaffolding alone: no link-shaped
+// note, so no founded genesis and nothing the chain can witness.
+func unfoundedTags() *fakeTags {
+	f := conformantTags()
+	f.notes["widget"] = []gh.ChainNote{{Rev: preGenesisRev, Note: []byte(`{"seed": true}`)}}
 
 	return f
 }
@@ -392,13 +431,119 @@ func TestTagsUnraisedRepositoryStaysBelow(t *testing.T) {
 func runTags(t *testing.T, f *fakeTags, tv assert.TagVerifier) *report.Report {
 	t.Helper()
 
-	rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
-		f, tv, report.NewJournal(), func(string, ...any) {})
+	rep, _ := runTagsLogged(t, f, tv)
+
+	return rep
+}
+
+// runTagsLogged runs the walk and keeps what it said. The lines are
+// evidence: stele#208's defect was invisible precisely because the
+// run's own output named neither the bound nor the tags it dropped.
+//
+//nolint:gocritic // unnamedResult: the sealed report, then the lines the run printed
+func runTagsLogged(t *testing.T, f *fakeTags, tv assert.TagVerifier) (*report.Report, []string) {
+	t.Helper()
+
+	var lines []string
+
+	rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"), f, tv, report.NewJournal(),
+		func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) })
 	if err != nil {
 		t.Fatalf("Tags: %v", err)
 	}
 
-	return rep
+	return rep, lines
+}
+
+// TestTagsReconciliation is stele#208's subject: the run states the
+// population it judged AGAINST THE DECLARATION, and every member of
+// that population is judged or is loudly unjudgeable. The counts have
+// to close — a set that does not balance is a member that went
+// missing, which is exactly what a silent narrowing looks like.
+func TestTagsReconciliation(t *testing.T) {
+	t.Parallel()
+
+	rep, lines := runTagsLogged(t, mixedTags(), &fakeTagVerifier{})
+
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	facts := tagFacts(t, rep)
+	for name, want := range map[string]string{
+		"tagsListed:widget":      "3",
+		"tagsExcluded:widget":    "1",
+		"tagsJudged:widget":      "1",
+		"tagsUnjudgeable:widget": "1",
+	} {
+		if facts[name] != want {
+			t.Errorf("%s = %q, want %q — facts: %+v", name, facts[name], want, facts)
+		}
+	}
+
+	for _, want := range []string{
+		"widget: 3 tag(s) listed, 1 excluded before epoch v1.1.0, 2 in population: 1 judged, 1 unjudgeable",
+		"widget@v1.2.0: tag:link unjudgeable — the ledger's founded genesis " + genesisRev,
+		"3 tag(s) listed, 1 excluded before a declared epoch, 2 in population: 1 judged, 1 unjudgeable",
+	} {
+		if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, want) }) {
+			t.Errorf("no line carries %q — the run said:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+
+	// The other half of the law: an exclusion produces NOTHING. Not a
+	// finding, not a count, and not a line — the excluded tag is absent
+	// from the run's output entirely.
+	for _, line := range lines {
+		if strings.Contains(line, "v1.0.0") {
+			t.Errorf("the excluded tag reached the output: %q", line)
+		}
+	}
+}
+
+// TestTagsUnjudgeableCarriesItsHorizon: the unjudgeable member's
+// finding is RECORDED and excused by a derived exception naming the
+// horizon it came from — the assert-chains shape. A walk that instead
+// decided not to look leaves nothing a reader could audit.
+func TestTagsUnjudgeableCarriesItsHorizon(t *testing.T) {
+	t.Parallel()
+
+	doc := encodeReport(t, runTags(t, preGenesisTags(), &fakeTagVerifier{}))
+
+	if len(doc.Excused) != 1 {
+		t.Fatalf("excused = %+v, want the one link finding the horizon excuses", doc.Excused)
+	}
+
+	e := doc.Excused[0].Exception
+	if e.Kind != "derived" || e.Subject != "widget@v1.1.0" || e.Assertion != "tag:link" {
+		t.Fatalf("exception = %+v, want a derived exception over that tag's link alone", e)
+	}
+
+	if !strings.Contains(e.Origin, genesisRev) || !strings.Contains(e.Origin, preGenesisRev) {
+		t.Fatalf("origin = %q, want the founded genesis and the target it does not reach", e.Origin)
+	}
+}
+
+// TestTagsUnfoundedLedgerWitnessesNothing: a repository whose ledger
+// founds no chain cannot answer the link question for ANY tag.
+// Answering it anyway reddens a whole listing for one missing ledger,
+// and whether a repository founds a chain at all is `assert chains`'
+// finding to make — once, where it is judged.
+func TestTagsUnfoundedLedgerWitnessesNothing(t *testing.T) {
+	t.Parallel()
+
+	rep := runTags(t, unfoundedTags(), &fakeTagVerifier{})
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	if facts := tagFacts(t, rep); facts["tagsUnjudgeable:widget"] != "1" {
+		t.Fatalf("facts = %+v, want the member counted unjudgeable", facts)
+	}
+
+	if origin := encodeReport(t, rep).Excused[0].Exception.Origin; !strings.Contains(origin, "founds no chain") {
+		t.Fatalf("origin = %q, want the unfounded ledger named", origin)
+	}
 }
 
 func TestTagsConformantPasses(t *testing.T) {
@@ -413,6 +558,13 @@ func TestTagsConformantPasses(t *testing.T) {
 
 	if tv.called != 1 {
 		t.Fatalf("verifier calls = %d, want 1 — the post-epoch tag owes exactly one verification", tv.called)
+	}
+
+	// A policy declaring no `from` at all binds its floor everywhere —
+	// the third of the three readings of that key, beside a repository
+	// the map names and one it does not.
+	if !slices.Equal(tv.floors, []string{"certificate-transparency"}) {
+		t.Fatalf("floors = %v, want the declared floor binding with no boundary declared", tv.floors)
 	}
 }
 
@@ -484,24 +636,45 @@ func TestTagsDefects(t *testing.T) {
 	}
 }
 
-func TestTagsBounds(t *testing.T) {
+// TestTagsPopulationBounds walks the two bounds and the difference
+// between them (stele#208). The DECLARED epoch bounds the population:
+// below it a tag produces nothing at all. The ledger's horizon bounds
+// one obligation: beyond it the link cannot be judged, and everything
+// else the tag owes still is.
+func TestTagsPopulationBounds(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a pre-genesis target is legacy, exempt by construction", func(t *testing.T) {
+	t.Run("a pre-genesis target's link is unjudgeable, not absent", func(t *testing.T) {
 		t.Parallel()
 
-		f := conformantTags()
-		f.objects[tagObjSHA].Target = preGenesisRev
-		f.objects[tagObjSHA].Signature = nil // owes nothing: legacy
-		f.ancestry[genesisRev+"..."+preGenesisRev] = false
+		f := preGenesisTags()
 
 		rep := runTags(t, f, &fakeTagVerifier{})
 		if rep.Verdict() != report.VerdictPass {
-			t.Fatalf("verdict = %s, findings: %+v — legacy tags owe nothing", rep.Verdict(), rep.Findings())
+			t.Fatalf("verdict = %s, findings: %+v — a link the ledger cannot witness is not a defect",
+				rep.Verdict(), rep.Findings())
+		}
+
+		facts := tagFacts(t, rep)
+		if facts["tagsUnjudgeable:widget"] != "1" || facts["tagsJudged:widget"] != "0" {
+			t.Fatalf("facts = %+v, want the member counted unjudgeable rather than dropped", facts)
 		}
 	})
 
-	t.Run("a pre-epoch tag owes no signature", func(t *testing.T) {
+	t.Run("a pre-genesis member still owes its signature", func(t *testing.T) {
+		t.Parallel()
+
+		f := preGenesisTags()
+		f.objects[tagObjSHA].Signature = nil
+
+		rep := runTags(t, f, &fakeTagVerifier{})
+		if rep.Verdict() != report.VerdictFail {
+			t.Fatalf("verdict = %s — the epoch declares this tag signed, and the ledger's reach"+
+				" says nothing about that obligation", rep.Verdict())
+		}
+	})
+
+	t.Run("a pre-epoch tag is excluded: no check, no count, no line", func(t *testing.T) {
 		t.Parallel()
 
 		f := conformantTags()
@@ -510,15 +683,28 @@ func TestTagsBounds(t *testing.T) {
 
 		tv := &fakeTagVerifier{}
 
+		// A population of nothing cannot pass: the declaration excludes
+		// every tag this repository has, so the run judged no subject.
 		rep := runTags(t, f, tv)
-		if rep.Verdict() != report.VerdictPass {
+		if rep.Verdict() != report.VerdictCannotJudge {
 			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
 		}
 
-		if tv.called != 0 {
-			t.Fatal("a pre-epoch tag was asked for a signature")
+		if tv.called != 0 || len(rep.Findings()) != 0 {
+			t.Fatalf("verifier calls = %d, findings = %+v — an exclusion produces nothing",
+				tv.called, rep.Findings())
+		}
+
+		facts := tagFacts(t, rep)
+		if facts["tagsListed:widget"] != "1" || facts["tagsExcluded:widget"] != "1" ||
+			facts["tagsJudged:widget"] != "0" || facts["tagsUnjudgeable:widget"] != "0" {
+			t.Fatalf("facts = %+v, want the tag listed and excluded, judged by nothing", facts)
 		}
 	})
+}
+
+func TestTagsBounds(t *testing.T) {
+	t.Parallel()
 
 	t.Run("a pending epoch owes no signatures at all", func(t *testing.T) {
 		t.Parallel()
@@ -540,6 +726,14 @@ func TestTagsBounds(t *testing.T) {
 		if rep.Verdict() != report.VerdictPass || tv.called != 0 {
 			t.Fatalf("verdict = %s, verifier calls = %d — pending means declared-unsigned",
 				rep.Verdict(), tv.called)
+		}
+
+		// And `pending` excludes nothing: a repository that has not begun
+		// signing is still wholly in the population, so its tagger and
+		// chain obligations stay in sight.
+		facts := tagFacts(t, rep)
+		if facts["tagsExcluded:gadget"] != "0" || facts["tagsJudged:gadget"] != "1" {
+			t.Fatalf("facts = %+v, want the whole listing judged and nothing excluded", facts)
 		}
 	})
 
@@ -761,8 +955,14 @@ func TestTagsDebtStalenessFollowsWhatWasChecked(t *testing.T) {
 // needs one owns it.
 type reportDoc struct {
 	Verdict     *string        `json:"verdict"`
+	Excused     []excusedDoc   `json:"excused"`
 	Stale       []exceptionDoc `json:"staleExceptions"`
 	Unexercised []exceptionDoc `json:"unexercisedExceptions"`
+}
+
+type excusedDoc struct {
+	Finding   report.Finding `json:"finding"`
+	Exception exceptionDoc   `json:"exception"`
 }
 
 type exceptionDoc struct {
