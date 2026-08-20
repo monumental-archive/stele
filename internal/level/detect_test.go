@@ -412,6 +412,56 @@ func TestDependencyGuardsSeparateNotLookingFromFindingNothing(t *testing.T) {
 	}
 }
 
+// TestBuildProvenanceGuardsSayWhatIsMissing. Both rows are provenance
+// that verified and still cannot answer the question asked of it, and
+// both must report rather than refute: the artifact is not shown to be
+// wrong, it is shown to be unexaminable, and refuting would accuse a
+// producer of a defect the evidence does not establish.
+func TestBuildProvenanceGuardsSayWhatIsMissing(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		breakIt func(*level.Evidence)
+		want    string
+	}{
+		{
+			// No buildType means no published schema, so there is
+			// nothing to judge the externalParameters against.
+			"provenance declaring no buildType",
+			func(ev *level.Evidence) { ev.Subjects[0].BuildType = "" },
+			"declares no buildType, so its parameter schema is unknown",
+		},
+		{
+			// The certificate does not name the workflow that held the
+			// signing capability, so the L3 boundary cannot be located
+			// — which is not the same as finding it breached.
+			"a certificate naming no signing workflow",
+			func(ev *level.Evidence) {
+				ev.Subjects[0].Cert.BuildSignerURI = ""
+				ev.Subjects[0].Cert.BuildSignerDigest = ""
+			},
+			"does not name the workflow that held the signing capability",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ev := buildEvidence()
+			tt.breakIt(ev)
+
+			got := reasons(t, level.Assess(level.TrackBuild, ev))
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("no requirement reported %q:\n%s", tt.want, got)
+			}
+
+			if strings.Contains(got, "REFUTED") {
+				t.Errorf("unexaminable provenance was reported as a defect:\n%s", got)
+			}
+		})
+	}
+}
+
 // TestSourceIdentityGuards: the two level-one source requirements that
 // rest on nothing but what the caller named. Both are reachable with
 // no chain at all, and both must report rather than hold — a
