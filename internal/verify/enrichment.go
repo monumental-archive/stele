@@ -18,6 +18,7 @@ package verify
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/monumental-archive/stele/internal/enrichment"
 	"github.com/monumental-archive/stele/internal/intoto"
@@ -25,17 +26,35 @@ import (
 	"github.com/monumental-archive/stele/internal/policy"
 )
 
-// EnrichmentDemand is what one release owes its enrichment claim.
-// nil means the obligation is not owed at all (pre-epoch history),
-// so "not owed" and "owed nothing extra" cannot be confused — the
-// absent-vs-zero discipline the decode types already keep, applied
-// to the seam itself.
+// EnrichmentDemand is what one release's artifacts owe their
+// enrichment claims. nil means the obligation is not owed at all
+// (pre-epoch history), so "not owed" and "owed nothing extra" cannot
+// be confused — the absent-vs-zero discipline the decode types already
+// keep, applied to the seam itself.
 type EnrichmentDemand struct {
-	// AlsoRequired are names the release's declared evidence classes
-	// owe on top of the verify policy's universal required set. They
-	// must live inside that policy's required ∪ permitted — one
-	// vocabulary, no second truth (docs/policy-schema.md).
-	AlsoRequired []string
+	// ByArtifact maps a subject's asset NAME to the names that
+	// subject's class owes on top of the verify policy's universal
+	// required set. A subject absent from the map owes nothing
+	// class-specific, which is what a stranger's read owes and what an
+	// artifact whose class nothing states owes (stele#206).
+	//
+	// Keyed per artifact because the obligation is: a release's classes
+	// describe what it shipped, and holding every artifact to all of
+	// them asks one artifact to answer for another's build. Names must
+	// live inside the policy's required ∪ permitted — one vocabulary,
+	// no second truth (docs/policy-schema.md).
+	ByArtifact map[string][]string
+}
+
+// forArtifact reports what one subject owes beyond the universal set.
+// A nil demand owes nothing extra, which keeps the three states of the
+// seam readable at the one place that reads them.
+func (d *EnrichmentDemand) forArtifact(name string) []string {
+	if d == nil {
+		return nil
+	}
+
+	return d.ByArtifact[name]
 }
 
 // validateDemand refuses an incoherent demand before any subject is
@@ -45,15 +64,21 @@ type EnrichmentDemand struct {
 // the POLICIES, not a fact about the release — so it is a refusal of
 // the run, distinct in text from any unmet obligation, and it fires
 // at the one place that holds both documents.
+//
+// Every artifact's names are checked, not the first artifact's: a
+// vocabulary that has diverged for one class has diverged, and a walk
+// that stopped at the first entry would pass whichever release
+// happened to list its sound class first.
 func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
-	if demand == nil || len(demand.AlsoRequired) == 0 {
+	names := demand.demanded()
+	if len(names) == 0 {
 		return nil
 	}
 
 	if e == nil {
 		return fmt.Errorf(
 			"verify: the demand requires enrichment names %v but the policy declares no build.enrichment — "+
-				"a class demands what no obligation covers", demand.AlsoRequired)
+				"a class demands what no obligation covers", names)
 	}
 
 	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
@@ -65,7 +90,7 @@ func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
 		allowed[n] = true
 	}
 
-	for _, n := range demand.AlsoRequired {
+	for _, n := range names {
 		if !allowed[n] {
 			return fmt.Errorf(
 				"verify: the demand requires enrichment name %q, which the policy neither requires nor permits — "+
@@ -74,6 +99,25 @@ func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
 	}
 
 	return nil
+}
+
+// demanded is every name the demand asks of any artifact, sorted and
+// deduplicated — the vocabulary the closed set is judged against, in
+// one spelling so the refusal text does not depend on map order.
+func (d *EnrichmentDemand) demanded() []string {
+	if d == nil {
+		return nil
+	}
+
+	var names []string
+
+	for _, owed := range d.ByArtifact {
+		names = append(names, owed...)
+	}
+
+	slices.Sort(names)
+
+	return slices.Compact(names)
 }
 
 // judgeEnrichment proves one subject's enrichment claim. Exactly one
@@ -164,11 +208,11 @@ func enrichmentPredicate(s Subject, payload []byte, predicateType string) (*enri
 // a signed false dependency is worse than an omitted one — and every
 // required name must appear, or the obligation is unmet.
 //
-// extras are the per-class half of the obligation (stele#122): names
-// this release's declared evidence classes owe on top of the
-// universal set. validateDemand already proved them a subset of the
-// closed set, so they extend only what is required, never what is
-// allowed.
+// extras are the per-class half of the obligation (stele#122), taken
+// for THIS artifact alone (stele#206): the names its own class owes on
+// top of the universal set. validateDemand already proved them a
+// subset of the closed set, so they extend only what is required,
+// never what is allowed.
 func judgeNames(e *policy.Enrichment, extras []string, pred *enrichment.Predicate, s Subject) error {
 	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
 	for _, n := range e.Required {
@@ -200,7 +244,7 @@ func judgeNames(e *policy.Enrichment, extras []string, pred *enrichment.Predicat
 	for _, n := range extras {
 		if !claimed[n] {
 			return fmt.Errorf(
-				"verify: %s: enrichment claims no %q, which the release's declared evidence classes require",
+				"verify: %s: enrichment claims no %q, which this release's evidence classes require of it",
 				s.Name, n)
 		}
 	}

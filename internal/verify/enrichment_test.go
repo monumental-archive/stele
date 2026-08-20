@@ -504,7 +504,7 @@ func TestClassDemand(t *testing.T) {
 			"digest": map[string]any{"sha256": digestHex([]byte("the pins"))},
 		})
 
-		if _, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}}); err != nil {
+		if _, err := w.runDemand(t, demandOn("app.tar.gz", "base-images")); err != nil {
 			t.Fatalf("VSA = %v — the class-required name is claimed", err)
 		}
 	})
@@ -517,9 +517,44 @@ func TestClassDemand(t *testing.T) {
 		// universal set is satisfied and the name is permitted.
 		w := newEnrichWorld(t)
 
-		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}})
-		if err == nil || !strings.Contains(err.Error(), "declared evidence classes require") {
+		_, err := w.runDemand(t, demandOn("app.tar.gz", "base-images"))
+		if err == nil || !strings.Contains(err.Error(), "evidence classes require of it") {
 			t.Fatalf("VSA = %v, want the class-required refusal", err)
+		}
+	})
+
+	t.Run("a name owed by ANOTHER artifact is not owed by this one", func(t *testing.T) {
+		t.Parallel()
+
+		// The stele#206 defect: one release's classes are a set of what
+		// it SHIPPED, not a property of every artifact in it. A demand
+		// keyed to the pgrx tarball must not reach the rust binary
+		// beside it, whose own class owes nothing of the sort.
+		w := newEnrichWorld(t)
+
+		if _, err := w.runDemand(t, demandOn("ext.tar.gz", "base-images")); err != nil {
+			t.Fatalf("VSA = %v — base-images is owed by another artifact, not this one", err)
+		}
+	})
+
+	t.Run("a narrowed artifact still owes the universal set in full", func(t *testing.T) {
+		t.Parallel()
+
+		// The excusal must never mask a class-independent failure: an
+		// artifact whose class is unknowable owes nothing class-specific
+		// and everything else (stele#206). Here the claim drops the
+		// universally required name, and the empty demand must not save
+		// it.
+		w := newEnrichWorld(t)
+		w.pred()["resolvedDependencies"] = []any{map[string]any{
+			"name":   "base-images",
+			"uri":    "https://github.com/acme/canon/blob/abc/base-images.json",
+			"digest": map[string]any{"sha256": digestHex([]byte("the pins"))},
+		}}
+
+		_, err := w.runDemand(t, &verify.EnrichmentDemand{ByArtifact: map[string][]string{}})
+		if err == nil || !strings.Contains(err.Error(), "which the policy requires") {
+			t.Fatalf("VSA = %v, want the universal-obligation refusal", err)
 		}
 	})
 
@@ -532,9 +567,27 @@ func TestClassDemand(t *testing.T) {
 		w := newEnrichWorld(t)
 		w.copies = 0
 
-		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"pgrx-base"}})
+		_, err := w.runDemand(t, demandOn("app.tar.gz", "pgrx-base"))
 		if err == nil || !strings.Contains(err.Error(), "class expectations and the closed set have diverged") {
 			t.Fatalf("VSA = %v, want the two-truths refusal", err)
+		}
+	})
+
+	t.Run("the closed set is judged across every artifact, not the first", func(t *testing.T) {
+		t.Parallel()
+
+		// A per-artifact demand made the vocabulary check a loop, and a
+		// loop that stopped at the first sound artifact would pass
+		// whichever release happened to list its good class first.
+		w := newEnrichWorld(t)
+		w.copies = 0
+
+		_, err := w.runDemand(t, &verify.EnrichmentDemand{ByArtifact: map[string][]string{
+			"app.tar.gz": {"base-images"},
+			"ext.tar.gz": {"pgrx-base"},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "class expectations and the closed set have diverged") {
+			t.Fatalf("VSA = %v, want the two-truths refusal from the second artifact", err)
 		}
 	})
 
@@ -544,11 +597,17 @@ func TestClassDemand(t *testing.T) {
 		w := newEnrichWorld(t)
 		w.policy = loadPolicy(t) // no build.enrichment declared
 
-		_, err := w.runDemand(t, &verify.EnrichmentDemand{AlsoRequired: []string{"base-images"}})
+		_, err := w.runDemand(t, demandOn("app.tar.gz", "base-images"))
 		if err == nil || !strings.Contains(err.Error(), "no build.enrichment") {
 			t.Fatalf("VSA = %v, want the undeclared-obligation refusal", err)
 		}
 	})
+}
+
+// demandOn is one artifact's class-specific demand — the shape the
+// assert walk derives per artifact (stele#206).
+func demandOn(artifact string, names ...string) *verify.EnrichmentDemand {
+	return &verify.EnrichmentDemand{ByArtifact: map[string][]string{artifact: names}}
 }
 
 // TestVSALevelsProvesTheSameObligation is the guard on the split's

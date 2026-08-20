@@ -198,6 +198,15 @@ func (m *Manifest) Subjects() []Asset {
 	return m.subjects(nil)
 }
 
+// Attributes reports whether this manifest's schema says which class
+// built each artifact. It is the ONE spelling of that question: a
+// second reading of the same schema number would let two callers
+// disagree about whether a document attributes, which is the class of
+// defect the shared-definition law exists to remove.
+func (m *Manifest) Attributes() bool {
+	return m.Schema != nil && *m.Schema >= classFrom
+}
+
 // SubjectsOf narrows Subjects to the artifacts ONE class built — the
 // population a per-class rebuild is judged against. ok=false means
 // this manifest carries no class answer (a schema below 3), and the
@@ -206,11 +215,40 @@ func (m *Manifest) Subjects() []Asset {
 // different facts, and conflating them is how a rebuild nobody ran
 // reads as a rebuild that found nothing.
 func (m *Manifest) SubjectsOf(class string) ([]Asset, bool) {
-	if !m.Current() {
+	if !m.Attributes() {
 		return nil, false
 	}
 
 	return m.subjects(&class), true
+}
+
+// ArtifactClasses maps each build subject's asset name to the class
+// that built it. ok=false means this manifest's schema cannot
+// attribute at all (below 3) — the same "no answer" SubjectsOf keeps,
+// and for the same reason: a consumer that read an empty map as "no
+// artifact owes anything class-specific" would excuse obligations a
+// class-attributed manifest does state.
+//
+// The key is the asset NAME, which Validate has already proven unique
+// across entries; digests are not unique by construction, because two
+// identically built artifacts share one.
+func (m *Manifest) ArtifactClasses() (map[string]string, bool) {
+	if !m.Attributes() {
+		return nil, false
+	}
+
+	out := make(map[string]string, len(m.Entries))
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Name == nil || e.Type == nil || *e.Type != TypeBuildSubject || e.Class == nil {
+			continue
+		}
+
+		out[*e.Name] = *e.Class
+	}
+
+	return out, true
 }
 
 // Declares reports whether the release named this class among the

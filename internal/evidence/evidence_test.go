@@ -339,7 +339,65 @@ func TestOlderSchemasReadForWhatTheyPromised(t *testing.T) {
 			if got, ok := m.SubjectsOf("go-binary"); ok {
 				t.Errorf("SubjectsOf = %+v, ok = true — a schema below the class answer must say it has none", got)
 			}
+
+			if m.Attributes() {
+				t.Error("Attributes = true on a schema that carries no class on any entry")
+			}
+
+			// The three-state seam a consumer narrows on (stele#206):
+			// "no answer" must never arrive as an empty map, or a walk
+			// reads "this manifest attributes nothing" as "no artifact
+			// owes anything class-specific" and excuses in silence.
+			if got, ok := m.ArtifactClasses(); ok || got != nil {
+				t.Errorf("ArtifactClasses = %+v, ok = %v, want no answer at all", got, ok)
+			}
 		})
+	}
+}
+
+// The attribution, read from the manifest's own entries: every
+// artifact maps to the class that built it, documents map to nothing
+// because a document ABOUT a release belongs to no one class, and the
+// answer is present — which is what lets the demand be per artifact
+// instead of the whole declared set (stele#206).
+func TestArtifactClassesReadsTheAttribution(t *testing.T) {
+	t.Parallel()
+
+	m, err := evidence.New([]string{"go-binary", "source-archive"}, true, "1.48.0",
+		[]evidence.Entry{
+			evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary"),
+			evidence.NewSubject("src-1.0.0.tar.gz", digestB, "source-archive"),
+			evidence.NewEvidence("attestations.intoto.jsonl", digestC),
+		})
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	if !m.Attributes() {
+		t.Fatal("Attributes = false on the schema that carries the class")
+	}
+
+	got, ok := m.ArtifactClasses()
+	if !ok {
+		t.Fatal("ArtifactClasses ok = false on the schema that carries the answer")
+	}
+
+	want := map[string]string{
+		"tool-linux-amd64.tar.gz": "go-binary",
+		"src-1.0.0.tar.gz":        "source-archive",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ArtifactClasses = %+v, want %+v", got, want)
+	}
+
+	for artifact, class := range want {
+		if got[artifact] != class {
+			t.Errorf("%s attributed to %q, want %q", artifact, got[artifact], class)
+		}
+	}
+
+	if _, named := got["attestations.intoto.jsonl"]; named {
+		t.Error("a document ABOUT the release was attributed to a class")
 	}
 }
 

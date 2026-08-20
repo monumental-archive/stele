@@ -109,20 +109,22 @@ func (passDeep) VSA(verify.Coords, []verify.Subject, verify.Pins, *verify.Enrich
 	return nil
 }
 
-// TestAssertEvidenceFullDepth drives the whole CLI at --depth full
-// over a snapshot, with the engine seam scripted to pass — the flag
-// path, the trust-authority load and the walk's deep branch in one
-// stroke.
-func TestAssertEvidenceFullDepth(t *testing.T) {
-	snap, policyPath := evidenceSnapshot(t)
+// deepSnapshot stages the whole --depth full world: the evidence
+// snapshot plus what the deep branch reads — the checksum manifest and
+// the two pin trees — with the engine seam scripted to pass. It
+// returns the argument list one Run needs. rewrite, when set, shapes
+// the fixture files before they are written.
+func deepSnapshot(t *testing.T, rewrite func(files map[string]string)) []string {
+	t.Helper()
+
+	snap, policyPath := evidenceSnapshotWith(t, rewrite)
 	dir := filepath.Dir(snap)
 
-	// The deep branch reads the checksum manifest and the pin trees.
 	// Snapshot FileAt stores the path as one escaped segment.
 	digest := strings.Repeat("5", 64)
 	wfSeg := url.PathEscape(".github/workflows/publish.yml")
 	files := map[string]string{
-		"acme/widget/releases/v1.0.0/assets/checksums.txt": digest + "  app\n",
+		"acme/widget/releases/v1.0.0/assets/checksums.txt": digest + "  app.tar.gz\n",
 		"acme/widget/files/v1.0.0/" + wfSeg: "uses: acme/canon/.github/workflows/publish.yml@" +
 			strings.Repeat("a", 40) + "\n",
 		"acme/canon/files/" + strings.Repeat("a", 40) + "/" + wfSeg: "uses: acme/signer/.github/workflows/sign.yml@" +
@@ -157,12 +159,49 @@ func TestAssertEvidenceFullDepth(t *testing.T) {
 
 	t.Cleanup(func() { newBundleVerifier, newDeepVerifier = origBV, origDeep })
 
-	var stdout, stderr bytes.Buffer
-
-	code := Run([]string{
+	return []string{
 		"assert", "evidence", "--org", "acme", "--policy", policyPath, "--snapshot", snap,
 		"--trusted-root", root, "--verify-policy", vp, "--depth", "full",
-	}, &stdout, &stderr)
+	}
+}
+
+// narrowDeepSnapshot is deepSnapshot with the release's manifest rolled
+// back to the pre-class-split schema and the policy giving its class an
+// enrichment name — the shape whose class-specific obligation the walk
+// must excuse, loudly (stele#206). The schema epoch moves past the
+// fixture's machinery version so the old manifest reads as the history
+// it is instead of refusing.
+func narrowDeepSnapshot(t *testing.T) []string {
+	t.Helper()
+
+	classless := `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, "machineryVersion": "9.9.9",` +
+		` "entries": [{"name": "app.tar.gz", "sha256": "` + strings.Repeat("5", 64) +
+		`", "type": "build-subject"}]}`
+
+	return deepSnapshot(t, func(files map[string]string) {
+		files["snap/acme/widget/releases/v1.0.0/assets/evidence-manifest.json"] = classless
+
+		narrowed := strings.Replace(files["policy.json"],
+			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}`,
+			`"manifestSchemaFromVersion": "10.0.0", `+
+				`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], `+
+				`"enrichment": ["base-images"]}}`, 1)
+		if narrowed == files["policy.json"] {
+			t.Fatal("the fixture policy changed shape — the narrowing rewrite matched nothing")
+		}
+
+		files["policy.json"] = narrowed
+	})
+}
+
+// TestAssertEvidenceFullDepth drives the whole CLI at --depth full
+// over a snapshot, with the engine seam scripted to pass — the flag
+// path, the trust-authority load and the walk's deep branch in one
+// stroke.
+func TestAssertEvidenceFullDepth(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := Run(deepSnapshot(t, nil), &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
@@ -170,6 +209,36 @@ func TestAssertEvidenceFullDepth(t *testing.T) {
 	if !strings.Contains(stderr.String()+stdout.String(), "full depth") {
 		t.Fatalf("output names no deep leg:\n%s%s", stdout.String(), stderr.String())
 	}
+}
+
+// TestAssertEvidenceExcusalIsWritten holds the excusal to the output
+// contract every other line of this walk keeps (stele#206): it is
+// STATED, and it is stated through the stream whose failure the verb
+// reports. A narrowing written down a side channel would survive a
+// failing writer, which is exactly how a silent excusal gets built by
+// accident.
+func TestAssertEvidenceExcusalIsWritten(t *testing.T) {
+	t.Run("the narrowing is stated, naming the artifact and what it excused", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := Run(narrowDeepSnapshot(t), &stdout, &stderr)
+		if code != exitOK {
+			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+		}
+
+		want := "app.tar.gz: class unknowable under schema 2 — excused: base-images"
+		if got := stdout.String() + stderr.String(); !strings.Contains(got, want) {
+			t.Fatalf("output does not state the narrowing:\n%s\nwant substring %q", got, want)
+		}
+	})
+
+	t.Run("a writer that fails while stating it fails the run", func(t *testing.T) {
+		var stderr bytes.Buffer
+
+		if code := Run(narrowDeepSnapshot(t), failWriterI{}, &stderr); code != exitIO {
+			t.Fatalf("Run = %d, want %d — the excusal must ride the reported stream", code, exitIO)
+		}
+	})
 }
 
 // TestEngineVerifierFailsClosed pins the delegation: the engine's own

@@ -45,22 +45,159 @@ type Contract struct {
 	// where the class list joins the policy — the semantics stay in
 	// the one owedFrom definition, never a second reading here.
 	MachineryVersion string
+	// Attributed reports whether the source can say WHICH class built
+	// each artifact. Carried as its own fact rather than inferred from
+	// an empty ArtifactClasses: a release that attributes and shipped
+	// no artifact, and a release that cannot attribute at all, are
+	// different facts, and only the second may narrow an obligation.
+	Attributed bool
+	// ArtifactClasses maps a build subject's asset name to the class
+	// that built it — meaningful only where Attributed.
+	ArtifactClasses map[string]string
+	// ManifestSchema is the schema the manifest declared, 0 when no
+	// manifest spoke for the release. It says WHY attribution is
+	// missing, so a narrowing states its own cause instead of asserting
+	// a schema number the release may never have carried.
+	ManifestSchema int
 	// Origin names where the contract was read from, for the report.
 	Origin string
 }
 
-// EnrichmentDemand derives what this release owes its enrichment
-// claim from its declared classes — the ONE derivation (stele#122),
-// written where the two things it joins already live. nil when the
-// contract says the obligation is not owed (pre-epoch history). The
-// union is sorted and deduplicated: what a release owes is a set,
-// and a set has one spelling, so the demand is independent of class
-// declaration order.
-func (e *EvidencePolicy) EnrichmentDemand(c *Contract) *verify.EnrichmentDemand {
+// ArtifactNote is one thing the demand derivation had to say about one
+// artifact: an excusal (loud, never silent) or a defect. Both name the
+// artifact, because "some artifact was narrowed" is not a statement
+// anyone can audit.
+type ArtifactNote struct {
+	Artifact string
+	Detail   string
+}
+
+// ArtifactDemand is what one release's artifacts owe their enrichment
+// claims, together with everything deriving it must state out loud.
+// Excused and Defects are deliberately separate vocabularies: an
+// excusal is a narrowing this walk performed and stated, a defect is a
+// finding the walk reds on. Conflating them would let a broken
+// manifest read as an excused one.
+type ArtifactDemand struct {
+	// Demand is the per-artifact demand handed to the verify engine,
+	// nil when the obligation is not owed at all.
+	Demand *verify.EnrichmentDemand
+	// Excused are artifacts narrowed because their class is unknowable,
+	// each carrying the names not asked of it.
+	Excused []ArtifactNote
+	// Defects are artifacts a manifest that COULD attribute failed to,
+	// which is broken derived state and never a narrowing.
+	Defects []ArtifactNote
+}
+
+// EnrichmentDemand derives what each of a release's artifacts owes its
+// enrichment claim — the ONE derivation (stele#122), written where the
+// two things it joins already live. A nil Demand means the obligation
+// is not owed at all (pre-epoch history), which is a different fact
+// from owing nothing extra.
+//
+// The demand is PER ARTIFACT because the obligation is (stele#206). A
+// release's classes are a set of what it shipped, not a property of
+// every artifact in it: asking a rust binary for the pgrx tarball's
+// base-image claims is asking one artifact to answer for another's
+// build. Where the manifest attributes each artifact to its class, the
+// artifact owes exactly that class's names, in full.
+//
+// Where the manifest CANNOT attribute — a schema below the class split,
+// or no manifest at all — the fallback is to owe nothing
+// class-specific, never to owe everything: the never-overclaim rule the
+// manifest epoch itself applies. Those artifacts stay held to the
+// verify policy's universal required set in full; only the per-class
+// half is excused, and every excused name is named.
+//
+// Where the manifest could attribute and did not, the artifact is a
+// DEFECT, not a narrowing, and it stays held to the whole declared set
+// — omission must not buy the leniency that only structural silence
+// earns.
+func (e *EvidencePolicy) EnrichmentDemand(c *Contract, subjects []verify.Subject) *ArtifactDemand {
 	if !c.Enrichment {
-		return nil
+		return &ArtifactDemand{}
 	}
 
+	declared := e.declaredEnrichment(c)
+
+	if !c.Attributed {
+		return &ArtifactDemand{Demand: &verify.EnrichmentDemand{}, Excused: excusals(c, subjects, declared)}
+	}
+
+	out := &ArtifactDemand{Demand: &verify.EnrichmentDemand{ByArtifact: map[string][]string{}}}
+
+	for _, s := range subjects {
+		owed, defect := e.artifactOwes(c, s.Name, declared)
+
+		if defect != "" {
+			out.Defects = append(out.Defects, ArtifactNote{Artifact: s.Name, Detail: defect})
+		}
+
+		if len(owed) > 0 {
+			out.Demand.ByArtifact[s.Name] = owed
+		}
+	}
+
+	return out
+}
+
+// artifactOwes answers for ONE artifact of an attributing manifest:
+// what its class owes, and — where the attribution is broken — what to
+// say about it. A defective attribution falls back to the whole
+// declared set, never to nothing: the fallback for "the manifest could
+// not say" is leniency, and the fallback for "the manifest did not
+// say" must not be, or a manifest earns leniency by omitting the field
+// that would have cost it.
+// It returns what the artifact owes and, where the attribution is
+// broken, the defect to report; an empty defect means the attribution
+// held.
+//
+//nolint:gocritic // unnamedResult: what it owes, then the defect — named in the doc
+func (e *EvidencePolicy) artifactOwes(c *Contract, artifact string, declared []string) ([]string, string) {
+	class, named := c.ArtifactClasses[artifact]
+
+	switch {
+	case !named:
+		// The checksum manifest pins this artifact and the evidence
+		// manifest attributes it to nothing: two documents the same
+		// publisher wrote in the same breath, disagreeing about what the
+		// release shipped.
+		return declared, fmt.Sprintf(
+			"schema %d attributes every artifact to a class and this one to none%s",
+			c.ManifestSchema, heldTo(declared))
+	case !e.definesClass(class):
+		return declared, fmt.Sprintf(
+			"built by class %q, which the policy does not define%s", class, heldTo(declared))
+	}
+
+	// Sorted for the same reason the union is: what one artifact owes is
+	// a set, and a set has one spelling — so which unmet name a refusal
+	// reports does not depend on the order the policy happened to list
+	// them in.
+	owed := slices.Clone(e.Classes[class].Enrichment)
+	slices.Sort(owed)
+
+	return owed, ""
+}
+
+// heldTo names the set a broken attribution leaves an artifact held
+// to, and says nothing when there is nothing to name — a clause
+// naming an empty set reads as an obligation when it is the absence of
+// one.
+func heldTo(declared []string) string {
+	if len(declared) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(" — held to the whole declared set (%s)", strings.Join(declared, ", "))
+}
+
+// declaredEnrichment is the union of what every class this release
+// declared owes — the whole set, sorted and deduplicated, because what
+// a release declares is a set and a set has one spelling. It is the
+// strict fallback, never the per-artifact answer.
+func (e *EvidencePolicy) declaredEnrichment(c *Contract) []string {
 	var names []string
 
 	for _, class := range c.Classes {
@@ -69,7 +206,40 @@ func (e *EvidencePolicy) EnrichmentDemand(c *Contract) *verify.EnrichmentDemand 
 
 	slices.Sort(names)
 
-	return &verify.EnrichmentDemand{AlsoRequired: slices.Compact(names)}
+	return slices.Compact(names)
+}
+
+// definesClass reports whether the policy declares this class at all.
+func (e *EvidencePolicy) definesClass(class string) bool {
+	_, ok := e.Classes[class]
+
+	return ok
+}
+
+// excusals states one narrowing per artifact. A release whose declared
+// classes owe nothing class-specific narrows nothing, so it says
+// nothing: an excusal naming no obligation is noise wearing the
+// vocabulary of an exception.
+func excusals(c *Contract, subjects []verify.Subject, declared []string) []ArtifactNote {
+	if len(declared) == 0 {
+		return nil
+	}
+
+	cause := fmt.Sprintf("class unknowable under schema %d", c.ManifestSchema)
+	if c.ManifestSchema == 0 {
+		cause = "class unknowable: no manifest attributes this release's artifacts"
+	}
+
+	out := make([]ArtifactNote, 0, len(subjects))
+
+	for _, s := range subjects {
+		out = append(out, ArtifactNote{
+			Artifact: s.Name,
+			Detail:   fmt.Sprintf("%s — excused: %s", cause, strings.Join(declared, ", ")),
+		})
+	}
+
+	return out
 }
 
 // PlannedInventories selects, from a release's SBOM assets, the
@@ -205,12 +375,22 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	// epoch" was true of every epoch already in the past and false
 	// for any epoch still in the future, which is exactly the class
 	// of defect the epochs exist to remove (stele#109).
+	// Which class built which artifact is READ from the manifest's own
+	// attribution, never inferred: a name or a checksum pattern that
+	// looked like one class's output would be a guess wearing a
+	// judgment, and the manifest's silence is itself the fact
+	// (stele#206).
+	artifactClasses, attributed := doc.ArtifactClasses()
+
 	return &Contract{
 		Classes:          doc.Classes,
 		StoreVSA:         *doc.StoreVSA,
 		Decision:         m.Policy.decision(*doc.MachineryVersion),
 		Enrichment:       m.Policy.enrichment(*doc.MachineryVersion),
 		MachineryVersion: *doc.MachineryVersion,
+		Attributed:       attributed,
+		ArtifactClasses:  artifactClasses,
+		ManifestSchema:   *doc.Schema,
 		Origin:           origin,
 	}, true, nil
 }
@@ -273,6 +453,10 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		machineryVersion = string(pm[1])
 	}
 
+	// A workflow input names the classes the release SHIPPED and could
+	// never say which artifact each one built — the releases this
+	// adapter speaks for predate the manifest entirely. Attribution is
+	// therefore absent, not empty, and the demand narrows accordingly.
 	return &Contract{
 		Classes:          classes,
 		StoreVSA:         w.Policy.storeVSA(machineryVersion),
