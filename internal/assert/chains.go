@@ -68,7 +68,7 @@ func Chains(
 
 	org := pop.Owner()
 
-	repos, err := pop.Members(TrackChains)
+	repos, err := ChainsSubjects.Enumerate(pop)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func Chains(
 		report.Fact{Name: "chainsVerified", Value: strconv.Itoa(w.verified)},
 		report.Fact{Name: "links", Value: strconv.Itoa(w.links)})
 
-	return report.Seal("assert chains", pop.Subject(), pop.Population(TrackChains), j,
+	return report.Seal("assert chains", pop.Subject(), pop.Population(ChainsSubjects.track), j,
 		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 

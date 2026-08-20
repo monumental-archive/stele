@@ -166,6 +166,12 @@ Stated honestly rather than discovered:
   calls — see the `permissions` section in
   [assert-policy-schema.md](assert-policy-schema.md).
 
+  It is also the exception to the paragraph above. It asks no track
+  question — a repository that publishes nothing still has workflows
+  — so pointed at an org it reads your roster WHOLE: listing a
+  repository in `population` means its grants are audited, even where
+  the same entry declares it outside every evidence track.
+
 ## What you can skip
 
 - **All of `assert`**, until you have a corpus worth auditing.

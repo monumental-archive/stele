@@ -91,7 +91,7 @@ func Tags(
 		return nil, errors.New("assert: the policy declares no tags section")
 	}
 
-	repos, err := pop.Members(TrackTags)
+	repos, err := TagsSubjects.Enumerate(pop)
 	if err != nil {
 		return nil, err
 	}

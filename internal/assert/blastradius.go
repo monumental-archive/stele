@@ -83,7 +83,7 @@ func BlastRadius(
 
 	org := pop.Owner()
 
-	repos, err := pop.Members(TrackBlastRadius)
+	repos, err := BlastRadiusSubjects.Enumerate(pop)
 	if err != nil {
 		return nil, err
 	}
