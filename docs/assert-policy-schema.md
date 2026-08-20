@@ -357,18 +357,32 @@ whole point is that nobody else checks these artifacts.
 
 **continuous** — a repo whose `stubPath` calls `stubUses` publishes
 rolling digests. The image under `tag` must carry an attestation
-verifying under `signerWorkflow`'s identity at a pin the repo's own
-workflows declare (`signerPinPattern`, capture group 1). Identity and
-pin travel together as one candidate: a workflow reached through a
-commit-pinned `uses:` carries that commit as its certificate SAN ref
-AND as the signer digest, so checking one without the other checks
-half the binding. The pin is DERIVED from the consuming tree, never a
-policy literal, because mid-bump a repo can carry one candidate per
-branch state and the artifact must verify under one of them. Three
-things fail closed, each its own finding: a stub that publishes but
-has no image under the tag, a tree
-declaring no pin at all (the identity cannot be derived, so the image
-cannot be vouched for), and an attestation that refuses.
+verifying under `signerWorkflow`'s identity at a pin that
+`signerPinPattern` (capture group 1) finds. Identity and pin travel
+together as one candidate: a workflow reached through a commit-pinned
+`uses:` carries that commit as its certificate SAN ref AND as the
+signer digest, so checking one without the other checks half the
+binding.
+
+The pin is DERIVED, never a policy literal — and derived from the
+CONSUMING CHAIN, which is two hops: the stub's own `uses:` names the
+shared reusable workflow at a commit, and THAT released tree names the
+signer pin. Both hops are the same release, so the declared identity
+and the signing surface move together; a signer bump on the shared
+repository's main declares nothing until a release carrying it is
+pinned by the consumer, which is exactly when artifacts start being
+signed under it. Reading the consumer's own workflows instead is
+wrong twice over: it is not the tree that signs, and any unrelated
+workflow there naming the signer becomes the declared identity.
+Multiple pins in the released tree are all declared, and the artifact
+must verify under one of them.
+
+Four things fail closed, each its own finding: a stub that publishes
+but has no image under the tag, a stub declaring no commit-pinned
+call (there is no released tree to derive from), a released tree that
+is unreadable at its pin or declares no signer pin (the identity
+cannot be derived, so the image cannot be vouched for), and an
+attestation that refuses.
 
 **baseImages** — every digest-pinned base reference in `pinFile` must
 carry a `predicateType` attestation verifying under
