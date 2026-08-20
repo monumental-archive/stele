@@ -12,7 +12,7 @@ authors:
     given-names: Carl
 repository-code: https://github.com/monumental-archive/stele
 license: Apache-2.0
-version: 0.19.0
+version: 0.19.1
 date-released: 2026-08-20
 identifiers:
   - type: doi
