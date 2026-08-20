@@ -303,14 +303,13 @@ func TestSourcesOrder(t *testing.T) {
 // an unplanned prefix obligation beside its planned one, and one
 // bearing none at all.
 const plannedPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {
       "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},
       "wasm-npm": {

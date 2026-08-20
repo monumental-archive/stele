@@ -80,7 +80,7 @@ type CallerSet struct {
 // tree holds the declared shared-workflow tree's files; it is unused,
 // and must be empty, when the policy declares no reusable tree.
 func Permissions(
-	pol *Policy, subject string, tree []workflow.File, callers []CallerSet, log Logf,
+	pol *Policy, subject string, tree []workflow.File, callers []CallerSet, j *report.Journal, log Logf,
 ) (*report.Report, error) {
 	pp := pol.Permissions
 	if pp == nil {
@@ -93,7 +93,7 @@ func Permissions(
 				"every call into it would read as absent")
 	}
 
-	w := &permWalk{pp: pp, tree: indexWorkflows(tree), log: log}
+	w := &permWalk{pp: pp, tree: indexWorkflows(tree), j: j, log: log}
 
 	w.log("assert: permissions: the declared tree holds %d reusable workflow(s)", w.tree.reusable())
 
@@ -112,7 +112,7 @@ func Permissions(
 	// No judged set: nothing downstream iterates the calls this walk
 	// checked — the gate and the audit read the verdict, and a set
 	// nobody consumes is weight the document does not need.
-	return report.Seal("assert permissions", subject, pop, w.findings, nil,
+	return report.Seal("assert permissions", subject, pop, j,
 		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 
@@ -159,19 +159,22 @@ func (i *wfIndex) reusable() int {
 }
 
 type permWalk struct {
-	pp       *PermissionsPolicy
-	tree     *wfIndex
-	log      Logf
-	findings []report.Finding
-	files    int
-	checked  int
-	outside  int
+	pp      *PermissionsPolicy
+	tree    *wfIndex
+	j       *report.Journal
+	log     Logf
+	files   int
+	checked int
+	outside int
 }
 
-func (w *permWalk) finding(subject, assertion, expected, actual, detail string) {
-	w.findings = append(w.findings, report.Finding{
-		Subject: subject, Assertion: assertion, Expected: expected, Actual: actual, Detail: detail,
-	})
+// check records one performed check and returns the handle its
+// divergence — if it has one — is reported through. Every question
+// this walk asks goes through here whether the answer is clean or
+// not: an excuse for a check nobody performed must never read as
+// stale (#147).
+func (w *permWalk) check(subject, assertion string) report.Check {
+	return w.j.Check(subject, assertion)
 }
 
 // set walks one caller set: its own files index first, because a
@@ -186,8 +189,8 @@ func (w *permWalk) set(cs CallerSet) {
 		file := path.Join(cs.Origin, f.Name)
 
 		doc, ok := own.docs[f.Name]
-		if !ok {
-			w.finding(file, assertWorkflowRead, "", "", "the workflow does not read: "+own.broken[f.Name].Error())
+		if c := w.check(file, assertWorkflowRead); !ok {
+			c.Diverged("the workflow does not read: " + own.broken[f.Name].Error())
 
 			continue
 		}
@@ -209,8 +212,8 @@ func (w *permWalk) job(file string, doc *workflow.Doc, job *workflow.Job, cs *Ca
 	subject := file + ":" + job.Name
 
 	ref, err := workflow.ParseRef(job.Uses)
-	if err != nil {
-		w.finding(subject, assertCallShape, "", job.Uses,
+	if c := w.check(subject, assertCallShape); err != nil {
+		c.DivergedFrom("", job.Uses,
 			"the call does not read ("+err.Error()+") — a call the join cannot read is an unchecked grant")
 
 		return
@@ -246,30 +249,31 @@ func (w *permWalk) locate(subject string, ref workflow.Ref, cs *CallerSet, own *
 		idx, dir = w.tree, *r.Dir
 	}
 
-	if ref.Path != path.Join(dir, ref.Name()) {
-		w.finding(subject, assertCallShape, path.Join(dir, ref.Name()), ref.Path,
+	if c := w.check(subject, assertCallShape); ref.Path != path.Join(dir, ref.Name()) {
+		c.DivergedFrom(path.Join(dir, ref.Name()), ref.Path,
 			"the call names a path outside the tree this run holds for it, so its requirement cannot be computed")
 
 		return nil, false
 	}
 
-	if err, broken := idx.broken[ref.Name()]; broken {
-		w.finding(subject, assertCalleeUnread, "", ref.Path,
+	err, broken := idx.broken[ref.Name()]
+	if c := w.check(subject, assertCalleeUnread); broken {
+		c.DivergedFrom("", ref.Path,
 			"the callee does not read ("+err.Error()+"), so what it asks of this caller is unknown")
 
 		return nil, false
 	}
 
 	doc, found := idx.docs[ref.Name()]
-	if !found {
-		w.finding(subject, assertCalleeAbsent, "", ref.Path,
+	if c := w.check(subject, assertCalleeAbsent); !found {
+		c.DivergedFrom("", ref.Path,
 			"the callee is absent from the tree this run holds — an unrecognised callee is an unchecked grant")
 
 		return nil, false
 	}
 
-	if !doc.Reusable {
-		w.finding(subject, assertCalleeClosed, "", ref.Path,
+	if c := w.check(subject, assertCalleeClosed); !doc.Reusable {
+		c.DivergedFrom("", ref.Path,
 			"the callee declares no workflow_call trigger, so this call cannot start at all")
 
 		return nil, false
@@ -287,8 +291,13 @@ func (w *permWalk) grants(subject, callee string, req, granted *workflow.Grant) 
 	// here goes stale the next time the platform adds a scope —
 	// silently, and in the direction that under-reports. Saying so is
 	// the honest answer; guessing is not.
+	// One recorded check for the comparison, taken before its outcome:
+	// a caller whose grants hold is a check that ran clean, which is
+	// what an excuse naming it is answered by.
+	c := w.check(subject, assertCallerGrant)
+
 	if req.All() > workflow.LevelNone && granted.All() < req.All() {
-		w.finding(subject, assertCallerGrant, "(every scope): "+req.All().String(), "(every scope): "+granted.All().String(),
+		c.DivergedFrom("(every scope): "+req.All().String(), "(every scope): "+granted.All().String(),
 			"the callee "+callee+" asks for a blanket grant and this caller does not hold one — "+
 				"an enumerated grant cannot be proven sufficient without the platform's full scope list")
 	}
@@ -299,7 +308,7 @@ func (w *permWalk) grants(subject, callee string, req, granted *workflow.Grant) 
 			continue
 		}
 
-		w.finding(subject, assertCallerGrant, scope+": "+want.String(), scope+": "+have.String(),
+		c.DivergedFrom(scope+": "+want.String(), scope+": "+have.String(),
 			"the callee "+callee+" asks for it and this caller does not grant it — "+
 				"the run dies as a startup failure, no jobs, no log")
 	}

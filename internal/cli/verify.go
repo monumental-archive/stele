@@ -341,17 +341,23 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		return exitIO
 	}
 
-	findings := make([]report.Finding, 0, len(divergences))
+	// The comparison is one recorded check per released artifact:
+	// verify carries no exceptions (below), so the journal's coverage
+	// answers nothing here — but a finding still reaches a report
+	// through the one door, whichever verb sealed it.
+	j := report.NewJournal()
+	for i := range subjects {
+		j.Check(subjects[i].Name, "repro")
+	}
+
 	for _, d := range divergences {
-		findings = append(findings, report.Finding{
-			Subject: d.Name, Assertion: "repro/" + d.Kind, Expected: d.Released, Actual: d.Rebuilt,
-			Detail: "the rebuild did not reproduce the release",
-		})
+		j.Check(d.Name, "repro/"+d.Kind).
+			DivergedFrom(d.Released, d.Rebuilt, "the rebuild did not reproduce the release")
 	}
 
 	rep := report.Seal("verify repro", repo+"@"+tag,
 		report.PopulationFromEvidence(len(subjects), "released build subjects under rebuild"),
-		findings, nil, report.NoCanary(), report.NoJudgedSet(),
+		j, report.NoCanary(), report.NoJudgedSet(),
 		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))},
 		report.Fact{Name: "subjectTyping", Value: typing})
 
@@ -468,14 +474,21 @@ func sealVerifyReport(va *verifyArgs, outcome *verifyOutcome, err error) *report
 	// material has not said what it proved.
 	trusted := va.root.facts()
 
+	// `verify` carries NO exceptions, by law rather than by omission
+	// (#147): it proves one artifact for a stranger, and an org file
+	// that could say "ignore this failure" would be a lie about the
+	// artifact. Written-down defects belong to the corpus walk, which
+	// judges immutable history — assert's question, not this one's.
+	j := report.NewJournal()
+
 	if err == nil {
-		return report.Seal(target, subject, outcome.pop, nil, nil, report.NoCanary(), report.NoJudgedSet(),
+		return report.Seal(target, subject, outcome.pop, j, report.NoCanary(), report.NoJudgedSet(),
 			append(trusted, outcome.facts...)...)
 	}
 
-	findings := []report.Finding{{Subject: subject, Assertion: va.mode, Detail: err.Error()}}
+	j.Check(subject, va.mode).Diverged(err.Error())
 
-	return report.Seal(target, subject, declaredPop(va), findings, nil,
+	return report.Seal(target, subject, declaredPop(va), j,
 		report.NoCanary(), report.NoJudgedSet(), trusted...)
 }
 

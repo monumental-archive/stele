@@ -377,12 +377,18 @@ func truncatingServer(t *testing.T) *gh.Client {
 
 // TestPaginationBound pins the walk's other end: a listing that never
 // serves a short page is a broken host, and the read must end with a
-// named refusal rather than paging forever.
+// named refusal rather than paging forever. Every page here is FULL
+// — under the short-page rule (#154) that is what a host must do to
+// reach the bound at all, and a host repeating a SHORT page is a
+// healthy answer this walk now terminates on.
 func TestPaginationBound(t *testing.T) {
 	t.Parallel()
 
+	page := []byte("[" + strings.Repeat(`{"name": "widget", "archived": false, "fork": false},`, 99) +
+		`{"name": "gadget", "archived": false, "fork": false}]`)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeBody(w, []byte(`[{"name": "widget", "archived": false, "fork": false}]`))
+		writeBody(w, page)
 	}))
 	t.Cleanup(srv.Close)
 

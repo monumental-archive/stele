@@ -17,13 +17,12 @@ import (
 )
 
 const permissionsCLIPolicy = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
   },
   "permissions": {
@@ -441,7 +440,7 @@ func TestAssertPermissionsUnreadableInputs(t *testing.T) {
 				root := t.TempDir()
 				path := filepath.Join(root, "policy.json")
 
-				if err := os.WriteFile(path, []byte(`{"schema": 4}`), 0o600); err != nil {
+				if err := os.WriteFile(path, []byte(`{"schema": 5}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
 

@@ -336,7 +336,18 @@ func Seal(t Track, lad *Ladder, in *Inputs) *Assessment {
 
 	pop := report.PopulationAgainstDeclared(determined, in.InScope, in.PopulationDetail)
 
-	rep := report.Seal("level "+strings.ToLower(t.name), in.Subject, pop, findings, nil,
+	// `level` takes no declaration (#125), and that extends to
+	// exceptions: nothing a policy or a debt file says may excuse a
+	// measured rung, so the journal this seals through opens empty.
+	// Every finding still enters through it, which is what keeps the
+	// document's coverage claim answerable.
+	j := report.NewJournal()
+	for i := range findings {
+		j.Check(findings[i].Subject, findings[i].Assertion).
+			DivergedFrom(findings[i].Expected, findings[i].Actual, findings[i].Detail)
+	}
+
+	rep := report.Seal("level "+strings.ToLower(t.name), in.Subject, pop, j,
 		report.NoCanary(), report.NoJudgedSet(), facts...)
 
 	return &Assessment{

@@ -7,10 +7,10 @@ argument (.github#392 §7) applied to output: the verb that asserts
 "this verifies" reads the same document the verifier wrote.
 
 The model lives in `internal/report`; the sealed constructor is the
-spec's enforcement. This file records the wire shape and the three
+spec's enforcement. This file records the wire shape and the four
 laws it encodes, so a schema change is a reviewed edit here first.
 
-## The three laws (types, not discipline)
+## The four laws (types, not discipline)
 
 1. **Population**: a run that judged zero subjects cannot report
    `PASS` — it reports `CANNOT_JUDGE`. A population always names how
@@ -25,9 +25,21 @@ laws it encodes, so a schema change is a reviewed edit here first.
    everything else it found.
 3. **Exceptions**: `declared` exceptions come only from a committed
    file a human edited under review; `derived` exceptions come only
-   from engine logic and name their evidence. A declared exception
-   matching no finding is reported under `staleExceptions` — a
-   retirement candidate, never silently carried.
+   from engine logic and name their evidence. An exception matching no
+   finding is reported, never silently carried.
+4. **Coverage**: a walk records every check it PERFORMED, not only the
+   checks that failed — through `Journal`, the one door a finding
+   reaches a report by. That is what makes law 3's report honest: an
+   unmatched exception whose check ran clean is `staleExceptions`, a
+   retirement candidate; one whose check this run never performed is
+   `unexercisedExceptions`, and the run says nothing about it. Calling
+   the second stale would be a retirement claim made without evidence
+   — law 1's defect, one level down (stele#147). A walk that discovers
+   rather than enumerating (the SBOM scan) records a subject as SWEPT,
+   which answers for every assertion on it.
+
+Neither exception bucket changes the verdict: `FAIL` means evidence is
+missing, never that the paperwork lags.
 
 `FAIL` and `CANNOT_JUDGE` are distinct verdicts because "I found
 divergence" and "I could not look" must never be conflated by a
@@ -41,7 +53,7 @@ never null.
 
 ```json
 {
-  "schema": 4,
+  "schema": 5,
   "target": "verify vsa",
   "subject": "acme/widget@v1.2.3",
   "verdict": "PASS | FAIL | CANNOT_JUDGE",
@@ -66,6 +78,9 @@ never null.
   "staleExceptions": [
     { "kind": "declared | derived", "subject": "…", "assertion": "…", "origin": "debt.txt:3" }
   ],
+  "unexercisedExceptions": [
+    { "kind": "declared | derived", "subject": "…", "assertion": "…", "origin": "debt.txt:9" }
+  ],
   "judged": [ { "…": "…" } ]
 }
 ```
@@ -87,6 +102,12 @@ never null.
   sight is reported, never laundered into either verdict.
 - `excused` — every excused finding beside the exception that excused
   it; an excuse is visible, never a deletion.
+- `staleExceptions` — excuses whose check this run performed and found
+  clean: retire them.
+- `unexercisedExceptions` — excuses this run did not look for. Not a
+  retirement candidate and not an error: a single-repository run
+  answers only for that repository, and a check an epoch exempts was
+  never asked.
 - `judged` — the collapsed, validated input set the run judged, in the
   mode's own shape, present only where a mode declares one. Where
   `population` says how many subjects a run covered and how the set

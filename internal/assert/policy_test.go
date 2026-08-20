@@ -27,27 +27,27 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		json string
 		want string
 	}{
-		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 4`, schemaPlusOne(), 1), "schema"},
-		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 4`, `"schema": 4, "extra": true`, 1), "unknown"},
+		{"wrong schema", strings.Replace(testPolicyJSON, `"schema": 5`, schemaPlusOne(), 1), "schema"},
+		{"unknown field", strings.Replace(testPolicyJSON, `"schema": 5`, `"schema": 5, "extra": true`, 1), "unknown"},
 		{
 			"empty classes",
-			`{"schema": 4, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
-			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt", "classes": {}}}`,
+			`{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "classes": {}}}`,
 			"classes is empty",
 		},
 		{
 			"a class requiring nothing",
-			`{"schema": 4, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
-			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
+			`{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
 			  "classes": {"idle": {"bundles": []}}}}`,
 			"requires nothing",
 		},
 		{
 			"missing required string",
-			`{"schema": 4, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
-			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
+			`{"schema": 5, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			  "umbrellaBundle": "u.jsonl",
 			  "classes": {"a": {"bundles": ["b"]}}}}`,
-			"debtFile",
+			"manifestAsset",
 		},
 		{
 			"unparsable epoch",
@@ -108,7 +108,7 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		{
 			"a pre-rename policy refuses as a version error",
 			strings.NewReplacer(
-				`"schema": 4`, `"schema": 1`,
+				`"schema": 5`, `"schema": 1`,
 				`"storeVsaFromVersion": "1.13.0"`, `"storeVsaFromCanon": "1.13.0"`,
 			).Replace(testPolicyJSON),
 			"not the implemented schema",
@@ -127,34 +127,14 @@ func TestLoadPolicyRefusals(t *testing.T) {
 	}
 }
 
-func TestParseDebt(t *testing.T) {
-	t.Parallel()
-
-	debt, err := assert.ParseDebt([]byte("# reviewed in PR 9\n\nwidget@v1.0.0(sbom)\n"), "debt.txt")
-	if err != nil {
-		t.Fatalf("ParseDebt: %v", err)
-	}
-
-	if len(debt) != 1 {
-		t.Fatalf("debt = %d entries, want 1", len(debt))
-	}
-
-	for _, bad := range []string{"no-parens\n", "widget@v1.0.0()\n", "(sbom)\n"} {
-		if _, err := assert.ParseDebt([]byte(bad), "debt.txt"); err == nil {
-			t.Fatalf("%q did not refuse", bad)
-		}
-	}
-}
-
 // TestTagsPolicyRefusals: the tags section is optional, but declared
 // means every field, validated strictly (stele#83).
 func TestTagsPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	const base = `{"schema": 4, "issuer": "https://token.example.com",
+	const base = `{"schema": 5, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
-	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "debtFile": "d.txt",
-	    "classes": {"a": {"bundles": ["b"]}}},
+	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", 	    "classes": {"a": {"bundles": ["b"]}}},
 	  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
 	    "identityPattern": "^https://github\\.com/acme/", "notesRef": "refs/notes/commits",
 	    "epochs": {"widget": "v1.0.0", "gadget": "pending"}}}`

@@ -108,8 +108,10 @@ type PlanFile struct {
 // passed judgment — instead of re-reading the same plan files with a
 // second collapse of its own; two derivations of one set agree until
 // the day they do not.
-func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanFile, log Logf) *report.Report {
-	findings, entries := parsePlans(files)
+func Plans(
+	pol *Policy, classes []string, machineryVersion string, files []PlanFile, j *report.Journal, log Logf,
+) *report.Report {
+	entries := parsePlans(j, files)
 
 	seen := map[string]bool{}
 	subjects := 0
@@ -123,31 +125,26 @@ func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanF
 		subjects++
 
 		cp, ok := pol.Evidence.Classes[class]
-		if !ok {
-			findings = append(findings, report.Finding{
-				Subject: class, Assertion: assertPlanClass,
-				Detail: "requested class is not declared in the policy — an undeclared class owes unknowable evidence",
-			})
+		if c := j.Check(class, assertPlanClass); !ok {
+			c.Diverged(
+				"requested class is not declared in the policy — an undeclared class owes unknowable evidence")
 
 			continue
 		}
 
 		owed := cp.owedPlannedPrefixes(machineryVersion)
 		for _, prefix := range owed {
-			if !classPlansPrefix(entries, class, prefix) {
-				findings = append(findings, report.Finding{
-					Subject: class, Assertion: assertPlanned, Expected: prefix,
-					Detail: fmt.Sprintf(
-						"no plan of this class names a document under %q — the release would publish and then red on the evidence walk",
-						prefix),
-				})
+			if c := j.Check(class, assertPlanned); !classPlansPrefix(entries, class, prefix) {
+				c.DivergedFrom(prefix, "", fmt.Sprintf(
+					"no plan of this class names a document under %q — the release would publish and then red on the evidence walk",
+					prefix))
 			}
 		}
 
 		log("assert: plans: class %s: %d planned obligation(s) judged", class, len(owed))
 	}
 
-	findings = append(findings, vocabularyFindings(pol, entries, seen)...)
+	vocabularyChecks(j, pol, entries, seen)
 
 	judged, rerr := jsonx.Marshal(entries)
 	if rerr != nil {
@@ -156,10 +153,7 @@ func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanF
 		// kept entry can fail to render here. Kept fail-closed anyway
 		// — a run that cannot state what it judged must not report a
 		// set nobody can read.
-		findings = append(findings, report.Finding{
-			Subject: "plans", Assertion: assertPlanSet,
-			Detail: fmt.Sprintf("the judged set did not render: %v", rerr),
-		})
+		j.Check("plans", assertPlanSet).Diverged(fmt.Sprintf("the judged set did not render: %v", rerr))
 
 		judged = nil
 	}
@@ -168,7 +162,7 @@ func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanF
 
 	pop := report.PopulationFromEvidence(subjects, "requested evidence classes")
 
-	return report.Seal("assert plans", strings.Join(sortedSet(seen), ","), pop, findings, nil,
+	return report.Seal("assert plans", strings.Join(sortedSet(seen), ","), pop, j,
 		report.NoCanary(), report.Judged(judged))
 }
 
@@ -184,21 +178,18 @@ func Plans(pol *Policy, classes []string, machineryVersion string, files []PlanF
 // slice starts empty rather than nil: a release that planned nothing
 // renders as an empty set, and a consumer iterating `null` is a
 // caller crashing on a judgment that passed.
-func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
-	var findings []report.Finding
-
+func parsePlans(j *report.Journal, files []PlanFile) []PlanEntry {
 	entries := []PlanEntry{}
 
 	byDoc := map[string]string{}
 	kept := map[string]bool{}
 
 	for _, f := range files {
+		shape := j.Check(f.Name, assertPlanShape)
+
 		decoded, err := jsonx.DecodeBytes[[]PlanEntry](f.Content)
 		if err != nil {
-			findings = append(findings, report.Finding{
-				Subject: f.Name, Assertion: assertPlanShape,
-				Detail: fmt.Sprintf("plan does not decode: %v", err),
-			})
+			shape.Diverged(fmt.Sprintf("plan does not decode: %v", err))
 
 			continue
 		}
@@ -206,10 +197,7 @@ func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
 		for i, e := range *decoded {
 			key, ferr := e.validate()
 			if ferr != nil {
-				findings = append(findings, report.Finding{
-					Subject: f.Name, Assertion: assertPlanShape,
-					Detail: fmt.Sprintf("entry %d: %v", i, ferr),
-				})
+				shape.Diverged(fmt.Sprintf("entry %d: %v", i, ferr))
 
 				continue
 			}
@@ -219,12 +207,8 @@ func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
 			}
 
 			if prior, ok := byDoc[*e.Doc]; ok {
-				findings = append(findings, report.Finding{
-					Subject: f.Name, Assertion: assertPlanConflict,
-					Expected: prior, Actual: key,
-					Detail: fmt.Sprintf(
-						"document %q is claimed by two different plans — the legs disagree about what was built", *e.Doc),
-				})
+				j.Check(f.Name, assertPlanConflict).DivergedFrom(prior, key, fmt.Sprintf(
+					"document %q is claimed by two different plans — the legs disagree about what was built", *e.Doc))
 
 				continue
 			}
@@ -237,9 +221,9 @@ func parsePlans(files []PlanFile) ([]report.Finding, []PlanEntry) {
 
 	// One document is claimed by at most one kept entry, so the
 	// document name is a total order over the set.
-	sort.Slice(entries, func(i, j int) bool { return *entries[i].Doc < *entries[j].Doc })
+	sort.Slice(entries, func(i, k int) bool { return *entries[i].Doc < *entries[k].Doc })
 
-	return findings, entries
+	return entries
 }
 
 // validate refuses an entry whose required fields are absent or whose
@@ -354,7 +338,7 @@ func classPlansPrefix(entries []PlanEntry, class, prefix string) bool {
 	return false
 }
 
-// vocabularyFindings judges every plan entry against its own class's
+// vocabularyChecks judges every plan entry against its own class's
 // declared vocabulary — the naming question, with no epoch in sight
 // (stele#143): whether a document is one a class could ever owe has
 // nothing to do with when the obligation comes online, so a pre-epoch
@@ -368,18 +352,14 @@ func classPlansPrefix(entries []PlanEntry, class, prefix string) bool {
 //   - a class declaring no planned prefixes has declared no
 //     vocabulary, so there is nothing to step outside of: absent, not
 //     refused.
-func vocabularyFindings(pol *Policy, entries []PlanEntry, requested map[string]bool) []report.Finding {
-	var out []report.Finding
-
+func vocabularyChecks(j *report.Journal, pol *Policy, entries []PlanEntry, requested map[string]bool) {
 	for _, e := range entries {
 		class := *e.Class
 
-		if !requested[class] {
-			out = append(out, report.Finding{
-				Subject: *e.Doc, Assertion: assertPlanDrift, Actual: class,
-				Detail: fmt.Sprintf(
-					"the plan names class %q, which this release does not declare — a leg ran for an undeclared class", class),
-			})
+		if c := j.Check(*e.Doc, assertPlanDrift); !requested[class] {
+			c.DivergedFrom("", class, fmt.Sprintf(
+				"the plan names class %q, which this release does not declare — a leg ran for an undeclared class",
+				class))
 
 			continue
 		}
@@ -397,17 +377,12 @@ func vocabularyFindings(pol *Policy, entries []PlanEntry, requested map[string]b
 			continue
 		}
 
-		if !docInVocabulary(*e.Doc, vocabulary) {
-			out = append(out, report.Finding{
-				Subject: *e.Doc, Assertion: assertPlanOrphan, Actual: class,
-				Detail: fmt.Sprintf(
-					"no planned prefix class %q declares claims this document — "+
-						"a misnamed obligation-bearer or an undeclared obligation", class),
-			})
+		if c := j.Check(*e.Doc, assertPlanOrphan); !docInVocabulary(*e.Doc, vocabulary) {
+			c.DivergedFrom("", class, fmt.Sprintf(
+				"no planned prefix class %q declares claims this document — "+
+					"a misnamed obligation-bearer or an undeclared obligation", class))
 		}
 	}
-
-	return out
 }
 
 // docInVocabulary reports whether some declared planned prefix claims

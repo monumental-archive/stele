@@ -98,8 +98,8 @@ func runDeepWalkPolicy(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert.P
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
-		func(string, ...any) {})
+	rep, err := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+		report.NewJournal(), nil, full, func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -323,7 +323,8 @@ func TestDepthFullBounds(t *testing.T) {
 
 		src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+			report.NewJournal(), nil, full,
 			func(string, ...any) {})
 		if rerr != nil {
 			t.Fatal(rerr)
@@ -397,7 +398,8 @@ func TestDepthClassDemand(t *testing.T) {
 
 	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-	rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+	rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+		report.NewJournal(), nil, full,
 		func(string, ...any) {})
 	if rerr != nil {
 		t.Fatal(rerr)
@@ -435,7 +437,8 @@ func TestDepthSelfAttesting(t *testing.T) {
 		pol := loadTestPolicy(t)
 		src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+			report.NewJournal(), nil, full,
 			func(string, ...any) {})
 		if rerr != nil {
 			t.Fatal(rerr)
@@ -472,7 +475,8 @@ func TestDepthSelfAttesting(t *testing.T) {
 		pol := loadTestPolicy(t)
 		src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{}, nil, nil, full,
+		rep, rerr := assert.Evidence(pol, assert.Population{Org: "acme"}, f, src, &fakeAttestor{},
+			report.NewJournal(), nil, full,
 			func(string, ...any) {})
 		if rerr != nil {
 			t.Fatal(rerr)

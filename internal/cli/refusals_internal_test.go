@@ -18,6 +18,7 @@ import (
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
@@ -26,10 +27,9 @@ import (
 func baseImagesPolicy(t *testing.T, pinFile string) *assert.Policy {
 	t.Helper()
 
-	content := `{"schema": 4, "issuer": "https://token.example.com",
+	content := `{"schema": 5, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
-	    "debtFile": "no-such-debt.txt",
 	    "classes": {"oci-image": {"bundles": ["b.jsonl"]}},
 	    "baseImages": {"pinFile": "` + pinFile + `", "attestorRepo": ".github",
 	      "attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main",
@@ -173,7 +173,7 @@ func TestAssertUsageMatrix(t *testing.T) {
 	dir := t.TempDir()
 
 	notAPolicy := filepath.Join(dir, "not-a-policy.json")
-	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 4}`), 0o600); err != nil {
+	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 5}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -358,10 +358,11 @@ func TestLoadTagVerifierRefusesABrokenRoot(t *testing.T) {
 	}
 }
 
-// TestLoadDebtParses pins the debt loader's success path: a committed
-// file that parses becomes declared exceptions, so the walk excuses
-// exactly what was reviewed.
-func TestLoadDebtParses(t *testing.T) {
+// TestOpenJournalCarriesTheDeclaredLines pins the loader's success
+// path: a committed file that parses opens a journal already carrying
+// its exceptions, so the run excuses exactly what was reviewed — and
+// nothing it did not.
+func TestOpenJournalCarriesTheDeclaredLines(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "debt.txt")
@@ -373,13 +374,61 @@ func TestLoadDebtParses(t *testing.T) {
 
 	var stderr bytes.Buffer
 
-	got, code := loadDebt(path, &stderr)
+	j, code := openJournal(path, "evidence", &stderr)
 	if code != exitOK {
-		t.Fatalf("loadDebt = %d: %s", code, stderr.String())
+		t.Fatalf("openJournal = %d: %s", code, stderr.String())
 	}
 
-	if len(got) != 2 {
-		t.Fatalf("loadDebt parsed %d exceptions, want the two declared", len(got))
+	j.Check("acme/widget@v1.0.0", "sbom").Diverged("absent")
+	j.Check("acme/gadget@v2.0.0", "checksums").Diverged("absent")
+	j.Check("acme/gadget@v2.0.0", "sbom").Diverged("absent")
+
+	rep := report.Seal("assert evidence", "acme", report.PopulationFromListing(2, "releases"),
+		j, report.NoCanary(), report.NoJudgedSet())
+	if got := rep.Findings(); len(got) != 1 || got[0].Assertion != "sbom" || got[0].Subject != "acme/gadget@v2.0.0" {
+		t.Fatalf("findings = %+v, want only the one no line excused", got)
+	}
+}
+
+// A policy that declares no debtFile declares no exceptions: the
+// journal opens empty rather than the run inventing a path.
+func TestOpenJournalWithoutAFile(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+
+	j, code := openJournal("", "tags", &stderr)
+	if code != exitOK || j == nil {
+		t.Fatalf("openJournal = %d, %v", code, j)
+	}
+
+	j.Check("acme/widget@v1.0.0", "tag:signature").Diverged("unsigned")
+
+	rep := report.Seal("assert tags", "acme", report.PopulationFromListing(1, "tags"),
+		j, report.NoCanary(), report.NoJudgedSet())
+	if rep.Verdict() != report.VerdictFail {
+		t.Fatalf("verdict = %s, want FAIL — nothing excuses what nobody wrote down", rep.Verdict())
+	}
+}
+
+// A malformed line is a usage refusal, never a skip: a reviewed file
+// that parses as nothing would excuse nothing silently.
+func TestOpenJournalRefusesAMalformedLine(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "debt.txt")
+	if err := os.WriteFile(path, []byte("not a debt line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+
+	if _, code := openJournal(path, "tags", &stderr); code != exitUsage {
+		t.Fatalf("openJournal = %d, want the usage refusal", code)
+	}
+
+	if !strings.Contains(stderr.String(), "stele assert tags:") {
+		t.Errorf("stderr = %q, want the refusal to name the target that read the file", stderr.String())
 	}
 }
 

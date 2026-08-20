@@ -26,13 +26,12 @@ import (
 // declaring no planned prefixes at all — no vocabulary, so its plans
 // are absent from the judgment, not refused by it.
 const plansPolicy = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "debt.txt",
     "classes": {
       "wasm-npm": {
         "bundles": ["attestations-npm.intoto.jsonl"],
@@ -236,7 +235,7 @@ func TestPlans(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rep := assert.Plans(pol, tt.classes, tt.machinery, tt.files, discard)
+			rep := assert.Plans(pol, tt.classes, tt.machinery, tt.files, report.NewJournal(), discard)
 
 			if rep.Verdict() != tt.verdict {
 				t.Fatalf("verdict = %s, want %s\nfindings: %+v", rep.Verdict(), tt.verdict, rep.Findings())
@@ -312,7 +311,7 @@ func TestPlansEntryShapeRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			files := []assert.PlanFile{{Name: "p", Content: []byte("[" + tt.entry + "]")}}
 
-			rep := assert.Plans(pol, []string{"oci-image"}, "1.43.0", files, discard)
+			rep := assert.Plans(pol, []string{"oci-image"}, "1.43.0", files, report.NewJournal(), discard)
 			if rep.Verdict() != report.VerdictFail {
 				t.Fatalf("verdict = %s, want FAIL", rep.Verdict())
 			}
@@ -388,7 +387,7 @@ func TestPlansEmitsTheJudgedSet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rep := assert.Plans(pol, []string{"wasm-npm"}, "1.41.0", tt.files, discard)
+			rep := assert.Plans(pol, []string{"wasm-npm"}, "1.41.0", tt.files, report.NewJournal(), discard)
 
 			if got := string(rep.Judged()); got != tt.want {
 				t.Fatalf("judged set = %s, want %s", got, tt.want)

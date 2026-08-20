@@ -35,7 +35,16 @@ type Policy struct {
 	// Issuer is the OIDC issuer every store-resident attestation this
 	// walk verifies must carry — the same value the verify policy
 	// names, repeated here so this file stands alone.
-	Issuer      *string            `json:"issuer,omitempty"`
+	Issuer *string `json:"issuer,omitempty"`
+	// DebtFile is the committed exceptions file (repo-relative in the
+	// policy repo's checkout) holding human-asserted debt. It sits at
+	// the ROOT because every target reads it (#147): excusability is a
+	// property of judgment, not of one walk, and a key named for one
+	// consumer among six would be a second source of truth about what
+	// the file is. Absent means the org declares no exceptions —
+	// validate by declared obligation, so nothing is excusable and
+	// every finding stands.
+	DebtFile    *string            `json:"debtFile,omitempty"`
 	Evidence    *EvidencePolicy    `json:"evidence"`
 	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
 	Tags        *TagsPolicy        `json:"tags,omitempty"`
@@ -280,9 +289,6 @@ type EvidencePolicy struct {
 	// its tag; a repository carrying its own machinery uses its own
 	// version (docs/assert-policy-schema.md defines it once).
 	StoreVSAFromVersion *string `json:"storeVsaFromVersion"`
-	// DebtFile is the committed exceptions file (repo-relative in the
-	// policy repo's checkout) holding human-asserted evidence debt.
-	DebtFile *string `json:"debtFile"`
 	// ExpectedRepos, when set, is the declared org population — a
 	// listing that sees a different count cannot judge.
 	ExpectedRepos *int `json:"expectedRepos,omitempty"`
@@ -520,7 +526,6 @@ func (p *Policy) validate() error {
 		"evidence.checksums":      e.Checksums,
 		"evidence.umbrellaBundle": e.UmbrellaBundle,
 		"evidence.manifestAsset":  e.ManifestAsset,
-		"evidence.debtFile":       e.DebtFile,
 	} {
 		if field == nil || *field == "" {
 			return fmt.Errorf("%s is absent or empty", name)

@@ -36,12 +36,14 @@ func assertPermissions(args []string, stdout, stderr io.Writer) int {
 		jsonOut                 bool
 		policyPath, treeDir     string
 		callersDir, org, repo   string
+		debtPath                string
 		snapshotDir, captureDir string
 	)
 
 	flags := flag.NewFlagSet("stele assert permissions", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
+	debtFlag(flags, &debtPath)
 	flags.StringVar(&treeDir, "tree", ".",
 		"checkout root holding the policy's declared reusable workflow tree")
 	flags.StringVar(&callersDir, "callers", "",
@@ -119,12 +121,17 @@ func assertPermissions(args []string, stdout, stderr io.Writer) int {
 
 	pop := assert.Population{Org: org, Repo: repo}
 
+	j, code := openJournal(debtPathFor(pol, debtPath), targetPermissions, stderr)
+	if code != exitOK {
+		return code
+	}
+
 	subject, callers, err := permissionCallers(pol.Permissions, pop, callersDir, forge)
 	if err != nil {
 		return emitReport(blindPermissions(subject, err), jsonOut, stdout, stderr)
 	}
 
-	rep, err := assert.Permissions(pol, subject, tree, callers, out.logf)
+	rep, err := assert.Permissions(pol, subject, tree, callers, j, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
@@ -145,10 +152,8 @@ func assertPermissions(args []string, stdout, stderr io.Writer) int {
 // CANNOT_JUDGE, carrying the reason as a finding rather than only on
 // stderr.
 func blindPermissions(subject string, err error) *report.Report {
-	return report.Seal("assert "+targetPermissions, subject,
-		report.PopulationFromEvidence(0, "walk incomplete"),
-		[]report.Finding{{Subject: subject, Assertion: targetPermissions, Detail: err.Error()}},
-		nil, report.NoCanary(), report.NoJudgedSet())
+	return refusal(targetPermissions, subject, err.Error(),
+		report.PopulationFromEvidence(0, "walk incomplete"))
 }
 
 // loadPermissionsPolicy loads the assert policy and refuses one that

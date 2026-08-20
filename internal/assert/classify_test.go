@@ -22,7 +22,7 @@ import (
 // declared evidence suffix, per-class bundles, a legacy VSA bundle,
 // and a prefixed asset.
 const classifyPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -30,7 +30,6 @@ const classifyPolicyJSON = `{
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
     "evidenceSuffixes": [".openvex.json"],
-    "debtFile": "security/attestation-debt.txt",
     "classes": {
       "rust-binary": {"bundles": ["attestations-binaries.intoto.jsonl"]},
       "wasm-npm": {

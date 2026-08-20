@@ -182,7 +182,7 @@ func TestImageFactsVerdicts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			rep, err := assert.ImageFacts(testImage, testDigest, []byte(tt.facts), tt.reg, discard)
+			rep, err := assert.ImageFacts(testImage, testDigest, []byte(tt.facts), tt.reg, report.NewJournal(), discard)
 			if err != nil {
 				t.Fatalf("ImageFacts: %v", err)
 			}
@@ -250,7 +250,7 @@ func TestImageFactsRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := assert.ImageFacts(tt.image, tt.digest, []byte(tt.facts), tt.reg, discard)
+			_, err := assert.ImageFacts(tt.image, tt.digest, []byte(tt.facts), tt.reg, report.NewJournal(), discard)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
 			}

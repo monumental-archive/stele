@@ -18,6 +18,20 @@ func finding(subject, assertion string) report.Finding {
 	return report.Finding{Subject: subject, Assertion: assertion, Detail: "detail"}
 }
 
+// journal replays a row's findings through the door a walk uses: each
+// one is a check that diverged. Rows pinning the coverage rules build
+// their own journals — this one is for the verdict axes, where what
+// was checked beyond the findings does not bear on the answer.
+func journal(findings []report.Finding, exceptions []report.Exception) *report.Journal {
+	j := report.NewJournal(exceptions...)
+
+	for _, f := range findings {
+		j.Check(f.Subject, f.Assertion).DivergedFrom(f.Expected, f.Actual, f.Detail)
+	}
+
+	return j
+}
+
 func TestSealVerdicts(t *testing.T) {
 	t.Parallel()
 
@@ -150,7 +164,8 @@ func TestSealVerdicts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			r := report.Seal("test", "acme/widget", tt.pop, tt.findings, tt.exceptions, tt.canary, report.NoJudgedSet())
+			r := report.Seal("test", "acme/widget", tt.pop,
+				journal(tt.findings, tt.exceptions), tt.canary, report.NoJudgedSet())
 			if got := r.Verdict(); got != tt.want {
 				t.Fatalf("verdict = %s, want %s", got, tt.want)
 			}
@@ -162,25 +177,31 @@ func TestSealVerdicts(t *testing.T) {
 	}
 }
 
-// TestSealStaleExceptions pins the retirement rule: an exception
-// matching no finding is carried in the document as stale — reported
-// for retirement, never a failure and never silently dropped.
-func TestSealStaleExceptions(t *testing.T) {
+// TestSealSortsUnmatchedExceptionsByCoverage pins #147's rule: what
+// an unmatched excuse is called follows from what the run could SEE.
+// The check ran and was clean → stale, a retirement candidate. The
+// check never ran here → unexercised, and this run says nothing about
+// it. Calling the second one stale would be a retirement claim made
+// without evidence — the population law's defect, one level down.
+func TestSealSortsUnmatchedExceptionsByCoverage(t *testing.T) {
 	t.Parallel()
 
-	r := report.Seal("test", "acme/widget",
-		report.PopulationFromEvidence(2, "subjects"),
-		[]report.Finding{finding("a", "x")},
-		[]report.Exception{
-			report.Declared("a", "x", "debt.txt:3"),
-			report.Declared("gone", "", "debt.txt:9"),
-		},
-		report.NoCanary(),
-		report.NoJudgedSet(),
+	j := report.NewJournal(
+		report.Declared("a", "x", "debt.txt:3"),       // matched below: excused
+		report.Declared("a", "y", "debt.txt:5"),       // checked, clean: stale
+		report.Declared("gone", "y", "debt.txt:9"),    // never checked: unexercised
+		report.Declared("a", "", "debt.txt:11"),       // subject-wide, and the subject was checked
+		report.Declared("nowhere", "", "debt.txt:13"), // subject-wide over a subject nobody checked
 	)
 
+	j.Check("a", "x").Diverged("detail")
+	j.Check("a", "y")
+
+	r := report.Seal("test", "acme/widget", report.PopulationFromEvidence(2, "subjects"),
+		j, report.NoCanary(), report.NoJudgedSet())
+
 	if got := r.Verdict(); got != report.VerdictPass {
-		t.Fatalf("verdict = %s, want PASS", got)
+		t.Fatalf("verdict = %s, want PASS — neither bucket is a failure", got)
 	}
 
 	var buf bytes.Buffer
@@ -189,13 +210,102 @@ func TestSealStaleExceptions(t *testing.T) {
 	}
 
 	doc := decodeDoc(t, buf.Bytes())
-	if len(doc.Stale) != 1 || doc.Stale[0].Subject != "gone" {
-		t.Fatalf("staleExceptions = %+v, want the unmatched one", doc.Stale)
+
+	stale := origins(doc.Stale)
+	if len(stale) != 2 || stale[0] != "debt.txt:5" || stale[1] != "debt.txt:11" {
+		t.Fatalf("staleExceptions = %v, want the two whose checks ran clean", stale)
 	}
 
-	if len(doc.Excused) != 1 || doc.Excused[0].Exception.Kind != "declared" {
+	unexercised := origins(doc.Unexercised)
+	if len(unexercised) != 2 || unexercised[0] != "debt.txt:9" || unexercised[1] != "debt.txt:13" {
+		t.Fatalf("unexercisedExceptions = %v, want the two this run never looked for", unexercised)
+	}
+
+	if len(doc.Excused) != 1 || doc.Excused[0].Exception.Origin != "debt.txt:3" {
 		t.Fatalf("excused = %+v, want the matched declared exception", doc.Excused)
 	}
+}
+
+// A swept subject answers for every assertion on it: a discovery walk
+// (the SBOM scan) enumerates what is there, so an excuse it did not
+// meet was met by absence — stale, not unexercised. And a
+// subject-agnostic excuse, which is the shape a triage decision has,
+// is exercised by the sweep itself.
+func TestSealStalenessFollowsASweep(t *testing.T) {
+	t.Parallel()
+
+	j := report.NewJournal(
+		report.Declared("acme/widget@v1", "CVE-1:pkg@1", "vex/one.json"),
+		report.Declared("", "CVE-2:pkg@2", "vex/two.json"),
+	)
+
+	j.Check("acme/widget@v1", "CVE-9:other@9").Diverged("affects")
+	j.Swept("acme/widget@v1")
+
+	r := report.Seal("test", "acme", report.PopulationFromEvidence(1, "SBOMs"), j, report.NoCanary(), report.NoJudgedSet())
+
+	var buf bytes.Buffer
+	if err := r.Encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	doc := decodeDoc(t, buf.Bytes())
+	if len(doc.Stale) != 2 {
+		t.Fatalf("staleExceptions = %+v, want both — the inventory was read whole", doc.Stale)
+	}
+
+	if len(doc.Unexercised) != 0 {
+		t.Fatalf("unexercisedExceptions = %+v, want none after a sweep", doc.Unexercised)
+	}
+}
+
+// Without a sweep, a subject-agnostic excuse is unexercised: nothing
+// enumerated anything, so nothing observed its absence.
+func TestSubjectAgnosticExceptionNeedsASweep(t *testing.T) {
+	t.Parallel()
+
+	j := report.NewJournal(report.Declared("", "CVE-2:pkg@2", "vex/two.json"))
+	j.Check("acme/widget@v1", "sbom")
+
+	r := report.Seal("test", "acme", report.PopulationFromEvidence(1, "subjects"),
+		j, report.NoCanary(), report.NoJudgedSet())
+
+	var buf bytes.Buffer
+	if err := r.Encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	doc := decodeDoc(t, buf.Bytes())
+	if len(doc.Unexercised) != 1 || len(doc.Stale) != 0 {
+		t.Fatalf("stale = %+v, unexercised = %+v — a check is not a sweep", doc.Stale, doc.Unexercised)
+	}
+}
+
+// A subject-agnostic exception excuses its assertion wherever it
+// appears: the decision is about the package version, not about the
+// release that happens to carry it.
+func TestSubjectAgnosticExceptionExcusesEverySubject(t *testing.T) {
+	t.Parallel()
+
+	j := report.NewJournal(report.Declared("", "CVE-1:pkg@1", "vex/one.json"))
+	j.Check("a@v1", "CVE-1:pkg@1").Diverged("affects")
+	j.Check("b@v2", "CVE-1:pkg@1").Diverged("affects")
+
+	r := report.Seal("test", "acme", report.PopulationFromEvidence(2, "SBOMs"), j, report.NoCanary(), report.NoJudgedSet())
+	if got := r.Verdict(); got != report.VerdictPass {
+		t.Fatalf("verdict = %s, want PASS — one decision covers the triple wherever it is found", got)
+	}
+}
+
+// origins renders an exception list by the line that asserted it —
+// the identity a debt file's reader cares about.
+func origins(list []encodedExc) []string {
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, e.Origin)
+	}
+
+	return out
 }
 
 // encodedDoc mirrors the wire shape for test-side decoding — the
@@ -213,8 +323,9 @@ type encodedDoc struct {
 		Finding   report.Finding `json:"finding"`
 		Exception encodedExc     `json:"exception"`
 	} `json:"excused"`
-	Stale  []encodedExc `json:"staleExceptions"`
-	Judged jsonx.Raw    `json:"judged"`
+	Stale       []encodedExc `json:"staleExceptions"`
+	Unexercised []encodedExc `json:"unexercisedExceptions"`
+	Judged      jsonx.Raw    `json:"judged"`
 }
 
 type encodedPop struct {
@@ -255,8 +366,9 @@ func TestEncodeShape(t *testing.T) {
 
 	r := report.Seal("verify vsa", "acme/widget@v1.2.3",
 		report.PopulationAgainstDeclared(2, 4, "org repos"),
-		[]report.Finding{{Subject: "a", Assertion: "digest", Expected: "aa", Actual: "bb", Detail: "drift"}},
-		nil,
+		journal([]report.Finding{
+			{Subject: "a", Assertion: "digest", Expected: "aa", Actual: "bb", Detail: "drift"},
+		}, nil),
 		report.CanaryMissed("known-bug"),
 		report.Judged(jsonx.Raw(`[{"doc":"sbom-npm-x"}]`)),
 		report.Fact{Name: "levels", Value: "SLSA_BUILD_LEVEL_3"},
@@ -308,7 +420,7 @@ func TestEncodeShape(t *testing.T) {
 func TestJudgedSet(t *testing.T) {
 	t.Parallel()
 
-	none := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil,
+	none := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), report.NewJournal(),
 		report.NoCanary(), report.NoJudgedSet())
 	if got := none.Judged(); len(got) != 0 {
 		t.Fatalf("Judged() = %s, want nothing — the run declared no set", got)
@@ -325,7 +437,7 @@ func TestJudgedSet(t *testing.T) {
 
 	set := `[{"class":"wasm-npm","doc":"sbom-npm-x"}]`
 
-	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil,
+	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), report.NewJournal(),
 		report.NoCanary(), report.Judged(jsonx.Raw(set)))
 
 	got := r.Judged()
@@ -368,7 +480,8 @@ func (*writeError) Error() string { return "write refused" }
 func TestEncodeWriteFailure(t *testing.T) {
 	t.Parallel()
 
-	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil, report.NoCanary(), report.NoJudgedSet())
+	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"),
+		report.NewJournal(), report.NoCanary(), report.NoJudgedSet())
 	if err := r.Encode(failWriter{}); err == nil {
 		t.Fatal("a failed write did not surface")
 	}
@@ -383,8 +496,8 @@ func TestFindingsAreTheUnexcusedOnes(t *testing.T) {
 
 	r := report.Seal("target", "subject",
 		report.PopulationFromEvidence(2, "subjects"),
-		[]report.Finding{finding("a", "unexcused"), finding("b", "excused")},
-		[]report.Exception{report.Declared("b", "excused", "debt.txt:1")},
+		journal([]report.Finding{finding("a", "unexcused"), finding("b", "excused")},
+			[]report.Exception{report.Declared("b", "excused", "debt.txt:1")}),
 		report.NoCanary(),
 		report.NoJudgedSet(),
 	)
@@ -408,7 +521,7 @@ func TestFindingsAreTheUnexcusedOnes(t *testing.T) {
 func TestJudgedSetAbsentEncodesAsNoValue(t *testing.T) {
 	t.Parallel()
 
-	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), nil, nil,
+	r := report.Seal("test", "s", report.PopulationFromEvidence(1, "x"), report.NewJournal(),
 		report.NoCanary(), report.NoJudgedSet())
 
 	if got := r.Judged(); got != nil {

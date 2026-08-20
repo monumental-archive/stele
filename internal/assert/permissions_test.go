@@ -19,13 +19,12 @@ import (
 )
 
 const permissionsPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
   },
   "permissions": {
@@ -37,13 +36,12 @@ const permissionsPolicyJSON = `{
 // localOnlyPolicyJSON declares no reusable tree: the adopter whose
 // reusable workflows all live beside their callers.
 const localOnlyPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
   },
   "permissions": {"callerDirs": [".github/workflows"]}
@@ -90,7 +88,7 @@ func sharedTree() []workflow.File { return []workflow.File{file("ci.yml", shared
 func runPermissions(t *testing.T, pol *assert.Policy, tree []workflow.File, sets []assert.CallerSet) *report.Report {
 	t.Helper()
 
-	rep, err := assert.Permissions(pol, "acme/widget", tree, sets, func(string, ...any) {})
+	rep, err := assert.Permissions(pol, "acme/widget", tree, sets, report.NewJournal(), func(string, ...any) {})
 	if err != nil {
 		t.Fatalf("Permissions = %v", err)
 	}
@@ -410,7 +408,7 @@ func TestPermissionsRefusals(t *testing.T) {
 			t.Parallel()
 
 			_, err := assert.Permissions(loadPermissionsPolicy(t, tt.policy), "acme", tt.tree,
-				callers(file("gate.yml", grantingCaller)), func(string, ...any) {})
+				callers(file("gate.yml", grantingCaller)), report.NewJournal(), func(string, ...any) {})
 			if err == nil {
 				t.Fatal("Permissions judged an input it could not judge from")
 			}

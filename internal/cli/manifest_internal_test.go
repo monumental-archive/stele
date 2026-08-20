@@ -17,7 +17,7 @@ import (
 
 // manifestPolicyJSON is the evidence vocabulary the stamping reads.
 const manifestPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -25,7 +25,6 @@ const manifestPolicyJSON = `{
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
     "evidenceSuffixes": [".openvex.json"],
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"go-binary": {"bundles": ["attestations-go-binaries.intoto.jsonl"]}}
   }
 }`

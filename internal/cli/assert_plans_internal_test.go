@@ -14,13 +14,12 @@ import (
 )
 
 const plansTestPolicy = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "debt.txt",
     "classes": {
       "wasm-npm": {
         "bundles": ["attestations-npm.intoto.jsonl"],

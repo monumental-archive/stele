@@ -1,6 +1,6 @@
 # The assert policy: schema, first cut
 
-The committed data `stele assert evidence` reads — the universality
+The committed data `stele assert` reads — the universality
 boundary applied to the comparison verb: **everything org-shaped
 lives here, zero org names in code**. Standard formats (Sigstore
 bundle JSONL, in-toto statements, the VSA predicate type, sha256
@@ -13,7 +13,7 @@ Four formats are defined here: the policy file, the release
 evidence manifest, the debt file, and the inventory plan. A change to any is a reviewed
 edit to this document first.
 
-`schema` is the refusal boundary: current **4**, the one epoch shared
+`schema` is the refusal boundary: current **5**, the one epoch shared
 by this policy, the verify policy and the report, so a bump cannot
 land on one document and miss another ([docs/versioning.md](versioning.md)).
 The gate fires before strict decoding, so another schema refuses as a
@@ -23,14 +23,14 @@ version mismatch, never as an unknown-field error.
 
 ```json
 {
-  "schema": 4,
+  "schema": 5,
+  "debtFile": "security/attestation-debt.txt",
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
-    "debtFile": "security/attestation-debt.txt",
     "expectedRepos": 4,
     "publishWorkflows": ["publish", "self-publish"],
     "classes": {
@@ -150,12 +150,20 @@ version mismatch, never as an unknown-field error.
 - `expectedRepos` — optional declared population. A listing that sees
   a different count refuses to judge: an unseen repo is unchecked,
   not clean, and a surplus one means this declaration is stale.
-- `debtFile` — where the humans keep evidence debt (format below).
 - `publishWorkflows` — the workflows whose failure can burn a release.
   Absent means ANY failed run on the tag counts, which is too broad:
   one flaky unrelated workflow would excuse a genuinely missing
   verdict, and the burned category must never become a mute button.
   Declare them.
+
+## `debtFile`
+
+Where the humans keep their written-down defects (format below). It
+sits at the ROOT of the policy, not inside a section, because EVERY
+target reads it: excusability is a property of judgment, not of one
+walk, and a defect the tag audit finds is no less writable-down than
+one the evidence walk finds. Optional — an org that declares no file
+has declared no exceptions, and every finding stands.
 
 ## The store-resident halves
 
@@ -332,22 +340,50 @@ tag's own tree, deliberately not assertable by hand.
 
 ## The debt file
 
-Human-declared exceptions, one per line, `#` comments allowed:
+Human-declared exceptions, one per line, `#` comments allowed. One
+file for every target — the tag audit's defects and the evidence
+walk's are the same kind of thing, and the file is read through the
+report layer both walks emit findings through:
 
 ```text
-# repo@tag(assertion) — see PR #NNN for the review that approved this
+# subject(assertion) — see PR #NNN for the review that approved this
 widget@v1.0.0(sbom)
 widget@v1.0.0(attestations-crates.intoto.jsonl)
 gadget@v0.2.0(vsa:abcdef012345)
+gadget@v0.3.0(tag:signature)
 ```
 
-The `assertion` is the finding's assertion string exactly: `sbom`,
-the checksum or bundle asset name, an `assetPrefixes` prefix, or
-`vsa:<first 12 digest hex>`. A malformed line is a refusal, not a
-skip — a reviewed file that parses as nothing would excuse nothing
-silently. A debt line matching no current finding surfaces in the
-report as a stale exception: a retirement candidate, never quietly
-carried.
+The `assertion` is the finding's assertion string exactly, and each
+target's vocabulary is its own:
+
+| target | assertions |
+| --- | --- |
+| `evidence` | `sbom`, the checksum or bundle asset name, an `assetPrefixes` prefix, `class:<name>`, `<asset>:unreadable`, `vsa:<first 12 digest hex>`, `continuous-digest`, `base-image-approval`, and at full depth `deep` and `vsa:deep` |
+| `tags` | `tag:epoch`, `tag:annotated`, `tag:tagger`, `tag:signature`, `tag:link` |
+| `chains` | `chains` — a founded chain's defect is never excusable; absence is excused by the policy's `chains.exceptions`, never here |
+| `blast-radius` | `<advisory>:<package>@<version>`, `<asset>:unattested`, `<asset>:empty-scan` |
+| `plans` | `class`, `planned-obligation`, `plan-shape`, `plan-conflict`, `plan-drift`, `plan-orphan`, `plan-set` |
+| `image-facts` | `fact-hygiene`, `index-media-type`, `index-annotations`, `config-labels` |
+| `permissions` | `caller-grant`, `call-shape`, `callee-absent`, `callee-unreadable`, `callee-not-callable`, `workflow-shape` |
+
+A malformed line is a refusal, not a skip — a reviewed file that
+parses as nothing would excuse nothing silently. Neither half may be
+blank: a line with no assertion is a blanket excuse that needs its own
+review, and a line with no subject is the any-subject wildcard, which
+is engine vocabulary (a triage decision judges a package version, not
+the release carrying it) and never a file's to spell.
+
+A line matching no finding is sorted by what the run could SEE
+([report-schema.md](report-schema.md)):
+
+- the check ran and was clean → **stale**, a retirement candidate;
+- the check never ran in this run → **unexercised**, and the run says
+  nothing about it. A single-repository walk answers only for that
+  repository; a tag the signing epoch exempts was never asked for a
+  signature at all.
+
+Both are reported, neither fails: red means evidence is missing, not
+that the paperwork lags.
 
 Burned releases (a verdict absent because the publish run died after
 the release sealed) are NOT written here — they are derived from run

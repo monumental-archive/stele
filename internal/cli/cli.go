@@ -136,7 +136,10 @@ usage:
               from the other direction
 
   stele assert <target>  compare published evidence to a declaration;
-                         exit 0 pass, 1 fail, 4 could-not-judge:
+                         exit 0 pass, 1 fail, 4 could-not-judge. Every
+                         target reads the policy's debtFile — written-
+                         down defects are reported, not failed — and
+                         --debt points one run at another file:
     image-facts  a published image's index annotations and every
                  per-arch config's labels equal the resolved facts
                  map (env contract: IMAGE, DIGEST, FACTS)
@@ -147,27 +150,27 @@ usage:
     blast-radius every SBOM scanned, every advisory finding joined
                  against the committed VEX decisions by exact
                  (advisory, package, version) triple (--org|--repo
-                 --policy --vex [--snapshot|--capture])
+                 --policy --vex [--debt --snapshot|--capture])
     tags         every release tag: minted by the declared role,
                  signed from the repository's epoch on (verified
                  natively, no gitsign binary), target carries a
                  source chain link (--org|--repo --policy
-                 [--snapshot|--capture])
+                 [--debt --snapshot|--capture])
     chains       every repository in the population: a founded source
                  chain verifies end to end over every protected
                  branch, or the repository is a declared exception —
                  cloneless, over the forge's own API (--org|--repo
-                 --policy --verify-policy [--snapshot|--capture])
+                 --policy --verify-policy [--debt --snapshot|--capture])
     plans        pre-publish: the build legs' inventory plans against
                  the planned obligations the post-publish walk reads,
                  and the judged plan set emitted for the derivation
-                 leg to iterate (--policy --classes
-                 --machinery-version [--out] <plan files...>)
+                 leg to iterate (--policy --classes --machinery-version
+                 [--debt --out] <plan files...>)
     permissions  the caller/callee join: every caller's permissions:
                  grant covers what the reusable tree it calls
                  requires — one checkout's callers at a pin bump, or
-                 the whole population on a schedule (--policy [--tree
-                 --callers | --org|--repo] [--snapshot|--capture])
+                 the whole population on a schedule (--policy [--debt
+                 --tree --callers | --org|--repo] [--snapshot|--capture])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,

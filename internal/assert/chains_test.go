@@ -16,13 +16,12 @@ import (
 )
 
 const chainsPolicyJSON = `{
-  "schema": 4,
+  "schema": 5,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
-    "debtFile": "security/attestation-debt.txt",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
   },
   "chains": {
@@ -74,7 +73,8 @@ func runChains(
 ) (*report.Report, error) {
 	t.Helper()
 
-	return assert.Chains(pol, pop, forge, tags, cv, notesRef, []string{mainRef}, func(string, ...any) {})
+	return assert.Chains(pol, pop, forge, tags, cv, notesRef, []string{mainRef},
+		report.NewJournal(), func(string, ...any) {})
 }
 
 func TestChainsVerifiedPopulation(t *testing.T) {
@@ -225,7 +225,7 @@ func TestChainsRefusals(t *testing.T) {
 			t.Parallel()
 
 			_, rerr := assert.Chains(tc.pol, assert.Population{Org: "acme"}, &fakeForge{repos: []string{"widget"}},
-				&fakeTags{}, &fakeChainVerifier{}, tc.notesRef, tc.refs, func(string, ...any) {})
+				&fakeTags{}, &fakeChainVerifier{}, tc.notesRef, tc.refs, report.NewJournal(), func(string, ...any) {})
 			if rerr == nil || !strings.Contains(rerr.Error(), tc.want) {
 				t.Fatalf("Chains = %v, want a refusal naming %q", rerr, tc.want)
 			}
@@ -239,7 +239,7 @@ func TestChainsNotesTearRefusesTheWalk(t *testing.T) {
 	tags := &fakeTags{torn: map[string]error{"ChainNotes": errTorn}}
 
 	_, err := assert.Chains(loadChainsPolicy(t), assert.Population{Org: "acme"},
-		&fakeForge{repos: []string{"widget"}}, tags, &fakeChainVerifier{}, notesRef, []string{mainRef},
+		&fakeForge{repos: []string{"widget"}}, tags, &fakeChainVerifier{}, notesRef, []string{mainRef}, report.NewJournal(),
 		func(string, ...any) {})
 	if err == nil || !errors.Is(err, errTorn) {
 		t.Fatalf("Chains = %v, want the tear carried out — partial sight is never a verdict", err)
@@ -252,7 +252,7 @@ func TestChainsListingTearRefusesTheWalk(t *testing.T) {
 	forge := &fakeForge{reposErr: errTorn}
 
 	_, err := assert.Chains(loadChainsPolicy(t), assert.Population{Org: "acme"}, forge, &fakeTags{},
-		&fakeChainVerifier{}, notesRef, []string{mainRef}, func(string, ...any) {})
+		&fakeChainVerifier{}, notesRef, []string{mainRef}, report.NewJournal(), func(string, ...any) {})
 	if err == nil || !errors.Is(err, errTorn) {
 		t.Fatalf("Chains = %v, want the listing tear", err)
 	}
