@@ -44,7 +44,7 @@ jobs:
     # TAG_MINT_APP_CLIENT_ID, read by the shared workflow itself, so a
     # caller carries no App identity and never needs updating when it
     # changes.
-    uses: monumental-archive/.github/.github/workflows/release.yml@cc4ec82c352041817e89c1f953e718d3ed8365d0 # v1.46.0
+    uses: monumental-archive/.github/.github/workflows/release.yml@92dfcc8d3e3713b06674f13111daa8fdc171e146 # v1.47.0
     permissions:
       # Required, and easy to omit. A `uses:` job with no `permissions:`
       # block inherits the WORKFLOW-level default — `permissions: {}` above
