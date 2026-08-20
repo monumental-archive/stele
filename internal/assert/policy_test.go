@@ -155,7 +155,7 @@ func TestTagsPolicyRefusals(t *testing.T) {
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", 	    "classes": {"a": {"bundles": ["b"]}}},
 	  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
-	    "identityPattern": "^https://github\\.com/acme/", "proofFloor": "certificate-transparency",
+	    "identityPattern": "^https://github\\.com/acme/", "proofFloor": {"floor": "certificate-transparency"},
 	    "notesRef": "refs/notes/commits",
 	    "epochs": {"widget": "v1.0.0", "gadget": "pending"}}}`
 
@@ -177,12 +177,12 @@ func TestTagsPolicyRefusals(t *testing.T) {
 		},
 		{"unqualified notes ref", `"notesRef": "refs/notes/commits"`, `"notesRef": "commits"`, "fully qualified"},
 		{
-			"missing proof floor", `"proofFloor": "certificate-transparency",`, ``,
+			"missing proof floor", `"proofFloor": {"floor": "certificate-transparency"},`, ``,
 			"proofFloor",
 		},
 		{
-			"unknown proof floor", `"proofFloor": "certificate-transparency"`,
-			`"proofFloor": "vibes"`, "not a floor this verifier judges",
+			"unknown proof floor", `"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "vibes"}`, "not a floor this verifier judges",
 		},
 		{"no epochs", `"epochs": {"widget": "v1.0.0", "gadget": "pending"}`, `"epochs": {}`, "epochs"},
 		{
@@ -190,6 +190,63 @@ func TestTagsPolicyRefusals(t *testing.T) {
 			`"epochs": {"widget": "soon"}`, "epochs[widget]",
 		},
 		{"issuer missing beside tags", `"issuer": "https://token.example.com",`, ``, "issuer"},
+
+		// The floor-with-a-from (stele#186). Half a declaration is a
+		// declaration with a hole in it, and a hole here is tags owing
+		// nothing at all.
+		{
+			"a rise with nothing beneath it", `"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"widget": "v1.2.0"}}`,
+			"together or not at all",
+		},
+		{
+			"a floor beneath a boundary that is never named",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "before": "certificate-transparency"}`,
+			"together or not at all",
+		},
+		{
+			"one floor on both sides of a boundary",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"widget": "v1.2.0"},
+			  "before": "observer-timestamp"}`,
+			"declares nothing",
+		},
+		{
+			"an unknown floor beneath the boundary",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"widget": "v1.2.0"},
+			  "before": "vibes"}`,
+			"not a floor this verifier judges",
+		},
+		{
+			"an unparsable boundary tag",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"widget": "soon"},
+			  "before": "certificate-transparency"}`,
+			"proofFloor.from[widget]",
+		},
+		{
+			"a rise for a repository that owes no signature",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"stranger": "v1.2.0"},
+			  "before": "certificate-transparency"}`,
+			"tags.epochs does not name",
+		},
+		{
+			"a rise for a repository declared unsigned",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"gadget": "v1.2.0"},
+			  "before": "certificate-transparency"}`,
+			"declared unsigned",
+		},
+		{
+			"a rise before signing began",
+			`"proofFloor": {"floor": "certificate-transparency"}`,
+			`"proofFloor": {"floor": "observer-timestamp", "from": {"widget": "v0.9.0"},
+			  "before": "certificate-transparency"}`,
+			"before the signing epoch",
+		},
 	}
 
 	for _, tt := range tests {

@@ -742,7 +742,11 @@ precondition. Declared means every field, validated strictly:
   "tagPattern": "^v[0-9]",
   "taggerName": "tag-mint[bot]",
   "identityPattern": "^https://github\\.com/example-org/",
-  "proofFloor": "certificate-transparency",
+  "proofFloor": {
+    "floor": "observer-timestamp",
+    "from": {"widget": "v1.9.0"},
+    "before": "certificate-transparency"
+  },
   "notesRef": "refs/notes/commits",
   "epochs": {"widget": "v1.2.0", "gadget": "pending"}
 }
@@ -755,15 +759,55 @@ precondition. Declared means every field, validated strictly:
   certificate's SAN must match; the issuer is the policy's top-level
   `issuer`, required when this section is declared.
 - `proofFloor` — how much countersigned proof a tag signature owes,
-  the ORG's declaration and never the tool's decision (stele#173).
-  `certificate-transparency`: the signing certificate's issuance
-  countersigned by a trusted CT log — what any Fulcio-minted
-  signature can prove offline, whether or not the mint kept its
-  receipts. `observer-timestamp`: additionally a transparency-log
-  entry and an observer timestamp over the signature itself, which
-  only a mint that embeds its Rekor entry (gitsign's offline mode)
-  can meet. The verdict states the depth actually reached; the floor
-  states the minimum that passes.
+  the ORG's declaration and never the tool's decision (stele#173),
+  and from which tag it owes it (stele#186).
+  - `proofFloor.floor` — the floor itself.
+    `certificate-transparency`: the signing certificate's issuance
+    countersigned by a trusted CT log — what any Fulcio-minted
+    signature can prove offline, whether or not the mint kept its
+    receipts. `observer-timestamp`: additionally a transparency-log
+    entry and an observer timestamp over the signature itself, which
+    only a mint that embeds its Rekor entry (gitsign's offline mode)
+    can meet. The verdict states the depth actually reached; the
+    floor states the minimum that passes.
+  - `proofFloor.from` — each repository's first tag owing `floor`,
+    for the case a mint gains the capability partway through a
+    repository's history. A repository absent from a declared map has
+    not raised its floor and every one of its tags owes `before` —
+    the correct reading for a rollout partway through a population.
+  - `proofFloor.before` — what tags earlier than the `from` tag owe.
+
+  `from` and `before` are declared together or not at all: a rise
+  from a point says nothing about the tags before it, and a floor for
+  tags before a point that is never named binds nothing. An org whose
+  floor never rose declares `floor` alone; an org that never minted
+  without receipts declares `from` at its first tag. Neither edits
+  this tool.
+
+  This is a **floor with a from**, deliberately not a second epoch map
+  beside `epochs`. They answer different questions about the same
+  tags: `epochs` says when a repository began signing at all, this
+  says when its floor rose. Raising a floor globally instead reddens
+  every tag minted before the mint could meet it — the #128/#109
+  failure the epoch vocabulary exists to prevent — and those tags are
+  not defective, so they are excused BY THE BOUNDARY and never by
+  debt lines.
+
+  The two floors are not ordered here. A mint that REGRESSED is a
+  real thing an org must be able to declare honestly, and a tool that
+  only permits rises decides a policy fact. What no org can mean is a
+  boundary carrying the same floor on both sides, and that refuses.
+  So do a `from` naming a repository `epochs` does not, a `from` on a
+  repository declared unsigned, and a `from` earlier than that
+  repository's signing epoch — a heavier obligation on tags that owe
+  no signature at all.
+
+  A run whose policy declares a boundary reports
+  `tagsProvenAt:<floor>` for each floor. A boundary is only proven by
+  a run that proved tags on both sides of it, and without the counts a
+  `from` naming a tag nobody minted reads exactly like one that binds.
+  Refused tags are absent from the counts by construction — a tag that
+  did not verify proves no regime, and its finding says so.
 - `notesRef` — the source chain's notes ref, fully qualified.
 - `epochs` — each releasing repository's first signed tag, or
   `pending` for declared-unsigned. A repository that releases tags
