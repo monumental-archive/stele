@@ -10,6 +10,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.18.0](https://github.com/monumental-archive/stele/compare/v0.17.1...v0.18.0) - 2026-08-20
+
+### Added
+
+- judge and publish this repository's own levels ([#204](https://github.com/monumental-archive/stele/pull/204))
+- load one policy document through the engine's own loader ([#212](https://github.com/monumental-archive/stele/pull/212))
+
+### Fixed
+
+- update module golang.org/x/mod to v0.40.0 ([#203](https://github.com/monumental-archive/stele/pull/203))
+- read every throttle marker and honour the host's wait ([#213](https://github.com/monumental-archive/stele/pull/213))
+- case-fold golang purl names on both sides of the VEX join ([#211](https://github.com/monumental-archive/stele/pull/211))
+- key the enrichment demand per artifact ([#215](https://github.com/monumental-archive/stele/pull/215))
+- judge the declared tag population, not the ledger's reach ([#218](https://github.com/monumental-archive/stele/pull/218))
+
 ## [0.17.1](https://github.com/monumental-archive/stele/compare/v0.17.0...v0.17.1) - 2026-08-20
 
 ### Fixed
