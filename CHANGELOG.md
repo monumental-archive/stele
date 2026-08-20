@@ -10,6 +10,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.16.0](https://github.com/monumental-archive/stele/compare/v0.15.0...v0.16.0) - 2026-08-20
+
+### Breaking
+
+- declare the evidence population per repo and track ([#175](https://github.com/monumental-archive/stele/pull/175))
+- one verification stance at countersigned instants ([#178](https://github.com/monumental-archive/stele/pull/178))
+
+### Added
+
+- emit the judged plan set for consumers to iterate ([#160](https://github.com/monumental-archive/stele/pull/160))
+- type every manifest entry as build subject or evidence ([#162](https://github.com/monumental-archive/stele/pull/162))
+- bear the release decision per planned inventory ([#164](https://github.com/monumental-archive/stele/pull/164))
+- accept a declared release version ([#166](https://github.com/monumental-archive/stele/pull/166))
+- join caller grants to callee permission requirements ([#165](https://github.com/monumental-archive/stele/pull/165))
+- derive a VEX decision's affected releases and subjects ([#169](https://github.com/monumental-archive/stele/pull/169))
+- judge every walk's exceptions by what it checked ([#168](https://github.com/monumental-archive/stele/pull/168))
+- emit the release decisions as one plan ([#171](https://github.com/monumental-archive/stele/pull/171))
+- publish the whole level board and own what replaces what ([#176](https://github.com/monumental-archive/stele/pull/176))
+
+### Fixed
+
+- hold a tag certificate at issuance, not the tagger clock ([#172](https://github.com/monumental-archive/stele/pull/172))
+- update module github.com/sigstore/sigstore to v1.10.9 ([#179](https://github.com/monumental-archive/stele/pull/179))
+- update module google.golang.org/protobuf to v1.36.12 ([#180](https://github.com/monumental-archive/stele/pull/180))
+
+### Documentation
+
+- execute the schema document's own examples ([#163](https://github.com/monumental-archive/stele/pull/163))
+- hold the surface statements to the binary ([#170](https://github.com/monumental-archive/stele/pull/170))
+- name the mechanism template in the repo instructions ([#174](https://github.com/monumental-archive/stele/pull/174))
+
 ## [0.15.0](https://github.com/monumental-archive/stele/compare/v0.14.0...v0.15.0) - 2026-08-19
 
 ### Added
