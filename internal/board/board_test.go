@@ -323,6 +323,147 @@ func TestBoardCannotBeBuilt(t *testing.T) {
 	})
 }
 
+// TestPublishRefusesAnUnopenablePrior is the sharper edge of the
+// never-overwrite rule, and the one direction that cannot be guessed.
+//
+// A prior shield the process cannot even OPEN is not an absent one.
+// Absent means nobody has published this cell, and grey may land;
+// unreadable means a document is there and its contents are unknown.
+// Treating the second as the first would publish "could not see" over
+// a level somebody proved — the exact erasure stele#135 exists to
+// prevent — so the run refuses and the caller goes red instead.
+func TestPublishRefusesAnUnopenablePrior(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	c := cell()
+	b := board.Board{Dir: dir}
+
+	if _, err := b.Publish(c, measured(t, c.Track)); err != nil {
+		t.Fatalf("seeding the prior level: %v", err)
+	}
+
+	shield := paths(dir, c).shield
+	if err := os.Chmod(shield, 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	//nolint:errcheck // restored so TempDir can clean up
+	t.Cleanup(func() { _ = os.Chmod(shield, 0o600) })
+
+	_, err := b.Publish(c, blind(t, c.Track))
+	if err == nil || !strings.Contains(err.Error(), c.String()) {
+		t.Fatalf("Publish = %v, want a refusal naming the cell it could not read", err)
+	}
+}
+
+// TestPublishRefusesAnUnwritableCell: the repository's directory
+// exists but nothing may be staged into it. A board that reported
+// success here would leave last run's documents in place while
+// claiming this run's judgment had been published.
+func TestPublishRefusesAnUnwritableCell(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	c := cell()
+	b := board.Board{Dir: dir}
+
+	if _, err := b.Publish(c, measured(t, c.Track)); err != nil {
+		t.Fatalf("seeding the cell: %v", err)
+	}
+
+	repo := filepath.Join(dir, c.Repo)
+
+	//nolint:gosec // G302: a DIRECTORY mode; read and traverse without write is the point
+	if err := os.Chmod(repo, 0o500); err != nil {
+		t.Fatal(err)
+	}
+
+	//nolint:errcheck,gosec // a DIRECTORY mode, restored so TempDir can clean up
+	t.Cleanup(func() { _ = os.Chmod(repo, 0o750) })
+
+	_, err := b.Publish(c, measured(t, c.Track))
+	if err == nil || !strings.Contains(err.Error(), c.String()) {
+		t.Fatalf("Publish = %v, want a refusal naming the cell it could not stage", err)
+	}
+}
+
+// TestPruneRefusesWhatItCannotRemove: a cell Prune names but cannot
+// delete must fail loudly. Returning the cell as removed while the
+// document stayed would tell the caller a level was retracted that a
+// reader can still fetch.
+func TestPruneRefusesWhatItCannotRemove(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	c := cell()
+
+	// A non-empty directory wearing a report's name: the layout reads
+	// it as a cell, and removing it cannot succeed.
+	at := paths(dir, c)
+	if err := os.MkdirAll(at.report, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(at.report, "occupant"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := board.Board{Dir: dir}.Prune(nil)
+	if err == nil || !strings.Contains(err.Error(), c.String()) {
+		t.Fatalf("Prune = %v, want a refusal naming the cell it could not remove", err)
+	}
+}
+
+// TestPruneRefusesABoardThatIsNotADirectory: --out-dir pointed at a
+// file is an operator error, and the run must say so rather than read
+// the board as holding nothing — which is what an empty listing would
+// mean, and would prune every cell the board actually has.
+func TestPruneRefusesABoardThatIsNotADirectory(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "board")
+	if err := os.WriteFile(file, []byte("not a board"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (board.Board{Dir: file}).Prune(nil); err == nil {
+		t.Fatal("Prune read a regular file as an empty board")
+	}
+}
+
+// TestTidyRefusesADirectoryItCannotRemove: the emptied repository
+// directory is the last thing a prune clears, and a board that left
+// one behind names a repository it no longer says anything about. A
+// failure to clear it is reported rather than swallowed, because the
+// caller's next action is to publish that board.
+func TestTidyRefusesADirectoryItCannotRemove(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	c := cell()
+	b := board.Board{Dir: dir}
+
+	if _, err := b.Publish(c, measured(t, c.Track)); err != nil {
+		t.Fatalf("seeding the cell: %v", err)
+	}
+
+	// Readable and traversable, but not writable: the cell's documents
+	// still delete (their own directory allows it), and the now-empty
+	// repository directory cannot, because that removal writes here.
+	//nolint:gosec // G302: a DIRECTORY mode; read and traverse without write is the point
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+
+	//nolint:errcheck,gosec // a DIRECTORY mode, restored so TempDir can clean up
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+
+	if _, err := b.Prune(nil); err == nil || !strings.Contains(err.Error(), c.Repo) {
+		t.Fatalf("Prune = %v, want a refusal naming the directory it could not remove", err)
+	}
+}
+
 // TestPrune: a cell the population no longer holds produces no file,
 // and the removals are named so a reader can tell deletion from
 // absence.
