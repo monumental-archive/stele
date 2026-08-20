@@ -304,6 +304,7 @@ func TestLevelPolicyRefusals(t *testing.T) {
 		name string
 		args []string
 		want int
+		doc  string
 	}{
 		{
 			name: "a declared population cannot apply to one repository",
@@ -314,13 +315,20 @@ func TestLevelPolicyRefusals(t *testing.T) {
 			name: "a policy that is not there is not a population",
 			args: []string{"level", "build", "--org", "acme", "--policy", "absent.json"},
 			want: exitBlind,
+			// The cause rides IN the document: a board consumer must be
+			// able to tell "nobody could look" from "nobody is here".
+			doc: "absent.json",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
-			if got := Run(tc.args, &stdout, &stderr); got != tc.want {
+			if got := Run(append(tc.args, "--json"), &stdout, &stderr); got != tc.want {
 				t.Errorf("Run = %d, want %d\nstderr: %s", got, tc.want, stderr.String())
+			}
+
+			if tc.doc != "" && !strings.Contains(stdout.String(), tc.doc) {
+				t.Errorf("the report does not carry the cause %q:\n%s", tc.doc, stdout.String())
 			}
 		})
 	}

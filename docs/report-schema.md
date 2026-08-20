@@ -167,6 +167,13 @@ subjects or branches **with a determinable ladder**, so a track that
 lost sight at its boundary is short-covered and seals `CANNOT_JUDGE`
 through the coverage law rather than through a second rule.
 
+An `--org` run that could not enumerate its population at all — a
+listing that tore, or a declaration and a listing that do not
+reconcile — seals with the cause as a `population` finding rather
+than only on the log. "Nobody could look" and "nobody is here" are
+opposite facts, and a board that merged them would be reading a
+number nobody measured.
+
 | track | population | facts |
 | --- | --- | --- |
 | `build` | latest release's subjects | `level`, `ceiling`, `declared`, `weakest`, `ladder`, `specStatus`, `sealedAt`, `sourceRevision` |

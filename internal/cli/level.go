@@ -233,6 +233,11 @@ func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 	repos, err := la.members(forge)
 	if err != nil {
 		out.logf("level: the organisation's population could not be enumerated: %v", err)
+
+		// Sealed rather than measured: a run that does not know who it
+		// was asking about has measured nobody, and the report says so
+		// with the cause in it rather than only on this log.
+		return level.Unenumerated(la.trackValue(), la.org, err, clock())
 	}
 
 	members := make([]*level.Evidence, 0, len(repos))
