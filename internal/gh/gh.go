@@ -14,13 +14,19 @@
 // answer away would turn a real absence into a timeout and hide a
 // narrowed credential behind noise.
 //
-// The one 403 that is NOT a fact about the subject is GitHub's
-// SECONDARY rate limit, which the forge spells with the same status
-// (stele#196). That is the host throttling THIS CALLER, so it is
-// classified on the response rather than on the status code and
+// The one 403 that is NOT a fact about the subject is the forge rate
+// limiting THIS CALLER, which it spells with the same status
+// (stele#196, stele#209). That is the host throttling this walk, so
+// it is classified on the response rather than on the status code and
 // joins the retry ladder — a throttled walk that reported its
 // subjects as forbidden would be the wrong-refusal class the ladder
 // exists to prevent.
+//
+// That classification is the one thing in this package a leg outside
+// it needs: internal/ghstore reads the same forge over the same
+// statuses, so it asks Throttled rather than growing a second answer
+// (stele#209). Two GitHub readers disagreeing about what a throttle
+// looks like is the shape the share-the-definition rule forbids.
 package gh
 
 import (
@@ -30,6 +36,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,56 +52,153 @@ var ErrForbidden = errors.New("gh: the credential cannot read this")
 // the host or the transport failed. Retried, never surfaced.
 var errTransient = errors.New("gh: transient")
 
-// errThrottled marks the host refusing this walk for its RATE. Named
+// ErrThrottled marks the host refusing this walk for its RATE. Named
 // apart from errTransient although both ride the same ladder, because
 // an exhausted ladder must say which of the two it ran out of — and
 // named apart from ErrForbidden because the two arrive with the same
 // status and mean opposite things: one is about this caller's pace,
 // the other about this subject's permissions.
-var errThrottled = errors.New("gh: the host throttled this walk, which says nothing about the subject")
+//
+// Exported, unlike errTransient, because it is the vocabulary a
+// SECOND forge reader types its own throttles with: the sentence a
+// walk prints for a throttle must not depend on which package read
+// the response. It carries no package prefix for the same reason —
+// each reader names its own context in front of it.
+var ErrThrottled = errors.New("the host throttled this walk, which says nothing about the subject")
 
 // retryable reports whether an error is one the ladder may run again.
 // Both members say nothing about the subject: the transport or host
 // failed, or the host throttled this caller.
 func retryable(err error) bool {
-	return errors.Is(err, errTransient) || errors.Is(err, errThrottled)
+	return errors.Is(err, errTransient) || errors.Is(err, ErrThrottled)
 }
 
 // secondaryLimitRE matches the message GitHub answers a secondary
 // rate limit with, and the fragment its documentation_url ends in.
 var secondaryLimitRE = regexp.MustCompile(`(?i)secondary[ -]rate[ -]limit`)
 
-// secondaryRateLimit reports whether a 403 is GitHub's SECONDARY rate
-// limit — the host throttling this caller — rather than a refusal of
-// the credential.
+// maxNamedWait bounds the wait one header may impose. A ladder is
+// bounded so a walk against a broken host still ends, and a host that
+// could name any wait it liked could hand back that bound — past this
+// point a Retry-After has stopped being a wait and become a hang. The
+// forge's documented secondary-limit wait is a minute; twice that is
+// honoured in full.
+const (
+	maxNamedWaitSeconds = 120
+	maxNamedWait        = maxNamedWaitSeconds * time.Second
+)
+
+// Throttled reports whether one forge response is the host throttling
+// THIS CALLER rather than refusing THIS SUBJECT, and the wait the host
+// named — zero when it named none.
 //
-// The forge documents two signals, and this reads both because each
-// travels without the other: a `retry-after` header naming the wait,
-// and a body whose message names the limit —
+// This is the ONE place that question is answered, for every leg that
+// reads GitHub (stele#209): the status test lives here too, so no
+// caller re-spells "only a 403 can be this" beside its own copy of the
+// markers.
 //
-//	retry-after: 60
-//	{"message": "You have exceeded a secondary rate limit.
-//	             Please wait a few minutes before you try again.",
+// Three markers, read because each travels without the others:
+//
+//	retry-after: 60                       ← the host names a wait
+//	x-ratelimit-remaining: 0              ← this response's own budget
+//	{"message": "You have exceeded a secondary rate limit. …",
 //	 "documentation_url": "https://docs.github.com/rest/overview/
-//	                       rate-limits-for-the-rest-api#about-secondary-rate-limits"}
+//	   rate-limits-for-the-rest-api#about-secondary-rate-limits"}
 //
-// GitHub sends the header only when it has a wait to name, and a
-// truncating proxy can drop the body while the header survives.
+// GitHub sends the header only when it has a wait to name; a
+// truncating proxy can drop the body while the header survives; and a
+// primary budget spent to zero is refused with neither.
 //
-// The primary budget cannot stand in for either: measured 2026-08-20,
-// an org-wide walk took this 403 with x-ratelimit-remaining at
-// 4799/5000 — by the primary counter, nothing was wrong.
+// The remaining counter is read off THIS response, which is what makes
+// it evidence rather than a guess: the counters are per resource, and
+// the response carries the one for the resource it answered. A
+// NEIGHBOURING counter proves nothing in either direction — measured
+// 2026-08-20, an org-wide walk took a secondary-limit 403 with
+// x-ratelimit-remaining at 4799/5000, so a healthy budget is no proof
+// of a healthy walk, and only exhaustion is a marker here.
 //
 // Reading a server-controlled body is the narrow exception to this
 // file's rule that only the status is trusted: it is asked one
 // documented question about ONE status, and its only power is to move
 // a refusal onto the retry ladder, never off one.
-func secondaryRateLimit(header http.Header, body []byte) bool {
-	if strings.TrimSpace(header.Get("Retry-After")) != "" {
-		return true
+func Throttled(status int, header http.Header, body []byte) (time.Duration, bool) {
+	if status != http.StatusForbidden {
+		return 0, false
 	}
 
-	return secondaryLimitRE.Match(body)
+	if raw := strings.TrimSpace(header.Get("Retry-After")); raw != "" {
+		return namedWait(raw), true
+	}
+
+	// Exhaustion is the marker; anything else the counter says is not
+	// one, and a counter that will not parse is no counter at all.
+	if n, err := strconv.Atoi(strings.TrimSpace(header.Get("X-Ratelimit-Remaining"))); err == nil && n <= 0 {
+		return 0, true
+	}
+
+	if secondaryLimitRE.Match(body) {
+		return 0, true
+	}
+
+	return 0, false
+}
+
+// namedWait reads the wait a Retry-After names, in the delta-seconds
+// form the forge sends. A header that will not parse still MARKED the
+// throttle — its presence is the marker — but names no wait, so the
+// ladder falls back to its own backoff rather than inventing a number
+// and lending it the host's authority.
+func namedWait(raw string) time.Duration {
+	secs, err := strconv.Atoi(raw)
+	if err != nil || secs <= 0 {
+		return 0
+	}
+
+	// Clamped in seconds, before the multiply: a wait long enough to
+	// overflow the duration would come back NEGATIVE and turn the
+	// ladder's pause into no pause at all.
+	if secs > maxNamedWaitSeconds {
+		return maxNamedWait
+	}
+
+	return time.Duration(secs) * time.Second
+}
+
+// throttleError is a throttle carrying the wait the host named. The
+// wait travels WITH the refusal because the classification and the
+// wait are one reading of one response: a ladder that had to ask the
+// response again would hold a second derivation of the same fact, and
+// by then the response is gone.
+type throttleError struct {
+	what string
+	wait time.Duration
+}
+
+func (t *throttleError) Error() string { return t.what + ": " + ErrThrottled.Error() }
+
+func (t *throttleError) Unwrap() error { return ErrThrottled }
+
+// ThrottleRefusal builds the error a throttled read returns: what was
+// being read, then the one sentence every leg says for a throttle.
+func ThrottleRefusal(what string, wait time.Duration) error {
+	return &throttleError{what: what, wait: wait}
+}
+
+// RetryWait is how long a ladder pauses before its next attempt: the
+// wait the host NAMED when the previous refusal carried one, and the
+// caller's own backoff otherwise.
+//
+// Shared so the two forge readers cannot come to honour the forge's
+// own number differently, while each keeps its own budget — the ladders
+// mean different things (one waits out a transient, the other waits out
+// a propagation) and only the host's number is common to both.
+func RetryWait(prev error, fallback time.Duration) time.Duration {
+	var t *throttleError
+	if errors.As(prev, &t) && t.wait > 0 {
+		return t.wait
+	}
+
+	return fallback
 }
 
 // The transient retry ladder: bounded, so a walk against a genuinely
@@ -353,7 +457,7 @@ func (c *Client) Asset(owner, repo, tag, name string) ([]byte, error) {
 
 	for attempt := 1; attempt <= transientAttempts; attempt++ {
 		if attempt > 1 {
-			c.sleep(time.Duration(attempt-1) * transientBackoff)
+			c.sleep(RetryWait(lastErr, time.Duration(attempt-1)*transientBackoff))
 		}
 
 		body, err := c.asset(owner, repo, tag, name)
@@ -622,15 +726,15 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errTransient)
-		}
-
 		// The download host throttles with the same 403 the API does,
 		// through the one classifier — a walk pulling many assets is
 		// exactly the pace that earns one.
-		if resp.StatusCode == http.StatusForbidden && secondaryRateLimit(resp.Header, body) {
-			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errThrottled)
+		if wait, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
+			return nil, ThrottleRefusal(fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), wait)
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errTransient)
 		}
 
 		return nil, fmt.Errorf("gh: asset %s: HTTP %d", u, resp.StatusCode)
@@ -648,15 +752,16 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 // Measured against the 2026-08-17 GitHub outage, where the first live
 // walk died on a single 504 mid-population.
 //
-// The exception is the 403 that secondaryRateLimit classifies as the
-// host throttling this caller: that one is no answer about the
-// subject at all, so it rides this ladder with the same backoff.
+// The exception is the 403 that Throttled classifies as the host
+// throttling this caller: that one is no answer about the subject at
+// all, so it rides this ladder — pausing for the wait the host itself
+// named, and for this ladder's own backoff when it named none.
 func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocritic // unnamedResult: body, found, error
 	var lastErr error
 
 	for attempt := 1; attempt <= transientAttempts; attempt++ {
 		if attempt > 1 {
-			c.sleep(time.Duration(attempt-1) * transientBackoff)
+			c.sleep(RetryWait(lastErr, time.Duration(attempt-1)*transientBackoff))
 		}
 
 		body, ok, err := c.once(path, accept)
@@ -683,8 +788,9 @@ func (c *Client) sleep(d time.Duration) {
 
 // once performs one API read. 404 returns (nil, false, nil); 403/401
 // return ErrForbidden — the two absences the engine must never
-// conflate; 5xx and 429 wrap errTransient for the retry above, and so
-// does the 403 that carries the forge's secondary-rate-limit signals.
+// conflate; 5xx and 429 wrap errTransient for the retry above, and the
+// 403 the classifier reads as a throttle wraps ErrThrottled for the
+// same retry.
 //
 //nolint:gocritic // unnamedResult: body, found, error
 func (c *Client) once(path, accept string) ([]byte, bool, error) {
@@ -712,18 +818,19 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("gh: %s: read: %w", path, err)
 	}
 
+	// Asked before the status vocabulary below, because the throttle is
+	// the one refusal the status cannot name: the classifier owns which
+	// statuses can carry it, so no case here restates that rule.
+	if wait, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
+		return nil, false, ThrottleRefusal(fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), wait)
+	}
+
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return body, true, nil
 	case http.StatusNotFound:
 		return nil, false, nil
-	case http.StatusForbidden:
-		if secondaryRateLimit(resp.Header, body) {
-			return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errThrottled)
-		}
-
-		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
-	case http.StatusUnauthorized:
+	case http.StatusForbidden, http.StatusUnauthorized:
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
 	case http.StatusTooManyRequests:
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)

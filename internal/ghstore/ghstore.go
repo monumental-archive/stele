@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -69,6 +70,11 @@ type response struct {
 // digest, retrying while a just-published attestation propagates.
 // An empty store after all retries is an error: this API is where
 // the evidence must live, and nothing there is a finding.
+//
+// A throttled read is the one refusal that is NOT such a finding: the
+// budget ran out on the host's pace, not on this digest's evidence, so
+// the refusal names the throttle and the caller reads "the run could
+// not see" rather than "the evidence is absent" (stele#209).
 func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) {
 	url := fmt.Sprintf("%s/repos/%s/attestations/sha256:%s?per_page=100", c.Base, slug, sha256Hex)
 
@@ -83,7 +89,10 @@ func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) 
 
 	for attempt := 1; attempt <= budget; attempt++ {
 		if attempt > 1 {
-			c.Sleep(time.Duration(attempt) * backoffStep)
+			// The host's own number wins over this ladder's when it named
+			// one: waiting out a propagation and waiting out a throttle
+			// are different waits, and only one of them the host knows.
+			c.Sleep(gh.RetryWait(lastErr, time.Duration(attempt)*backoffStep))
 		}
 
 		bundles, err := c.fetch(url)
@@ -127,6 +136,16 @@ func (c *Client) fetch(url string) ([]verify.StoredBundle, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// The one non-200 that is not about this digest at all: the host
+		// throttling THIS caller. Classified through internal/gh's one
+		// function rather than a second reading of the same headers
+		// (stele#209) — two GitHub readers that disagreed about what a
+		// throttle looks like would report the same outage two ways, and
+		// this leg's way would be "the evidence is not there".
+		if wait, ok := gh.Throttled(resp.StatusCode, resp.Header, body); ok {
+			return nil, gh.ThrottleRefusal(fmt.Sprintf("HTTP %d", resp.StatusCode), wait)
+		}
+
 		// The status alone: the body is server-controlled prose.
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
