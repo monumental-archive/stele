@@ -204,7 +204,8 @@ type verifyArgs struct {
 // verifyCmd dispatches `stele verify <mode>`.
 func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele verify: a mode is required: release, vsa, chain or repro"); err != nil {
+		if _, err := fmt.Fprintln(stderr,
+			"stele verify: a mode is required: release, vsa, chain, repro or policy"); err != nil {
 			return exitIO
 		}
 
@@ -218,9 +219,16 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 		// store — its argument surface shares nothing with the three
 		// cryptographic modes, so it parses its own.
 		return verifyRepro(args[1:], stdout, stderr)
+	case modePolicy:
+		// The load-check is offline and answers about the document
+		// itself, so it holds none of the inputs the modes above judge
+		// WITH — and writes nothing on success, which is why it takes
+		// only the stream it refuses on.
+		return loadPolicyDoc(args[1:], stderr)
 	case modeRelease, modeVSA, modeChain:
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele verify: unknown mode %q (release, vsa, chain, repro)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr,
+			"stele verify: unknown mode %q (release, vsa, chain, repro, policy)\n", mode); err != nil {
 			return exitIO
 		}
 

@@ -127,6 +127,29 @@ level the emitter writes while a claim is not yet provable;
 recorded, not designed around). Field semantics:
 [policy-schema](policy-schema.md).
 
+### Keeping the floor loadable across a pin bump
+
+Your policy is committed beside a pinned stele, and an epoch bump
+moves what that binary accepts ([versioning](versioning.md)). Ask the
+engine directly, in a lint rather than at the moment some unrelated
+verb runs:
+
+```console
+stele verify policy --verify-policy path/to/verify-policy.json
+stele verify policy --assert-policy path/to/assert-policy.json
+```
+
+Offline, reaching nothing: a document that loads says nothing and
+exits 0, and any other exit prints the engine's own refusal. Run it
+over each committed document at the pin you actually ship, and a bump
+that would have broken your belt breaks one lint line instead, naming
+the cause.
+
+Do not build this guard by reading stele's epoch and comparing it to
+your document's — that is a second copy of a number whose whole
+design is that it has one home. Ask the binary; the pin is a pointer
+to the authority.
+
 ## The couplings that are real
 
 Stated honestly rather than discovered:
