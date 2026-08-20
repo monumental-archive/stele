@@ -13,6 +13,14 @@
 // the subject, so it is retried on a bounded ladder. Retrying an
 // answer away would turn a real absence into a timeout and hide a
 // narrowed credential behind noise.
+//
+// The one 403 that is NOT a fact about the subject is GitHub's
+// SECONDARY rate limit, which the forge spells with the same status
+// (stele#196). That is the host throttling THIS CALLER, so it is
+// classified on the response rather than on the status code and
+// joins the retry ladder — a throttled walk that reported its
+// subjects as forbidden would be the wrong-refusal class the ladder
+// exists to prevent.
 package gh
 
 import (
@@ -36,6 +44,58 @@ var ErrForbidden = errors.New("gh: the credential cannot read this")
 // errTransient marks a status that says nothing about the subject —
 // the host or the transport failed. Retried, never surfaced.
 var errTransient = errors.New("gh: transient")
+
+// errThrottled marks the host refusing this walk for its RATE. Named
+// apart from errTransient although both ride the same ladder, because
+// an exhausted ladder must say which of the two it ran out of — and
+// named apart from ErrForbidden because the two arrive with the same
+// status and mean opposite things: one is about this caller's pace,
+// the other about this subject's permissions.
+var errThrottled = errors.New("gh: the host throttled this walk, which says nothing about the subject")
+
+// retryable reports whether an error is one the ladder may run again.
+// Both members say nothing about the subject: the transport or host
+// failed, or the host throttled this caller.
+func retryable(err error) bool {
+	return errors.Is(err, errTransient) || errors.Is(err, errThrottled)
+}
+
+// secondaryLimitRE matches the message GitHub answers a secondary
+// rate limit with, and the fragment its documentation_url ends in.
+var secondaryLimitRE = regexp.MustCompile(`(?i)secondary[ -]rate[ -]limit`)
+
+// secondaryRateLimit reports whether a 403 is GitHub's SECONDARY rate
+// limit — the host throttling this caller — rather than a refusal of
+// the credential.
+//
+// The forge documents two signals, and this reads both because each
+// travels without the other: a `retry-after` header naming the wait,
+// and a body whose message names the limit —
+//
+//	retry-after: 60
+//	{"message": "You have exceeded a secondary rate limit.
+//	             Please wait a few minutes before you try again.",
+//	 "documentation_url": "https://docs.github.com/rest/overview/
+//	                       rate-limits-for-the-rest-api#about-secondary-rate-limits"}
+//
+// GitHub sends the header only when it has a wait to name, and a
+// truncating proxy can drop the body while the header survives.
+//
+// The primary budget cannot stand in for either: measured 2026-08-20,
+// an org-wide walk took this 403 with x-ratelimit-remaining at
+// 4799/5000 — by the primary counter, nothing was wrong.
+//
+// Reading a server-controlled body is the narrow exception to this
+// file's rule that only the status is trusted: it is asked one
+// documented question about ONE status, and its only power is to move
+// a refusal onto the retry ladder, never off one.
+func secondaryRateLimit(header http.Header, body []byte) bool {
+	if strings.TrimSpace(header.Get("Retry-After")) != "" {
+		return true
+	}
+
+	return secondaryLimitRE.Match(body)
+}
 
 // The transient retry ladder: bounded, so a walk against a genuinely
 // broken host still ends and reports CANNOT_JUDGE rather than hanging.
@@ -297,7 +357,7 @@ func (c *Client) Asset(owner, repo, tag, name string) ([]byte, error) {
 		}
 
 		body, err := c.asset(owner, repo, tag, name)
-		if !errors.Is(err, errTransient) {
+		if !retryable(err) {
 			return body, err
 		}
 
@@ -566,6 +626,13 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errTransient)
 		}
 
+		// The download host throttles with the same 403 the API does,
+		// through the one classifier — a walk pulling many assets is
+		// exactly the pace that earns one.
+		if resp.StatusCode == http.StatusForbidden && secondaryRateLimit(resp.Header, body) {
+			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errThrottled)
+		}
+
 		return nil, fmt.Errorf("gh: asset %s: HTTP %d", u, resp.StatusCode)
 	}
 
@@ -580,6 +647,10 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 // timeout, and how it hides a narrowed credential behind noise.
 // Measured against the 2026-08-17 GitHub outage, where the first live
 // walk died on a single 504 mid-population.
+//
+// The exception is the 403 that secondaryRateLimit classifies as the
+// host throttling this caller: that one is no answer about the
+// subject at all, so it rides this ladder with the same backoff.
 func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocritic // unnamedResult: body, found, error
 	var lastErr error
 
@@ -589,7 +660,7 @@ func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocri
 		}
 
 		body, ok, err := c.once(path, accept)
-		if !errors.Is(err, errTransient) {
+		if !retryable(err) {
 			return body, ok, err
 		}
 
@@ -612,7 +683,8 @@ func (c *Client) sleep(d time.Duration) {
 
 // once performs one API read. 404 returns (nil, false, nil); 403/401
 // return ErrForbidden — the two absences the engine must never
-// conflate; 5xx and 429 wrap errTransient for the retry above.
+// conflate; 5xx and 429 wrap errTransient for the retry above, and so
+// does the 403 that carries the forge's secondary-rate-limit signals.
 //
 //nolint:gocritic // unnamedResult: body, found, error
 func (c *Client) once(path, accept string) ([]byte, bool, error) {
@@ -645,7 +717,13 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 		return body, true, nil
 	case http.StatusNotFound:
 		return nil, false, nil
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusForbidden:
+		if secondaryRateLimit(resp.Header, body) {
+			return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errThrottled)
+		}
+
+		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
+	case http.StatusUnauthorized:
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
 	case http.StatusTooManyRequests:
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)
