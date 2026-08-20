@@ -230,16 +230,9 @@ type TagsPolicy struct {
 	// IdentityPattern is the regular expression the signing
 	// certificate's SAN must match.
 	IdentityPattern *string `json:"identityPattern"`
-	// ProofFloor is the floor of proof the org requires of a tag
-	// signature (stele#173) — how much countersigned evidence is
-	// enough is the ORG's declaration, never the tool's decision.
-	// "certificate-transparency": the signing certificate's issuance
-	// countersigned by a trusted CT log — what any Fulcio-minted
-	// signature can prove offline, receipts or not. Or
-	// "observer-timestamp": additionally a transparency-log entry and
-	// an observer timestamp over the signature itself, which only a
-	// mint that embeds its receipts can meet.
-	ProofFloor *string `json:"proofFloor"`
+	// ProofFloor is how much countersigned proof the org requires of a
+	// tag signature, and from which tag (stele#173, stele#186).
+	ProofFloor *TagProofFloor `json:"proofFloor"`
 	// NotesRef is the source chain's notes ref, fully qualified.
 	NotesRef *string `json:"notesRef"`
 	// Epochs maps each releasing repository to the first tag that
@@ -265,15 +258,13 @@ func (tp *TagsPolicy) validate() error {
 		}
 	}
 
-	if tp.ProofFloor == nil || *tp.ProofFloor == "" {
+	if tp.ProofFloor == nil {
 		return errors.New(
-			"tags.proofFloor is absent or empty — the org declares how much proof is enough, the tool never does")
+			"tags.proofFloor is absent — the org declares how much proof is enough, the tool never does")
 	}
 
-	if *tp.ProofFloor != "certificate-transparency" && *tp.ProofFloor != "observer-timestamp" {
-		return fmt.Errorf(
-			"tags.proofFloor %q is not a floor this verifier judges (certificate-transparency, observer-timestamp)",
-			*tp.ProofFloor)
+	if err := tp.ProofFloor.validate(); err != nil {
+		return err
 	}
 
 	if !strings.HasPrefix(*tp.NotesRef, "refs/") {
@@ -291,6 +282,157 @@ func (tp *TagsPolicy) validate() error {
 
 		if _, err := semver.NewVersion(strings.TrimPrefix(epoch, "v")); err != nil {
 			return fmt.Errorf("tags.epochs[%s]: %w", repo, err)
+		}
+	}
+
+	return tp.ProofFloor.validateAgainst(tp.Epochs)
+}
+
+// The floors this verifier judges, named once. A floor the policy may
+// declare is a floor the tool must be able to reach, so the set lives
+// beside the declaration it validates rather than being restated at
+// each use.
+const (
+	tagFloorCertificateTransparency = "certificate-transparency"
+	tagFloorObserverTimestamp       = "observer-timestamp"
+)
+
+func knownTagFloor(floor string) bool {
+	return floor == tagFloorCertificateTransparency || floor == tagFloorObserverTimestamp
+}
+
+// TagProofFloor declares how much countersigned proof a tag signature
+// owes — and, when a repository's mint gained the capability to prove
+// more partway through its history, the tag from which the heavier
+// obligation binds.
+//
+// The floor and the point it binds from are ONE declaration, never a
+// second epoch map beside tags.epochs (stele#186). They answer
+// different questions about the same tags: `epochs` says when a
+// repository began signing at all, this says when its floor rose. A
+// floor raised globally instead would redden every tag minted before
+// the mint could meet it — the #128/#109 failure the epoch vocabulary
+// exists to prevent — and those tags are not defective.
+//
+// Universality: an org whose floor never rose declares `floor` alone;
+// an org that never minted without receipts declares `from` at its
+// first tag. Neither has to edit this tool.
+type TagProofFloor struct {
+	// Floor is the floor owed from a repository's `from` tag onward,
+	// or by every tag when no `from` is declared.
+	// "certificate-transparency": the signing certificate's issuance
+	// countersigned by a trusted CT log — what any Fulcio-minted
+	// signature can prove offline, receipts or not.
+	// "observer-timestamp": additionally a transparency-log entry and
+	// an observer timestamp over the signature itself, which only a
+	// mint that embeds its receipts can meet.
+	Floor *string `json:"floor"`
+	// From maps a repository to the first tag owing Floor. A
+	// repository absent from a declared map has not raised its floor
+	// and every one of its tags owes Before — the correct reading for
+	// a rollout partway through a population. Absent entirely means
+	// Floor binds everywhere.
+	From map[string]string `json:"from"`
+	// Before is what tags earlier than the `from` tag owe. Declared
+	// with From or not at all: a rise with nothing beneath it leaves
+	// the tags it does not reach owing nothing at all.
+	Before *string `json:"before"`
+}
+
+// Raised reports whether any repository's floor rises — what a caller
+// needs to know to say which regimes one run covered.
+func (f *TagProofFloor) Raised() bool { return len(f.From) > 0 }
+
+// floorFor is the floor one tag of one repository owes.
+func (f *TagProofFloor) floorFor(repo, tag string) string {
+	if len(f.From) == 0 {
+		return *f.Floor
+	}
+
+	from, raised := f.From[repo]
+	if !raised {
+		return *f.Before
+	}
+
+	if tagAtOrAfter(tag, from) {
+		return *f.Floor
+	}
+
+	return *f.Before
+}
+
+func (f *TagProofFloor) validate() error {
+	if f.Floor == nil || *f.Floor == "" {
+		return errors.New(
+			"tags.proofFloor.floor is absent or empty — the org declares how much proof is enough, " +
+				"the tool never does")
+	}
+
+	if !knownTagFloor(*f.Floor) {
+		return fmt.Errorf(
+			"tags.proofFloor.floor %q is not a floor this verifier judges (%s, %s)",
+			*f.Floor, tagFloorCertificateTransparency, tagFloorObserverTimestamp)
+	}
+
+	if (len(f.From) == 0) != (f.Before == nil) {
+		return errors.New(
+			"tags.proofFloor declares `from` and `before` together or not at all — " +
+				"a floor that rises from a point says nothing about the tags before it, " +
+				"and a floor for tags before a point that is never named binds nothing")
+	}
+
+	if f.Before == nil {
+		return nil
+	}
+
+	if !knownTagFloor(*f.Before) {
+		return fmt.Errorf(
+			"tags.proofFloor.before %q is not a floor this verifier judges (%s, %s)",
+			*f.Before, tagFloorCertificateTransparency, tagFloorObserverTimestamp)
+	}
+
+	// Equal floors are refused; unequal ones are not ordered here. A
+	// mint that REGRESSED is a real thing an org must be able to
+	// declare honestly, and a tool that only permits rises decides a
+	// policy fact. What no org can mean is a boundary with the same
+	// floor on both sides.
+	if *f.Before == *f.Floor {
+		return fmt.Errorf(
+			"tags.proofFloor.before is %q, the floor it is already — a boundary with one floor on both sides "+
+				"declares nothing", *f.Before)
+	}
+
+	for repo, from := range f.From {
+		if _, err := semver.NewVersion(strings.TrimPrefix(from, "v")); err != nil {
+			return fmt.Errorf("tags.proofFloor.from[%s]: %w", repo, err)
+		}
+	}
+
+	return nil
+}
+
+// validateAgainst holds the declared boundaries against the signing
+// epochs: a floor cannot rise for a repository that owes no signature
+// at all, nor at a tag minted before that repository began signing.
+func (f *TagProofFloor) validateAgainst(epochs map[string]string) error {
+	for repo, from := range f.From {
+		epoch, declared := epochs[repo]
+
+		switch {
+		case !declared:
+			return fmt.Errorf(
+				"tags.proofFloor.from[%s] raises the floor for a repository tags.epochs does not name — "+
+					"a heavier obligation on tags that owe no signature at all", repo)
+
+		case epoch == EpochPending:
+			return fmt.Errorf(
+				"tags.proofFloor.from[%s] raises the floor for a repository declared unsigned — "+
+					"tags.epochs says it has not begun signing", repo)
+
+		case !tagAtOrAfter(from, epoch):
+			return fmt.Errorf(
+				"tags.proofFloor.from[%s] is %s, before the signing epoch %s — "+
+					"the floor cannot rise for tags that owe no signature", repo, from, epoch)
 		}
 	}
 

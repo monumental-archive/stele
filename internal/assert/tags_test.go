@@ -7,6 +7,8 @@ package assert_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,7 +33,7 @@ const tagsPolicyJSON = `{
     "tagPattern": "^v[0-9]",
     "taggerName": "release-mint[bot]",
     "identityPattern": "^https://github\\.com/acme/",
-    "proofFloor": "certificate-transparency",
+    "proofFloor": {"floor": "certificate-transparency"},
     "notesRef": "refs/notes/commits",
     "epochs": {"widget": "v1.1.0", "gadget": "pending"}
   }
@@ -111,20 +113,34 @@ func (f *fakeTags) IsAncestor(_, _, base, head string) (bool, error) {
 // tear reports the scripted failure for one named read, if any.
 func (f *fakeTags) tear(read string) error { return f.torn[read] }
 
-// fakeTagVerifier scripts the trust seam.
+// fakeTagVerifier scripts the trust seam, recording the floor each
+// tag was judged against — the fact stele#186's boundary is proven
+// by, since a floor that binds nowhere looks exactly like one that
+// binds everywhere.
 type fakeTagVerifier struct {
 	err    error
 	called int
+	floors []string
+	// refuseFloor refuses exactly one floor — the shape a mint that
+	// stopped embedding its receipts takes: every signature still
+	// verifies, and only the raised obligation is unmet.
+	refuseFloor string
 }
 
-func (v *fakeTagVerifier) Verify(_, _ []byte) (assert.TagProof, error) {
+func (v *fakeTagVerifier) Verify(_, _ []byte, floor string) (assert.TagProof, error) {
 	v.called++
+	v.floors = append(v.floors, floor)
+
+	err := v.err
+	if v.refuseFloor != "" && floor == v.refuseFloor {
+		err = errors.New("the tag signature carries no transparency-log entry and no signed timestamp")
+	}
 
 	return assert.TagProof{
 		SAN:      "https://github.com/acme/widget/x",
-		Depth:    "certificate-transparency",
+		Depth:    floor,
 		Observed: "2026-08-19T13:49:19Z (certificate-transparency test-log)",
-	}, v.err
+	}, err
 }
 
 // conformantTags scripts one repo, widget, with a signed post-epoch
@@ -157,6 +173,219 @@ func conformantTags() *fakeTags {
 			genesisRev + "..." + genesisRev:  true,
 			genesisRev + "..." + unlinkedRev: true,
 		},
+	}
+}
+
+// The raised-floor policy (stele#186): widget's mint gained the
+// capability at v1.3.0, so from there the floor is the observer
+// stance and before it certificate transparency. gadget is declared
+// unsigned and never appears in `from`.
+const raisedFloorPolicyJSON = `{
+  "schema": 6,
+  "issuer": "https://token.example.com",
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "storeVsaFromVersion": "1.13.0",
+    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
+  },
+  "tags": {
+    "tagPattern": "^v[0-9]",
+    "taggerName": "release-mint[bot]",
+    "identityPattern": "^https://github\\.com/acme/",
+    "proofFloor": {
+      "floor": "observer-timestamp",
+      "from": {"widget": "v1.3.0"},
+      "before": "certificate-transparency"
+    },
+    "notesRef": "refs/notes/commits",
+    "epochs": {"widget": "v1.1.0", "gadget": "pending"}
+  }
+}`
+
+// spanningTags scripts widget across the raise: two tags below the
+// boundary, the boundary tag itself, and one above it. All four are
+// signed, annotated and linked — the ONLY thing that differs across
+// them is what they owe.
+func spanningTags() *fakeTags {
+	refs := []gh.TagRef{}
+	objects := map[string]*gh.TagObject{}
+
+	for i, name := range []string{"v1.1.0", "v1.2.0", "v1.3.0", "v1.4.0"} {
+		sha := fmt.Sprintf("00000000000000000000000000000000000000c%d", i)
+		refs = append(refs, gh.TagRef{Name: name, ObjectSHA: sha, Annotated: true})
+		objects[sha] = &gh.TagObject{
+			Tagger: "release-mint[bot]", Target: linkedRev,
+			Payload:   []byte("object x\ntagger release-mint[bot] <m@e> 1755000000 +0000\n"),
+			Signature: []byte("-----BEGIN SIGNED MESSAGE-----\nx\n-----END SIGNED MESSAGE-----\n"),
+		}
+	}
+
+	f := conformantTags()
+	f.refs = map[string][]gh.TagRef{"widget": refs}
+	f.objects = objects
+
+	return f
+}
+
+func runTagsPolicy(t *testing.T, policyJSON string, f *fakeTags, tv assert.TagVerifier) *report.Report {
+	t.Helper()
+
+	pol, err := assert.LoadPolicy(strings.NewReader(policyJSON))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	rep, rerr := assert.Tags(pol, repoPop(t, "acme/widget"), f, tv, report.NewJournal(), func(string, ...any) {})
+	if rerr != nil {
+		t.Fatalf("Tags: %v", rerr)
+	}
+
+	return rep
+}
+
+// TestTagsRaisedFloorBoundary: the floor rises at a named tag and
+// nowhere else. Every tag below the boundary owes what the mint could
+// prove then; the boundary tag and everything above owe the raised
+// obligation. This is the whole of stele#186 in one assertion — a
+// floor raised globally instead would redden the tags below it, which
+// are not defective.
+func TestTagsRaisedFloorBoundary(t *testing.T) {
+	t.Parallel()
+
+	tv := &fakeTagVerifier{}
+
+	rep := runTagsPolicy(t, raisedFloorPolicyJSON, spanningTags(), tv)
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	want := []string{
+		"certificate-transparency", // v1.1.0 — the signing epoch, before the raise
+		"certificate-transparency", // v1.2.0 — the last tag below the boundary
+		"observer-timestamp",       // v1.3.0 — the boundary tag itself owes the raise
+		"observer-timestamp",       // v1.4.0 — and everything after it
+	}
+
+	if !slices.Equal(tv.floors, want) {
+		t.Fatalf("floors = %v, want %v", tv.floors, want)
+	}
+}
+
+// TestTagsRaisedFloorRefusesAMintThatReverted: the obligation the
+// declaration creates. A tag at or after the boundary whose mint
+// dropped its receipts refuses — which is what makes a silent revert
+// of the mint visible, and is the reason the floor is declared at all
+// rather than left implied by what the tags happen to carry.
+func TestTagsRaisedFloorRefusesAMintThatReverted(t *testing.T) {
+	t.Parallel()
+
+	tv := &fakeTagVerifier{refuseFloor: "observer-timestamp"}
+
+	rep := runTagsPolicy(t, raisedFloorPolicyJSON, spanningTags(), tv)
+	if rep.Verdict() == report.VerdictPass {
+		t.Fatal("a post-boundary tag with no receipt passed")
+	}
+
+	subjects := map[string]bool{}
+
+	for _, f := range rep.Findings() {
+		subjects[f.Subject] = true
+	}
+
+	for _, tag := range []string{"widget@v1.3.0", "widget@v1.4.0"} {
+		if !subjects[tag] {
+			t.Errorf("no finding for %s — the raised floor bound nothing there", tag)
+		}
+	}
+
+	for _, tag := range []string{"widget@v1.1.0", "widget@v1.2.0"} {
+		if subjects[tag] {
+			t.Errorf("finding for %s — a tag below the boundary owes the raise it predates", tag)
+		}
+	}
+}
+
+// TestTagsRaisedFloorReportsBothRegimes: a run that judged only one
+// side of a boundary has not proven the boundary, so the report
+// carries the count at each floor. Without it a policy whose `from`
+// names a tag nobody minted reads exactly like one that binds.
+func TestTagsRaisedFloorReportsBothRegimes(t *testing.T) {
+	t.Parallel()
+
+	facts := tagFacts(t, runTagsPolicy(t, raisedFloorPolicyJSON, spanningTags(), &fakeTagVerifier{}))
+
+	if facts["tagsProvenAt:certificate-transparency"] != "2" || facts["tagsProvenAt:observer-timestamp"] != "2" {
+		t.Fatalf("floor facts = %+v, want two tags judged at each floor", facts)
+	}
+}
+
+// tagFacts reads a sealed report's facts the way a consumer does —
+// through the encoded document, never a test-only accessor.
+func tagFacts(t *testing.T, rep *report.Report) map[string]string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := rep.Encode(&buf); err != nil {
+		t.Fatalf("Encode = %v", err)
+	}
+
+	doc, err := jsonx.DecodeForeign[struct {
+		Facts []report.Fact `json:"facts"`
+	}](buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	facts := map[string]string{}
+	for _, f := range doc.Facts {
+		facts[f.Name] = f.Value
+	}
+
+	return facts
+}
+
+// TestTagsUnraisedFloorReportsNoRegimes: an org whose floor never
+// rose declares no boundary, so the run states no split — a fact
+// naming a regime that does not exist is noise that reads as
+// evidence.
+func TestTagsUnraisedFloorReportsNoRegimes(t *testing.T) {
+	t.Parallel()
+
+	for name := range tagFacts(t, runTags(t, conformantTags(), &fakeTagVerifier{})) {
+		if strings.HasPrefix(name, "tagsProvenAt:") {
+			t.Fatalf("fact %s on a policy that declares no boundary", name)
+		}
+	}
+}
+
+// TestTagsUnraisedRepositoryStaysBelow: a repository absent from a
+// declared `from` has not raised its floor, and every one of its tags
+// owes what came before — the correct reading for a rollout partway
+// through a population, and the one that keeps a partial switch from
+// reddening the repositories that have not switched.
+func TestTagsUnraisedRepositoryStaysBelow(t *testing.T) {
+	t.Parallel()
+
+	policy := strings.Replace(raisedFloorPolicyJSON,
+		`"from": {"widget": "v1.3.0"}`, `"from": {"gadget": "v2.0.0"}`, 1)
+	policy = strings.Replace(policy,
+		`"epochs": {"widget": "v1.1.0", "gadget": "pending"}`,
+		`"epochs": {"widget": "v1.1.0", "gadget": "v2.0.0"}`, 1)
+
+	tv := &fakeTagVerifier{}
+
+	rep := runTagsPolicy(t, policy, spanningTags(), tv)
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+	}
+
+	for i, floor := range tv.floors {
+		if floor != "certificate-transparency" {
+			t.Fatalf("tag %d judged at %q — widget declares no raise", i, floor)
+		}
 	}
 }
 

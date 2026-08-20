@@ -1221,7 +1221,7 @@ func loadTagVerifier(pol *assert.Policy, root *rootFlags, stderr io.Writer) (ass
 		return fail(err.Error())
 	}
 
-	tv, err := newTagVerifier(rootJSON, *pol.Tags.IdentityPattern, *pol.Issuer, *pol.Tags.ProofFloor)
+	tv, err := newTagVerifier(rootJSON, *pol.Tags.IdentityPattern, *pol.Issuer)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -1229,11 +1229,13 @@ func loadTagVerifier(pol *assert.Policy, root *rootFlags, stderr io.Writer) (ass
 	return tv, exitOK
 }
 
-// newTagVerifier builds the gitsign verifier over the trust package,
-// carrying the policy's declared proof floor. Swappable in tests.
+// newTagVerifier builds the gitsign verifier over the trust package.
+// The proof floor is NOT bound here: it is a per-tag value the walk
+// computes from the policy's declared boundary (stele#186).
+// Swappable in tests.
 //
 //nolint:gochecknoglobals // test seam, written only by test setup
-var newTagVerifier = func(rootJSON []byte, sanPattern, issuer, proofFloor string) (assert.TagVerifier, error) {
+var newTagVerifier = func(rootJSON []byte, sanPattern, issuer string) (assert.TagVerifier, error) {
 	tr, err := trust.LoadRoot(rootJSON)
 	if err != nil {
 		return nil, fmt.Errorf("trusted root: %w", err)
@@ -1250,21 +1252,19 @@ var newTagVerifier = func(rootJSON []byte, sanPattern, issuer, proofFloor string
 	}
 
 	return tagTrust{
-		v:     v,
-		id:    trust.TagIdentity{SANPattern: re, Issuer: issuer},
-		floor: trust.TagFloor(proofFloor),
+		v:  v,
+		id: trust.TagIdentity{SANPattern: re, Issuer: issuer},
 	}, nil
 }
 
 // tagTrust adapts trust.VerifyTag to the walk's seam.
 type tagTrust struct {
-	v     *trust.Verifier
-	id    trust.TagIdentity
-	floor trust.TagFloor
+	v  *trust.Verifier
+	id trust.TagIdentity
 }
 
-func (t tagTrust) Verify(payload, signature []byte) (assert.TagProof, error) {
-	verdict, err := t.v.VerifyTag(payload, signature, t.id, t.floor)
+func (t tagTrust) Verify(payload, signature []byte, floor string) (assert.TagProof, error) {
+	verdict, err := t.v.VerifyTag(payload, signature, t.id, trust.TagFloor(floor))
 	if err != nil {
 		return assert.TagProof{}, err
 	}

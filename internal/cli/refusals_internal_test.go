@@ -339,7 +339,7 @@ func TestLoadTagVerifierRefusesABrokenRoot(t *testing.T) {
 		Issuer: &issuer,
 		Tags: &assert.TagsPolicy{
 			IdentityPattern: &pattern,
-			ProofFloor:      &floor,
+			ProofFloor:      &assert.TagProofFloor{Floor: &floor},
 			Epochs:          map[string]string{"widget": "v0.1.0"},
 		},
 	}

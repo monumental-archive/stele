@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -37,13 +38,18 @@ import (
 )
 
 // TagVerifier proves one tag signature — the trust boundary behind a
-// seam so every guard here stays table-tested; the CLI binds the
-// real gitsign verification, carrying the policy's declared proof
-// floor.
+// seam so every guard here stays table-tested; the CLI binds the real
+// gitsign verification.
 type TagVerifier interface {
 	// Verify proves the signature over the payload to at least the
-	// declared floor and returns the proof it reached.
-	Verify(payload, signature []byte) (TagProof, error)
+	// given floor and returns the proof it reached.
+	//
+	// The floor is per TAG, not per run (stele#186): a mint gains the
+	// capability to prove more partway through a repository's history,
+	// and the tags before that point are not defective. A run-wide
+	// floor could only be the lowest any tag can meet, which is a
+	// floor nothing rises above.
+	Verify(payload, signature []byte, floor string) (TagProof, error)
 }
 
 // TagProof is one verified tag signature's verdict: who signed, the
@@ -98,7 +104,7 @@ func Tags(
 
 	w := &tagsWalk{
 		pol: tp, org: pop.Owner(), tags: tags, tv: tv, j: j, log: log,
-		tagRE: regexp.MustCompile(*tp.TagPattern),
+		tagRE: regexp.MustCompile(*tp.TagPattern), floors: map[string]int{},
 	}
 
 	for _, repo := range repos {
@@ -111,6 +117,26 @@ func Tags(
 		report.Fact{Name: "tagsChecked", Value: strconv.Itoa(w.checked)})
 	if len(w.legacy) > 0 {
 		facts = append(facts, report.Fact{Name: "legacyTags", Value: strings.Join(w.legacy, " ")})
+	}
+
+	// A raised floor is only proven by a run that PROVED tags on both
+	// sides of it, so the run reports how many it proved at each —
+	// sorted, so the fact does not depend on map order. Refused tags
+	// are absent by construction: the counter moves after a verdict,
+	// and a tag that did not verify proves no regime.
+	if tp.ProofFloor.Raised() {
+		names := make([]string, 0, len(w.floors))
+		for floor := range w.floors {
+			names = append(names, floor)
+		}
+
+		sort.Strings(names)
+
+		for _, floor := range names {
+			facts = append(facts, report.Fact{
+				Name: "tagsProvenAt:" + floor, Value: strconv.Itoa(w.floors[floor]),
+			})
+		}
 	}
 
 	pop2 := report.PopulationFromListing(w.checked, "release tags")
@@ -129,6 +155,10 @@ type tagsWalk struct {
 	tagRE   *regexp.Regexp
 	checked int
 	legacy  []string
+	// floors counts the tags PROVEN at each declared floor — the fact
+	// that says which regimes a run actually covered, rather than
+	// which the policy declared.
+	floors map[string]int
 }
 
 func (w *tagsWalk) repo(repo string) error {
@@ -249,7 +279,7 @@ func (w *tagsWalk) tag(repo string, ref gh.TagRef, epoch string, noted map[strin
 	// at all — not performed and passed, which is the distinction an
 	// excuse for such a tag rests on.
 	if epoch != EpochPending && tagAtOrAfter(ref.Name, epoch) {
-		w.signature(subject, obj)
+		w.signature(subject, obj, w.pol.ProofFloor.floorFor(repo, ref.Name))
 	}
 
 	if c := w.j.Check(subject, assertTagLink); !noted[target] {
@@ -276,8 +306,9 @@ func (w *tagsWalk) resolveTarget(repo string, ref gh.TagRef) (string, *gh.TagObj
 	return obj.Target, obj, nil
 }
 
-// signature judges the signing obligation on one annotated tag.
-func (w *tagsWalk) signature(subject string, obj *gh.TagObject) {
+// signature judges the signing obligation on one annotated tag,
+// against the floor that tag owes.
+func (w *tagsWalk) signature(subject string, obj *gh.TagObject, floor string) {
 	c := w.j.Check(subject, assertTagSignature)
 
 	if len(obj.Signature) == 0 {
@@ -291,14 +322,20 @@ func (w *tagsWalk) signature(subject string, obj *gh.TagObject) {
 	// signing time and the identity, and a prefix that picks one of
 	// them misreports the others (stele#167, where a clock
 	// disagreement surfaced as an untrusted chain).
-	proof, err := w.tv.Verify(obj.Payload, obj.Signature)
+	proof, err := w.tv.Verify(obj.Payload, obj.Signature, floor)
 	if err != nil {
 		c.Diverged("signature refused: " + err.Error())
 
 		return
 	}
 
-	w.log("assert: tags: %s signature %s observed %s", subject, proof.Depth, proof.Observed)
+	w.floors[floor]++
+
+	// The floor is logged beside the depth because they are different
+	// facts: what was owed, and what was proven. A run that reports
+	// only the depth cannot be read as evidence that the raised floor
+	// bound anything.
+	w.log("assert: tags: %s signature %s (floor %s) observed %s", subject, proof.Depth, floor, proof.Observed)
 }
 
 // tagAtOrAfter reports whether the tag sits at or after the epoch
