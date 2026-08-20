@@ -126,8 +126,8 @@ func Throttled(status int, header http.Header, body []byte) (time.Duration, bool
 		return 0, false
 	}
 
-	if raw := strings.TrimSpace(header.Get("Retry-After")); raw != "" {
-		return namedWait(raw), true
+	if strings.TrimSpace(header.Get("Retry-After")) != "" {
+		return retryAfter(header), true
 	}
 
 	// Exhaustion is the marker; anything else the counter says is not
@@ -141,6 +141,15 @@ func Throttled(status int, header http.Header, body []byte) (time.Duration, bool
 	}
 
 	return 0, false
+}
+
+// retryAfter is the wait a response's Retry-After names, zero when it
+// names none. The ONE reading of that header for every status that can
+// carry it: a 429 says unambiguously what a 403 has to be classified
+// into, but the number both name is the same number, read and clamped
+// here alone (stele#217).
+func retryAfter(header http.Header) time.Duration {
+	return namedWait(strings.TrimSpace(header.Get("Retry-After")))
 }
 
 // namedWait reads the wait a Retry-After names, in the delta-seconds
@@ -164,36 +173,50 @@ func namedWait(raw string) time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
-// throttleError is a throttle carrying the wait the host named. The
-// wait travels WITH the refusal because the classification and the
-// wait are one reading of one response: a ladder that had to ask the
-// response again would hold a second derivation of the same fact, and
-// by then the response is gone.
-type throttleError struct {
+// waitError is a refusal carrying the wait the host named. The wait
+// travels WITH the refusal because the classification and the wait are
+// one reading of one response: a ladder that had to ask the response
+// again would hold a second derivation of the same fact, and by then
+// the response is gone.
+//
+// It carries its own sentinel because two different refusals earn a
+// named wait and MEAN different things — the throttle and the 429 the
+// forge answers a rate limit with — while the pause they earn is the
+// host's either way (stele#217).
+type waitError struct {
 	what string
 	wait time.Duration
+	kind error
 }
 
-func (t *throttleError) Error() string { return t.what + ": " + ErrThrottled.Error() }
+func (t *waitError) Error() string { return t.what + ": " + t.kind.Error() }
 
-func (t *throttleError) Unwrap() error { return ErrThrottled }
+func (t *waitError) Unwrap() error { return t.kind }
 
 // ThrottleRefusal builds the error a throttled read returns: what was
 // being read, then the one sentence every leg says for a throttle.
 func ThrottleRefusal(what string, wait time.Duration) error {
-	return &throttleError{what: what, wait: wait}
+	return &waitError{what: what, wait: wait, kind: ErrThrottled}
+}
+
+// transientRefusal builds the error a 429 returns: still transient —
+// what a 429 MEANS is unchanged — but carrying the wait the host named,
+// so the ladder pauses for the minute it was asked for rather than
+// burning its budget in eighteen seconds.
+func transientRefusal(what string, wait time.Duration) error {
+	return &waitError{what: what, wait: wait, kind: errTransient}
 }
 
 // RetryWait is how long a ladder pauses before its next attempt: the
-// wait the host NAMED when the previous refusal carried one, and the
-// caller's own backoff otherwise.
+// wait the host NAMED when the previous refusal carried one — whichever
+// refusal that was — and the caller's own backoff otherwise.
 //
 // Shared so the two forge readers cannot come to honour the forge's
 // own number differently, while each keeps its own budget — the ladders
 // mean different things (one waits out a transient, the other waits out
 // a propagation) and only the host's number is common to both.
 func RetryWait(prev error, fallback time.Duration) time.Duration {
-	var t *throttleError
+	var t *waitError
 	if errors.As(prev, &t) && t.wait > 0 {
 		return t.wait
 	}
@@ -733,7 +756,14 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 			return nil, ThrottleRefusal(fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), wait)
 		}
 
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		// The 429 the download host answers a rate limit with names its
+		// own wait, read through the same one place the 403's is.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, transientRefusal(
+				fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), retryAfter(resp.Header))
+		}
+
+		if resp.StatusCode >= http.StatusInternalServerError {
 			return nil, fmt.Errorf("gh: asset %s: HTTP %d: %w", u, resp.StatusCode, errTransient)
 		}
 
@@ -756,6 +786,12 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 // throttling this caller: that one is no answer about the subject at
 // all, so it rides this ladder — pausing for the wait the host itself
 // named, and for this ladder's own backoff when it named none.
+//
+// A 429 rides it on the same terms (stele#217): it needs no
+// classifying, but it carries the same Retry-After, and a ladder that
+// read the host's number for the ambiguous status and ignored it for
+// the unambiguous one would end a walk in eighteen seconds against a
+// host that asked for sixty.
 func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocritic // unnamedResult: body, found, error
 	var lastErr error
 
@@ -790,7 +826,8 @@ func (c *Client) sleep(d time.Duration) {
 // return ErrForbidden — the two absences the engine must never
 // conflate; 5xx and 429 wrap errTransient for the retry above, and the
 // 403 the classifier reads as a throttle wraps ErrThrottled for the
-// same retry.
+// same retry. A 429 stays transient and additionally carries the wait
+// it named, which RetryWait hands the ladder.
 //
 //nolint:gocritic // unnamedResult: body, found, error
 func (c *Client) once(path, accept string) ([]byte, bool, error) {
@@ -833,7 +870,8 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 	case http.StatusForbidden, http.StatusUnauthorized:
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
 	case http.StatusTooManyRequests:
-		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)
+		return nil, false, transientRefusal(
+			fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), retryAfter(resp.Header))
 	default:
 		// The status alone: the body is server-controlled prose.
 		if resp.StatusCode >= http.StatusInternalServerError {

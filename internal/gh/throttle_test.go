@@ -354,6 +354,173 @@ func TestThrottleJoinsTheLadder(t *testing.T) {
 	}
 }
 
+// The scripted 429s: the status that needs no classifying, with and
+// without the wait it is documented to carry.
+func retryAfter429(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "60")
+	w.WriteHeader(http.StatusTooManyRequests)
+}
+
+func bare429(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusTooManyRequests)
+}
+
+func unreadableRetryAfter429(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "in a little while")
+	w.WriteHeader(http.StatusTooManyRequests)
+}
+
+func overBoundRetryAfter429(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "86400")
+	w.WriteHeader(http.StatusTooManyRequests)
+}
+
+// TestRateLimitWaitComesFromTheResponse pins stele#217: the wait a
+// ladder takes comes from the response for BOTH statuses the forge
+// rate limits with. A 429 carrying retry-after: 60 burned the ladder's
+// four attempts in eighteen seconds, so the AMBIGUOUS status got the
+// host's own number and the UNAMBIGUOUS one did not.
+//
+// The 429 is still a transient — what it MEANS is unchanged, and the
+// classifier still answers only for the 403 — so every row here also
+// asserts it is neither of the two sentinels a caller branches on.
+func TestRateLimitWaitComesFromTheResponse(t *testing.T) {
+	t.Parallel()
+
+	// The ladder's own backoff is (attempt-1) × 3s.
+	ladder := []time.Duration{3 * time.Second, 6 * time.Second, 9 * time.Second}
+
+	for _, tc := range []struct {
+		name     string
+		respond  func(http.ResponseWriter)
+		refuse   int
+		attempts int
+		waits    []time.Duration
+		found    bool
+	}{
+		{
+			name:     "a named wait is honoured, and the walk completes",
+			respond:  retryAfter429,
+			refuse:   2,
+			attempts: 3,
+			waits:    []time.Duration{60 * time.Second, 60 * time.Second},
+			found:    true,
+		},
+		{
+			name:     "a named wait is honoured on every attempt of an exhausted ladder",
+			respond:  retryAfter429,
+			refuse:   99,
+			attempts: 4,
+			waits:    []time.Duration{60 * time.Second, 60 * time.Second, 60 * time.Second},
+		},
+		{
+			name:     "a 429 naming no wait still pauses on the ladder's own backoff",
+			respond:  bare429,
+			refuse:   99,
+			attempts: 4,
+			waits:    ladder,
+		},
+		{
+			// Exactly what the same header does on a 403: one parse, and
+			// a number it cannot read is a number it does not invent.
+			name:     "a retry-after that will not parse falls back to the ladder's backoff",
+			respond:  unreadableRetryAfter429,
+			refuse:   99,
+			attempts: 4,
+			waits:    ladder,
+		},
+		{
+			// And the same clamp: a bounded ladder is what makes a walk
+			// against a broken host end.
+			name:     "a wait past the bound is clamped, never honoured whole",
+			respond:  overBoundRetryAfter429,
+			refuse:   99,
+			attempts: 4,
+			waits:    []time.Duration{120 * time.Second, 120 * time.Second, 120 * time.Second},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newProbe(t, tc.refuse, tc.respond)
+
+			repos, err := p.client.ListRepos("acme")
+
+			switch {
+			case tc.found && (err != nil || len(repos) != 1):
+				t.Fatalf("ListRepos = %v, %v — a rate-limited read must not end the walk", repos, err)
+			case !tc.found && err == nil:
+				t.Fatal("ListRepos answered where the forge refused")
+			}
+
+			if p.attempts != tc.attempts {
+				t.Fatalf("attempts = %d, want %d", p.attempts, tc.attempts)
+			}
+
+			if !slices.Equal(p.waits, tc.waits) {
+				t.Fatalf("waits = %v, want %v", p.waits, tc.waits)
+			}
+
+			if tc.found {
+				return
+			}
+
+			if !strings.Contains(err.Error(), "HTTP 429") {
+				t.Fatalf("err = %v, want it to name the status", err)
+			}
+
+			// The vocabulary is unchanged: a 429 is neither the host's
+			// classified throttle nor the credential's refusal.
+			if errors.Is(err, gh.ErrThrottled) {
+				t.Fatalf("err = %v — a 429 needs no classifying and must not borrow that word", err)
+			}
+
+			if errors.Is(err, gh.ErrForbidden) {
+				t.Fatalf("err = %v — a 429 says nothing about the credential", err)
+			}
+		})
+	}
+}
+
+// TestAssetRateLimitHonoursTheNamedWait is the download host's row: a
+// walk pulling many assets is the pace that earns a 429, and that
+// ladder reads the host's number through the same one place.
+func TestAssetRateLimitHonoursTheNamedWait(t *testing.T) {
+	t.Parallel()
+
+	seen := 0
+	waits := []time.Duration{}
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/acme/widget/releases/download/v1.0.0/app.bin", func(w http.ResponseWriter, _ *http.Request) {
+		seen++
+		if seen <= 2 {
+			retryAfter429(w)
+
+			return
+		}
+
+		writeBody(w, []byte("asset bytes"))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := gh.New("test-token")
+	c.Base = srv.URL
+	c.Download = srv.URL
+	c.Sleep = func(d time.Duration) { waits = append(waits, d) }
+
+	body, err := c.Asset("acme", "widget", "v1.0.0", "app.bin")
+	if err != nil || string(body) != "asset bytes" {
+		t.Fatalf("Asset = %q, %v — a rate-limited download must not end the walk", body, err)
+	}
+
+	if want := []time.Duration{60 * time.Second, 60 * time.Second}; !slices.Equal(waits, want) {
+		t.Fatalf("waits = %v, want %v — the download ladder honours the host's number too", waits, want)
+	}
+}
+
 // TestThrottleIsNotTheForbiddenSentinel pins the typed half of the
 // same rule: a caller that branches on ErrForbidden — an unreadable
 // subject is unchecked, never clean — must not see a throttle there,
