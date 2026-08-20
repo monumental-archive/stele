@@ -358,6 +358,46 @@ func TestLoadRefusals(t *testing.T) {
     ]`, `"protectedBranches": []`, "source.protectedBranches is absent or empty"},
 		{"branch name empty", `"name": "main"`, `"name": ""`, "protectedBranches[0].name"},
 		{
+			// A branch declaring a target with no level claims under it
+			// establishes that target from nothing, which is the same as
+			// claiming it outright.
+			"a branch that claims a target but establishes no level",
+			`"levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
+          {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
+        ]}]`,
+			`"levels": []`,
+			"protectedBranches[0].levels is absent or empty",
+		},
+		{
+			"a level claim naming no readable level",
+			`"levels": [{"level": "SLSA_SOURCE_LEVEL_3"`,
+			`"levels": [{"level": "SOURCE_3"`,
+			"levels[0].level",
+		},
+		{
+			// One level, one claim: two entries for a level are two
+			// property sets for one rung, and nothing decides between
+			// them.
+			"one level claimed twice",
+			`"levels": [{"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
+          {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}
+        ]}]`,
+			`"levels": [
+          {"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
+            {"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}]},
+          {"level": "SLSA_SOURCE_LEVEL_3", "requiredProperties": [
+            {"name": "ACME_SOURCE_DCO", "since": "2026-08-09T16:29:06+01:00"}]}]`,
+			"declares SLSA_SOURCE_LEVEL_3 more than once",
+		},
+		{
+			// A required property with no name matches every property
+			// and none: the join it drives is by name.
+			"a required property with no name",
+			`{"name": "ACME_SOURCE_GATED", "since": "2026-08-09T16:29:06+01:00"}`,
+			`{"name": "", "since": "2026-08-09T16:29:06+01:00"}`,
+			"name is absent or empty",
+		},
+		{
 			"branch level malformed",
 			`"targetLevel": "SLSA_SOURCE_LEVEL_3"`,
 			`"targetLevel": "LEVEL_3"`,

@@ -204,6 +204,47 @@ func TestClosureTerminatesOnACycle(t *testing.T) {
 	}
 }
 
+// One crate at two major versions is ordinary in a resolved Rust
+// graph — windows-sys and syn both routinely appear twice — and both
+// copies belong in the inventory, because a consumer triaging an
+// advisory needs to know which versions the artifact actually links.
+// The ordering has to be total for that: name alone leaves the two
+// copies interchangeable, and an inventory whose row order wanders
+// between runs re-renders on every derivation.
+func TestClosureOrdersDuplicateNamesByVersion(t *testing.T) {
+	t.Parallel()
+
+	twice := `{"packages": [
+	  {"id": "a 1.0.0 (path+file:///a)", "name": "a", "version": "1.0.0", "source": ""},
+	  {"id": "dup 0.52.0 (registry+x)", "name": "dup", "version": "0.52.0", "source": "registry+x"},
+	  {"id": "dup 0.48.0 (registry+x)", "name": "dup", "version": "0.48.0", "source": "registry+x"},
+	  {"id": "mid 1.0.0 (registry+x)", "name": "mid", "version": "1.0.0", "source": "registry+x"}],
+	 "resolve": {"nodes": [
+	  {"id": "a 1.0.0 (path+file:///a)", "deps": [
+	    {"pkg": "dup 0.52.0 (registry+x)", "dep_kinds": [{"kind": ""}]},
+	    {"pkg": "mid 1.0.0 (registry+x)", "dep_kinds": [{"kind": ""}]}]},
+	  {"id": "mid 1.0.0 (registry+x)", "deps": [
+	    {"pkg": "dup 0.48.0 (registry+x)", "dep_kinds": [{"kind": ""}]}]},
+	  {"id": "dup 0.52.0 (registry+x)", "deps": []},
+	  {"id": "dup 0.48.0 (registry+x)", "deps": []}]}}`
+
+	_, got, err := cargo.Closure([]byte(twice), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both copies survive, and the older sorts first: discovery order
+	// reached 0.52.0 first, so an unstable tiebreak would show here.
+	versions := make([]string, 0, len(got))
+	for _, p := range got {
+		versions = append(versions, p.Name+"@"+p.Version)
+	}
+
+	if strings.Join(versions, ",") != "dup@0.48.0,dup@0.52.0,mid@1.0.0" {
+		t.Fatalf("closure = %v, want both dup versions ordered oldest first", versions)
+	}
+}
+
 func TestClosureRefusals(t *testing.T) {
 	t.Parallel()
 

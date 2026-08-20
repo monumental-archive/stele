@@ -136,13 +136,19 @@ func ResolveRoot(p RootPlan) ([]byte, error) {
 // fetchTUF walks the TUF metadata chain from the plan's anchor and
 // returns the trusted-root target's bytes.
 //
-// Coverage note, deliberate: this function is the network boundary.
-// Exercising it means either reaching the live public-good instance
-// — a network dependency the gate refuses by law — or standing up a
-// fake TUF repository, which would prove the fake and not the
-// instance. It is proven where a network boundary can honestly be
-// proven: in shadow mode against the real instance before cutover.
-// The DECISION that reaches it (PlanRoot) is table-tested whole.
+// Coverage note, deliberate: the network boundary begins at tuf.New
+// below. Everything above it is a local read of the caller's own
+// anchor, and its refusal IS table-tested — an anchor that is not
+// there must say so rather than fall through to the built-in one and
+// resolve against trust material nobody asked for.
+//
+// Past that point, exercising this means either reaching the live
+// public-good instance — a network dependency the gate refuses by
+// law — or standing up a fake TUF repository, which would prove the
+// fake and not the instance. It is proven where a network boundary
+// can honestly be proven: in shadow mode against the real instance
+// before cutover. The DECISION that reaches it (PlanRoot) is
+// table-tested whole.
 func fetchTUF(p RootPlan) ([]byte, error) {
 	opts := tuf.DefaultOptions()
 	opts.RepositoryBaseURL = p.Mirror

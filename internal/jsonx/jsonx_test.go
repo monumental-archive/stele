@@ -2,6 +2,7 @@ package jsonx_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -91,6 +92,99 @@ func (failWriter) Write([]byte) (int, error) { return 0, errSink }
 func TestEncodeWriteFailure(t *testing.T) {
 	if err := jsonx.Encode(failWriter{}, claim{}); err == nil {
 		t.Fatal("Encode to a failing writer succeeded, want error")
+	}
+}
+
+// TestValueKeepsNumbersInTheirSourceSpelling is the reason Value
+// exists rather than a bare json.Unmarshal into any. A matcher tree
+// read from policy is compared against a forge response read the same
+// way, and float64 is the wrong carrier for both sides: a GitHub node
+// or ruleset id past 2^53 does not survive the round trip, so two
+// equal ids would compare unequal — or, worse, two different ids would
+// compare equal after both rounded to the same float.
+func TestValueKeepsNumbersInTheirSourceSpelling(t *testing.T) {
+	t.Parallel()
+
+	// Past 2^53: the smallest integer float64 cannot represent exactly
+	// is 9007199254740993, and it rounds to its even neighbour.
+	const beyondFloat = "9007199254740993"
+
+	got, err := jsonx.Value([]byte(`{"id": ` + beyondFloat + `}`))
+	if err != nil {
+		t.Fatalf("Value = %v", err)
+	}
+
+	obj, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("Value returned %T, want an object as map[string]any", got)
+	}
+
+	num, ok := obj["id"].(jsonx.Number)
+	if !ok {
+		t.Fatalf("id landed as %T, want jsonx.Number — a float cannot carry this id", obj["id"])
+	}
+
+	if num.String() != beyondFloat {
+		t.Errorf("id = %s, want %s exactly", num, beyondFloat)
+	}
+}
+
+// TestValueShapes: the two container shapes a matcher tree walks, and
+// the scalars at its leaves, all arrive as the plain Go kinds a walk
+// can type-switch on.
+func TestValueShapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"an object", `{"a": 1}`, "map[string]interface {}"},
+		{"an array", `[1, 2]`, "[]interface {}"},
+		{"a string", `"x"`, "string"},
+		{"a bool", `true`, "bool"},
+		{"a number", `1.5`, "json.Number"},
+		{"null", `null`, "<nil>"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := jsonx.Value([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("Value(%s) = %v", tt.input, err)
+			}
+
+			if kind := fmt.Sprintf("%T", got); kind != tt.want {
+				t.Errorf("Value(%s) landed as %s, want %s", tt.input, kind, tt.want)
+			}
+		})
+	}
+}
+
+// TestValueRefusals: there is no schema for Value to be strict about,
+// so an unknown field is meaningless here — but a second value still
+// is not one value. Policy and forge responses both arrive as whole
+// documents, and silently reading the first of two would judge against
+// half the input.
+func TestValueRefusals(t *testing.T) {
+	t.Parallel()
+
+	if _, err := jsonx.Value([]byte(`{"a":`)); err == nil {
+		t.Error("Value accepted malformed input")
+	}
+
+	_, err := jsonx.Value([]byte(`{"a": 1} {"a": 2}`))
+	if !errors.Is(err, jsonx.ErrTrailingData) {
+		t.Errorf("Value with trailing data = %v, want ErrTrailingData", err)
+	}
+
+	// No schema means no unknown fields: whatever the tree carries is
+	// the tree.
+	if _, err := jsonx.Value([]byte(`{"anything": {"nested": []}}`)); err != nil {
+		t.Errorf("Value refused a shape it has no schema for: %v", err)
 	}
 }
 

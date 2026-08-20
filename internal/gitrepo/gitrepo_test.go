@@ -460,6 +460,80 @@ func TestCloneRefusals(t *testing.T) {
 	}
 }
 
+// TestCloneRefusalsThatNeedARemote: the refusals above are answered
+// before anything is created, so they never reach the scratch tree.
+// These do, and each is a different failure the clone must not confuse
+// with the one thing it is allowed to shrug at — a ledger the remote
+// simply does not have yet.
+func TestCloneRefusalsThatNeedARemote(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a scratch path that cannot be created", func(t *testing.T) {
+		t.Parallel()
+
+		// A file where the scratch tree's parent belongs.
+		blocked := filepath.Join(t.TempDir(), "occupied")
+		if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := gitrepo.Clone(filepath.Join(blocked, "repo"),
+			"file:///nowhere", "", "n", "e@x", "refs/heads/main", "refs/notes/commits")
+		if err == nil || !strings.Contains(err.Error(), "scratch dir") {
+			t.Fatalf("Clone = %v, want the scratch-dir refusal", err)
+		}
+	})
+
+	t.Run("a remote that is not there", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := gitrepo.Clone(filepath.Join(t.TempDir(), "repo"),
+			"file://"+filepath.Join(t.TempDir(), "absent"), "", "n", "e@x",
+			"refs/heads/main", "refs/notes/commits")
+		if err == nil || !strings.Contains(err.Error(), "fetching refs/heads/main") {
+			t.Fatalf("Clone = %v, want the branch fetch to refuse by name", err)
+		}
+	})
+
+	t.Run("a branch the remote does not have", func(t *testing.T) {
+		t.Parallel()
+
+		// The branch fetch is strict on purpose: a branch that is not
+		// there is an error in its own right, never an empty history.
+		remote := t.TempDir()
+		git := gitCmd(t, remote)
+		git("init", "-q", "--bare")
+
+		_, err := gitrepo.Clone(filepath.Join(t.TempDir(), "repo"),
+			"file://"+remote, "", "n", "e@x", "refs/heads/absent", "refs/notes/commits")
+		if err == nil || !strings.Contains(err.Error(), "fetching refs/heads/absent") {
+			t.Fatalf("Clone = %v, want a refusal naming the branch", err)
+		}
+	})
+}
+
+// TestSetNotesRefRefusesAnUnqualifiedRef: a bare "commits" is not a
+// ref, and binding one would write the ledger to a name git resolves
+// somewhere else entirely.
+func TestSetNotesRefRefusesAnUnqualifiedRef(t *testing.T) {
+	t.Parallel()
+
+	fx := repo(t)
+
+	r, err := gitrepo.Open(fx.dir, "refs/notes/commits")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := r.SetNotesRef("commits"); err == nil {
+		t.Fatal("SetNotesRef accepted an unqualified ref")
+	}
+
+	if err := r.SetNotesRef("refs/notes/commits"); err != nil {
+		t.Fatalf("SetNotesRef(qualified) = %v", err)
+	}
+}
+
 func TestNotesPushAndFetch(t *testing.T) {
 	t.Parallel()
 

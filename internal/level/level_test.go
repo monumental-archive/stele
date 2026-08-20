@@ -2,6 +2,7 @@ package level_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +263,132 @@ func TestSealVerdicts(t *testing.T) {
 	}
 }
 
+// TestRungPrecedenceIsWorstWins pins the whole ordering, one pair at a
+// time. The rule is that a rung is never improved after the fact — a
+// level refuted by one requirement is not rescued by the next one
+// holding — and that ordering is the only thing standing between a
+// ladder and a report that quotes whichever requirement happened to be
+// evaluated last.
+//
+// UNCLAIMED's place in it is the row worth stating: it outranks HELD,
+// so a level the specification places no obligation at cannot be
+// talked up into holding, but it yields to both UNDETERMINED and
+// REFUTED, because "nothing was asked here" must never suppress a
+// genuine failure recorded at the same rung.
+func TestRungPrecedenceIsWorstWins(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		first  func(*level.Ladder)
+		second func(*level.Ladder)
+		want   level.Determination
+	}{
+		{
+			"unclaimed is not talked up into held",
+			func(l *level.Ladder) { l.Unclaimed(2, "no obligation") },
+			func(l *level.Ladder) { l.Hold(2, "something held") },
+			level.Unclaimed,
+		},
+		{
+			"unclaimed yields to a genuine blindness",
+			func(l *level.Ladder) { l.Unclaimed(2, "no obligation") },
+			func(l *level.Ladder) { l.Blind(2, "could not look") },
+			level.Undetermined,
+		},
+		{
+			"unclaimed yields to a refutation",
+			func(l *level.Ladder) { l.Unclaimed(2, "no obligation") },
+			func(l *level.Ladder) { l.Refute(2, "contradicted") },
+			level.Refuted,
+		},
+		{
+			"a refutation is not rescued by a later hold",
+			func(l *level.Ladder) { l.Refute(2, "contradicted") },
+			func(l *level.Ladder) { l.Hold(2, "something held") },
+			level.Refuted,
+		},
+		{
+			"blindness is not rescued by a later hold",
+			func(l *level.Ladder) { l.Blind(2, "could not look") },
+			func(l *level.Ladder) { l.Hold(2, "something held") },
+			level.Undetermined,
+		},
+		{
+			"a refutation outranks blindness: contradiction settles a level, absence does not",
+			func(l *level.Ladder) { l.Blind(2, "could not look") },
+			func(l *level.Ladder) { l.Refute(2, "contradicted") },
+			level.Refuted,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lad := level.NewLadder(level.TrackBuild)
+			tt.first(lad)
+			tt.second(lad)
+
+			for _, r := range lad.Rungs() {
+				if r.Level == 2 && r.Determination != tt.want {
+					t.Errorf("rung 2 = %q, want %q", r.Determination, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestDeclaredLevelThatDoesNotParseStillDiverges. A declaration is
+// somebody else's document, and it can say something this track cannot
+// read: another track's level, or a spelling with no number in it.
+//
+// The gap is real either way — the declared string is not what was
+// computed — so the finding is raised regardless; only the WORDING
+// depends on being able to compare the two, and an unreadable
+// declaration cannot be shown to sit above the evidence. Reporting no
+// divergence at all would be the dangerous reading: a policy could
+// then silence a real disagreement with a typo.
+func TestDeclaredLevelThatDoesNotParseStillDiverges(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		declared string
+	}{
+		{"another track's level", "SLSA_BUILD_LEVEL_3"},
+		{"this track's prefix with no number", "SLSA_SOURCE_LEVEL_three"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lad := level.NewLadder(level.TrackSource)
+			lad.Hold(1, "r")
+			lad.Refute(2, "r")
+
+			a := level.Seal(level.TrackSource, lad, &level.Inputs{
+				Subject: "acme/widget", Declared: tt.declared,
+				InScope: 1, Determined: 1,
+				PopulationDetail: "branches", Now: epoch,
+			})
+
+			if got := a.Report().Verdict(); got != report.VerdictFail {
+				t.Errorf("verdict = %q, want FAIL — an unreadable declaration must not silence the gap", got)
+			}
+
+			var buf bytes.Buffer
+			if err := a.Report().Encode(&buf); err != nil {
+				t.Fatalf("Encode = %v", err)
+			}
+
+			// Unreadable means uncomparable, so the report takes the
+			// direction it can defend: the evidence supports something
+			// the declaration does not claim.
+			if !strings.Contains(buf.String(), "the declaration does not claim") {
+				t.Errorf("divergence is worded as an overclaim it cannot prove:\n%s", buf.String())
+			}
+		})
+	}
+}
+
 func TestSealRecordsTheLadderAndTheClock(t *testing.T) {
 	t.Parallel()
 
@@ -365,6 +492,118 @@ func TestShield(t *testing.T) {
 		if !strings.Contains(buf.String(), `"schemaVersion":1`) {
 			t.Errorf("%s: shield document = %s", tt.name, buf.String())
 		}
+	}
+}
+
+// TestShieldRoundTripsThroughItsOwnDecoder is the board's
+// never-overwrite rule, held at the one place it is decided.
+//
+// A published board asks a cell what it ALREADY holds, so that a run
+// which cannot judge today does not publish grey over a level somebody
+// proved yesterday. Two things have to be true for that to work: a
+// shield this package wrote must read back through DecodeShield, and
+// Measured must answer from the same field the writer set — if the two
+// ever came apart, a grey cell could read as measured and overwrite a
+// real level, which is the one direction the rule exists to forbid.
+func TestShieldRoundTripsThroughItsOwnDecoder(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		build func(*level.Ladder)
+		done  int
+		want  bool
+	}{
+		{"a level that holds was measured", func(l *level.Ladder) { l.Hold(1, "r") }, 1, true},
+		{"a measured zero was still measured", func(l *level.Ladder) { l.Refute(1, "r") }, 1, true},
+		{"a run that could not see was not", func(l *level.Ladder) { l.Blind(1, "r") }, 0, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lad := level.NewLadder(level.TrackSource)
+			tt.build(lad)
+
+			a := level.Seal(level.TrackSource, lad, &level.Inputs{
+				Subject: "acme/widget", InScope: 1, Determined: tt.done,
+				PopulationDetail: "subjects", Now: epoch,
+			})
+
+			var buf bytes.Buffer
+			if err := a.Shield().Encode(&buf); err != nil {
+				t.Fatalf("Encode = %v", err)
+			}
+
+			back, err := level.DecodeShield(&buf)
+			if err != nil {
+				t.Fatalf("DecodeShield(own bytes) = %v", err)
+			}
+
+			if *back != a.Shield() {
+				t.Errorf("round trip changed the shield: %+v, want %+v", *back, a.Shield())
+			}
+
+			if back.Measured() != tt.want {
+				t.Errorf("Measured = %v, want %v for %+v", back.Measured(), tt.want, *back)
+			}
+		})
+	}
+}
+
+// TestDecodeShieldRefusesWhatItDidNotWrite: the board reads cells off
+// a published site, and a document that is not a shield must refuse
+// rather than decode to a zero value — a zero Shield has the empty
+// colour, which Measured would read as measured, and the board would
+// then decline to publish over a cell that never held anything.
+func TestDecodeShieldRefusesWhatItDidNotWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		doc  string
+	}{
+		{"not JSON at all", "<html>404</html>"},
+		{"a document with a field no shield carries", `{"schemaVersion":1,"label":"x","extra":true}`},
+		{"two documents where one was expected", `{"schemaVersion":1}{"schemaVersion":1}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := level.DecodeShield(strings.NewReader(tt.doc)); err == nil {
+				t.Errorf("DecodeShield(%s) succeeded, want a refusal", tt.doc)
+			}
+		})
+	}
+}
+
+// TestUnenumeratedIsAnAnswerAboutTheRun, not about the subject. When
+// the population itself could not be listed — the degraded forge that
+// answers 200 with an empty body — nothing was measured, and the one
+// honest output says so: no level, a grey badge, CANNOT_JUDGE, and the
+// cause quoted where a reader can act on it. Reporting L0 here would
+// be this tool asserting a fact about a repository it never reached.
+func TestUnenumeratedIsAnAnswerAboutTheRun(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("listing acme: 200 with an empty body")
+
+	a := level.Unenumerated(level.TrackSource, "acme", cause, epoch)
+
+	if got := a.Report().Verdict(); got != report.VerdictCannotJudge {
+		t.Errorf("verdict = %q, want CANNOT_JUDGE — not reaching the population is not a level", got)
+	}
+
+	if got := a.Shield(); got.Measured() {
+		t.Errorf("shield = %+v, want an unmeasured cell that cannot overwrite a published level", got)
+	}
+
+	var buf bytes.Buffer
+	if err := a.Report().Encode(&buf); err != nil {
+		t.Fatalf("Encode = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), cause.Error()) {
+		t.Errorf("the report does not carry the cause:\n%s", buf.String())
 	}
 }
 

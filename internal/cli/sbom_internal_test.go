@@ -452,13 +452,14 @@ func TestDeriveSBOMRefusesContradictoryFeatures(t *testing.T) {
 // stubNpmResolver returns recorded npm ls output.
 type stubNpmResolver struct {
 	tree []byte
+	err  error
 	dir  string
 }
 
 func (s *stubNpmResolver) Tree(dir string) ([]byte, error) {
 	s.dir = dir
 
-	return s.tree, nil
+	return s.tree, s.err
 }
 
 func withNpmResolver(t *testing.T, r npm.Resolver) {

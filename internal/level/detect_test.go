@@ -334,6 +334,207 @@ func TestDependencyTrackFromReleaseEvidence(t *testing.T) {
 	}
 }
 
+// reasons renders one assessment's report so a row can assert the
+// SENTENCE a requirement reported, not merely the level it folded to.
+// Several of the guards below sit above the scalar's binding rung, so
+// a level assertion alone cannot tell them apart from their
+// neighbours.
+func reasons(t *testing.T, a *level.Assessment) string {
+	t.Helper()
+
+	var buf strings.Builder
+	if err := a.Report().Encode(&buf); err != nil {
+		t.Fatalf("Encode = %v", err)
+	}
+
+	return buf.String()
+}
+
+// TestDependencyGuardsSeparateNotLookingFromFindingNothing. Each row
+// is a state where the run DID look and got an empty answer, which is
+// a different fact from the field never being read — and the two must
+// not render alike, because one is a defect in the release and the
+// other a gap in this run.
+func TestDependencyGuardsSeparateNotLookingFromFindingNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		ev   *level.Evidence
+		want string
+	}{
+		{
+			// Scanned with nothing to scan: the scan ran and covered no
+			// artifact, which contradicts the requirement rather than
+			// leaving it unmeasured.
+			name: "a scan that ran over no inventory is refuted, not unevaluated",
+			ev: &level.Evidence{
+				Owner: "acme", Repo: "widget", Now: epoch,
+				Scanned: true,
+			},
+			want: "there was no inventory to scan",
+		},
+		{
+			// An empty map is not a nil map: the sources were read and
+			// there were none, so nothing can be said about where the
+			// build fetched from — but the reason must not be the
+			// were-not-read one.
+			name: "sources read and empty is a different sentence from sources unread",
+			ev: &level.Evidence{
+				Owner: "acme", Repo: "widget", Now: epoch,
+				Inventoried: []string{"widget_linux_amd64"}, Scanned: true,
+				DependencySources: map[string]bool{},
+			},
+			want: "no resolved dependency source was found to judge",
+		},
+		{
+			// Refuting would call a genuine private mirror upstream;
+			// holding would take a stranger's host for the producer's.
+			// Neither is honest, so the requirement goes unevaluated and
+			// names the hosts.
+			name: "a host this run cannot place is unevaluated, never guessed either way",
+			ev: &level.Evidence{
+				Owner: "acme", Repo: "widget", Now: epoch,
+				Inventoried: []string{"widget_linux_amd64"}, Scanned: true,
+				DependencySources:   map[string]bool{"https://mirror.acme.example/go": true},
+				UnrecognisedSources: []string{"https://packages.unknown.example"},
+			},
+			want: "belong to a host this run cannot place",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := reasons(t, level.Assess(level.TrackDependency, tt.ev)); !strings.Contains(got, tt.want) {
+				t.Errorf("no requirement reported %q:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+// TestBuildProvenanceGuardsSayWhatIsMissing. Both rows are provenance
+// that verified and still cannot answer the question asked of it, and
+// both must report rather than refute: the artifact is not shown to be
+// wrong, it is shown to be unexaminable, and refuting would accuse a
+// producer of a defect the evidence does not establish.
+func TestBuildProvenanceGuardsSayWhatIsMissing(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		breakIt func(*level.Evidence)
+		want    string
+	}{
+		{
+			// No buildType means no published schema, so there is
+			// nothing to judge the externalParameters against.
+			"provenance declaring no buildType",
+			func(ev *level.Evidence) { ev.Subjects[0].BuildType = "" },
+			"declares no buildType, so its parameter schema is unknown",
+		},
+		{
+			// The certificate does not name the workflow that held the
+			// signing capability, so the L3 boundary cannot be located
+			// — which is not the same as finding it breached.
+			"a certificate naming no signing workflow",
+			func(ev *level.Evidence) {
+				ev.Subjects[0].Cert.BuildSignerURI = ""
+				ev.Subjects[0].Cert.BuildSignerDigest = ""
+			},
+			"does not name the workflow that held the signing capability",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ev := buildEvidence()
+			tt.breakIt(ev)
+
+			got := reasons(t, level.Assess(level.TrackBuild, ev))
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("no requirement reported %q:\n%s", tt.want, got)
+			}
+
+			if strings.Contains(got, "REFUTED") {
+				t.Errorf("unexaminable provenance was reported as a defect:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestSourceIdentityGuards: the two level-one source requirements that
+// rest on nothing but what the caller named. Both are reachable with
+// no chain at all, and both must report rather than hold — a
+// repository nobody named and a revision that is not a content digest
+// are exactly the inputs a credulous judge would wave through.
+func TestSourceIdentityGuards(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a repository nobody named establishes no stable locator", func(t *testing.T) {
+		t.Parallel()
+
+		got := reasons(t, level.Assess(level.TrackSource, &level.Evidence{NoChain: true, Now: epoch}))
+		if !strings.Contains(got, "no repository was named") {
+			t.Errorf("an unnamed repository still claimed a locator:\n%s", got)
+		}
+	})
+
+	t.Run("a revision that is not a content digest is refuted", func(t *testing.T) {
+		t.Parallel()
+
+		// The spec rests revision immutability on the identifier BEING a
+		// digest of the content. A forge whose revision ids are sequence
+		// numbers establishes nothing by naming one, and this is the
+		// branch that keeps that from reading as a pass.
+		a := level.Assess(level.TrackSource, &level.Evidence{
+			Owner: "acme", Repo: "widget", NoChain: true, Now: epoch,
+			Revisions: []level.Revision{{ID: "r4711", Subject: "feat: one", Parents: 1, Time: epoch}},
+		})
+
+		got := reasons(t, a)
+		if !strings.Contains(got, "is not a content digest") {
+			t.Errorf("a sequence-numbered revision was accepted as immutable:\n%s", got)
+		}
+	})
+}
+
+// TestRequirementsOfATrackThisToolDoesNotJudge: the catalogue answers
+// for the tracks it carries and empty for anything else. A track this
+// tool does not judge is ABSENT, not refused, and the empty answer is
+// what leaves the vocabulary open — a caller asking about one gets
+// nothing to report rather than a panic or another track's rows.
+func TestRequirementsOfATrackThisToolDoesNotJudge(t *testing.T) {
+	t.Parallel()
+
+	if got := level.Requirements(level.Track{}); len(got) != 0 {
+		t.Errorf("Requirements(unknown track) = %v, want nothing", got)
+	}
+}
+
+// TestRegisterRefusesADuplicate: two detectors for one requirement
+// means one of them silently never runs, and which one would depend on
+// package initialisation order. The registry refuses instead.
+func TestRegisterRefusesADuplicate(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Error("registering a second detector for one requirement did not panic")
+		}
+	}()
+
+	level.RegisterForTest(duplicateDetector{})
+}
+
+type duplicateDetector struct{}
+
+// A requirement the catalogue carries AND a detector already claims.
+func (duplicateDetector) For() string { return "SLSA_SOURCE_SCS_REPO_ID" }
+
+func (duplicateDetector) Detect(*level.Evidence) level.Outcome {
+	return level.Established("never reached")
+}
+
 // TestDraftTrackAlwaysSaysSo: no output carrying a dependency level
 // may omit that SLSA v1.2 approves no such track.
 func TestDraftTrackAlwaysSaysSo(t *testing.T) {

@@ -176,6 +176,23 @@ func TestResolveRootRefusals(t *testing.T) {
 			plan:    trust.RootPlan{},
 			wantErr: "unplanned root origin",
 		},
+		{
+			// The TUF leg is the network boundary and is deliberately
+			// not proven here (see fetchTUF's own note) — but the anchor
+			// is a LOCAL file, read before any metadata is fetched, and
+			// an operator who names one that is not there must be told
+			// so. Falling through to the built-in anchor instead would
+			// silently resolve against different trust material than the
+			// one they asked for, which is the one mistake a trust root
+			// must never make quietly.
+			name: "a TUF anchor that is not there refuses before any fetch",
+			plan: trust.RootPlan{
+				Origin: trust.OriginTUF,
+				Mirror: "https://tuf-repo-cdn.example.invalid",
+				Anchor: filepath.Join(t.TempDir(), "absent-root.json"),
+			},
+			wantErr: "read TUF anchor",
+		},
 	}
 
 	for _, tc := range tests {
