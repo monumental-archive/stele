@@ -329,9 +329,15 @@ Two optional sections cover artifacts that have no release to hang
 evidence off, so the attestation store is the only durable record —
 and for both, presence is not enough: the bundle must VERIFY under a
 pinned identity, which is why declaring either requires a top-level
-`issuer` and a `--trusted-root` at the CLI. A policy that declares
-them without a root is a usage refusal, never a silent skip: the
-whole point is that nobody else checks these artifacts.
+`issuer` and TRUST MATERIAL for the run. The material is not one
+flag: `--trusted-root PATH` names the document, and absent the flag
+the run resolves it through TUF — a live fetch from the Sigstore
+public-good instance, anchored by the root pinned in this binary.
+Both are origins on the one ladder `trust.PlanRoot` decides from the
+invocation alone (`docs/trusted-root.md`, `internal/trust`); there is
+no third, and no fallback between them. What is refused is a run that
+holds no material at all — never a silent skip, because the whole
+point is that nobody else checks these artifacts.
 
 ```json
 {
@@ -805,8 +811,10 @@ else reds under `deep`, excusable only by a written debt line.
 Pre-store releases are held to presence depth for their verdicts —
 grandfathered history under the verify policy's enumerated legacy
 roots — and the bound is logged, never silent. Asking for full depth
-without `--verify-policy` and `--trusted-root` is a usage refusal,
-never a shallower walk that looks like the deep one.
+without `--verify-policy` is a usage refusal, never a shallower walk
+that looks like the deep one: the policy names the trust identities.
+The trust material the run verifies against comes from the origin
+ladder, `--trusted-root` or TUF, exactly as everywhere else.
 
 ## The tags section
 
@@ -997,7 +1005,8 @@ section — one declaration, never restated:
   remove-the-line-when-activated contract, made structural.
 
 The walk (`stele assert chains --org|--repo`, with `--verify-policy`
-and `--trusted-root`): the population is the org listing or the one
+and trust material — `--trusted-root` or the TUF origin): the
+population is the org listing or the one
 named repository — enumerated, never the enrolled set. A repository
 with no link-shaped note on the declared notes ref is **unactivated**:
 a finding unless a declared exception names it, because an
