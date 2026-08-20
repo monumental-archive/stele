@@ -21,6 +21,7 @@ import (
 	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/verify"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 // Contract is what one release owes.
@@ -199,9 +200,8 @@ type WorkflowSource struct {
 }
 
 var (
-	workflowCallRE = regexp.MustCompile(`(?m)^\s*workflow_call:`)
-	classesRE      = regexp.MustCompile(`(?m)^[^#\n]*classes:\s*(.+)$`)
-	pinCommentRE   = regexp.MustCompile(`uses:.*(?:publish|release)\.ya?ml@[^#\n]*#\s*v(\d+\.\d+\.\d+)`)
+	classesRE    = regexp.MustCompile(`(?m)^[^#\n]*classes:\s*(.+)$`)
+	pinCommentRE = regexp.MustCompile(`uses:.*(?:publish|release)\.ya?ml@[^#\n]*#\s*v(\d+\.\d+\.\d+)`)
 )
 
 // Contract implements ContractSource.
@@ -215,7 +215,7 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, nil
 	}
 
-	if workflowCallRE.Match(wf) {
+	if callable(wf) {
 		wf, ok, err = w.Forge.FileAt(owner, repo, ".github/workflows/self-publish.yml", tag)
 		if err != nil {
 			return nil, false, fmt.Errorf("assert: workflow contract of %s/%s@%s: %w", owner, repo, tag, err)
@@ -252,6 +252,25 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		MachineryVersion: machineryVersion,
 		Origin:           "publish workflow at " + tag,
 	}, true, nil
+}
+
+// callable answers "may anything call this workflow" through the ONE
+// workflow parser (internal/workflow), so this legacy adapter and the
+// permissions join cannot hold two definitions of what a
+// workflow_call trigger IS.
+//
+// Bytes that will not parse are not a callable workflow. This
+// adapter's whole shape is fall-through — a file that does not speak
+// for the release hands the question to the next source — and a file
+// nothing can read does not speak for it either. The two regexes
+// above stay where they are: they mine a literal an author wrote (a
+// class list in an input, a version in a pin comment) out of
+// history's spelling of it, which is a different question from what
+// the format says, and one this adapter's sunset carries away.
+func callable(content []byte) bool {
+	doc, err := workflow.Parse(content)
+
+	return err == nil && doc.Reusable
 }
 
 // splitClasses reads the workflow input's class list. The separator

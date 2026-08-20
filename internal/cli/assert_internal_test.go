@@ -22,6 +22,7 @@ import (
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 const (
@@ -479,7 +480,7 @@ func (s *storeForge) Asset(_, _, _, _ string) ([]byte, error) { return nil, nil 
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (s *storeForge) FileAt(_, _, _, _ string) ([]byte, bool, error)      { return nil, false, nil }
 func (s *storeForge) PackageVersionDigest(_, _, _ string) (string, error) { return "", nil }
-func (s *storeForge) WorkflowContents(_, _ string) ([][]byte, error)      { return nil, nil }
+func (s *storeForge) Workflows(_, _ string) ([]workflow.File, error)      { return nil, nil }
 func (s *storeForge) FailedRuns(_, _, _ string) ([]string, error)         { return nil, nil }
 func (s *storeForge) TagCommit(_, _, _ string) (string, error)            { return "", nil }
 

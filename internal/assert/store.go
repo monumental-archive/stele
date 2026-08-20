@@ -133,7 +133,7 @@ func (w *evidenceWalk) signerPins(repo, pattern string) ([]string, error) {
 		return nil, fmt.Errorf("assert: signer pin pattern: %w", err)
 	}
 
-	contents, err := w.forge.WorkflowContents(w.org, repo)
+	files, err := w.forge.Workflows(w.org, repo)
 	if err != nil {
 		return nil, fmt.Errorf("assert: workflows of %s: %w", repo, err)
 	}
@@ -147,8 +147,8 @@ func (w *evidenceWalk) signerPins(repo, pattern string) ([]string, error) {
 
 	var pins []string
 
-	for _, content := range contents {
-		for _, m := range re.FindAllSubmatch(content, -1) {
+	for _, f := range files {
+		for _, m := range re.FindAllSubmatch(f.Content, -1) {
 			if len(m) <= pinGroup {
 				continue
 			}

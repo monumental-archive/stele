@@ -52,6 +52,7 @@ const (
 	targetTags        = "tags"
 	targetChains      = "chains"
 	targetPlans       = "plans"
+	targetPermissions = "permissions"
 )
 
 // The effect seams, swapped only by tests.
@@ -80,7 +81,8 @@ var (
 func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains or plans"); err != nil {
+			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains, plans "+
+				"or permissions"); err != nil {
 			return exitIO
 		}
 
@@ -100,9 +102,11 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertChains(args[1:], stdout, stderr)
 	case targetPlans:
 		return assertPlans(args[1:], stdout, stderr)
+	case targetPermissions:
+		return assertPermissions(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags, chains, plans)\n",
+			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags, chains, plans, permissions)\n",
 			args[0]); err != nil {
 			return exitIO
 		}
