@@ -137,6 +137,7 @@ func everyPath(t *testing.T, status int, body string) *gh.Client {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 	c.Sleep = func(time.Duration) {}
@@ -277,6 +278,7 @@ func TestTransportFaults(t *testing.T) {
 		t.Parallel()
 
 		c := gh.New("")
+		ownTransport(c, nil)
 		c.Base = unbuildable
 		c.Sleep = func(time.Duration) {}
 
@@ -289,6 +291,7 @@ func TestTransportFaults(t *testing.T) {
 		t.Parallel()
 
 		c := gh.New("")
+		ownTransport(c, nil)
 		c.Download = unbuildable
 		c.Sleep = func(time.Duration) {}
 
@@ -368,6 +371,7 @@ func truncatingServer(t *testing.T) *gh.Client {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Download = srv.URL
 	c.Sleep = func(time.Duration) {}
@@ -393,6 +397,7 @@ func TestPaginationBound(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Sleep = func(time.Duration) {}
 
@@ -491,6 +496,7 @@ func crookedServer(t *testing.T) *gh.Client {
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
+	ownTransport(c, srv)
 	c.Base = srv.URL
 	c.Sleep = func(time.Duration) {}
 
