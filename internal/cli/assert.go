@@ -23,6 +23,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/govulncheck"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
@@ -54,6 +55,7 @@ const (
 	targetChains      = "chains"
 	targetPlans       = "plans"
 	targetPermissions = "permissions"
+	targetAdvisories  = "advisories"
 )
 
 // The effect seams, swapped only by tests.
@@ -82,8 +84,8 @@ var (
 func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains, plans "+
-				"or permissions"); err != nil {
+			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains, plans, "+
+				"permissions or advisories"); err != nil {
 			return exitIO
 		}
 
@@ -105,9 +107,12 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertPlans(args[1:], stdout, stderr)
 	case targetPermissions:
 		return assertPermissions(args[1:], stdout, stderr)
+	case targetAdvisories:
+		return assertAdvisories(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele assert: unknown target %q (image-facts, evidence, blast-radius, tags, chains, plans, permissions)\n",
+			"stele assert: unknown target %q "+
+				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories)\n",
 			args[0]); err != nil {
 			return exitIO
 		}
@@ -565,6 +570,91 @@ func refusal(target, subject, detail string, pop report.Population) *report.Repo
 	j.Check(subject, target).Diverged(detail)
 
 	return report.Seal("assert "+target, subject, pop, j, report.NoCanary(), report.NoJudgedSet())
+}
+
+// assertAdvisories runs the advisories target: one module's
+// reachable-vulnerability scan, judged against the recorded triage
+// decisions through the one join (stele#221).
+//
+// The scan arrives as a FILE, not on stdin. The producer already
+// materialises it — a scan is captured to a temp file precisely so a
+// broken scan is not read as a truncated stream — and a path is
+// re-readable, nameable in an error, and the shape every other target
+// here takes. Divergence from the Python it replaces, recorded rather
+// than carried: that read stdin.
+func assertAdvisories(args []string, stdout, stderr io.Writer) int {
+	var (
+		scanPath, vexDir, subject string
+		jsonOut                   bool
+	)
+
+	flags := flag.NewFlagSet("stele assert advisories", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&scanPath, "scan", "", "path to govulncheck's JSON output (required)")
+	flags.StringVar(&vexDir, "vex", "", "directory of committed *.openvex.json decisions (required)")
+	flags.StringVar(&subject, "subject", "",
+		"the module this scan covers, named in the report (required)")
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	usageFail := func(msg string) int {
+		if _, err := fmt.Fprintf(stderr, "stele assert advisories: %s\n", msg); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	switch {
+	case scanPath == "":
+		return usageFail("--scan is required")
+	case vexDir == "":
+		return usageFail("--vex is required")
+	case subject == "":
+		return usageFail("--subject is required: a report names what it judged")
+	}
+
+	decisions, code := loadVEX(vexDir, stderr)
+	if code != exitOK {
+		return code
+	}
+
+	sf, err := os.Open(scanPath) //nolint:gosec // the scan path is operator-supplied by design
+	if err != nil {
+		return usageFail(err.Error())
+	}
+	defer sf.Close() //nolint:errcheck // read-only close
+
+	scan, rerr := govulncheck.Read(sf)
+	if rerr != nil {
+		// A scan that did not happen is CANNOT_JUDGE — never a pass
+		// over an empty finding set, which is exactly what a truncated
+		// or foreign stream would otherwise render as.
+		rep := refusal(targetAdvisories, subject, rerr.Error(),
+			report.PopulationFromEvidence(0, "no readable govulncheck scan"))
+
+		if _, werr := fmt.Fprintf(stderr, "%v\n", rerr); werr != nil {
+			return exitIO
+		}
+
+		return emitReport(rep, jsonOut, stdout, stderr)
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	rep := assert.Advisories(subject, scan, decisions, report.NewJournal(), out.logf)
+	if out.err != nil {
+		return exitIO
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
 }
 
 // assertImageFacts runs the image-facts target: env contract read and

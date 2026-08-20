@@ -10,8 +10,15 @@ What the join MEANS for a report — the exact `(advisory, package,
 version)` triple, the empty set deciding nothing, a matched decision
 appearing as a declared exception and an unmatched one as stale — is
 in [assert-policy-schema.md](assert-policy-schema.md). This document
-is narrower: given a finding and a decision, when are their package
-identities equal?
+is narrower, and answers two questions:
+
+1. Given a finding and a decision, when are their package identities
+   equal?
+2. Given a decision that matches, does it EXCUSE the finding?
+
+They are separate questions and a join has to answer both. Answering
+only the first excuses a finding on the strength of a statement that
+may be admitting it.
 
 ## The rule
 
@@ -84,6 +91,40 @@ finding's own detail line carries the module path as the scanner
 reported it, which is the spelling a reader will find in a manifest.
 Both facts are present and neither is invented.
 
+## Which decisions excuse
+
+A decision that matches a finding has still only answered "somebody
+looked at this". Whether it CLEARS the finding is one further
+question, asked of its status: **does the status deny that the
+advisory applies to the product?** Only a denial excuses.
+
+| status | excuses | why |
+| --- | --- | --- |
+| `not_affected` | yes | OpenVEX's denial |
+| `false_positive` | yes | the same denial in another dialect's spelling |
+| `affected` | no | an admission — it states the finding is real |
+| `under_investigation` | no | a judgment not yet made |
+| `fixed` | no | see below |
+| anything else | no | an unrecognised judgment is not one to act on |
+
+`fixed` is the row worth stating explicitly, because it reads like an
+exit and is not one. It claims the product was remediated, which is
+not a denial that the advisory applies — and the join only meets a
+decision where a scan CURRENTLY reports that exact triple, so a
+`fixed` statement matching a live finding is a remediation claim the
+scanner in hand has just disproved. Excusing on it would let a stale
+claim silence the evidence that refutes it.
+
+`false_positive` is not OpenVEX v0.2.0 vocabulary; it is what some
+other VEX dialects call the same denial, and reading it as one is a
+deliberate choice so a decision written in that spelling does not
+silently decide nothing.
+
+**A decision that matches and does not excuse is reported, never
+silent.** It belongs on the finding it failed to excuse — a red
+finding whose reader cannot tell that somebody already looked at it
+and wrote something down is how one advisory gets triaged twice.
+
 ## Implementing this join a second time
 
 Anything reading these decisions alongside another scanner must reach
@@ -97,11 +138,26 @@ excuses a finding in one place and not the other. To agree:
    patch: the sides still disagree, just about different inputs.
 3. Fold nothing else, and treat an unrecognised ecosystem as
    case-sensitive.
-4. Treat two decisions that fold to one identity as what they are —
+4. Excuse only on a denying status, by the table above, and report a
+   matching decision that does not excuse.
+5. Treat two decisions that fold to one identity as what they are —
    two judgments on one finding, which is a contradiction to surface,
    not a race for file order to settle.
+6. Scan one ecosystem, judge one ecosystem: a decision whose purl type
+   your scanner cannot report on is not stale and not covered, it is
+   out of scope, and it should produce nothing at all.
 
-In this repository the rule is implemented once, in
-`internal/vexjoin` (`canonicalName` and `foldsNames`), and every key
-on either side is built through `KeyFromPurl` or `KeyFromFinding` so
-no caller can spell the rule a second way.
+In this repository the rules are implemented once, in
+`internal/vexjoin` (`canonicalName` and `foldsNames` for identity,
+`Decision.Excuses` for the status question), and every key on either
+side is built through `KeyFromPurl` or `KeyFromFinding` so no caller
+can spell the identity rule a second way.
+
+Both `stele assert advisories` and `stele assert blast-radius` join on
+that identity. The status rule currently has ONE adopter — `assert
+advisories` — because blast-radius excuses on any matching decision
+regardless of status, which is a defect recorded at stele#222 rather
+than a second reading of this document. Stated here rather than
+smoothed over: a doc claiming two conforming implementations where
+there is one would be the same kind of unverified confidence this
+document exists to correct.

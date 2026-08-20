@@ -462,3 +462,96 @@ func TestDecisionsDifferingOnlyInCaseCollide(t *testing.T) {
 		}
 	}
 }
+
+// TestExcusesIsADenialTest holds the one question the status rule
+// asks: does this status DENY that the advisory applies? Only a
+// denial excuses. Every OpenVEX v0.2.0 status is a row, because the
+// dangerous rows are the ones that read like judgments and are not
+// denials — a gate cleared by a statement admitting the finding is
+// worse than no statement at all.
+func TestExcusesIsADenialTest(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		status  string
+		excuses bool
+		why     string
+	}{
+		{"not_affected", true, "OpenVEX's denial"},
+		{"false_positive", true, "the same denial in another dialect's spelling"},
+		{"affected", false, "an admission — excusing on it would clear the finding it admits"},
+		{"under_investigation", false, "a judgment not yet made"},
+		{"fixed", false, "a remediation claim the live scan just disproved, not a denial"},
+		{"", false, "no status is no judgment"},
+		{"Not_Affected", false, "statuses are OpenVEX's vocabulary, not a case-folded field"},
+		{"resolved", false, "an unrecognised judgment is not one this code may act on"},
+	} {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+
+			doc := `{"@context":"https://openvex.dev/ns/v0.2.0","timestamp":"2026-08-20T00:00:00Z",` +
+				`"statements":[{"vulnerability":{"name":"GO-2026-0001"},"status":"` + tt.status + `",` +
+				`"products":[{"@id":"pkg:golang/example.com/dep@v1.0.0"}]}]}`
+
+			d := &vexjoin.Decisions{}
+			if err := vexjoin.Parse(d, []byte(doc), "x.openvex.json"); err != nil {
+				// An empty status is refused at the parse — a decision
+				// that decides nothing is not a decision — so it never
+				// reaches the status test at all.
+				if tt.status == "" {
+					return
+				}
+
+				t.Fatalf("Parse: %v", err)
+			}
+
+			dec, ok := d.Get(vexjoin.KeyFromFinding("GO-2026-0001", "Go", "example.com/dep", "v1.0.0"))
+			if !ok {
+				t.Fatal("the decision did not join its own product")
+			}
+
+			if got := dec.Excuses(); got != tt.excuses {
+				t.Errorf("Excuses() = %v for status %q, want %v — %s", got, tt.status, tt.excuses, tt.why)
+			}
+		})
+	}
+}
+
+// A decision knows which ecosystem's rules its product was read
+// under, so a caller scanning ONE ecosystem can tell a decision it
+// could meet from one it never could. A Go scan and a cargo decision
+// are not a stale pair; they are strangers.
+func TestDecisionCarriesItsPurlType(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		purl string
+		want string
+	}{
+		{"pkg:golang/example.com/dep@v1.0.0", "golang"},
+		{"pkg:cargo/serde_cbor@0.11.2", "cargo"},
+		{"pkg:npm/%40scope/pkg@1.0.0", "npm"},
+		// purl declares the TYPE case-insensitive with lowercase
+		// canonical, so the type a decision reports is lowercased even
+		// when the document shouted it.
+		{"pkg:GOLANG/example.com/dep@v1.0.0", "golang"},
+	} {
+		t.Run(tt.purl, func(t *testing.T) {
+			t.Parallel()
+
+			d := &vexjoin.Decisions{}
+			if err := vexjoin.Parse(d, decide(tt.purl), "x.openvex.json"); err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+
+			all := d.All()
+			if len(all) != 1 {
+				t.Fatalf("All = %v, want the one decision", all)
+			}
+
+			if got := all[0].PurlType(); got != tt.want {
+				t.Errorf("PurlType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

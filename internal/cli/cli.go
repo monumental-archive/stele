@@ -182,6 +182,12 @@ usage:
                  requires — one checkout's callers at a pin bump, or
                  the whole population on a schedule (--policy [--debt
                  --tree --callers | --org|--repo] [--snapshot|--capture])
+    advisories   one module's govulncheck scan joined against the
+                 committed VEX decisions: only a reachable (called)
+                 advisory gates, and only a decision DENYING that the
+                 advisory applies excuses it — one that admits,
+                 withholds or claims a fix is reported on the finding
+                 (--scan --vex --subject [--json])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,

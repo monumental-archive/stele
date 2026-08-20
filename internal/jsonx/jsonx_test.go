@@ -265,3 +265,66 @@ func TestDecodeVersionedReadFailure(t *testing.T) {
 		t.Fatalf("DecodeVersioned(failReader) error = %v, want a read error", err)
 	}
 }
+
+// A concatenated stream is not one document, which is the whole
+// difference from DecodeForeign: trailing data there is an error,
+// here it is the next value.
+func TestDecodeForeignStream(t *testing.T) {
+	t.Parallel()
+
+	type msg struct {
+		N *int `json:"n"`
+	}
+
+	got, err := jsonx.DecodeForeignStream[msg](strings.NewReader(`{"n":1}{"n":2}
+	  {"n":3}`))
+	if err != nil {
+		t.Fatalf("DecodeForeignStream: %v", err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("decoded %d values, want 3", len(got))
+	}
+
+	for i := range got {
+		if got[i].N == nil || *got[i].N != i+1 {
+			t.Errorf("value %d = %v, want %d", i, got[i].N, i+1)
+		}
+	}
+}
+
+// An empty stream is zero values, not an error: a producer that
+// emitted nothing is a fact for the caller to judge, not a decode
+// failure. What the caller must NOT be handed is a prefix it cannot
+// tell from the whole, so a stream that breaks mid-value fails.
+func TestDecodeForeignStreamEdges(t *testing.T) {
+	t.Parallel()
+
+	type msg struct {
+		N *int `json:"n"`
+	}
+
+	empty, err := jsonx.DecodeForeignStream[msg](strings.NewReader(""))
+	if err != nil || empty != nil {
+		t.Fatalf("empty stream = (%v, %v), want (nil, nil)", empty, err)
+	}
+
+	// Unknown fields are tolerated — foreign schemas grow.
+	grown, err := jsonx.DecodeForeignStream[msg](strings.NewReader(`{"n":1,"added_later":true}`))
+	if err != nil || len(grown) != 1 {
+		t.Fatalf("unknown field = (%v, %v), want one value", grown, err)
+	}
+
+	truncated, err := jsonx.DecodeForeignStream[msg](strings.NewReader(`{"n":1}{"n":`))
+	if err == nil {
+		t.Fatal("a truncated stream decoded clean")
+	}
+
+	if truncated != nil {
+		t.Errorf("values = %v, want nothing — a prefix must not pass as the whole", truncated)
+	}
+
+	if !strings.Contains(err.Error(), "value 2") {
+		t.Errorf("err = %v, want it to name which value failed", err)
+	}
+}
