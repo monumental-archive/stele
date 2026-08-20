@@ -100,7 +100,8 @@ type deriveArgs struct {
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele derive: a mode is required: version, notes, bump, sbom, claims, facts or vex"); err != nil {
+			"stele derive: a mode is required: version, notes, bump, sbom, claims, facts, vex or"+
+				" vex-subjects"); err != nil {
 			return exitIO
 		}
 
@@ -109,14 +110,29 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims, deriveFacts, deriveVEX:
+	case deriveVersion, deriveNotes, deriveBump, deriveSBOM, deriveClaims, deriveFacts, deriveVEX,
+		deriveVEXSubjects:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele derive: unknown mode %q (version, notes, bump, sbom, claims, facts, vex)\n", mode); err != nil {
+			"stele derive: unknown mode %q (version, notes, bump, sbom, claims, facts, vex,"+
+				" vex-subjects)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
+	}
+
+	// vex-subjects walks the org's published inventories rather than
+	// local ones: which releases a decision reaches is a fact about
+	// what is published, so it shares the assert engine's walk.
+	if mode == deriveVEXSubjects {
+		va, code := parseVEXSubjectsArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		return runDeriveMode(va.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveVEXSubjects(va, doc, log) })
 	}
 
 	// vex scans inventories and renders a document.

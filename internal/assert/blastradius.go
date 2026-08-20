@@ -14,7 +14,7 @@
 // package version, not the release that happens to carry it, so it
 // excuses its triple wherever the scan meets it. That is also what
 // makes staleness honest here — this walk DISCOVERS rather than
-// enumerating obligations, so it records each scanned subject as
+// enumerating obligations, so each scanned subject is recorded as
 // swept, and a decision that met nothing across a swept corpus is
 // stale by evidence rather than by a fabricated subject.
 
@@ -25,10 +25,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/sbomwalk"
 	"github.com/monumental-archive/stele/internal/triage"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 )
@@ -85,23 +85,24 @@ func BlastRadius(
 		return nil, err
 	}
 
-	w := &blastWalk{
-		pol: pol.BlastRadius, evidence: pol.Evidence, org: org,
-		forge: forge, scanner: scanner, decisions: decisions, j: j, log: log,
-	}
+	w := &blastWalk{pol: pol.BlastRadius, org: org, decisions: decisions, j: j, log: log}
 
 	// Every recorded decision enters the judgment once, before the
-	// scan: one that meets its triple excuses it, one that meets
-	// nothing is answered by what the walk swept.
+	// scan, and SUBJECT-AGNOSTICALLY: a decision judges a package
+	// version, not the release that happens to carry it, so it excuses
+	// its triple wherever the scan meets it. One that meets nothing is
+	// answered by what the walk swept.
 	all := decisions.All()
 	for i := range all {
 		j.Except(report.Declared("", all[i].Key.String(), all[i].Origin))
 	}
 
-	for _, repo := range repos {
-		if err := w.repo(repo); err != nil {
-			return nil, err
-		}
+	walk := &sbomwalk.Walk{
+		Org: org, SBOMSuffix: *pol.Evidence.SBOMSuffix, Forge: forge, Scanner: scanner,
+	}
+
+	if err := walk.Releases(repos, w.inventory); err != nil {
+		return nil, err
 	}
 
 	covered := report.PopulationFromListing(w.scanned, "SBOMs scanned")
@@ -117,10 +118,7 @@ func BlastRadius(
 
 type blastWalk struct {
 	pol        *BlastRadiusPolicy
-	evidence   *EvidencePolicy
 	org        string
-	forge      gh.Forge
-	scanner    osv.Scanner
 	decisions  *vexjoin.Decisions
 	j          *report.Journal
 	log        Logf
@@ -129,102 +127,45 @@ type blastWalk struct {
 	canarySeen bool
 }
 
-func (w *blastWalk) repo(repo string) error {
-	tags, err := w.forge.ReleaseTags(w.org, repo)
-	if err != nil {
-		return fmt.Errorf("assert: releases of %s/%s: %w", w.org, repo, err)
-	}
-
-	for _, tag := range tags {
-		if err := w.release(repo, tag); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (w *blastWalk) release(repo, tag string) error {
-	subject := repo + "@" + tag
-
-	assets, err := w.forge.ReleaseAssets(w.org, repo, tag)
-	if err != nil {
-		return fmt.Errorf("assert: assets of %s: %w", subject, err)
-	}
-
-	var sboms []string
-
-	for _, a := range assets {
-		if strings.HasSuffix(a, *w.evidence.SBOMSuffix) {
-			sboms = append(sboms, a)
-		}
-	}
-
-	if len(sboms) == 0 {
-		// Pre-standup releases are recorded, not failed — they predate
-		// the obligation. The evidence walk owns the completeness
-		// question; this walk scans what exists.
-		w.missing = append(w.missing, subject)
+// inventory answers for one thing the shared walk found — the
+// blast-radius reading of it. A release with no inventory is recorded
+// rather than failed: pre-standup releases predate the obligation,
+// and the evidence walk owns the completeness question. A defect the
+// walk DID reach is a finding: bytes nothing attests, or a scan that
+// read nothing, must never pass for a clean release.
+func (w *blastWalk) inventory(inv *sbomwalk.Inventory) error {
+	switch inv.Defect {
+	case sbomwalk.DefectNoInventory:
+		w.missing = append(w.missing, inv.Subject())
 
 		return nil
-	}
-
-	for _, name := range sboms {
-		if err := w.scanSBOM(repo, tag, name); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// scanSBOM downloads, trust-checks and scans one SBOM asset.
-func (w *blastWalk) scanSBOM(repo, tag, name string) error {
-	subject := repo + "@" + tag
-
-	sbom, err := w.forge.Asset(w.org, repo, tag, name)
-	if err != nil {
-		return fmt.Errorf("assert: sbom of %s: %w", subject, err)
-	}
-
-	// Trust nothing downloaded: the asset must be one the attestation
-	// store vouches for. Presence depth, like the evidence walk; the
-	// cryptographic judgment is the full-depth leg.
-	stored, err := w.forge.Attestations(w.org, repo, chain.SHA256Hex(sbom))
-	if err != nil {
-		return fmt.Errorf("assert: store for %s sbom: %w", subject, err)
-	}
-
-	if c := w.j.Check(subject, name+":unattested"); len(stored) == 0 {
-		c.Diverged("no attestation in the store covers the downloaded SBOM bytes")
+	case sbomwalk.DefectUnattested:
+		w.j.Check(inv.Subject(), inv.Asset+":unattested").
+			Diverged("no attestation in the store covers the downloaded SBOM bytes")
 
 		return nil
-	}
-
-	out, err := w.scanner.Scan(sbom)
-	if c := w.j.Check(subject, name+":empty-scan"); errors.Is(err, osv.ErrZeroPackages) {
-		c.Diverged("the SBOM parsed to zero packages — a scan that reads nothing must not report clean")
+	case sbomwalk.DefectZeroPackages:
+		w.j.Check(inv.Subject(), inv.Asset+":empty-scan").
+			Diverged("the SBOM parsed to zero packages — a scan that reads nothing must not report clean")
 
 		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("assert: scanning %s: %w", subject, err)
+	case sbomwalk.DefectNone:
 	}
 
 	w.scanned++
-	w.log("assert: blast-radius: %s scanned", subject)
+	w.log("assert: blast-radius: %s scanned", inv.Subject())
 
-	if err := w.judge(subject, out); err != nil {
+	if err := w.judge(inv.Subject(), inv.Report); err != nil {
 		return err
 	}
 
-	// The inventory was read whole: every advisory on this subject
-	// was observed, so one a decision names and the scan did not meet
-	// was observed to be absent.
-	w.j.Swept(subject)
+	// The inventory was read whole: every advisory on this subject was
+	// observed, so one a decision names and the scan did not meet was
+	// observed to be ABSENT — which is what makes that decision stale
+	// by evidence rather than by a fabricated subject.
+	w.j.Swept(inv.Subject())
 
-	w.noteCanary(repo, tag, out)
+	w.noteCanary(inv.Repo, inv.Tag, inv.Report)
 
 	return nil
 }

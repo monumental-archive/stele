@@ -26,7 +26,11 @@ const cmdVersion = "version"
 // develVersion is the toolchain's stamp for a build no tag names.
 const develVersion = "(devel)"
 
-// Exit codes: 0 success, 2 usage error, 3 output-stream failure.
+// The exit codes this package owns. The judging verbs add their own
+// two — exitRefused (1) in verify.go, exitBlind (4) in assert.go —
+// beside the verdicts that produce them; all five are printed by
+// `stele help` and enumerated in MAINTENANCE.md, which
+// surface_test.go holds to the binary.
 const (
 	exitOK    = 0
 	exitUsage = 2
@@ -80,7 +84,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // usage writes the command synopsis.
 func usage(w io.Writer) error {
-	const text = `stele — SLSA evidence engine and verifier
+	const text = `stele — SLSA evidence engine and verifier, and the
+release engine that produces the evidence
 
 usage:
   stele help             show this synopsis
@@ -125,6 +130,10 @@ usage:
               CONTENT against the forge's live enforcement state
               through the policy's declared table; a lapsed control
               is absent, an unreadable one refuses
+    vex-subjects  which published releases one VEX decision reaches,
+              and the subjects a claim about it is signed over —
+              the assert engine's own inventory walk and join, read
+              from the other direction
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -152,6 +161,16 @@ usage:
                  branch, or the repository is a declared exception —
                  cloneless, over the forge's own API (--org|--repo
                  --policy --verify-policy [--debt --snapshot|--capture])
+    plans        pre-publish: the build legs' inventory plans against
+                 the planned obligations the post-publish walk reads,
+                 and the judged plan set emitted for the derivation
+                 leg to iterate (--policy --classes --machinery-version
+                 [--debt --out] <plan files...>)
+    permissions  the caller/callee join: every caller's permissions:
+                 grant covers what the reusable tree it calls
+                 requires — one checkout's callers at a pin bump, or
+                 the whole population on a schedule (--policy [--debt
+                 --tree --callers | --org|--repo] [--snapshot|--capture])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,
@@ -189,12 +208,19 @@ takes --policy --repo --branch [--canon-root --canon-digest --out
 --snapshot|--capture]; derive facts takes --archetype --repo --git-dir --server-url
 [--version --rev --tree --title --description]; derive vex
 takes --subjects --vex --author --id --released [--base-ecosystems
---out]; the other
+--out]; derive vex-subjects takes --policy --decision --org|--repo
+[--snapshot --out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
 --date --changelog]; bump adds [--check --date].
+
+exit codes: 0 success; 1 refused — a judgment that found divergence,
+or a derivation that will not stand; 2 usage error; 3 output-stream
+failure; 4 CANNOT_JUDGE, the run could not see enough to judge. "I
+found divergence" and "I could not look" are different answers and
+never share a code.
 
 Trust material: every verifying verb takes [--trusted-root] for an
 offline document, or [--tuf-root --tuf-mirror] for a private Sigstore
