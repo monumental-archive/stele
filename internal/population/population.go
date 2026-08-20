@@ -9,13 +9,18 @@
 // organisation's configuration (stele#153).
 //
 // Two vocabularies meet here and must never merge. An EXCLUSION says
-// a repository owes nothing: it produces no member, no finding, no
-// count and no cell — silence, because there is nothing to say. An
-// exception (declared elsewhere, in the assert policy and the debt
-// file) says a repository owes something it has not got: dated,
-// removal-conditioned, and loud until resolved. The schema here
-// cannot express the second, which is what keeps "outside the scope"
-// from decaying into "behind on the work".
+// a repository owes no EVIDENCE: on the tracks it names, it produces
+// no member, no finding, no count and no cell — silence, because
+// there is nothing to say. An exception (declared elsewhere, in the
+// assert policy and the debt file) says a repository owes something
+// it has not got: dated, removal-conditioned, and loud until
+// resolved. The schema here cannot express the second, which is what
+// keeps "outside the scope" from decaying into "behind on the work".
+//
+// An exclusion narrows evidence, and evidence only. A walk that asks
+// no track question — one measuring something every repository has
+// whatever it publishes — reads the ROSTER, and being listed here at
+// all is what puts a repository under it (stele#181).
 //
 // The reconciliation is the other half. A credential that cannot see
 // a repository makes a walk run short and PASS — a clean check
@@ -256,6 +261,39 @@ func (s *Set) Grid() []Membership {
 				out = append(out, Membership{Repo: m.name, Track: t})
 			}
 		}
+	}
+
+	return out
+}
+
+// Roster is every repository this population holds, in listing order,
+// whatever any of them bears evidence on.
+//
+// Its own door, beside Members and Grid, because a third question is
+// asked here. Members is asked BY a walk that named one track, so a
+// track nobody is in is a contradiction it must report. Grid is asked
+// by a consumer building one cell per (repository, track). The roster
+// is asked by a walk that names NO track at all — one measuring
+// something every repository has whatever it publishes — and for such
+// a walk a repository's tracks are not narrowing input: reading them
+// would answer a question nobody asked (stele#181).
+//
+// Listing a repository in the population is therefore what puts it
+// under such a walk, EVEN WHEN the same declaration excludes it from
+// every evidence track. An exclusion says what a repository owes
+// evidence on, and a walk that consumes no evidence reads past it.
+//
+// An empty roster is the degraded forge (stele#69) and stays
+// CANNOT_JUDGE over a population of zero rather than becoming an
+// error — the Members contradiction has no counterpart here, because
+// a DECLARED population cannot reach this door empty: Validate
+// refuses a roster of nothing, and the reconciliation refuses a
+// listing that does not show what the roster names.
+func (s *Set) Roster() []string {
+	out := make([]string, 0, len(s.members))
+
+	for _, m := range s.members {
+		out = append(out, m.name)
 	}
 
 	return out

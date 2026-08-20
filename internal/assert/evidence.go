@@ -46,7 +46,7 @@ func Evidence(
 ) (*report.Report, error) {
 	e := pol.Evidence
 
-	repos, err := pop.Members(TrackEvidence)
+	repos, err := EvidenceSubjects.Enumerate(pop)
 	if err != nil {
 		return nil, err
 	}

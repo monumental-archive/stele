@@ -279,6 +279,96 @@ func TestDeclaredOutEntirely(t *testing.T) {
 	}
 }
 
+// TestRoster is the third door (stele#181). A walk that names no
+// track reads the roster whole, so the very repository
+// TestDeclaredOutEntirely proves invisible to every evidence walk is
+// present here: an exclusion says what a repository owes EVIDENCE on,
+// and being listed at all is what puts a repository under a walk that
+// consumes none.
+func TestRoster(t *testing.T) {
+	t.Parallel()
+
+	withSite := theOrg()
+	withSite.repos = append(withSite.repos, gh.Repo{Name: "www"})
+
+	for _, tc := range []struct {
+		name string
+		l    lister
+		decl *population.Declaration
+		want []string
+	}{
+		{
+			name: "the default predicate's roster is its listing, archives and forks out",
+			l:    theOrg(),
+			want: []string{"canon", "lab", "signer"},
+		},
+		{
+			name: "a declared roster holds every entry, whatever tracks it named",
+			l:    withSite,
+			decl: &population.Declaration{Repositories: []population.Entry{
+				{Repo: new("canon")},
+				{Repo: new("lab")},
+				{
+					Repo: new("signer"), Tracks: &[]string{"source"},
+					Reason: new("publishes no releases; it is the signing workflow repository"),
+				},
+				{Repo: new("www"), Tracks: &[]string{}, Reason: new("the product site; it bears no evidence")},
+			}},
+			want: []string{"canon", "lab", "signer", "www"},
+		},
+		{
+			name: "an archive the roster names is a member here too, like every other entry",
+			l:    lister{repos: []gh.Repo{{Name: "canon"}, {Name: "attic", Archived: true}}},
+			decl: &population.Declaration{Repositories: []population.Entry{
+				{Repo: new("canon")}, {Repo: new("attic")},
+			}},
+			want: []string{"canon", "attic"},
+		},
+		{
+			// The Members contradiction has no counterpart at this door:
+			// a walk that named no track cannot be pointed at one nobody
+			// is in, so nobody is an outage (stele#69) and stays
+			// CANNOT_JUDGE over a population of zero.
+			name: "a listing that came back empty is an empty roster, never an error",
+			l:    lister{},
+			want: []string{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			set, err := population.Scope{Org: "acme"}.Resolve(tc.l, tc.decl)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+
+			if got := set.Roster(); !slices.Equal(got, tc.want) {
+				t.Fatalf("Roster = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// The single-repository consumer (stele#79) at the same door: the
+	// roster is one repository, and the entry that excludes it from
+	// every evidence track does not remove it — a caller who named a
+	// target explicitly asked about that target.
+	t.Run("the single-repository roster is the repository named", func(t *testing.T) {
+		t.Parallel()
+
+		set, err := population.Scope{Repo: "acme/www"}.Resolve(nil,
+			&population.Declaration{Repositories: []population.Entry{
+				{Repo: new("www"), Tracks: &[]string{}, Reason: new("the product site; it bears no evidence")},
+			}})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+
+		if got := set.Roster(); !slices.Equal(got, []string{"www"}) {
+			t.Fatalf("Roster = %v, want the one repository named", got)
+		}
+	})
+}
+
 // TestReconciliation: both directions refuse, and both refuse BY NAME.
 // A count cannot say which repository went missing, and the repository
 // that went missing is the whole finding.

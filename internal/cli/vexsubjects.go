@@ -113,7 +113,7 @@ func runDeriveVEXSubjects(va *vexSubjectsArgs, doc io.Writer, out *latch) error 
 	// reason: this mode derives which releases an advisory reaches
 	// from their SBOMs, so a repository declared outside the
 	// dependency track has nothing here to be affected.
-	repos, err := pop.Members(assert.TrackBlastRadius)
+	repos, err := assert.BlastRadiusSubjects.Enumerate(pop)
 	if err != nil {
 		return fmt.Errorf("derive vex-subjects: %w", err)
 	}

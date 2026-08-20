@@ -8,6 +8,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,31 @@ const permissionsCLIPolicy = `{
     "umbrellaBundle": "attestations.intoto.jsonl",
     "manifestAsset": "evidence-manifest.json",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
+  },
+  "permissions": {
+    "reusable": {"repo": "acme/shared", "dir": ".github/workflows"},
+    "callerDirs": [".github/workflows", "workflow-templates"]
+  }
+}`
+
+// permissionsCLIExcludedPolicy is the policy above with a population
+// that declares its one member outside the build track. %s is the
+// track list, because "source evidence only" and "no evidence at all"
+// are two spellings of the same exclusion and the join must read past
+// both.
+const permissionsCLIExcludedPolicy = `{
+  "schema": 5,
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}
+  },
+  "population": {
+    "repositories": [
+      {"repo": "widget", "tracks": %s, "reason": "publishes no releases"}
+    ]
   },
   "permissions": {
     "reusable": {"repo": "acme/shared", "dir": ".github/workflows"},
@@ -311,6 +337,48 @@ func TestAssertPermissionsPopulationWalk(t *testing.T) {
 
 			if !strings.Contains(stdout.String(), "acme/widget") {
 				t.Fatalf("stdout = %q, want the population member named", stdout.String())
+			}
+		})
+	}
+}
+
+// TestAssertPermissionsReadsPastEveryExclusion is the roster door at
+// the command line (stele#181). The policy declares its one member
+// outside the build track, and the join walks it anyway: what a
+// workflow may do is no claim about a release, and a repository that
+// publishes nothing still has callers that die at the next pin bump.
+// Mapped to a track, each of these runs refused by name instead — the
+// coverage lost silently, with no line anywhere saying so.
+func TestAssertPermissionsReadsPastEveryExclusion(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		tracks string
+	}{
+		{"source evidence only, like a signing workflow repository", `["source"]`},
+		{"no evidence at all, like a product site", `[]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			policyPath, root := permissionsCheckout(t, permissionsCLIGrantingCaller)
+			if err := os.WriteFile(policyPath,
+				fmt.Appendf(nil, permissionsCLIExcludedPolicy, tt.tracks), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			snap := permissionsSnapshot(t, permissionsCLIShortCaller)
+
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{
+				"assert", "permissions", "--policy", policyPath, "--tree", root,
+				"--org", "acme", "--snapshot", snap,
+			}, &stdout, &stderr)
+			if code != exitRefused {
+				t.Fatalf("Run = %d, want %d — the excluded member's caller went unjudged\nstdout: %s\nstderr: %s",
+					code, exitRefused, stdout.String(), stderr.String())
+			}
+
+			if !strings.Contains(stdout.String(), "acme/widget") {
+				t.Fatalf("stdout = %q, want the excluded member named", stdout.String())
 			}
 		})
 	}

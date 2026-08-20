@@ -240,7 +240,7 @@ func permissionCallers(
 		return scope.Subject(), nil, err
 	}
 
-	repos, err := pop.Members(assert.TrackPermissions)
+	repos, err := assert.PermissionsSubjects.Enumerate(pop)
 	if err != nil {
 		return scope.Subject(), nil, err
 	}

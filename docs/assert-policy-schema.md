@@ -203,23 +203,45 @@ with no configuration at all.
   reason for is indistinguishable from a mistake, and this is the one
   field that tells a later reader which it was.
 
-Which target reads which track is a fact about the MECHANISM, not
-about any organisation: the evidence walk and the permissions join
-measure `build`; chains and tags measure `source`; blast-radius (and
-`derive vex-subjects`, which sweeps the same SBOMs) measures
-`dependency`.
+### Which door a target opens
+
+A walk enumerates by the QUESTION IT ASKS, and which question each
+target asks is a fact about the mechanism, not about any organisation.
+
+A target measuring evidence asks a **track** question, and reads that
+track's bearers: the evidence walk measures `build`; chains and tags
+measure `source`; blast-radius (and `derive vex-subjects`, which
+sweeps the same SBOMs) measures `dependency`. A repository declared
+outside the track is invisible to it — not measured, not counted, not
+a finding.
+
+A target measuring something every repository has whatever it
+publishes asks **no track question at all**, and reads the roster:
+every entry in this section, in listing order. `assert permissions`
+is that target today. The caller/callee join reads workflow files,
+computes a requirement and compares it against a grant; it makes no
+claim about any release and consumes no attestation, so no track
+scopes it.
+
+**Listing a repository here therefore means its workflow grants are
+audited, even when the same entry excludes it from every evidence
+track.** A repository that publishes nothing still has callers that
+die as `startup_failure` at the next pin bump, and an organisation
+must be able to say *this repository bears no build evidence* without
+also saying *do not audit its workflow grants* (stele#181).
 
 ### Exclusions are not exceptions
 
 The two vocabularies mean opposite things and the schema keeps them
-apart on purpose. An **exclusion** here says a repository owes
-nothing: it produces no member, no finding, no stale entry, no count
-and no board cell — silence, because there is nothing to say. An
-**exception** (`chains.exceptions`, the debt file) says a repository
-owes something it has not got: dated, removal-conditioned, and loud
-until resolved. There is no way to spell the second in this section,
-which is what keeps "outside the scope" from decaying into "behind on
-the work".
+apart on purpose. An **exclusion** here says a repository owes no
+EVIDENCE: on the tracks it names it produces no member, no finding,
+no stale entry, no count and no board cell — silence, because there
+is nothing to say. It narrows evidence and evidence only; a target
+that consumes none reads the roster past it. An **exception**
+(`chains.exceptions`, the debt file) says a repository owes something
+it has not got: dated, removal-conditioned, and loud until resolved.
+There is no way to spell the second in this section, which is what
+keeps "outside the scope" from decaying into "behind on the work".
 
 An exclusion is also not an excuse. It decides who is ASKED, never
 what the answer is — a repository that is in the population is judged
@@ -254,7 +276,9 @@ walk with nothing to judge would otherwise seal `CANNOT_JUDGE` with
 no cause, which reads exactly like a credential that could not look.
 A listing that merely came back EMPTY is the opposite case and stays
 `CANNOT_JUDGE` with the population at zero — an outage is not a usage
-error.
+error. A target that reads the roster has no such contradiction to
+report: it named no track, so there is none to be empty of, and an
+empty roster is the outage case alone.
 
 Single-repository runs (`--repo owner/name`) read the roster only
 where it names that repository. A closed roster scopes an
