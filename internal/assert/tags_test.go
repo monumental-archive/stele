@@ -524,6 +524,47 @@ func TestTagsUnjudgeableCarriesItsHorizon(t *testing.T) {
 	}
 }
 
+// TestTagsDebtLineBesideItsDerivation is stele#220's measured case,
+// run through the walk that produced it: a debt line and the ledger
+// horizon answer one coordinate. Both are credited, neither is called
+// stale, and the pairing — a declared line shown beside a derivation
+// over the same coordinate — is the signal that the machinery has
+// outgrown the line. Before the fix the walk credited the debt line
+// and told a human to go and delete the derivation.
+func TestTagsDebtLineBesideItsDerivation(t *testing.T) {
+	t.Parallel()
+
+	debt, err := report.ParseDebt([]byte("widget@v1.1.0(tag:link)\n"), "debt.txt")
+	if err != nil {
+		t.Fatalf("debt: %v", err)
+	}
+
+	rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+		preGenesisTags(), &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+
+	doc := encodeReport(t, rep)
+
+	if len(doc.Excused) != 2 {
+		t.Fatalf("excused = %+v, want the finding named beside BOTH excuses", doc.Excused)
+	}
+
+	if k, o := doc.Excused[0].Exception.Kind, doc.Excused[0].Exception.Origin; k != "declared" || o != "debt.txt:1" {
+		t.Errorf("first excuse = %s %q, want the declared debt line", k, o)
+	}
+
+	if k := doc.Excused[1].Exception.Kind; k != "derived" {
+		t.Errorf("second excuse kind = %q, want the derived horizon", k)
+	}
+
+	if len(doc.Stale) != 0 || len(doc.Unexercised) != 0 {
+		t.Errorf("stale = %+v, unexercised = %+v — nothing here was checked clean",
+			doc.Stale, doc.Unexercised)
+	}
+}
+
 // TestTagsUnfoundedLedgerWitnessesNothing: a repository whose ledger
 // founds no chain cannot answer the link question for ANY tag.
 // Answering it anyway reddens a whole listing for one missing ledger,

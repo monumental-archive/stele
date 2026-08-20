@@ -22,7 +22,14 @@
 //     STALE, a run that never performed it reports it UNEXERCISED.
 //     Staleness is a retirement claim, and a claim needs sight — so
 //     walks record every check through the Journal, not only the
-//     checks that failed.
+//     checks that failed. A retirement claim is also addressed to
+//     somebody: only a DECLARED exception can be stale, because only a
+//     committed line has an owner who could delete it (#220).
+//
+// Excusing is many-to-many, not a race between exceptions: a finding
+// answered by a debt line AND by a derivation is reported with both,
+// so the redundancy a human retires the debt line on is visible
+// rather than asserted.
 package report
 
 import (
@@ -203,8 +210,11 @@ type Report struct {
 	unlooked  []Exception
 }
 
-// excusedFinding pairs a finding with the exception that excused it,
-// so the report shows every excuse beside what it excused.
+// excusedFinding pairs a finding with ONE exception that excused it,
+// so the report shows every excuse beside what it excused. A finding
+// several exceptions answer appears once per exception: the pairing is
+// the observation, and there is no rule about which one "really"
+// excused it.
 type excusedFinding struct {
 	finding   Finding
 	exception Exception
@@ -224,6 +234,12 @@ func Seal(
 
 	used := make([]bool, len(j.exceptions))
 
+	// EVERY matching exception is credited, not the first one in the
+	// slice (stele#220). Excusing is not a race: where a debt line and
+	// a derivation both answer one coordinate, both answered it, and
+	// crediting one silently made the other's coordinate look
+	// unexcused — which the loop below then reported as a retirement
+	// claim about the wrong exception, in both directions.
 	for fi := range j.findings {
 		excused := false
 
@@ -232,8 +248,6 @@ func Seal(
 				r.excused = append(r.excused, excusedFinding{finding: j.findings[fi], exception: j.exceptions[ei]})
 				used[ei] = true
 				excused = true
-
-				break
 			}
 		}
 
@@ -242,12 +256,18 @@ func Seal(
 		}
 	}
 
-	// An unmatched exception is sorted by what the run could SEE, not
-	// by what it was called: the check ran clean (retire the excuse),
-	// or it never ran here (this run has nothing to say about it).
+	// An unmatched DECLARED exception is sorted by what the run could
+	// SEE, not by what it was called: the check ran clean (retire the
+	// excuse), or it never ran here (this run has nothing to say about
+	// it). Both buckets address a human holding a committed file, so
+	// neither can carry a derived exception: nobody can retire engine
+	// logic, and a run that tells them to is describing itself wrong.
+	// A declared line the machinery has outgrown is not announced
+	// either — it is SEEN, in the excused pairing that names the
+	// derivation beside it.
 	for i, e := range j.exceptions {
 		switch {
-		case used[i]:
+		case used[i] || e.kind != kindDeclared:
 		case j.exercised(&e):
 			r.stale = append(r.stale, e)
 		default:

@@ -7,6 +7,7 @@ package report_test
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,7 +191,7 @@ func TestSealSortsUnmatchedExceptionsByCoverage(t *testing.T) {
 		report.Declared("a", "x", "debt.txt:3"),       // matched below: excused
 		report.Declared("a", "y", "debt.txt:5"),       // checked, clean: stale
 		report.Declared("gone", "y", "debt.txt:9"),    // never checked: unexercised
-		report.Declared("a", "", "debt.txt:11"),       // subject-wide, and the subject was checked
+		report.Declared("a", "", "debt.txt:11"),       // subject-wide: it too answers the a/x finding
 		report.Declared("nowhere", "", "debt.txt:13"), // subject-wide over a subject nobody checked
 	)
 
@@ -212,8 +213,8 @@ func TestSealSortsUnmatchedExceptionsByCoverage(t *testing.T) {
 	doc := decodeDoc(t, buf.Bytes())
 
 	stale := origins(doc.Stale)
-	if len(stale) != 2 || stale[0] != "debt.txt:5" || stale[1] != "debt.txt:11" {
-		t.Fatalf("staleExceptions = %v, want the two whose checks ran clean", stale)
+	if len(stale) != 1 || stale[0] != "debt.txt:5" {
+		t.Fatalf("staleExceptions = %v, want the one whose check ran clean and matched nothing", stale)
 	}
 
 	unexercised := origins(doc.Unexercised)
@@ -221,8 +222,13 @@ func TestSealSortsUnmatchedExceptionsByCoverage(t *testing.T) {
 		t.Fatalf("unexercisedExceptions = %v, want the two this run never looked for", unexercised)
 	}
 
-	if len(doc.Excused) != 1 || doc.Excused[0].Exception.Origin != "debt.txt:3" {
-		t.Fatalf("excused = %+v, want the matched declared exception", doc.Excused)
+	// Both lines that answer a/x are credited: the narrow one and the
+	// subject-wide one. Crediting only the first would report the
+	// other stale, which is a retirement claim about a line that did
+	// its job this run (#220).
+	if len(doc.Excused) != 2 ||
+		doc.Excused[0].Exception.Origin != "debt.txt:3" || doc.Excused[1].Exception.Origin != "debt.txt:11" {
+		t.Fatalf("excused = %+v, want both declared lines that matched the finding", doc.Excused)
 	}
 }
 
@@ -294,6 +300,196 @@ func TestSubjectAgnosticExceptionExcusesEverySubject(t *testing.T) {
 	r := report.Seal("test", "acme", report.PopulationFromEvidence(2, "SBOMs"), j, report.NoCanary(), report.NoJudgedSet())
 	if got := r.Verdict(); got != report.VerdictPass {
 		t.Fatalf("verdict = %s, want PASS — one decision covers the triple wherever it is found", got)
+	}
+}
+
+// TestOverlappingExceptionsOverOneCoordinate pins stele#220 across
+// the four arrangements a declared line and a derivation can take over
+// one coordinate. The rules under test, in one place:
+//
+//   - every matching exception is credited, so a finding both answer
+//     names both, and neither is left looking unmatched;
+//   - stale keeps its #147 meaning exactly — this run performed the
+//     check and found it CLEAN — so no exception whose coordinate
+//     diverged is ever called stale;
+//   - a derived exception is never stale and never unexercised in any
+//     arrangement: both buckets speak to a human holding a committed
+//     file, and nobody can retire engine logic.
+//
+// The redundancy signal for a debt line the machinery has outgrown is
+// therefore the visible pairing — the line shown excused alongside a
+// derivation — not a claim the report makes.
+func TestOverlappingExceptionsOverOneCoordinate(t *testing.T) {
+	t.Parallel()
+
+	const (
+		subject   = "widget@v1.1.0"
+		assertion = "tag:link"
+		debtLine  = "debt.txt:1"
+		horizon   = "the ledger founds no chain reaching this tag"
+	)
+
+	tests := []struct {
+		name        string
+		declared    bool
+		derived     bool
+		diverged    bool
+		excusedBy   []string
+		stale       []string
+		unexercised []string
+		findings    int
+	}{
+		{
+			name:      "declared alone",
+			declared:  true,
+			diverged:  true,
+			excusedBy: []string{debtLine},
+		},
+		{
+			name:      "derived alone",
+			derived:   true,
+			diverged:  true,
+			excusedBy: []string{horizon},
+		},
+		{
+			name:      "both over one coordinate",
+			declared:  true,
+			derived:   true,
+			diverged:  true,
+			excusedBy: []string{debtLine, horizon},
+		},
+		{
+			// The clean check is the ONLY arrangement that retires a
+			// line, and it retires the declared one alone.
+			name:     "both, and the check ran clean",
+			declared: true,
+			derived:  true,
+			stale:    []string{debtLine},
+		},
+		{
+			name:     "declared alone, and the check ran clean",
+			declared: true,
+			stale:    []string{debtLine},
+		},
+		{
+			name:    "derived alone, and the check ran clean",
+			derived: true,
+		},
+		{
+			name:     "neither, and the check diverged",
+			diverged: true,
+			findings: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := sealOneCoordinate(subject, assertion, debtLine, horizon,
+				tt.declared, tt.derived, tt.diverged)
+
+			want := report.VerdictPass
+			if tt.findings > 0 {
+				want = report.VerdictFail
+			}
+
+			if got := r.Verdict(); got != want {
+				t.Fatalf("verdict = %s, want %s", got, want)
+			}
+
+			var buf bytes.Buffer
+			if err := r.Encode(&buf); err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+
+			doc := decodeDoc(t, buf.Bytes())
+
+			if got := excusedOrigins(t, doc, subject, assertion); !slices.Equal(got, tt.excusedBy) {
+				t.Errorf("excused by %v, want %v", got, tt.excusedBy)
+			}
+
+			if got := origins(doc.Stale); !slices.Equal(got, tt.stale) {
+				t.Errorf("staleExceptions = %v, want %v", got, tt.stale)
+			}
+
+			if got := origins(doc.Unexercised); !slices.Equal(got, tt.unexercised) {
+				t.Errorf("unexercisedExceptions = %v, want %v", got, tt.unexercised)
+			}
+
+			if len(doc.Findings) != tt.findings {
+				t.Errorf("findings = %+v, want %d unexcused", doc.Findings, tt.findings)
+			}
+		})
+	}
+}
+
+// sealOneCoordinate runs one arrangement of the overlap: the debt
+// line, the derivation, or both, over a single checked coordinate that
+// either diverged or ran clean.
+func sealOneCoordinate(subject, assertion, debtLine, horizon string, declared, derived, diverged bool) *report.Report {
+	var lines []report.Exception
+	if declared {
+		lines = append(lines, report.Declared(subject, assertion, debtLine))
+	}
+
+	j := report.NewJournal(lines...)
+	if derived {
+		j.Except(report.Derived(subject, assertion, horizon))
+	}
+
+	c := j.Check(subject, assertion)
+	if diverged {
+		c.Diverged("the tag names no link")
+	}
+
+	return report.Seal("test", "acme/widget", report.PopulationFromEvidence(1, "tags"),
+		j, report.NoCanary(), report.NoJudgedSet())
+}
+
+// excusedOrigins lists what excused the findings, asserting on the
+// way that every pairing names the one coordinate under test.
+func excusedOrigins(t *testing.T, doc *encodedDoc, subject, assertion string) []string {
+	t.Helper()
+
+	out := make([]string, 0, len(doc.Excused))
+
+	for i := range doc.Excused {
+		if f := doc.Excused[i].Finding; f.Subject != subject || f.Assertion != assertion {
+			t.Fatalf("excused pairs the wrong finding: %+v", f)
+		}
+
+		out = append(out, doc.Excused[i].Exception.Origin)
+	}
+
+	return out
+}
+
+// A derivation over a coordinate this run never checked is not
+// reported either: unexercised is a statement to a human about a
+// committed line, and there is no committed line to make it about.
+func TestAnUncheckedDerivationIsNotReported(t *testing.T) {
+	t.Parallel()
+
+	j := report.NewJournal(report.Declared("elsewhere", "y", "debt.txt:4"))
+	j.Except(report.Derived("widget@v1", "tag:link", "the ledger founds no chain"))
+	j.Check("other@v2", "tag:link")
+
+	r := report.Seal("test", "acme", report.PopulationFromEvidence(1, "tags"),
+		j, report.NoCanary(), report.NoJudgedSet())
+
+	var buf bytes.Buffer
+	if err := r.Encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	doc := decodeDoc(t, buf.Bytes())
+	if got := origins(doc.Unexercised); !slices.Equal(got, []string{"debt.txt:4"}) {
+		t.Fatalf("unexercisedExceptions = %v, want the declared line alone", got)
+	}
+
+	if len(doc.Stale) != 0 {
+		t.Fatalf("staleExceptions = %+v, want none", doc.Stale)
 	}
 }
 
