@@ -125,6 +125,76 @@ func TestRenderOrdersAndDeduplicates(t *testing.T) {
 	}
 }
 
+// One advisory reaching several products is the ordinary shape, not a
+// corner: a CVE in a shared dependency touches every artifact that
+// links it, and each lands as its own statement. Advisory name alone
+// therefore does not order the document — the product, and then the
+// subcomponent, have to finish the job, or two statements stay
+// interchangeable and the rendered bytes wander between runs.
+func TestRenderOrdersStatementsSharingOneAdvisory(t *testing.T) {
+	t.Parallel()
+
+	// Deliberately supplied worst-first, and the two rows sharing a
+	// product differ ONLY in subcomponent, so a comparator stopping at
+	// the product leaves them tied.
+	rows := []vex.Coverage{
+		{
+			Product: "pkg:github/acme/widget@v1", Subcomponent: "pkg:npm/zlib@1",
+			Advisory: "CVE-1", Status: "not_affected", Decided: decided(),
+		},
+		{
+			Product:  "pkg:github/acme/gadget@v1",
+			Advisory: "CVE-1", Status: "affected", ActionStatement: "upgrade", Decided: decided(),
+		},
+		{
+			Product: "pkg:github/acme/widget@v1", Subcomponent: "pkg:npm/apple@1",
+			Advisory: "CVE-1", Status: "not_affected", Decided: decided(),
+		},
+	}
+
+	got := render(t, rows)
+
+	gadget := strings.Index(got, "gadget")
+	apple := strings.Index(got, "apple")
+	zlib := strings.Index(got, "zlib")
+
+	if gadget >= apple || apple >= zlib {
+		t.Errorf("statements sharing CVE-1 are not ordered by product then subcomponent:\n%s", got)
+	}
+
+	// And the order is a function of the inputs, not of their arrival.
+	if reversed := render(t, []vex.Coverage{rows[2], rows[0], rows[1]}); reversed != got {
+		t.Errorf("arrival order changed the document:\n%s\n%s", got, reversed)
+	}
+}
+
+// TestEncodeWriteFailure: the document is written to a file the
+// release depends on, and a write that half-succeeds must be reported.
+// A truncated VEX document is a triage surface with statements
+// silently missing from it.
+func TestEncodeWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	complete, err := vex.Cover(coverage(), nil)
+	if err != nil {
+		t.Fatalf("Cover = %v", err)
+	}
+
+	doc, err := vex.Render(opts(), complete)
+	if err != nil {
+		t.Fatalf("Render = %v", err)
+	}
+
+	if err := doc.Encode(failWriter{}); err == nil {
+		t.Fatal("Encode to a failing writer succeeded, want error")
+	}
+}
+
+// failWriter is a sink that always tears.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("sink closed") }
+
 // A subcomponent-less coverage is legal: the judgment concerns the
 // product itself.
 func TestRenderWithoutSubcomponent(t *testing.T) {

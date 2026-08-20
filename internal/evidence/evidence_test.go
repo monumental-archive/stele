@@ -8,6 +8,7 @@ package evidence_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -27,6 +28,33 @@ func oneOfEach() []evidence.Entry {
 	return []evidence.Entry{
 		evidence.NewSubject("widget-x86_64.tar.gz", digestA, "go-binary", "linux-amd64"),
 		evidence.NewEvidence("attestations-image.intoto.jsonl", digestB),
+	}
+}
+
+// failWriter is a sink that always tears — the release's manifest is
+// written to a real file under a real bundle, and a torn write there
+// is the everyday disk fault.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errSink }
+
+var errSink = errors.New("sink closed")
+
+// TestEncodeWriteFailure: a half-written manifest is the one failure
+// this document must never reach a bundle in. Every completeness walk
+// reads it to learn what the release was supposed to contain, so a
+// truncated one silently shrinks the obligation — the entries that
+// never made it to disk are entries nothing will go looking for.
+func TestEncodeWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	m, err := evidence.New([]string{"go-binary"}, true, "1.0.0", oneOfEach())
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	if err := m.Encode(failWriter{}); err == nil {
+		t.Fatal("Encode to a failing writer succeeded, want error")
 	}
 }
 

@@ -118,3 +118,99 @@ func TestNonASCIIModuleRefuses(t *testing.T) {
 		t.Error("a non-ASCII module path did not refuse")
 	}
 }
+
+// TestNewUsesTheChecksummedProxy pins the production default. The
+// package doc rests the whole trust argument on this being the same
+// proxy a Go build already fetches through — a client pointed
+// somewhere else by default would be a new network dependency nobody
+// declared — and the timeout is what stops one unresponsive registry
+// from hanging a walk over an entire inventory.
+func TestNewUsesTheChecksummedProxy(t *testing.T) {
+	t.Parallel()
+
+	c := pkgtime.New()
+	if c.GoProxy != "https://proxy.golang.org" {
+		t.Errorf("GoProxy = %q, want the public checksummed proxy", c.GoProxy)
+	}
+
+	if c.HTTP == nil || c.HTTP.Timeout == 0 {
+		t.Error("the default client has no timeout — one slow registry would hang the walk")
+	}
+}
+
+// TestUnreadableProxyBaseRefuses: GoProxy is operator configuration,
+// and a spelling that cannot become a request must be reported as
+// such. This is the branch that separates "the operator misconfigured
+// the proxy" from "the registry does not serve this package" — the
+// second is a clean unknown, and reporting the first that way would
+// turn every dependency into unevaluated and the misconfiguration into
+// silence.
+func TestUnreadableProxyBaseRefuses(t *testing.T) {
+	t.Parallel()
+
+	c := &pkgtime.Client{GoProxy: "http://proxy\x7f.invalid", HTTP: http.DefaultClient}
+
+	_, ok, err := c.Published("pkg:golang/example.com/mod@v1.0.0")
+	if err == nil || ok {
+		t.Fatalf("Published = %v, %v — an unusable proxy base must refuse", ok, err)
+	}
+}
+
+// TestUnreachableProxyRefuses: the registry being down is not the
+// registry saying no. An ingestion interval that could not be measured
+// must reach the judge as an error, never as a zero time a requirement
+// could read as "published at the epoch".
+func TestUnreachableProxyRefuses(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	c := &pkgtime.Client{GoProxy: srv.URL, HTTP: srv.Client()}
+	srv.Close()
+
+	when, ok, err := c.Published("pkg:golang/example.com/mod@v1.0.0")
+	if err == nil || ok || !when.IsZero() {
+		t.Fatalf("Published = %v, %v, %v — an unreachable proxy must refuse", when, ok, err)
+	}
+}
+
+// TestTruncatedProxyResponseRefuses: a body that stops mid-flight
+// decodes to nothing useful, and the read is where that shows. The
+// answer must be a refusal rather than the zero time.
+func TestTruncatedProxyResponseRefuses(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// More promised than delivered: the server closes the connection
+		// short, and the client's read fails rather than completing.
+		w.Header().Set("Content-Length", "4096")
+
+		if _, err := w.Write([]byte(`{"Version":"v1.0.0"`)); err != nil {
+			return
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &pkgtime.Client{GoProxy: srv.URL, HTTP: srv.Client()}
+
+	_, ok, err := c.Published("pkg:golang/example.com/mod@v1.0.0")
+	if err == nil || ok {
+		t.Fatalf("Published = %v, %v — a truncated body must refuse", ok, err)
+	}
+}
+
+// TestUndecodableModulePathIsAnotherEcosystem: a purl whose module
+// carries a broken percent escape names no module this resolver can
+// address. That is the same clean unknown as an npm package, not an
+// error — the purl came from somebody else's SBOM, and this package
+// does not get to fail a walk over a document it merely could not
+// read.
+func TestUndecodableModulePathIsAnotherEcosystem(t *testing.T) {
+	t.Parallel()
+
+	c := serve(t, http.StatusOK, `{}`)
+
+	when, ok, err := c.Published("pkg:golang/example.com/m%zzd@v1.0.0")
+	if ok || err != nil || !when.IsZero() {
+		t.Fatalf("Published = %v, %v, %v — want a clean unknown", when, ok, err)
+	}
+}

@@ -590,6 +590,80 @@ func TestSingleRepository(t *testing.T) {
 	}
 }
 
+// TestSingleRepositoryWithNoDeclarationAtAll is the adopter case the
+// layout law is written about: a stranger points this walk at their
+// own repository holding no policy document whatsoever. Nothing about
+// this org's roster may be needed to answer, and the target must come
+// back bearing every track — the tool has been told nothing that would
+// narrow it.
+func TestSingleRepositoryWithNoDeclarationAtAll(t *testing.T) {
+	t.Parallel()
+
+	set, err := population.Scope{Repo: "stranger/tool"}.Resolve(nil, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	for _, track := range level.Tracks() {
+		members, merr := set.Members(track)
+		if merr != nil || !slices.Equal(members, []string{"tool"}) {
+			t.Fatalf("Members(%s) = %v, %v — an undeclared target bears every track",
+				track.Key(), members, merr)
+		}
+	}
+}
+
+// TestGrid is the fourth door, and the one a board is built from. It
+// differs from Members in what an empty answer MEANS: Members is asked
+// by a walk that named a track, so a repository outside that track is
+// a contradiction; Grid is asked by a consumer that named no track, so
+// a repository's missing track is simply a cell that does not exist.
+//
+// The rows below are the two halves of the exclusion law. signer bears
+// source alone and contributes exactly one cell — not three, and not a
+// cell marked absent. www is declared out entirely and contributes
+// NOTHING: no cell to publish, and so nothing on a board for a reader
+// to mistake for an unmeasured one.
+func TestGrid(t *testing.T) {
+	t.Parallel()
+
+	withSite := theOrg()
+	withSite.repos = append(withSite.repos, gh.Repo{Name: "www"})
+
+	decl := &population.Declaration{Repositories: []population.Entry{
+		{Repo: new("canon")},
+		{
+			Repo: new("signer"), Tracks: &[]string{"source"},
+			Reason: new("publishes no releases; it is the signing workflow repository"),
+		},
+		{Repo: new("www"), Tracks: &[]string{}, Reason: new("the product site; it bears no evidence")},
+		{Repo: new("lab")},
+	}}
+
+	set, err := population.Scope{Org: "acme"}.Resolve(withSite, decl)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	var got []string
+	for _, m := range set.Grid() {
+		got = append(got, m.Repo+"/"+m.Track.Key())
+	}
+
+	// Listing order outer, the spec's track order inner: a board's rows
+	// and columns are both stable, so two publications of an unchanged
+	// population are the same document.
+	want := []string{
+		"canon/build", "canon/source", "canon/dependency",
+		"lab/build", "lab/source", "lab/dependency",
+		"signer/source",
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("Grid =\n  %v\nwant\n  %v", got, want)
+	}
+}
+
 // TestEmptyPopulation pins the two opposite meanings of nobody, which
 // is the whole reason exclusions and exceptions may never share a
 // vocabulary: a population DECLARED empty is a contradiction the

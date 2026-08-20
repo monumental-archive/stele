@@ -215,6 +215,38 @@ func TestStale(t *testing.T) {
 	}
 }
 
+// The stale list is a retirement worklist a human reads and edits a
+// VEX document from, so it is ordered rather than delivered in
+// whatever order the decisions were parsed. Both keys are needed to
+// order it: two decisions about one advisory differ only by package,
+// and two about one package only by advisory.
+func TestStaleIsOrdered(t *testing.T) {
+	t.Parallel()
+
+	const several = `{"timestamp": "2026-01-01T00:00:00Z", "statements": [
+	  {"vulnerability": {"name": "CVE-9"}, "status": "not_affected",
+	   "justification": "vulnerable_code_not_present", "products": [{"@id": "pkg:npm/a@1"}]},
+	  {"vulnerability": {"name": "CVE-1"}, "status": "not_affected",
+	   "justification": "vulnerable_code_not_present", "products": [{"@id": "pkg:npm/z@1"}]},
+	  {"vulnerability": {"name": "CVE-1"}, "status": "not_affected",
+	   "justification": "vulnerable_code_not_present", "products": [{"@id": "pkg:npm/b@1"}]}]}`
+
+	got := triage.Stale(nil, decisions(t, several))
+	if len(got) != 3 {
+		t.Fatalf("Stale = %+v, want all three unmatched decisions", got)
+	}
+
+	var spelled []string
+	for i := range got {
+		spelled = append(spelled, got[i].Key.String())
+	}
+
+	want := []string{"CVE-1:b@1", "CVE-1:z@1", "CVE-9:a@1"}
+	if strings.Join(spelled, ",") != strings.Join(want, ",") {
+		t.Fatalf("Stale = %v, want %v", spelled, want)
+	}
+}
+
 // An empty decision set decides nothing — never everything.
 func TestEmptyDecisionsDecideNothing(t *testing.T) {
 	t.Parallel()
