@@ -445,3 +445,58 @@ func TestSubjectsOfScopesToOneClass(t *testing.T) {
 		t.Error("Declares does not read the manifest's own class list")
 	}
 }
+
+// TestPinsReadsBothPopulations: the cross-check (stele#219) asks about
+// every name the manifest pins, artifacts and documents alike, because
+// the checksum manifest pins both and a disagreement over an evidence
+// document is the same defect as one over an artifact.
+func TestPinsReadsBothPopulations(t *testing.T) {
+	t.Parallel()
+
+	m, err := evidence.New([]string{"go-binary"}, true, "1.48.0", []evidence.Entry{
+		evidence.NewSubject("tool-linux-amd64.tar.gz", digestA, "go-binary"),
+		evidence.NewEvidence("attestations.intoto.jsonl", digestC),
+	})
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	got, ok := m.Pins()
+	if !ok {
+		t.Fatal("Pins ok = false on a schema that carries entries")
+	}
+
+	want := map[string]string{
+		"tool-linux-amd64.tar.gz":   digestA,
+		"attestations.intoto.jsonl": digestC,
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("Pins = %+v, want %+v", got, want)
+	}
+
+	for name, digest := range want {
+		if got[name] != digest {
+			t.Errorf("%s pins %q, want %q", name, got[name], digest)
+		}
+	}
+}
+
+// TestPinsCannotAnswerBelowEntries: "cannot pin" and "pins nothing"
+// are different facts, and only the first may excuse the cross-check.
+// A schema below entries carries no answer at all, and an empty map
+// read as one would silently excuse a document that pins plenty.
+func TestPinsCannotAnswerBelowEntries(t *testing.T) {
+	t.Parallel()
+
+	doc := `{"schema": 1, "classes": ["go-binary"], "storeVsa": true, "machineryVersion": "1.48.0"}`
+
+	m, err := evidence.Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse = %v", err)
+	}
+
+	if got, ok := m.Pins(); ok || got != nil {
+		t.Fatalf("Pins = %+v, %v — want no answer from a schema that carries no entries", got, ok)
+	}
+}

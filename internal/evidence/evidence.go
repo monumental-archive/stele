@@ -251,6 +251,39 @@ func (m *Manifest) ArtifactClasses() (map[string]string, bool) {
 	return out, true
 }
 
+// Pins maps every entry's asset name to the bytes it pins — the
+// manifest's whole half of the release's pinning, documents included,
+// so a cross-check against the release's checksum manifest asks about
+// everything both documents name (stele#219). ok=false means this
+// manifest's schema carries no entries at all (below 2), which is
+// "cannot pin", a different fact from "pins nothing" — only the first
+// may excuse the cross-check.
+//
+// The key is the asset NAME for the same reason ArtifactClasses uses
+// it: Validate has proven names unique across entries, while digests
+// are not unique by construction, because two identically built
+// artifacts share one. Keying by digest would collide exactly those
+// two artifacts into one answer, which is the failure this
+// cross-check exists to detect rather than commit.
+func (m *Manifest) Pins() (map[string]string, bool) {
+	if m.Schema == nil || *m.Schema < entriesFrom {
+		return nil, false
+	}
+
+	out := make(map[string]string, len(m.Entries))
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Name == nil || e.SHA256 == nil {
+			continue
+		}
+
+		out[*e.Name] = *e.SHA256
+	}
+
+	return out, true
+}
+
 // Declares reports whether the release named this class among the
 // ones it shipped — asked before a class-scoped walk narrows to it,
 // so a class the release never shipped refuses instead of sealing an
