@@ -242,6 +242,12 @@ The canon speaks for the org; stele speaks for the mechanism.
 - Commits: conventional, imperative, lowercase, 72-column, DCO
   sign-off; scopes in `committed.toml`. PRs squash-merge through the
   org gate (`ci / ci`).
+- Issues: follow the org's mechanism template, which lives in the
+  canon (`.github/ISSUE_TEMPLATE/mechanism.yml` there — this repo has
+  no copy of its own) — Defect, Decided build, Canon consequence,
+  Done when, Sequencing. GitHub applies it only in the web new-issue
+  flow, so an issue filed through `gh` or the REST API arrives blank:
+  write the five sections by hand.
 - Licence: Apache-2.0 (public Go infra convention — patent grant;
   0BSD stays canon-only). REUSE.toml declares; per-file headers are
   refused by design.
