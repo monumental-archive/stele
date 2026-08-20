@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/digitorus/pkcs7"
+	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
 	"github.com/sigstore/rekor/pkg/types/hashedrekord"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"google.golang.org/protobuf/proto"
@@ -55,6 +56,19 @@ func signCMS(t *testing.T, payload []byte, leaf *x509.Certificate, key *ecdsa.Pr
 	})
 }
 
+// signCMSWithDigest signs under a named CMS digest algorithm — the
+// one input the tag path's entity adapter does not take from the
+// signature.
+func signCMSWithDigest(
+	t *testing.T, payload []byte, leaf *x509.Certificate, key *ecdsa.PrivateKey, digest asn1.ObjectIdentifier,
+) []byte {
+	t.Helper()
+
+	return buildCMSWithDigest(t, payload, digest, func(sd *pkcs7.SignedData) error {
+		return sd.AddSigner(leaf, key, pkcs7.SignerInfoConfig{})
+	})
+}
+
 // signCMSWithoutAttributes signs with no authenticated attributes at
 // all — the shape a signature takes when it declares no signing
 // time. pkcs7 accepts it and silently skips its own window check,
@@ -70,12 +84,20 @@ func signCMSWithoutAttributes(t *testing.T, payload []byte, leaf *x509.Certifica
 func buildCMS(t *testing.T, payload []byte, sign func(*pkcs7.SignedData) error) []byte {
 	t.Helper()
 
+	return buildCMSWithDigest(t, payload, pkcs7.OIDDigestAlgorithmSHA256, sign)
+}
+
+func buildCMSWithDigest(
+	t *testing.T, payload []byte, digest asn1.ObjectIdentifier, sign func(*pkcs7.SignedData) error,
+) []byte {
+	t.Helper()
+
 	sd, err := pkcs7.NewSignedData(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sd.SetDigestAlgorithm(pkcs7.OIDDigestAlgorithmSHA256)
+	sd.SetDigestAlgorithm(digest)
 
 	if serr := sign(sd); serr != nil {
 		t.Fatal(serr)
@@ -531,6 +553,264 @@ func TestVerifyTagWithMalformedReceipt(t *testing.T) {
 		!strings.Contains(err.Error(), "does not decode") {
 		t.Fatalf("error = %v, want the malformed-receipt refusal", err)
 	}
+}
+
+// TestVerifyTagWithOfflineReceipt: the shape a gitsign
+// `rekorMode=offline` mint actually embeds (stele#182) — every
+// countersignature, and no canonicalized body. The body is rebuilt
+// from the signature and the entry proves over the reconstruction,
+// reaching the observer-timestamp depth through the same verifier
+// every bundle passes. Both the signed entry timestamp and a
+// single-leaf inclusion proof are exercised, because each hashes the
+// body its own way and a wrong rebuild has to fail both.
+func TestVerifyTagWithOfflineReceipt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		receipt offlineReceipt
+	}{
+		{name: "signed entry timestamp", receipt: offlineReceipt{}},
+		{name: "inclusion promise and proof", receipt: offlineReceipt{withProof: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newTagWorld(t)
+			sig := attachOfflineReceipt(t, &w, tc.receipt)
+
+			for _, floor := range []trust.TagFloor{
+				trust.TagFloorCertificateTransparency, trust.TagFloorObserverTimestamp,
+			} {
+				verdict, err := w.verifier.VerifyTag(w.payload, sig, tagID(), floor)
+				if err != nil {
+					t.Fatalf("VerifyTag(floor %s) = %v", floor, err)
+				}
+
+				if verdict.Depth != trust.TagFloorObserverTimestamp {
+					t.Fatalf("depth = %q, want %q", verdict.Depth, trust.TagFloorObserverTimestamp)
+				}
+
+				sources := map[string]bool{}
+				for _, o := range verdict.Observed {
+					sources[o.Source()] = true
+				}
+
+				if !sources[trust.SourceTransparencyLog] || !sources[trust.SourceCertificateTransparency] {
+					t.Fatalf("observed = %v, want the log observation and the countersigned issuance", verdict.Observed)
+				}
+			}
+		})
+	}
+}
+
+// TestVerifyTagWithOfflineReceiptOverOtherBytes: the reconstruction
+// IS the binding. An entry that carries no body but whose
+// countersignatures were drawn over some OTHER body refuses — under
+// the signed entry timestamp, which signs the body's bytes, and under
+// an inclusion proof, which hashes them into a tree. Each refusal
+// names the rebuild, so the reader is not left to rediscover why a
+// receipt that decodes cleanly still proves nothing.
+func TestVerifyTagWithOfflineReceiptOverOtherBytes(t *testing.T) {
+	t.Parallel()
+
+	other := []byte("a genuine log entry, sealed by the same log, over entirely different bytes")
+
+	for _, tc := range []struct {
+		name    string
+		receipt offlineReceipt
+	}{
+		{
+			name:    "signed entry timestamp over another body",
+			receipt: offlineReceipt{loggedBlob: other},
+		},
+		{
+			name: "inclusion proof over another body",
+			receipt: offlineReceipt{
+				loggedBlob: other,
+				withProof:  true,
+				// Without the promise the proof is the only
+				// countersignature left, so the refusal can only come
+				// from the tree.
+				mutate: func(pb *protorekor.TransparencyLogEntry) { pb.InclusionPromise = nil },
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newTagWorld(t)
+			sig := attachOfflineReceipt(t, &w, tc.receipt)
+
+			_, err := w.verifier.VerifyTag(w.payload, sig, tagID(), trust.TagFloorCertificateTransparency)
+			if err == nil {
+				t.Fatal("VerifyTag accepted a receipt drawn over other bytes")
+			}
+
+			if !strings.Contains(err.Error(), "rebuilt from this signature") {
+				t.Fatalf("error = %v, want the refusal to name the rebuild", err)
+			}
+		})
+	}
+}
+
+// TestVerifyTagWithUnusableReceipt: everything a bodyless entry must
+// name before anything can be held against it, broken one at a time
+// and refused BY NAME.
+//
+// This is the defect stele#182 was diagnosed through: sigstore-go
+// collapses most of these into "nil value in transaction log entry",
+// which cost a live tag audit a day to attribute. A refusal that does
+// not say which field is missing is itself the finding.
+func TestVerifyTagWithUnusableReceipt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*protorekor.TransparencyLogEntry)
+		want   string
+	}{
+		{
+			name:   "no kind and version",
+			mutate: func(pb *protorekor.TransparencyLogEntry) { pb.KindVersion = nil },
+			want:   "names no kind and version",
+		},
+		{
+			name: "kind without a version",
+			mutate: func(pb *protorekor.TransparencyLogEntry) {
+				pb.KindVersion = &protorekor.KindVersion{Kind: hashedrekord.KIND}
+			},
+			want: "names no kind and version",
+		},
+		{
+			name:   "no log key ID",
+			mutate: func(pb *protorekor.TransparencyLogEntry) { pb.LogId = nil },
+			want:   "names no log key ID",
+		},
+		{
+			name:   "impossible log index",
+			mutate: func(pb *protorekor.TransparencyLogEntry) { pb.LogIndex = -1 },
+			want:   "which no log ever issues",
+		},
+		{
+			name: "a kind this tool does not rebuild",
+			mutate: func(pb *protorekor.TransparencyLogEntry) {
+				pb.KindVersion = &protorekor.KindVersion{Kind: "dsse", Version: "0.0.1"}
+			},
+			want: "will not guess another entry shape",
+		},
+		{
+			name: "a version this tool does not rebuild",
+			mutate: func(pb *protorekor.TransparencyLogEntry) {
+				pb.KindVersion = &protorekor.KindVersion{Kind: hashedrekord.KIND, Version: "0.0.2"}
+			},
+			want: "will not guess another entry shape",
+		},
+		{
+			// Rebuilt or carried, an entry still has to parse: an
+			// inclusion proof with no checkpoint states a root hash
+			// nothing signed.
+			name: "an inclusion proof with no checkpoint",
+			mutate: func(pb *protorekor.TransparencyLogEntry) {
+				pb.InclusionProof = &protorekor.InclusionProof{TreeSize: 1, RootHash: []byte("not a root")}
+			},
+			want: "inclusion proof missing required checkpoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newTagWorld(t)
+			sig := attachOfflineReceipt(t, &w, offlineReceipt{mutate: tc.mutate})
+
+			_, err := w.verifier.VerifyTag(w.payload, sig, tagID(), trust.TagFloorCertificateTransparency)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestVerifyTagRebuildRefusesMaterialThatDoesNotSign: the rebuild
+// cannot invent a body out of material that does not sign, and does
+// not try.
+//
+// The reachable way to hold a signature that verifies against bytes
+// this path would not digest is a CMS whose digest algorithm is not
+// the one the tag entity presents (SHA-256). pkcs7 verifies such a
+// signature happily — it uses the algorithm the CMS declares — and
+// the rebuild then refuses, because Rekor's own constructor
+// reverifies the signature over the digest before it will render a
+// body. The refusal names the rebuild rather than surfacing as a
+// countersignature that mysteriously does not verify.
+func TestVerifyTagRebuildRefusesMaterialThatDoesNotSign(t *testing.T) {
+	t.Parallel()
+
+	w := newTagWorld(t)
+	w.sigPEM = signCMSWithDigest(t, w.payload, w.leaf, w.leafKey, pkcs7.OIDDigestAlgorithmSHA384)
+
+	// Any well-formed bodyless entry will do: the rebuild is driven by
+	// the CMS, and refuses before the entry is held against anything.
+	sig := attachOfflineReceipt(t, &w, offlineReceipt{loggedBlob: []byte("whatever the log happened to record")})
+
+	_, err := w.verifier.VerifyTag(w.payload, sig, tagID(), trust.TagFloorCertificateTransparency)
+	if err == nil || !strings.Contains(err.Error(), "rebuilding the hashedrekord/0.0.1 transparency-log entry body") {
+		t.Fatalf("error = %v, want the rebuild refusal", err)
+	}
+}
+
+// offlineReceipt describes one synthesized gitsign-offline receipt:
+// which bytes the LOG recorded, which countersignatures ride with the
+// entry, and any surgery on the entry before it is embedded.
+type offlineReceipt struct {
+	// loggedBlob is the blob the log's countersignatures cover. Nil
+	// means the signature's own signed-attribute blob — the honest
+	// case; anything else synthesizes a genuine receipt for something
+	// else entirely.
+	loggedBlob []byte
+	// withProof adds a single-leaf inclusion proof beside the promise.
+	withProof bool
+	// mutate edits the decoded entry last, after it is built.
+	mutate func(*protorekor.TransparencyLogEntry)
+}
+
+// attachOfflineReceipt mints a Rekor entry, strips its canonicalized
+// body the way a gitsign offline mint does, and rides it into the
+// signature's unsigned attributes.
+func attachOfflineReceipt(t *testing.T, w *tagWorld, r offlineReceipt) []byte {
+	t.Helper()
+
+	logged, loggedSig := cmsSignedPieces(t, w.sigPEM)
+
+	if r.loggedBlob != nil {
+		logged = r.loggedBlob
+		digest := sha256.Sum256(logged)
+
+		var err error
+
+		loggedSig, err = ecdsa.SignASN1(rand.Reader, w.leafKey, digest[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := w.world.rekorBody(t, hashedrekord.KIND, logged, loggedSig, w.leaf, time.Unix(worldEpoch, 0))
+	pb := w.world.rekorOfflineProto(t, body, time.Unix(worldEpoch, 0))
+
+	if r.withProof {
+		pb = w.world.withInclusionProof(t, pb, body)
+	}
+
+	if r.mutate != nil {
+		r.mutate(pb)
+	}
+
+	raw, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return attachRawReceipt(t, w.sigPEM, raw)
 }
 
 // attachReceipt mints a Rekor entry over the CMS's signed-attribute

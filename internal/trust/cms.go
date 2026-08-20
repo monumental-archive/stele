@@ -15,6 +15,7 @@
 package trust
 
 import (
+	"crypto/sha256"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
@@ -83,6 +84,14 @@ type cmsPieces struct {
 	tlogEntries [][]byte
 	// timestamps are the DER RFC 3161 timestamp tokens.
 	timestamps [][]byte
+}
+
+// signedBlobDigest is the digest of the bytes the signature covers.
+// It is what the signed entity presents as its message signature and
+// what a rebuilt Rekor body records as its subject — one definition,
+// so the two can never disagree about which bytes were signed.
+func (p *cmsPieces) signedBlobDigest() [sha256.Size]byte {
+	return sha256.Sum256(p.signedBlob)
 }
 
 // parseCMS extracts the byte-exact signer pieces from one CMS DER.

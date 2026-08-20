@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
-	openapiruntime "github.com/go-openapi/runtime"
 	ct "github.com/google/certificate-transparency-go"
 	cttls "github.com/google/certificate-transparency-go/tls"
 	ctx509 "github.com/google/certificate-transparency-go/x509"
@@ -36,11 +35,11 @@ import (
 	"github.com/secure-systems-lab/go-securesystemslib/dsse"
 	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
-	"github.com/sigstore/rekor/pkg/generated/models"
 	"github.com/sigstore/rekor/pkg/pki"
 	"github.com/sigstore/rekor/pkg/types"
 	dsseEntry "github.com/sigstore/rekor/pkg/types/dsse"
 	"github.com/sigstore/rekor/pkg/types/hashedrekord"
+	"github.com/sigstore/rekor/pkg/util"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tlog"
@@ -48,6 +47,7 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/signature"
 	sigdsse "github.com/sigstore/sigstore/pkg/signature/dsse"
+	"github.com/transparency-dev/merkle/rfc6962"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
@@ -377,22 +377,14 @@ func (w *world) rekorEntry(t *testing.T, kind string, blob, sig []byte, leaf *x5
 		t.Fatal(err)
 	}
 
-	canonical, err := types.CanonicalizeEntry(context.Background(), impl)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reparsed, err := models.UnmarshalProposedEntry(bytes.NewReader(canonical), openapiruntime.JSONConsumer())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	final, err := types.UnmarshalEntry(reparsed)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	body, err := final.Canonicalize(context.Background())
+	// types.CanonicalizeEntry is Canonicalize FOLLOWED BY the JCS
+	// transform, and those canonical bytes are what a Rekor log
+	// stores and countersigns. Re-marshalling the entry afterwards
+	// would undo the transform and mint bodies in an ordering no log
+	// produces — which stays invisible while the body travels with
+	// its entry, and is exactly what an offline mint's rebuilt body
+	// has to match (stele#182).
+	body, err := types.CanonicalizeEntry(context.Background(), impl)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,6 +434,57 @@ func (w *world) rekorProto(t *testing.T, body []byte, integrated time.Time) *pro
 		InclusionPromise:  &protorekor.InclusionPromise{SignedEntryTimestamp: set},
 		CanonicalizedBody: body,
 	}
+}
+
+// rekorOfflineProto seals a body into the entry shape a gitsign
+// offline mint actually embeds (stele#182): every countersignature
+// over the body, and the body itself LEFT OUT — derivable from the
+// signature the entry rides on, so gitsign carries no second copy.
+//
+// The body argument is what the LOG signed, not what the entry
+// carries. Passing bytes other than the signature's own is how a
+// receipt for something else is synthesized.
+func (w *world) rekorOfflineProto(t *testing.T, body []byte, integrated time.Time) *protorekor.TransparencyLogEntry {
+	t.Helper()
+
+	pb := w.rekorProto(t, body, integrated)
+	pb.CanonicalizedBody = nil
+
+	return pb
+}
+
+// withInclusionProof adds a single-leaf inclusion proof over body,
+// under a checkpoint the world's Rekor key signs. A one-leaf tree's
+// root IS its leaf hash, which is the smallest proof that can be
+// honestly built — and enough for a verifier to refuse a proof drawn
+// over different bytes.
+func (w *world) withInclusionProof(
+	t *testing.T, pb *protorekor.TransparencyLogEntry, body []byte,
+) *protorekor.TransparencyLogEntry {
+	t.Helper()
+
+	leafHash := rfc6962.DefaultHasher.HashLeaf(body)
+
+	signer, err := signature.LoadECDSASignerVerifier(w.rekorKey, crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const treeID = int64(1)
+
+	checkpoint, err := util.CreateAndSignCheckpoint(context.Background(), "rekor.example", treeID, 1, leafHash, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pb.InclusionProof = &protorekor.InclusionProof{
+		LogIndex:   0,
+		RootHash:   leafHash,
+		TreeSize:   1,
+		Checkpoint: &protorekor.Checkpoint{Envelope: string(checkpoint)},
+	}
+
+	return pb
 }
 
 // sealRekorEntry wraps a canonical body into a tlog entry with the
