@@ -330,6 +330,98 @@ func TestMissNamesThePath(t *testing.T) {
 	}
 }
 
+// TestNumbersCompareWithoutAFloatRoundTrip. A control must never be
+// decided by whether two values survived the same binary float.
+// Integers compare as integers, so a required-approvals rule written
+// `2` matches a forge answering `2` however either was spelled; a
+// value no int64 holds, or one with a fraction, falls back to its
+// SOURCE SPELLING, because the alternative is parsing it into a float
+// and letting the comparison turn on rounding.
+//
+// The spelling fallback is deliberately strict: 1.50 and 1.5 are the
+// same number and different spellings, and this reports a miss. That
+// is the honest answer here — nothing in the rules vocabulary is a
+// fractional quantity, so a fractional value on either side means the
+// policy and the forge disagree about what the field IS, and saying
+// "equal" would paper over it.
+func TestNumbersCompareWithoutAFloatRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name      string
+		matcher   string
+		candidate string
+		want      bool
+	}{
+		{"integers compare as integers", `{"n": 2}`, `{"n": 2}`, true},
+		{"a different integer misses", `{"n": 2}`, `{"n": 3}`, false},
+		{
+			// Past 2^53 in both directions: float64 would collapse
+			// these two onto one value and call them equal.
+			"an id no float holds is compared exactly",
+			`{"n": 9007199254740993}`, `{"n": 9007199254740993}`, true,
+		},
+		{
+			"two ids a float would collapse together stay distinct",
+			`{"n": 9007199254740993}`, `{"n": 9007199254740992}`, false,
+		},
+		{"a fraction matches its own spelling", `{"n": 1.5}`, `{"n": 1.5}`, true},
+		{"a fraction spelled differently is reported, not smoothed over", `{"n": 1.50}`, `{"n": 1.5}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, ok, why := matchJSON(t, tt.matcher, tt.candidate)
+			if ok != tt.want {
+				t.Fatalf("match = %v (%s), want %v", ok, why, tt.want)
+			}
+		})
+	}
+}
+
+// TestMissRendersEveryScalarShape: the miss message is the whole
+// difference between a five-minute and a five-hour investigation when
+// a control lapses, so every value a forge can put in a field has to
+// render as something a reader recognises — a null especially, since
+// "expected true, got " reads as a bug in the tool rather than an
+// absent field in the answer.
+func TestMissRendersEveryScalarShape(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name      string
+		matcher   string
+		candidate string
+		want      string
+	}{
+		{"an absent value renders as null", `{"a": true}`, `{"a": null}`, ".a: null != true"},
+		{"a string renders quoted", `{"a": "x"}`, `{"a": "y"}`, `.a: "y" != "x"`},
+		{"a number renders in its own spelling", `{"a": 1}`, `{"a": 2}`, ".a: 2 != 1"},
+		{"a bool renders as a bool", `{"a": true}`, `{"a": false}`, ".a: false != true"},
+		{
+			// Neither side is a scalar: a forge answering with a
+			// structure where the policy wants a value still has to
+			// produce a message naming what it found, rather than an
+			// empty slot the reader cannot interpret.
+			"a structure where a scalar was wanted still renders",
+			`{"a": true}`, `{"a": {"nested": 1}}`, "map[nested:1]",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, ok, why := matchJSON(t, tt.matcher, tt.candidate)
+			if ok {
+				t.Fatal("match succeeded, want a miss")
+			}
+
+			if !strings.Contains(why, tt.want) {
+				t.Errorf("why = %q, want it to carry %q", why, tt.want)
+			}
+		})
+	}
+}
+
 // matchesArray is what the loader uses to refuse a matcher that could
 // never see a rule list.
 func TestMatchesArray(t *testing.T) {
