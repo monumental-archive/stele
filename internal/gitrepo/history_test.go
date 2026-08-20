@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -115,6 +116,48 @@ func TestTags(t *testing.T) {
 		// every tag arrived as "refs/tags/…".
 		if strings.HasPrefix(tag, "refs/") {
 			t.Errorf("Tags() returned %q, want an unqualified tag name", tag)
+		}
+	}
+}
+
+// The two tag reads answer two questions, and the maintenance branch
+// is where they must differ: measuring a range asks what this line of
+// history descends from, minting a name asks what the repository has
+// already taken. A single answer would either derive 2.0.1 from a 1.x
+// branch or mint a name twice.
+func TestAllTagsIgnoresReachability(t *testing.T) {
+	h := historyRepo(t)
+	git := gitIn(t, h.dir)
+
+	// A 2.0.0 released from a line this branch never merged.
+	git("checkout", "-q", "-b", "next", h.tip)
+	git("commit", "-q", "--allow-empty", "-m", "feat!: the next line")
+	git("tag", "v2.0.0")
+	git("checkout", "-q", "main")
+
+	repo := openHistory(t, h.dir)
+
+	reachable, err := repo.Tags("HEAD")
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+
+	all, err := repo.AllTags()
+	if err != nil {
+		t.Fatalf("AllTags: %v", err)
+	}
+
+	if slices.Contains(reachable, "v2.0.0") {
+		t.Errorf("Tags() = %v, want the tag on the unmerged line excluded", reachable)
+	}
+
+	if !slices.Contains(all, "v2.0.0") {
+		t.Errorf("AllTags() = %v, want the tag on the unmerged line included — the name is taken either way", all)
+	}
+
+	for _, tag := range all {
+		if strings.HasPrefix(tag, "refs/") {
+			t.Errorf("AllTags() returned %q, want an unqualified tag name", tag)
 		}
 	}
 }

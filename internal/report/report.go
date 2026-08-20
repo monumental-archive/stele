@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
@@ -160,6 +161,32 @@ type Fact struct {
 	Value string `json:"value"`
 }
 
+// JudgedSet is the collapsed, validated input set a run judged,
+// rendered ONCE by the engine that judged it. It answers a different
+// question from Population: Population records how many subjects a
+// run covered and how the set was obtained, this records what the set
+// WAS, in full. Information beside the verdict, like Fact — it can
+// move no judgment.
+//
+// It exists because a consumer that iterates a judgment's inputs must
+// iterate what PASSED judgment, never its own second reading of the
+// same raw bytes (stele#151: a publish guard judged the collapsed
+// plan set while the derivation loop beside it re-collapsed the same
+// files with jq — two derivations of one set, agreeing by luck). The
+// report carries the engine's rendering, and a caller writing the set
+// beside the report writes those same bytes back out, so a second
+// derivation is unrepresentable. Constructors below, alone.
+type JudgedSet struct {
+	raw jsonx.Raw
+}
+
+// NoJudgedSet declares that a run reports no input set of its own —
+// the common case: nothing downstream iterates what it judged.
+func NoJudgedSet() JudgedSet { return JudgedSet{} }
+
+// Judged carries one rendered set, as the engine rendered it.
+func Judged(raw jsonx.Raw) JudgedSet { return JudgedSet{raw: raw} }
+
 // Report is a sealed judgment. Constructor: Seal, alone — the zero
 // value carries no verdict and encodes as nothing.
 type Report struct {
@@ -168,6 +195,7 @@ type Report struct {
 	verdict   Verdict
 	pop       Population
 	canary    Canary
+	judged    JudgedSet
 	facts     []Fact
 	unexcused []Finding
 	excused   []excusedFinding
@@ -190,9 +218,9 @@ type excusedFinding struct {
 // a CANNOT_JUDGE are still carried: partial sight is reported, never
 // laundered into either verdict.
 func Seal(
-	target, subject string, pop Population, j *Journal, canary Canary, facts ...Fact,
+	target, subject string, pop Population, j *Journal, canary Canary, judged JudgedSet, facts ...Fact,
 ) *Report {
-	r := &Report{target: target, subject: subject, pop: pop, canary: canary, facts: facts}
+	r := &Report{target: target, subject: subject, pop: pop, canary: canary, judged: judged, facts: facts}
 
 	used := make([]bool, len(j.exceptions))
 
@@ -258,6 +286,15 @@ func (r *Report) Findings() []Finding {
 	return out
 }
 
+// Judged returns the rendered input set this report carries, copied,
+// and nil where the run declared none — nil, never an empty slice,
+// because a caller re-encoding the result must see "no set" as
+// absence rather than as bytes that are not a JSON value. A caller
+// placing the set beside the report writes exactly these bytes: one
+// rendering reaches both destinations, so the file and the document
+// cannot disagree about what was judged.
+func (r *Report) Judged() jsonx.Raw { return slices.Clone(r.judged.raw) }
+
 // Schema is the document epoch, stamped on every encoded report so a
 // consumer can refuse a version it does not implement instead of
 // best-efforting it (stele#107: a format with a consumer beyond its
@@ -284,6 +321,7 @@ type reportDoc struct {
 	Excused    []excusedDoc   `json:"excused,omitempty"`
 	Stale      []exceptionDoc `json:"staleExceptions,omitempty"`
 	Unlooked   []exceptionDoc `json:"unexercisedExceptions,omitempty"`
+	Judged     jsonx.Raw      `json:"judged,omitempty"`
 }
 
 type populationDoc struct {
@@ -332,6 +370,7 @@ func (r *Report) Encode(w io.Writer) error {
 		},
 		Facts:    r.facts,
 		Findings: r.unexcused,
+		Judged:   r.judged.raw,
 	}
 
 	if r.canary.declared {

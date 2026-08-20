@@ -79,6 +79,16 @@ version mismatch, never as an unknown-field error.
   inventory and an unplanned attestation asset (the `pgrx-extension`
   shape). Absent means the obligation is judged only by the
   post-publish evidence walk.
+
+  The declaration has a second consumer (stele#158): a planned
+  document is one the release decision is borne per, so the evidence
+  walk hands the verify engine the assets these obligations claim as
+  the decision's denominator — one decision per planned inventory,
+  and none for the per-release view. The epoch answers for history
+  by construction: a release whose classes owed no planned prefix at
+  its machinery version planned nothing, and keeps the whole-release
+  decision invariant it was published under
+  ([policy-schema.md](policy-schema.md#trustdecision-optional)).
 - `classes.<name>.enrichment` — dependency names a release declaring
   this class owes its build-enrichment claim ON TOP of the verify
   policy's universal `required` set (stele#122): a `pgrx-extension`
@@ -253,26 +263,71 @@ publisher's CI. Writer and reader share one definition
 this reader admits cannot drift apart:
 
 ```json
-{ "schema": 1, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
-  "machineryVersion": "1.40.0" }
+{ "schema": 2, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+  "machineryVersion": "1.40.0",
+  "entries": [
+    { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject" },
+    { "name": "attestations-image.intoto.jsonl", "sha256": "2222…", "type": "evidence" }
+  ] }
 ```
 
-All four fields are required. The manifest declares **facts** —
-classes, verdict layout, and the version of the publish machinery
-that produced the release — never obligations: whether the release
-owes a decision or an enrichment claim is always *derived* from the
-policy's `*FromVersion` epochs against `machineryVersion`, through
-the same epoch semantics the workflow adapter uses. An adopter with
-no history declares no epochs, and every obligation simply always
-holds. `machineryVersion` is the attested spelling of the fact the
-workflow adapter regexes out of a pin comment; a manifest that omits
-it, or carries an unparsable one, refuses — a declaration that
-cannot answer the epochs excuses nothing silently.
+All five fields are required. The manifest declares **facts** —
+classes, verdict layout, the version of the publish machinery that
+produced the release, and what the release published — never
+obligations: whether the release owes a decision or an enrichment
+claim is always *derived* from the policy's `*FromVersion` epochs
+against `machineryVersion`, through the same epoch semantics the
+workflow adapter uses. An adopter with no history declares no epochs,
+and every obligation simply always holds. `machineryVersion` is the
+attested spelling of the fact the workflow adapter regexes out of a
+pin comment; a manifest that omits it, or carries an unparsable one,
+refuses — a declaration that cannot answer the epochs excuses nothing
+silently.
+
+### Typed entries
+
+`entries` pins every asset the release published and says what each
+one **is**. The two types carry opposite obligations, which is the
+whole reason the distinction is worth a field:
+
+- `build-subject` — an artifact *of* the build. It must rebuild
+  bit-for-bit.
+- `evidence` — a document *about* the release: an attestation bundle,
+  an inventory, a triage decision, a digest manifest. It **cannot**
+  rebuild bit-for-bit, because a Sigstore signature embeds a fresh
+  timestamp and certificate on every signing, and that
+  non-reproducibility is a security property, not a defect.
+
+The vocabulary is closed: an entry that is neither refuses the
+manifest, because unknown defaulting into either population is the
+failure this typing exists to prevent. So does an entry with no
+digest, or the same asset twice.
+
+The type is stamped by `stele emit manifest`, from the vocabulary
+this policy already declares — `checksums`, `manifestAsset`,
+`umbrellaBundle`, `sbomSuffix`, `evidenceSuffixes`, and each class's
+`bundles`, `legacyVsaBundles` and `assetPrefixes`. That is the ONE
+definition of the question (`internal/assert`'s `Classify`), and
+emission is the one moment the knowledge exists natively. Every walk
+downstream **reads** the answer: `stele verify repro` takes the
+released manifest whole and judges its `build-subject` entries, and a
+walk that re-derived the typing would be the second answer this field
+exists to retire. The classifier's other job is a manifest that
+arrives untyped — a legacy release, or a foreign one this org never
+wrote — where it classifies a plain sha256sum manifest instead.
+
+A manifest cannot pin itself: a document carrying its own digest is
+not a document. The entries are therefore the assets published
+*beside* it, and nothing is lost — the manifest is an evidence
+document, and so is the checksum manifest that pins it.
 
 The manifest's `schema` is its own number, outside the live-document
 epoch ([versioning.md](versioning.md)): manifests are published
 release assets, immutable once shipped, so the number moves only
 when this format's own key set changes against documents that exist.
+It moved to `2` when entries gained their type. Pre-v1 there is no
+dual-version reader — a schema-1 manifest is refused, and the
+manifests already published re-emit typed at the canon train.
 
 Releases without a manifest fall back to the workflow adapter — the
 quarantined read of the first consumer's publish-workflow convention
@@ -307,8 +362,9 @@ target's vocabulary is its own:
 | `tags` | `tag:epoch`, `tag:annotated`, `tag:tagger`, `tag:signature`, `tag:link` |
 | `chains` | `chains` — a founded chain's defect is never excusable; absence is excused by the policy's `chains.exceptions`, never here |
 | `blast-radius` | `<advisory>:<package>@<version>`, `<asset>:unattested`, `<asset>:empty-scan` |
-| `plans` | `class`, `planned-obligation`, `plan-shape`, `plan-conflict`, `plan-drift`, `plan-orphan` |
+| `plans` | `class`, `planned-obligation`, `plan-shape`, `plan-conflict`, `plan-drift`, `plan-orphan`, `plan-set` |
 | `image-facts` | `fact-hygiene`, `index-media-type`, `index-annotations`, `config-labels` |
+| `permissions` | `caller-grant`, `call-shape`, `callee-absent`, `callee-unreadable`, `callee-not-callable`, `workflow-shape` |
 
 A malformed line is a refusal, not a skip — a reviewed file that
 parses as nothing would excuse nothing silently. Neither half may be
@@ -390,10 +446,10 @@ different params, or different classes — is legs disagreeing about
 what was built: refused, never last-writer-wins.
 
 `stele assert plans --policy <assert-policy> --classes <declared>
---machinery-version <riding> <plan files...>` judges the plans
-against the planned obligations pre-publish, in the publish guard.
-The judgment is bidirectional, and the two directions deliberately
-ask two different questions (stele#143):
+--machinery-version <riding> [--out <path>] <plan files...>` judges
+the plans against the planned obligations pre-publish, in the publish
+guard. The judgment is bidirectional, and the two directions
+deliberately ask two different questions (stele#143):
 
 - **owed** — for each requested class's planned prefixes owed at the
   riding machinery version (the same policy and the same `owedFrom`
@@ -412,6 +468,31 @@ ask two different questions (stele#143):
   outside the judgment, not refused by it; a plan naming a class the
   release does not declare is drift (a leg ran for an undeclared
   class).
+
+### The judged set is what consumers iterate
+
+The judgment emits the entry set it judged: collapsed, validated,
+params canonicalised, ordered by document, and independent of the
+order the plan files were named. It rides in the report document as
+`judged` ([report-schema.md](report-schema.md)), and `--out <path>`
+writes those same bytes as one JSON array — the plan format again,
+merged. The derivation leg that produces the documents iterates THAT
+file.
+
+This is the rule, not a convenience (stele#151): a consumer must
+never re-derive the plan set from the same raw files. Before this,
+the publish guard judged the collapsed set while the loop beside it
+re-collapsed the plans with `jq -s 'add | unique'` — two derivations
+of one set from one set of bytes, agreeing until the day their
+notions of "identical entry" parted. One rendering reaches the
+report and the file, so a second reading of what was planned is
+unrepresentable.
+
+The file is written on `PASS` alone: the set exists to be iterated,
+and one that failed judgment must not be there to iterate. The exit
+code is one guard; a workflow that reads the file regardless finds
+nothing rather than a plan the guard refused. A set that cannot be
+placed is an output failure (exit 3), never a silent green.
 
 Verdicts and exit codes are the assert verb's usual three
 ([report-schema.md](report-schema.md)); an unreadable plan path is a
@@ -517,3 +598,76 @@ API — no clone); a founded chain that fails to verify is a finding
 that **no exception can excuse** — declared exceptions carry the
 `unactivated` assertion alone, so an opt-out excuses absence,
 structurally never a defect. A zero population seals CANNOT_JUDGE.
+
+## The permissions section
+
+The caller/callee permissions join (stele#148). The platform makes
+`permissions:` caller-owned — a reusable workflow inherits its
+caller's grant and can only narrow it — so a callee that gains a
+capability is a breaking change to every caller, enforced at run time
+as a startup failure with no jobs and no log. The requirement is
+nevertheless statically computable: the union of the callee's job
+grants is exactly what a caller must hold. Declaring the section
+declares the obligation.
+
+Everything here is a convention, and every convention is declared:
+
+```json
+"permissions": {
+  "reusable": {"repo": "example-org/.github", "dir": ".github/workflows"},
+  "callerDirs": [".github/workflows", "workflow-templates"]
+}
+```
+
+- `reusable` — the shared-workflow tree this org publishes: `repo` is
+  the `owner/name` a caller spells in `uses:`, and `dir` is that
+  repository's own directory holding the workflows, which is also
+  where the run reads them under `--tree`. Both halves are needed and
+  neither implies the other: the reference is how callers NAME the
+  tree, the directory is where a run can READ it. The whole object is
+  optional — an adopter whose reusable workflows all live beside their
+  callers declares none, and the join then covers local (`./…`) calls
+  alone.
+- `callerDirs` — the checkout-relative directories whose workflow
+  files are read as callers, at least one. More than one because a
+  tree may hold callers it does not run: an org's workflow templates
+  are stubs destined for other repositories, and a stub's grant is
+  exactly as breakable as a live caller's. A declared directory the
+  checkout does not carry is an answer, not a defect — an org declares
+  the directories its trees MAY use. Directories are checkout-relative
+  and may not climb out of it; a policy that could is refused at load.
+
+The join (`stele assert permissions --policy`, with `--tree` for the
+reusable checkout and either `--callers` for a checkout or
+`--org`/`--repo` for a population walked through the forge):
+
+- a job's `uses:` is read through the platform's own grammar. A
+  **local** reference resolves in the CALLER's own file set — a
+  repository calling its own reusable workflow is judged against that
+  workflow, never against the shared tree. A **remote** reference
+  matching `reusable.repo` resolves in the declared tree. Anything
+  else is another repository's workflow, which this run holds no tree
+  for: outside the declared scope, counted in the
+  `callsOutsideDeclaredTrees` fact rather than silently invisible.
+- the requirement is the union of every job's effective grant — its
+  own `permissions:` block, or the workflow-level default when it
+  declares none. `uses:` jobs count too: a nested callee's ask chains
+  up through the workflow to its caller.
+- a **blanket** ask (`read-all`, `write-all`) is answered by a blanket
+  grant alone. Proving an enumerated caller sufficient would need the
+  platform's full scope vocabulary, and a vocabulary hardcoded in the
+  tool goes stale the next time the platform adds a scope — silently,
+  in the direction that under-reports. The join says so instead of
+  guessing.
+- every degraded shape is a finding, never a skip: a workflow file
+  that will not parse (`workflow-shape`), a call the grammar cannot
+  read (`call-shape`), a callee absent from the tree
+  (`callee-absent`), present but unparsable (`callee-unreadable`), or
+  present and declaring no `workflow_call` trigger
+  (`callee-not-callable`). An unchecked grant reporting green is the
+  failure class the join exists to remove.
+- a run that examined no workflow file at all seals CANNOT_JUDGE: a
+  wrong path, an empty checkout and a narrowed credential all look
+  identical from inside, and none of them may exit like a pass. A
+  declared reusable tree the run holds no file from is refused for the
+  same reason.

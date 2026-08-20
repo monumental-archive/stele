@@ -101,7 +101,7 @@ func TestLoadFullDepthHappyPath(t *testing.T) {
 // passDeep accepts everything — the walk's own branch is under test.
 type passDeep struct{}
 
-func (passDeep) Release(verify.Coords, []verify.Subject, []verify.Subject, verify.Pins, bool) error {
+func (passDeep) Release(verify.Coords, []verify.Subject, verify.SBOMs, verify.Pins, bool) error {
 	return nil
 }
 
@@ -187,7 +187,7 @@ func TestEngineVerifierFailsClosed(t *testing.T) {
 	c := verify.Coords{Owner: "acme", Repo: "widget", Tag: "v1.0.0"}
 	pins := verify.Pins{Machinery: strings.Repeat("a", 40), Signer: strings.Repeat("b", 40)}
 
-	if rerr := ev.Release(c, nil, nil, pins, true); rerr == nil {
+	if rerr := ev.Release(c, nil, verify.SBOMs{}, pins, true); rerr == nil {
 		t.Fatal("Release verified an empty subject list")
 	}
 
@@ -199,7 +199,7 @@ func TestEngineVerifierFailsClosed(t *testing.T) {
 		t.Fatal("verdict-only VSA verified an empty subject list")
 	}
 
-	if perr := ev.Release(c, nil, nil, pins, false); perr == nil {
+	if perr := ev.Release(c, nil, verify.SBOMs{}, pins, false); perr == nil {
 		t.Fatal("provenance-only Release verified an empty subject list")
 	}
 }

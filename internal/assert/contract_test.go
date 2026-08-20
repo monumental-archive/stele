@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 func TestManifestSource(t *testing.T) {
@@ -44,11 +45,18 @@ func TestManifestSource(t *testing.T) {
 	// machineryVersion rows are the stele#109 point: without it the
 	// obligations cannot be derived, and deriving is the only mode.
 	for name, doc := range map[string]string{
-		"empty manifest":           `{"schema": 1}`,
-		"missing machineryVersion": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true}`,
-		"unparsable machineryVersion": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true, ` +
-			`"machineryVersion": "not-a-version"}`,
-		"wrong schema": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+		"empty manifest":           `{"schema": 2}`,
+		"missing machineryVersion": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true}`,
+		"unparsable machineryVersion": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "not-a-version", "entries": [` + manifestEntry("a.tar.gz", "build-subject") + `]}`,
+		"no entries": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0"}`,
+		"an entry typed outside the vocabulary": `{"schema": 2, "classes": ["oci-image"], "storeVsa": true, ` +
+			`"machineryVersion": "1.0.0", "entries": [` + manifestEntry("a.tar.gz", "artefact") + `]}`,
+		// Pre-v1 there is no dual-version reader: the manifests
+		// published under schema 1 re-emit typed at the canon train,
+		// and this reader refuses them until they do (stele#156).
+		"the retired schema": `{"schema": 1, "classes": ["oci-image"], "storeVsa": true, ` +
 			`"machineryVersion": "1.0.0"}`,
 	} {
 		f3 := completeRelease()
@@ -95,8 +103,9 @@ func TestManifestSourceEpochs(t *testing.T) {
 			pol.Evidence.EnrichmentFromVersion = tt.enrichmentFrom
 
 			f := completeRelease()
-			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 1, ` +
-				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `"}`
+			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 2, ` +
+				`"classes": ["oci-image"], "storeVsa": true, "machineryVersion": "` + tt.machinery + `", ` +
+				`"entries": [` + manifestEntry("widget-x86_64.tar.gz", "build-subject") + `]}`
 
 			c, ok, err := (assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}).
 				Contract("acme", "widget", "v1.0.0")
@@ -286,5 +295,114 @@ func TestSourcesOrder(t *testing.T) {
 
 	if len(c.Classes) != 1 || c.Classes[0] != "oci-image" {
 		t.Fatalf("classes = %v, want the manifest's oci-image, not the workflow's", c.Classes)
+	}
+}
+
+// The policy the plan derivation is measured against: two classes
+// bearing planned inventories at different epochs, one class bearing
+// an unplanned prefix obligation beside its planned one, and one
+// bearing none at all.
+const plannedPolicyJSON = `{
+  "schema": 5,
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "storeVsaFromVersion": "1.13.0",
+    "classes": {
+      "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]},
+      "wasm-npm": {
+        "bundles": ["attestations-npm.intoto.jsonl"],
+        "assetPrefixes": [{"prefix": "sbom-npm-", "owedFrom": "1.42.0", "planned": true}]
+      },
+      "pgrx-extension": {
+        "bundles": ["attestations-extensions.intoto.jsonl"],
+        "assetPrefixes": [
+          {"prefix": "attestations-extimg-pg"},
+          {"prefix": "sbom-pgrx-", "owedFrom": "1.43.0", "planned": true}
+        ]
+      }
+    }
+  }
+}`
+
+// TestPlannedInventories pins the decision's denominator (stele#158):
+// what a release planned is recovered from the planned obligations
+// its classes owed AT ITS OWN machinery version, so a release
+// published before per-artifact inventories existed plans nothing and
+// keeps the whole-release invariant it shipped under.
+func TestPlannedInventories(t *testing.T) {
+	t.Parallel()
+
+	pol, err := assert.LoadPolicy(strings.NewReader(plannedPolicyJSON))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	sboms := []verify.Subject{
+		{Name: "sbom-npm-widget-wasm-1.0.0.spdx.json", SHA256: subjectDigest},
+		{Name: "sbom-pgrx-widget-pg17-1.0.0.spdx.json", SHA256: subjectDigest},
+		{Name: "widget-1.0.0.spdx.json", SHA256: subjectDigest},
+		{Name: "widget-1.0.0-image.spdx.json", SHA256: subjectDigest},
+	}
+
+	tests := []struct {
+		name      string
+		classes   []string
+		machinery string
+		want      []string
+	}{
+		{
+			"a release under the pre-inventory machinery plans nothing",
+			[]string{"wasm-npm", "pgrx-extension"},
+			"1.41.0", nil,
+		},
+		{
+			"each planned obligation arrives at its own epoch",
+			[]string{"wasm-npm", "pgrx-extension"},
+			"1.42.0",
+			[]string{"sbom-npm-widget-wasm-1.0.0.spdx.json"},
+		},
+		{
+			"every planned inventory, and neither the view nor the image",
+			[]string{"wasm-npm", "pgrx-extension"},
+			"1.43.0",
+			[]string{"sbom-npm-widget-wasm-1.0.0.spdx.json", "sbom-pgrx-widget-pg17-1.0.0.spdx.json"},
+		},
+		{
+			"a class the release did not declare claims no document",
+			[]string{"wasm-npm"},
+			"1.43.0",
+			[]string{"sbom-npm-widget-wasm-1.0.0.spdx.json"},
+		},
+		{
+			"a class carrying no planned obligation plans nothing",
+			[]string{"oci-image"},
+			"1.43.0", nil,
+		},
+		{
+			"a class no policy declares owes nothing derivable here",
+			[]string{"source-archive"},
+			"1.43.0", nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := pol.Evidence.PlannedInventories(
+				&assert.Contract{Classes: tt.classes, MachineryVersion: tt.machinery}, sboms)
+
+			names := make([]string, 0, len(got))
+			for _, s := range got {
+				names = append(names, s.Name)
+			}
+
+			if strings.Join(names, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("PlannedInventories = %v, want %v", names, tt.want)
+			}
+		})
 	}
 }

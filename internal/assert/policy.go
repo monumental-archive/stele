@@ -49,6 +49,7 @@ type Policy struct {
 	BlastRadius *BlastRadiusPolicy `json:"blastRadius,omitempty"`
 	Tags        *TagsPolicy        `json:"tags,omitempty"`
 	Chains      *ChainsPolicy      `json:"chains,omitempty"`
+	Permissions *PermissionsPolicy `json:"permissions,omitempty"`
 }
 
 // ChainsPolicy parameterises the chain-coverage audit (stele#94).
@@ -90,6 +91,114 @@ func (cp *ChainsPolicy) validate() error {
 
 		if e.Reason == nil || *e.Reason == "" {
 			return fmt.Errorf("chains.exceptions[%d].reason is absent or empty — a silent exception is silence", i)
+		}
+	}
+
+	return nil
+}
+
+// PermissionsPolicy parameterises the caller/callee permissions join
+// (stele#148). The platform makes `permissions:` caller-owned — a
+// reusable workflow inherits its caller's grant and can only narrow
+// it — so a callee that gains a capability breaks every caller,
+// enforced at run time as a startup failure with no jobs and no log.
+// The requirement is nevertheless statically computable, which is
+// what this section points the join at.
+//
+// Everything here is a CONVENTION, and every convention is declared:
+// which repository holds the shared workflows, where its files sit in
+// the checkout the run is handed, and which directories of the
+// caller's tree hold callers. The Python this replaces carried all
+// three as literals, which is why a tree shaped differently could not
+// express its own join without editing the tool.
+type PermissionsPolicy struct {
+	// Reusable declares the shared-workflow tree this run holds and
+	// the reference spelling that names it. Absent is meaningful: an
+	// adopter whose reusable workflows all live beside their callers
+	// declares no remote tree, and the join then covers local calls
+	// alone.
+	Reusable *ReusableTree `json:"reusable,omitempty"`
+	// CallerDirs are the checkout-relative directories whose workflow
+	// files are read as callers. More than one because a tree may hold
+	// callers it does not run — an org's workflow templates are stubs
+	// destined for other repositories, and a stub's grant is exactly
+	// as breakable as a live caller's.
+	CallerDirs []string `json:"callerDirs"`
+}
+
+// ReusableTree declares one shared-workflow tree: the owner/name a
+// caller spells in `uses:`, and the directory its files occupy in the
+// checkout the run is pointed at. Both halves are needed and neither
+// implies the other — the reference is how callers name the tree, the
+// directory is where this run can read it.
+type ReusableTree struct {
+	Repo *string `json:"repo"`
+	Dir  *string `json:"dir"`
+}
+
+func (pp *PermissionsPolicy) validate() error {
+	if len(pp.CallerDirs) == 0 {
+		return errors.New("permissions.callerDirs is absent or empty — a join with no callers judges nothing")
+	}
+
+	seen := map[string]bool{}
+
+	for i, dir := range pp.CallerDirs {
+		if err := relativeDir(dir); err != nil {
+			return fmt.Errorf("permissions.callerDirs[%d]: %w", i, err)
+		}
+
+		if seen[dir] {
+			return fmt.Errorf("permissions.callerDirs[%d] names %q twice — the caller directories are a set", i, dir)
+		}
+
+		seen[dir] = true
+	}
+
+	if pp.Reusable == nil {
+		return nil
+	}
+
+	return pp.Reusable.validate()
+}
+
+func (rt *ReusableTree) validate() error {
+	if rt.Repo == nil || *rt.Repo == "" {
+		return errors.New("permissions.reusable.repo is absent or empty")
+	}
+
+	owner, name, ok := strings.Cut(*rt.Repo, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return fmt.Errorf("permissions.reusable.repo %q is not owner/name", *rt.Repo)
+	}
+
+	if rt.Dir == nil || *rt.Dir == "" {
+		return errors.New("permissions.reusable.dir is absent or empty")
+	}
+
+	if err := relativeDir(*rt.Dir); err != nil {
+		return fmt.Errorf("permissions.reusable.dir: %w", err)
+	}
+
+	return nil
+}
+
+// relativeDir refuses a declared directory that could reach outside
+// the checkout it is resolved against. A policy is reviewed data, not
+// a trusted path: the run joins these onto an operator-supplied root,
+// and a policy that can escape it turns a reviewed declaration into a
+// file-system reach.
+func relativeDir(dir string) error {
+	switch {
+	case dir == "":
+		return errors.New("the directory is empty")
+	case strings.HasPrefix(dir, "/"):
+		return fmt.Errorf("%q is absolute — declared directories are checkout-relative", dir)
+	}
+
+	for part := range strings.SplitSeq(dir, "/") {
+		if part == ".." {
+			return fmt.Errorf("%q climbs out of the checkout", dir)
 		}
 	}
 
@@ -459,6 +568,12 @@ func (p *Policy) validate() error {
 
 	if p.Chains != nil {
 		if err := p.Chains.validate(); err != nil {
+			return err
+		}
+	}
+
+	if p.Permissions != nil {
+		if err := p.Permissions.validate(); err != nil {
 			return err
 		}
 	}

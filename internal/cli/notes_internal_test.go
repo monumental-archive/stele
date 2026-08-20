@@ -379,3 +379,19 @@ func TestMentionsVersion(t *testing.T) {
 		})
 	}
 }
+
+// The changelog section carries the declared version: notes and
+// version read one decision, so a release cut as 2.0.0 cannot be
+// written up as the 1.1.0 the commits called for (stele#146).
+func TestNotesRendersADeclaredVersion(t *testing.T) {
+	got := runNotes(t, releaseHistory(),
+		"--release-as", "2.0.0",
+		"--compare-url", "https://example.test/o/r/compare/")
+	if got.code != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got.code, got.stderr)
+	}
+
+	if !strings.Contains(got.stdout, "## [2.0.0](https://example.test/o/r/compare/v1.0.0...v2.0.0)") {
+		t.Errorf("stdout =\n%s\nwant the declared version's section", got.stdout)
+	}
+}

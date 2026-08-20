@@ -12,9 +12,11 @@ import (
 // unhappy is the least exercised code here.
 type stubHistory struct {
 	tags       []string
+	allTags    []string
 	commits    []string
 	messages   map[string]string
 	tagsErr    error
+	allTagsErr error
 	revsErr    error
 	msgErr     error
 	timeErr    error
@@ -22,6 +24,22 @@ type stubHistory struct {
 }
 
 func (s *stubHistory) Tags(string) ([]string, error) { return s.tags, s.tagsErr }
+
+// AllTags answers the names-taken question. It defaults to the
+// reachable set: a stub whose two answers differ is stating a
+// maintenance branch, and every test that does not say so means the
+// ordinary repository where they agree.
+func (s *stubHistory) AllTags() ([]string, error) {
+	if s.allTagsErr != nil {
+		return nil, s.allTagsErr
+	}
+
+	if s.allTags != nil {
+		return s.allTags, nil
+	}
+
+	return s.tags, nil
+}
 
 func (s *stubHistory) Commits(_, _ string, _ ...string) ([]string, error) {
 	return s.commits, s.revsErr
@@ -258,6 +276,135 @@ func TestSplitTypes(t *testing.T) {
 		t.Run(tc.in, func(t *testing.T) {
 			if got := splitTypes(tc.in); len(got) != tc.want {
 				t.Errorf("splitTypes(%q) = %v, want %d entries", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// --release-as at the surface: the caller declares, the tool judges
+// (stele#146). Every refusal is a row — a declaration accepted when it
+// should refuse is a published version overwritten or a name minted
+// twice, and both are discovered after the tag exists.
+func TestDeriveVersionReleaseAs(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		hist  *stubHistory
+		want  []string
+		refus string
+	}{
+		{
+			name: "a 1.0.0 no commit could reach",
+			args: []string{"--release-as", "1.0.0"},
+			hist: &stubHistory{
+				tags:     []string{"v0.9.3"},
+				commits:  []string{"a"},
+				messages: map[string]string{"a": "fix: repair it"},
+			},
+			want: []string{
+				"declared 1.0.0 over the derived base 0.9.3",
+				"bump=major (declared; the range requested patch)",
+				"declared=true", "version=1.0.0", "tag=v1.0.0", "release=true",
+			},
+		},
+		{
+			name: "a derived run says so too",
+			hist: &stubHistory{
+				tags:     []string{"v0.9.3"},
+				commits:  []string{"a"},
+				messages: map[string]string{"a": "fix: repair it"},
+			},
+			want: []string{"declared=false", "version=0.9.4"},
+		},
+		{
+			name: "a range that voted for nothing still releases when declared",
+			args: []string{"--release-as", "1.0.0"},
+			hist: &stubHistory{
+				tags:     []string{"v0.9.3"},
+				commits:  []string{"a"},
+				messages: map[string]string{"a": "chore: tidy"},
+			},
+			want: []string{"bump=major (declared; the range requested none)", "version=1.0.0"},
+		},
+		{
+			name: "the namespace's own debris is named before the name is judged",
+			args: []string{"--release-as", "2.0.0"},
+			hist: &stubHistory{
+				tags:     []string{"v1.0.0"},
+				allTags:  []string{"v1.0.0", "v1.9-pre-import"},
+				commits:  []string{"a"},
+				messages: map[string]string{"a": "fix: repair it"},
+			},
+			want: []string{`skipped "v1.9-pre-import"`, "version=2.0.0"},
+		},
+		{
+			name:  "a version that is not one",
+			args:  []string{"--release-as", "1.0"},
+			hist:  &stubHistory{tags: []string{"v0.9.3"}},
+			refus: "--release-as \"1.0\"",
+		},
+		{
+			name: "a walk backwards",
+			args: []string{"--release-as", "0.9.0"},
+			hist: &stubHistory{
+				tags:     []string{"v0.9.3"},
+				commits:  []string{"a"},
+				messages: map[string]string{"a": "fix: repair it"},
+			},
+			refus: "not an increase over the derived base 0.9.3",
+		},
+		{
+			// The maintenance branch: 2.0.0 is not reachable from this
+			// ref, so it is above the base and still a name taken.
+			name: "a name published on another line of history",
+			args: []string{"--release-as", "2.0.0"},
+			hist: &stubHistory{
+				tags:     []string{"v1.4.2"},
+				allTags:  []string{"v1.4.2", "v2.0.0"},
+				commits:  []string{"a"},
+				messages: map[string]string{"a": "fix: repair it"},
+			},
+			refus: "namespace already carries 2.0.0",
+		},
+		{
+			name: "listing every tag fails",
+			args: []string{"--release-as", "2.0.0"},
+			hist: &stubHistory{
+				tags:       []string{"v1.4.2"},
+				allTagsErr: errors.New("git said no"),
+				commits:    []string{"a"},
+				messages:   map[string]string{"a": "fix: repair it"},
+			},
+			refus: "git said no",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withHistory(t, tc.hist, nil)
+
+			var stdout, stderr bytes.Buffer
+
+			code := deriveCmd(append([]string{"version", "--git-dir", "."}, tc.args...), &stdout, &stderr)
+
+			if tc.refus != "" {
+				if code != exitRefused {
+					t.Fatalf("deriveCmd = %d, want %d (stdout: %s)", code, exitRefused, stdout.String())
+				}
+
+				if !strings.Contains(stderr.String(), tc.refus) {
+					t.Fatalf("stderr = %q, want it to mention %q", stderr.String(), tc.refus)
+				}
+
+				return
+			}
+
+			if code != exitOK {
+				t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", code, exitOK, stderr.String())
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
+				}
 			}
 		})
 	}

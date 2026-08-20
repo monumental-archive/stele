@@ -80,7 +80,7 @@ func BlastRadius(
 		return nil, errors.New("assert: the policy declares no blastRadius section")
 	}
 
-	org, repos, err := pop.resolve(forge)
+	org, repos, err := pop.Resolve(forge)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,8 @@ func BlastRadius(
 		facts = append(facts, report.Fact{Name: "releasesWithoutSBOM", Value: strings.Join(w.missing, " ")})
 	}
 
-	return report.Seal("assert blast-radius", pop.Subject(), covered, j, w.canary(), facts...), nil
+	return report.Seal("assert blast-radius", pop.Subject(), covered, j,
+		w.canary(), report.NoJudgedSet(), facts...), nil
 }
 
 type blastWalk struct {

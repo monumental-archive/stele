@@ -34,7 +34,18 @@ drift this schema exists to refuse. Its values are drawn from the
 first conforming consumer's committed policy — a worked example,
 never vocabulary: nothing in this schema knows those names.
 
-```json
+Every fenced example here is EXECUTED: the test suite splices the
+`json policy-fragment` fences into the `json policy` document at the
+object each names and runs the result through `policy.Load`
+(`internal/policy/schema_doc_test.go`). A shape this file teaches
+and the loader refuses is a red build, and so is a document whose
+examples stop composing — the load-time cross-check below reads the
+property names and the claims table together. This file went on
+teaching the pre-#125 branch shape until stele#150 because nothing
+executed it, and the canon's own migration was written against the
+loader's error message rather than against the doc.
+
+```json policy
 {
   "schema": 5,
 
@@ -84,15 +95,20 @@ never vocabulary: nothing in this schema knows those names.
       {
         "name": "main",
         "targetLevel": "SLSA_SOURCE_LEVEL_3",
-        "requiredProperties": [
-          { "name": "ORG_SOURCE_GATED", "since": "2026-08-10T21:41:46+01:00" },
-          { "name": "ORG_SOURCE_DCO", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_CAPABILITY_BOUNDARY", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_HISTORY_PROTECTED", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_SIGNED", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_REVIEWED_THREADS", "since": "2026-08-10T21:41:46+01:00" },
-          { "name": "ORG_SOURCE_TAG_IMMUTABLE", "since": "2026-08-09T16:29:06+01:00" },
-          { "name": "ORG_SOURCE_RELEASE_TAG_MINTED", "since": "2026-08-09T16:29:06+01:00" }
+        "levels": [
+          {
+            "level": "SLSA_SOURCE_LEVEL_3",
+            "requiredProperties": [
+              { "name": "ORG_SOURCE_GATED", "since": "2026-08-10T21:41:46+01:00" },
+              { "name": "ORG_SOURCE_DCO", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_CAPABILITY_BOUNDARY", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_HISTORY_PROTECTED", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_SIGNED", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_REVIEWED_THREADS", "since": "2026-08-10T21:41:46+01:00" },
+              { "name": "ORG_SOURCE_TAG_IMMUTABLE", "since": "2026-08-09T16:29:06+01:00" },
+              { "name": "ORG_SOURCE_RELEASE_TAG_MINTED", "since": "2026-08-09T16:29:06+01:00" }
+            ]
+          }
         ]
       }
     ],
@@ -151,8 +167,9 @@ strict decoding, never incidentally with an unknown-field error
 shared by the verify policy, the assert policy and the report, so a
 bump cannot land on one document and miss another (the drift #107
 found). Identifiers written into history — the chain note version,
-the evidence-manifest schema — keep their own numbers, because they
-cannot be re-emitted on demand.
+the evidence-manifest schema — keep their own numbers, because the
+documents carrying them already exist and moving a number orphans
+every one of them until it is re-emitted.
 
 ### `issuer`
 
@@ -210,13 +227,37 @@ the claimed verifier URI is constant across both epochs.
 
 ### `trust.decision` (optional)
 
-The release-decision gate: a release's SBOM must carry a decision
-attestation, signed by this workflow, whose predicate names
+The release-decision gate: a release's SBOM documents must carry a
+decision attestation, signed by this workflow, whose predicate names
 `conclusion == requiredConclusion` for the release tag. The
-predicate type is an org URI, so it lives here, not in code. The
-selection rule (the decision-bearing SBOM is found by verifying
-candidates, never by filename; two winners is a refusal) is
-verifier logic, not policy — it stays in code.
+predicate type is an org URI, so it lives here, not in code. What
+carries a decision, and how many, is verifier logic against the
+release's own INVENTORY PLAN — it stays in code, and the plan
+arrives as an input, not a policy field:
+
+- a release that declares **no plan** owes one decision for the
+  whole release: exactly one SBOM asset carries it, found by
+  verifying candidates and never by filename, and two bearers is a
+  refusal. This is the invariant every release published before
+  per-artifact inventories existed shipped under.
+- a release that declares a **plan** — the documents its build legs
+  planned to inventory (stele#158, the `planned` obligations of
+  [assert-policy-schema.md](assert-policy-schema.md#the-inventory-plan))
+  — owes one decision per planned document, and the verdict
+  aggregates over the plan. A planned inventory no decision covers
+  is a refusal; so is a decision naming anything the plan does not,
+  read from the decision's own signed subject list. The per-release
+  view aggregated from those documents bears no decision of its own:
+  it is a view, and nothing plans it.
+
+Which documents a release planned is per-release data, so it is
+never declared here: `verify release` and `emit vsa` take it as
+`--inventories`, a sha256sum manifest of the planned documents, and
+the evidence walk derives it from the planned obligations each
+declared class owed at that release's machinery version. Absent is a
+declaration — "this release planned no inventories" — not a default
+that softens the gate: the whole-release invariant then applies in
+full.
 
 **The whole section is optional**: a release decision is an
 obligation an org declares, not a precondition of using the
@@ -284,7 +325,7 @@ step 1 says the same for the source track. A level is therefore
 never derived from an artifact, and this section is where the org
 says how far it vouches for each attester.
 
-```json
+```json policy-fragment
 "slsaRootsOfTrust": [
   {
     "attesterId": "https://github.com/acme/.github/.github/workflows/verify-release.yml",
@@ -441,6 +482,18 @@ cannot make an undocumented note format verifiable.
 
 ### `source.protectedBranches`
 
+Each branch names itself, the level it targets, and — under
+`levels[]` — what establishes each level it claims: one entry per
+level, carrying that level's `requiredProperties`. The claims hang
+off the level rather than off the branch (#125) because WHICH level
+an organization's controls establish is that organization's claim;
+a tool that fixed requirements to rungs in code would make every
+other shape unclaimable. A level the spec makes structurally
+judgeable from evidence stele already holds needs no entry, and a
+level with neither an entry nor a structural judgment is UNCLAIMED
+— the policy said nothing, which is not the judge deciding nobody
+could.
+
 The target level is claimed only when every
 required property appears in the link's `controls[].property`;
 otherwise the link under-claims `underclaimLevel`. `since` times
@@ -453,8 +506,9 @@ was deleted — agreement was the proof bar, never the steady state.
 ### `source.claims`
 
 Where the frozen control table lives, and the reason this section
-exists: before this section, the property *names* lived here (in
-`protectedBranches[].requiredProperties`) while the rules that decide
+exists: before this section, the property *names* lived here (on the
+branch itself, before #125 moved them under `levels[]`) while the
+rules that decide
 whether each one is live lived in the first consumer's `claims.sh`
 script and in prose in its source-track document. One vocabulary,
 three places,
@@ -471,7 +525,7 @@ The section is an obligation like every other: absent means the org
 does not derive claims with this tool. Declared means each property
 carries a scope and a matcher, validated strictly.
 
-```json
+```json policy-fragment source
 "claims": {
   "properties": [
     {
@@ -639,7 +693,7 @@ this section rather than from any fact about a particular org:
 
 #### Load-time cross-check
 
-Every `requiredProperties[].name` in `protectedBranches` must be
+Every `protectedBranches[].levels[].requiredProperties[].name` must be
 declared here. A required property with no matcher can never be
 claimed, so the branch could never reach its target level — today
 that is a silent permanent under-claim discoverable only by reading

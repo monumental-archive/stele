@@ -13,6 +13,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 const storePolicyJSON = `{
@@ -78,8 +79,11 @@ func continuousForge() *fakeForge {
 			"    uses: acme/.github/.github/workflows/continuous.yml@abc\n",
 	}
 	f.pkgDigest = map[string]string{"widget": contDigest}
-	f.workflows = map[string][][]byte{
-		"widget": {[]byte("uses: acme/signer/.github/workflows/sign.yml@" + signerPin + "\n")},
+	f.workflows = map[string][]workflow.File{
+		"widget": {{
+			Name:    "publish.yml",
+			Content: []byte("uses: acme/signer/.github/workflows/sign.yml@" + signerPin + "\n"),
+		}},
 	}
 
 	return f
@@ -149,7 +153,7 @@ func TestContinuousHalf(t *testing.T) {
 		t.Parallel()
 
 		f := continuousForge()
-		f.workflows = map[string][][]byte{"widget": {[]byte("jobs: {}\n")}}
+		f.workflows = map[string][]workflow.File{"widget": {{Name: "ci.yml", Content: []byte("jobs: {}\n")}}}
 
 		att := &fakeAttestor{}
 

@@ -80,7 +80,8 @@ never null.
   ],
   "unexercisedExceptions": [
     { "kind": "declared | derived", "subject": "…", "assertion": "…", "origin": "debt.txt:9" }
-  ]
+  ],
+  "judged": [ { "…": "…" } ]
 }
 ```
 
@@ -107,6 +108,20 @@ never null.
   retirement candidate and not an error: a single-repository run
   answers only for that repository, and a check an epoch exempts was
   never asked.
+- `judged` — the collapsed, validated input set the run judged, in the
+  mode's own shape, present only where a mode declares one. Where
+  `population` says how many subjects a run covered and how the set
+  was obtained, this says what the set WAS. Information beside the
+  verdict, like `facts`: it can move no judgment.
+
+  It exists so a consumer that iterates a judgment's inputs iterates
+  what PASSED judgment rather than its own second reading of the same
+  raw bytes (stele#151: a publish guard judged the collapsed inventory
+  plan set while the derivation loop beside it re-collapsed the same
+  files with `jq -s 'add | unique'` — two derivations of one set,
+  agreeing by luck). The engine renders the set once; the document
+  carries that rendering, and a `--out` file carries the same bytes
+  back out, so the two cannot disagree.
 
 ## What `verify --json` puts in it
 
@@ -119,13 +134,20 @@ never null.
 ## What `verify repro` puts in it
 
 The reproducibility comparison (stele#96) seals one report: subject
-`owner/repo@tag`, population sized by the RELEASED manifest (an empty
-release under rebuild is `CANNOT_JUDGE` by law 1, never a pass), and
-one finding per artifact that failed to reproduce, typed in the
+`owner/repo@tag`, population sized by the released manifest's BUILD
+SUBJECTS (an empty subject population is `CANNOT_JUDGE` by law 1,
+never a pass — a repro claim over nothing is not a proof), and one
+finding per artifact that failed to reproduce, typed in the
 assertion — `repro/diverged` (both digests carried in
 `expected`/`actual`), `repro/absent-from-rebuild`, and
 `repro/extra-in-rebuild` (the artifact SET diverged, a different
-defect from a byte difference). `rebuiltArtifacts` rides as a fact.
+defect from a byte difference). `rebuiltArtifacts` rides as a fact,
+beside `subjectTyping`: `manifest` where the released manifest typed
+its own entries, `policy` where an untyped one was classified through
+the org's declared evidence vocabulary (stele#156). The release's
+evidence documents are never in the population — a Sigstore bundle
+cannot rebuild bit-for-bit, and that is a security property.
+
 The rebuild itself is orchestration and stays with the caller; SLSA
 v1.2 names verified reproducibility only as a future-directions
 candidate, so this verdict is information — it claims no level and
@@ -184,6 +206,15 @@ engine's message as the finding; a refusal before any population
 existed (an empty subject manifest) seals as `CANNOT_JUDGE` by law 1.
 With `--json` the progress lines move to stderr so stdout carries
 exactly one document; the exit code contract is unchanged.
+
+## What `assert plans` puts in it
+
+The pre-publish inventory-plan judgment
+([assert-policy-schema.md](assert-policy-schema.md#the-inventory-plan))
+seals `judged`: the collapsed, validated plan entries, canonicalised
+and ordered by document. `--out <path>` writes exactly those bytes
+beside the report, on `PASS` alone — the set exists to be iterated,
+and one that failed judgment must not be there to iterate.
 
 ## Deliberately absent
 

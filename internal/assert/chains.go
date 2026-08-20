@@ -65,7 +65,7 @@ func Chains(
 		return nil, errors.New("assert: chains needs the source notes ref and at least one protected branch")
 	}
 
-	org, repos, err := pop.resolve(forge)
+	org, repos, err := pop.Resolve(forge)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,8 @@ func Chains(
 
 	pop2 := report.PopulationFromListing(len(repos), "repositories in the population")
 
-	return report.Seal("assert chains", pop.Subject(), pop2, j, report.NoCanary(), facts...), nil
+	return report.Seal("assert chains", pop.Subject(), pop2, j,
+		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 
 type chainsWalk struct {

@@ -17,7 +17,10 @@ never a hardcoded name. Four verbs, which are the command surface:
   tags (tagger role, gitsign signature from the declared epoch, chain
   link on the target), chain coverage of the whole population
   (founded and verified per protected branch, or a declared
-  exception — cloneless, #94).
+  exception — cloneless, #94), the caller/callee `permissions:` join
+  across a workflow tree (#148 — what a shared workflow's jobs ask
+  for is what its callers must grant, computed through the one
+  workflow reader in `internal/workflow`).
   Repo-settings drift was in the original charter and is DROPPED by
   written decision: rulesets enforce; a setting that matters to
   evidence surfaces as a consequence in the evidence walk, and a
@@ -94,6 +97,19 @@ over whole, and only then does the next open. State and next step:
    (#131/#132 at #139) states both policy floors as fenced examples
    the test suite executes through `policy.Load`. The stele side of
    the port is COMPLETE; everything remaining is canon-side.
+7. **`assert permissions` — BUILT (#148), cutover pending**: the last
+   judgment-shaped script in the canon
+   (`security/workflow-permissions.py`) is ported whole. Its three
+   org-shaped literals — the shared repository's name, its tree's
+   directory, the caller directories — are the policy's `permissions`
+   section, and the fixed-indent line scanner is replaced by the one
+   workflow parser (`internal/workflow`), which the release
+   contract's legacy adapter now shares. Shadow-proven against the
+   canon tree: the computed requirements are identical across all 39
+   (workflow, scope, level) tuples, and 21 mutations of the callee
+   side produce identical caller findings. Four measured divergences,
+   all the port being more correct, are recorded on the issue. This
+   batches into the same canon handover.
 
    The canon cutover is deliberately NOT per-leg. One batched
    handover, filed as .github#545, and inside it the stele pin bump

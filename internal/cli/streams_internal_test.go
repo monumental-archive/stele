@@ -270,6 +270,52 @@ func TestAssertStreamGuards(t *testing.T) {
 		sweepWriteFailures(t, []string{"assert", "plans"})
 	})
 
+	t.Run("permissions passing", func(t *testing.T) {
+		policy, root := permissionsCheckout(t, permissionsCLIGrantingCaller)
+		sweepWriteFailures(t, []string{
+			"assert", "permissions", "--policy", policy, "--tree", root, "--callers", root,
+		})
+	})
+
+	t.Run("permissions short of the ask", func(t *testing.T) {
+		policy, root := permissionsCheckout(t, permissionsCLIShortCaller)
+		sweepWriteFailures(t, []string{
+			"assert", "permissions", "--policy", policy, "--tree", root, "--callers", root,
+		})
+	})
+
+	t.Run("permissions short of the ask as json", func(t *testing.T) {
+		policy, root := permissionsCheckout(t, permissionsCLIShortCaller)
+		sweepWriteFailures(t, []string{
+			"assert", "permissions", "--json", "--policy", policy, "--tree", root, "--callers", root,
+		})
+	})
+
+	t.Run("permissions usage refusal", func(t *testing.T) {
+		sweepWriteFailures(t, []string{"assert", "permissions"})
+	})
+
+	t.Run("permissions policy refusal", func(t *testing.T) {
+		sweepWriteFailures(t, []string{
+			"assert", "permissions", "--policy", filepath.Join(t.TempDir(), "ghost.json"),
+		})
+	})
+
+	t.Run("permissions walk torn", func(t *testing.T) {
+		policy, root := permissionsCheckout(t, permissionsCLIGrantingCaller)
+		sweepWriteFailures(t, []string{
+			"assert", "permissions", "--policy", policy, "--tree", root, "--org", "acme",
+			"--snapshot", t.TempDir(),
+		})
+	})
+
+	t.Run("permissions engine refusal", func(t *testing.T) {
+		policy, root := permissionsCheckout(t, permissionsCLIGrantingCaller)
+		sweepWriteFailures(t, []string{
+			"assert", "permissions", "--policy", policy, "--tree", emptyTreeCheckout(t), "--callers", root,
+		})
+	})
+
 	t.Run("an unknown target", func(t *testing.T) {
 		sweepWriteFailures(t, []string{"assert", "conjure"})
 	})

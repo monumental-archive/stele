@@ -383,7 +383,8 @@ func TestOpenJournalCarriesTheDeclaredLines(t *testing.T) {
 	j.Check("acme/gadget@v2.0.0", "checksums").Diverged("absent")
 	j.Check("acme/gadget@v2.0.0", "sbom").Diverged("absent")
 
-	rep := report.Seal("assert evidence", "acme", report.PopulationFromListing(2, "releases"), j, report.NoCanary())
+	rep := report.Seal("assert evidence", "acme", report.PopulationFromListing(2, "releases"),
+		j, report.NoCanary(), report.NoJudgedSet())
 	if got := rep.Findings(); len(got) != 1 || got[0].Assertion != "sbom" || got[0].Subject != "acme/gadget@v2.0.0" {
 		t.Fatalf("findings = %+v, want only the one no line excused", got)
 	}
@@ -403,7 +404,8 @@ func TestOpenJournalWithoutAFile(t *testing.T) {
 
 	j.Check("acme/widget@v1.0.0", "tag:signature").Diverged("unsigned")
 
-	rep := report.Seal("assert tags", "acme", report.PopulationFromListing(1, "tags"), j, report.NoCanary())
+	rep := report.Seal("assert tags", "acme", report.PopulationFromListing(1, "tags"),
+		j, report.NoCanary(), report.NoJudgedSet())
 	if rep.Verdict() != report.VerdictFail {
 		t.Fatalf("verdict = %s, want FAIL — nothing excuses what nobody wrote down", rep.Verdict())
 	}

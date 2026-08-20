@@ -8,6 +8,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/ghstore"
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/policy"
@@ -176,24 +179,26 @@ func (l *latch) logf(format string, args ...any) {
 
 // verifyArgs is everything the four modes read, parsed in one place.
 type verifyArgs struct {
-	policyPath   string
-	root         rootFlags
-	repo         string
-	tag          string
-	subjects     string
-	sboms        string
-	signerPin    string
-	machineryPin string
-	gitDir       string
-	ref          string
-	mode         string
-	jsonOut      bool
-	noRetry      bool
-	p            *policy.Policy
-	coords       verify.Coords
-	subjectList  []verify.Subject
-	sbomList     []verify.Subject
-	bv           verify.BundleVerifier
+	policyPath    string
+	root          rootFlags
+	repo          string
+	tag           string
+	subjects      string
+	sboms         string
+	inventories   string
+	signerPin     string
+	machineryPin  string
+	gitDir        string
+	ref           string
+	mode          string
+	jsonOut       bool
+	noRetry       bool
+	p             *policy.Policy
+	coords        verify.Coords
+	subjectList   []verify.Subject
+	sbomList      []verify.Subject
+	inventoryList []verify.Subject
+	bv            verify.BundleVerifier
 }
 
 // verifyCmd dispatches `stele verify <mode>`.
@@ -257,23 +262,39 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // verifyRepro runs the reproducibility comparison (stele#96): the
-// release's checksum manifest against the digests an independent
-// rebuild produced. The rebuild itself is orchestration and stays
-// with the caller; only the judgment lives here, and it speaks the
-// report's tri-state — an empty released manifest is a population of
-// zero, which seals CANNOT_JUDGE, never PASS.
+// release's own manifest against the digests an independent rebuild
+// produced. The rebuild itself is orchestration and stays with the
+// caller; only the judgment lives here, and it speaks the report's
+// tri-state — an empty subject population is a population of zero,
+// which seals CANNOT_JUDGE, never PASS, because a repro claim over
+// nothing is not a proof.
+//
+// The released manifest is taken WHOLE (stele#156). The flag it
+// replaced asked for "the RELEASED artifacts" — a set only this
+// engine's private knowledge could draw, so a caller could honour the
+// contract only by reimplementing the tool, which is exactly what the
+// canon's audit did in thirty lines of workflow bash. Now the engine
+// reads which entries are build subjects: from the manifest's own
+// typing where it carries one, and from the org's declared vocabulary
+// where a legacy or foreign manifest does not.
 func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	var (
-		repo, tag, subjects, rebuilt string
-		jsonOut                      bool
+		repo, tag, released, rebuilt, policyPath string
+		jsonOut                                  bool
 	)
 
 	fs := flag.NewFlagSet("stele verify repro", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&repo, "repo", "", "owner/repo whose release is under rebuild (required)")
 	fs.StringVar(&tag, "tag", "", "release tag under rebuild (required)")
-	fs.StringVar(&subjects, "subjects", "", "sha256sum manifest of the RELEASED artifacts (required)")
+	fs.StringVar(&released, "released", "",
+		"the RELEASED manifest, whole (required) — a typed evidence manifest, whose build-subject "+
+			"entries are the population, or a legacy sha256sum manifest classified through --assert-policy")
 	fs.StringVar(&rebuilt, "rebuilt", "", "sha256sum manifest of the REBUILT artifacts (required)")
+	fs.StringVar(&policyPath, "assert-policy", "",
+		"assert policy whose evidence vocabulary types an UNTYPED released manifest; unused, and not "+
+			"read, when the manifest carries its own typing. Named for the document it takes: --policy "+
+			"is the VERIFY policy everywhere else under this verb, and this comparison verifies nothing")
 	fs.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -294,15 +315,15 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		return fail("--repo must be owner/repo")
 	case tag == "":
 		return fail("--tag is required")
-	case subjects == "":
-		return fail("--subjects is required")
+	case released == "":
+		return fail("--released is required")
 	case rebuilt == "":
 		return fail("--rebuilt is required")
 	}
 
-	released, err := reproManifest(subjects)
+	subjects, typing, err := reproSubjects(released, policyPath)
 	if err != nil {
-		return fail("subjects: " + err.Error())
+		return fail("released: " + err.Error())
 	}
 
 	built, err := reproManifest(rebuilt)
@@ -315,7 +336,7 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		out = &latch{w: stderr}
 	}
 
-	divergences := verify.Repro(released, built, out.logf)
+	divergences := verify.Repro(subjects, built, out.logf)
 	if out.err != nil {
 		return exitIO
 	}
@@ -325,8 +346,8 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	// answers nothing here — but a finding still reaches a report
 	// through the one door, whichever verb sealed it.
 	j := report.NewJournal()
-	for _, s := range released {
-		j.Check(s.Name, "repro")
+	for i := range subjects {
+		j.Check(subjects[i].Name, "repro")
 	}
 
 	for _, d := range divergences {
@@ -335,11 +356,85 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rep := report.Seal("verify repro", repo+"@"+tag,
-		report.PopulationFromEvidence(len(released), "released artifacts under rebuild"),
-		j, report.NoCanary(),
-		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))})
+		report.PopulationFromEvidence(len(subjects), "released build subjects under rebuild"),
+		j, report.NoCanary(), report.NoJudgedSet(),
+		report.Fact{Name: "rebuiltArtifacts", Value: strconv.Itoa(len(built))},
+		report.Fact{Name: "subjectTyping", Value: typing})
 
 	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// The two ways a released manifest's build subjects become known,
+// reported as a fact so a reader of the verdict knows which one
+// answered.
+const (
+	// typingManifest: the manifest typed its own entries.
+	typingManifest = "manifest"
+	// typingPolicy: an untyped manifest, classified through the org's
+	// declared evidence vocabulary.
+	typingPolicy = "policy"
+)
+
+// reproSubjects reads the released manifest whole and returns the
+// build subjects alone, with the source of that classification.
+//
+// The two formats are told apart by the FIRST byte, never by trying
+// one and falling back to the other: a typed manifest whose schema or
+// shape this build refuses must refuse the walk, and a fallback would
+// launder that refusal into a text parse that happens to fail
+// differently.
+func reproSubjects(path, policyPath string) ([]verify.Subject, string, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the manifest path is operator-supplied by design
+	if err != nil {
+		return nil, "", err //nolint:wrapcheck // reported under the flag's own name by the caller
+	}
+
+	if bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("{")) {
+		doc, perr := evidence.Parse(raw)
+		if perr != nil {
+			return nil, "", perr
+		}
+
+		typed := doc.Subjects()
+
+		subjects := make([]verify.Subject, 0, len(typed))
+		for _, a := range typed {
+			subjects = append(subjects, verify.Subject{Name: a.Name, SHA256: a.SHA256})
+		}
+
+		return subjects, typingManifest, nil
+	}
+
+	listed, err := parseManifest(string(raw))
+	if err != nil {
+		return nil, "", err
+	}
+
+	if policyPath == "" {
+		return nil, "", errors.New("this manifest carries no typing, so --assert-policy is required: which" +
+			" assets are build subjects can only come from the org's declared evidence vocabulary")
+	}
+
+	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return nil, "", err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subjects []verify.Subject
+
+	for _, s := range listed {
+		if pol.Evidence.Classify(s.Name) == evidence.TypeBuildSubject {
+			subjects = append(subjects, s)
+		}
+	}
+
+	return subjects, typingPolicy, nil
 }
 
 // reproManifest reads one sha256sum manifest from disk.
@@ -387,13 +482,14 @@ func sealVerifyReport(va *verifyArgs, outcome *verifyOutcome, err error) *report
 	j := report.NewJournal()
 
 	if err == nil {
-		return report.Seal(target, subject, outcome.pop, j, report.NoCanary(),
+		return report.Seal(target, subject, outcome.pop, j, report.NoCanary(), report.NoJudgedSet(),
 			append(trusted, outcome.facts...)...)
 	}
 
 	j.Check(subject, va.mode).Diverged(err.Error())
 
-	return report.Seal(target, subject, declaredPop(va), j, report.NoCanary(), trusted...)
+	return report.Seal(target, subject, declaredPop(va), j,
+		report.NoCanary(), report.NoJudgedSet(), trusted...)
 }
 
 // declaredPop reports what a refused run HAD under test: the subject
@@ -431,6 +527,7 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 		fs.StringVar(&va.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
 		fs.StringVar(&va.sboms, "sboms", "",
 			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode, required)")
+		fs.StringVar(&va.inventories, "inventories", "", inventoriesUsage+" (release mode)")
 		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&va.machineryPin, "machinery-digest", "",
 			"commit digest the verifier/decision identities are pinned at (required)")
@@ -493,34 +590,14 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 	}
 
 	if va.mode == modeRelease || va.mode == modeVSA {
-		if va.subjects == "" {
-			return fail(errors.New("--subjects is required"))
-		}
-
-		manifest, err := os.ReadFile(va.subjects)
-		if err != nil {
-			return fail(err)
-		}
-
-		va.subjectList, err = parseManifest(string(manifest))
-		if err != nil {
-			return fail(err)
+		if serr := va.loadSubjects(); serr != nil {
+			return fail(serr)
 		}
 	}
 
 	if va.mode == modeRelease {
-		if va.sboms == "" {
-			return fail(errors.New("--sboms is required"))
-		}
-
-		manifest, err := os.ReadFile(va.sboms)
-		if err != nil {
-			return fail(err)
-		}
-
-		va.sbomList, err = parseManifest(string(manifest))
-		if err != nil {
-			return fail(err)
+		if berr := va.loadSBOMs(); berr != nil {
+			return fail(berr)
 		}
 	}
 
@@ -529,6 +606,80 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 	}
 
 	return exitOK
+}
+
+// loadSubjects reads the release's subject manifest — the bytes the
+// release claims, which every provenance check is held against.
+func (va *verifyArgs) loadSubjects() error {
+	if va.subjects == "" {
+		return errors.New("--subjects is required")
+	}
+
+	manifest, err := os.ReadFile(va.subjects)
+	if err != nil {
+		return fmt.Errorf("reading the subject manifest: %w", err)
+	}
+
+	va.subjectList, err = parseManifest(string(manifest))
+
+	return err
+}
+
+// loadSBOMs reads the decision candidates and, when the release
+// declares one, its inventory plan — the decision's denominator.
+func (va *verifyArgs) loadSBOMs() error {
+	if va.sboms == "" {
+		return errors.New("--sboms is required")
+	}
+
+	manifest, err := os.ReadFile(va.sboms)
+	if err != nil {
+		return fmt.Errorf("reading the SBOM manifest: %w", err)
+	}
+
+	if va.sbomList, err = parseManifest(string(manifest)); err != nil {
+		return err
+	}
+
+	if va.inventories == "" {
+		return nil
+	}
+
+	manifest, err = os.ReadFile(va.inventories)
+	if err != nil {
+		return fmt.Errorf("reading the inventory plan: %w", err)
+	}
+
+	va.inventoryList, err = parsePlan(string(manifest))
+
+	return err
+}
+
+// inventoriesUsage is the one spelling of what the plan input IS,
+// stated where both modes read it: the flag exists on `verify
+// release` and `emit vsa` because they run the same engine, and two
+// descriptions of one input drift.
+const inventoriesUsage = "sha256sum manifest of the release's PLANNED inventory documents — " +
+	"the inventory plan as digests, each owing its own release decision; " +
+	"absent declares a release with no plan, judged under the whole-release decision invariant"
+
+// parsePlan reads the inventory plan manifest — the same sha256sum
+// shape as every other manifest input, because the plan reaches the
+// engine as digests. A plan document that names nothing is refused:
+// declaring a plan and planning nothing is not the same claim as
+// declaring no plan, and only the second one may soften the gate.
+func parsePlan(text string) ([]verify.Subject, error) {
+	planned, err := parseManifest(text)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(planned) == 0 {
+		return nil, errors.New(
+			"the inventory plan names no document — a declared plan that plans nothing is not an absent plan")
+	}
+
+	return planned, nil
 }
 
 // parseManifest reads a sha256sum manifest: "<64 hex>  <name>" per
@@ -548,7 +699,7 @@ func parseManifest(text string) ([]verify.Subject, error) {
 
 		digest, name, ok := strings.Cut(trimmed, "  ")
 		if !ok || digest == "" || name == "" {
-			return nil, fmt.Errorf("subjects line %d is not a sha256sum record", line)
+			return nil, fmt.Errorf("manifest line %d is not a sha256sum record", line)
 		}
 
 		subjects = append(subjects, verify.Subject{Name: name, SHA256: digest})
@@ -564,8 +715,10 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 
 	switch va.mode {
 	case modeRelease:
+		sboms := verify.SBOMs{Assets: va.sbomList, Planned: va.inventoryList}
+
 		verdict, err := verify.Release(
-			va.p, va.coords, va.subjectList, va.sbomList, pins, newStore(va.noRetry), va.bv, out.logf)
+			va.p, va.coords, va.subjectList, sboms, pins, newStore(va.noRetry), va.bv, out.logf)
 		if err != nil {
 			return nil, err
 		}

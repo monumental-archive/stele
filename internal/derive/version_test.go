@@ -1,6 +1,7 @@
 package derive_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -476,5 +477,186 @@ func TestUnreleased(t *testing.T) {
 	next, releases := got.Next()
 	if !releases || next.String() != "0.1.0" {
 		t.Errorf("first release = %v/%v, want 0.1.0", next, releases)
+	}
+}
+
+// versions parses a namespace's carried versions for the collision
+// half of Declare's judgment.
+func versions(t *testing.T, ss ...string) []*semver.Version {
+	t.Helper()
+
+	out := make([]*semver.Version, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, mustVersion(t, s))
+	}
+
+	return out
+}
+
+// Declare is the caller declaring and the tool judging (stele#146).
+// Every refusal is a row, because a refusal that does not fire is a
+// published version overwritten or a namespace walked backwards —
+// both discovered after the tag exists.
+func TestDeclare(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		base      string
+		commits   []string
+		declare   string
+		taken     []string
+		want      string
+		wantBump  derive.Bump
+		wantReq   derive.Bump
+		wantRefus string
+	}{
+		{
+			name: "a major nothing broke, which is the whole point",
+			base: "0.9.3", commits: []string{"fix: repair it"}, declare: "1.0.0",
+			want: "1.0.0", wantBump: derive.BumpMajor, wantReq: derive.BumpPatch,
+		},
+		{
+			name: "a product-line number the commits could never reach",
+			base: "1.4.2", commits: []string{"feat: a thing"}, declare: "25.1.0",
+			want: "25.1.0", wantBump: derive.BumpMajor, wantReq: derive.BumpMinor,
+		},
+		{
+			name: "a range that voted for nothing still releases when a human declares",
+			base: "0.9.3", commits: []string{"chore: tidy"}, declare: "1.0.0",
+			want: "1.0.0", wantBump: derive.BumpMajor, wantReq: derive.BumpNone,
+		},
+		{
+			name: "a declared patch is a patch",
+			base: "1.4.2", commits: []string{"feat: a thing"}, declare: "1.4.3",
+			want: "1.4.3", wantBump: derive.BumpPatch, wantReq: derive.BumpMinor,
+		},
+		{
+			name: "the base itself is not an increase",
+			base: "1.4.2", commits: []string{"fix: repair it"}, declare: "1.4.2",
+			wantRefus: "not an increase over the derived base 1.4.2",
+		},
+		{
+			name: "a walk backwards is refused, naming the base",
+			base: "1.4.2", commits: []string{"fix: repair it"}, declare: "1.0.0",
+			wantRefus: "not an increase over the derived base 1.4.2",
+		},
+		{
+			// The maintenance branch: v2.0.0 is published on another
+			// line, so it is above this base and the increase test alone
+			// would mint a name twice.
+			name: "a name the namespace already carries is refused",
+			base: "1.4.2", commits: []string{"fix: repair it"}, declare: "2.0.0",
+			taken:     []string{"1.4.2", "2.0.0"},
+			wantRefus: "namespace already carries 2.0.0",
+		},
+		{
+			name: "a prerelease of a taken version is its own name",
+			base: "1.4.2", commits: []string{"fix: repair it"}, declare: "2.0.0-rc.1",
+			taken: []string{"1.4.2", "2.0.0"},
+			want:  "2.0.0-rc.1", wantBump: derive.BumpMajor, wantReq: derive.BumpPatch,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decided, err := testRules(t, true).Decide(mustVersion(t, tc.base), parseAll(t, tc.commits...))
+			if err != nil {
+				t.Fatalf("Decide: %v", err)
+			}
+
+			got, err := decided.Declare(mustVersion(t, tc.declare), versions(t, tc.taken...))
+
+			if tc.wantRefus != "" {
+				if err == nil {
+					t.Fatalf("Declare(%s) was accepted, want a refusal mentioning %q", tc.declare, tc.wantRefus)
+				}
+
+				if !strings.Contains(err.Error(), tc.wantRefus) {
+					t.Fatalf("Declare(%s) refused with %q, want it to mention %q", tc.declare, err, tc.wantRefus)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Declare(%s): %v", tc.declare, err)
+			}
+
+			next, releases := got.Next()
+			switch {
+			case !releases:
+				t.Fatal("a declared version releases nothing")
+			case next.String() != tc.want:
+				t.Errorf("version = %s, want %s", next, tc.want)
+			case !got.Declared():
+				t.Error("Declared() is false after a declaration")
+			case got.Applied() != tc.wantBump:
+				t.Errorf("Applied() = %s, want %s — the bump describes what moved", got.Applied(), tc.wantBump)
+			case got.Requested() != tc.wantReq:
+				t.Errorf("Requested() = %s, want %s — the range still said what it said", got.Requested(), tc.wantReq)
+			case got.Base().String() != tc.base:
+				t.Errorf("Base() = %s, want the derived base %s", got.Base(), tc.base)
+			}
+		})
+	}
+}
+
+// A decision that never derived a base, and a declaration of nothing:
+// both are callers holding it wrong, and both refuse rather than
+// reaching through a nil.
+func TestDeclareRefusesWithoutInputs(t *testing.T) {
+	var undecided derive.Decision
+
+	if _, err := undecided.Declare(mustVersion(t, "1.0.0"), nil); err == nil {
+		t.Error("declaring against a decision with no base was accepted")
+	}
+
+	decided, err := testRules(t, true).Decide(mustVersion(t, "1.0.0"), parseAll(t, "fix: repair it"))
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	if _, err := decided.Declare(nil, nil); err == nil {
+		t.Error("declaring no version was accepted")
+	}
+}
+
+// The derived decision reports declared=false: the state is a fact
+// about how the number was reached, not a flag only the declaring path
+// remembers to set.
+func TestDerivedDecisionIsNotDeclared(t *testing.T) {
+	decided, err := testRules(t, true).Decide(mustVersion(t, "1.0.0"), parseAll(t, "feat: a thing"))
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	if decided.Declared() {
+		t.Error("a derived decision reports as declared")
+	}
+}
+
+// Versions is the one reading of a namespace: LatestTag folds it, and
+// Declare compares against it. A second membership rule is how the two
+// come to disagree about which tags are the namespace's.
+func TestVersions(t *testing.T) {
+	tags := []string{"v1.0.0", "v0.9-pre-import", "core-v2.0.0", "vault-v3.0.0", "v2.1.0", "v"}
+
+	got, skipped := derive.Versions("v", tags)
+
+	// "core-v2.0.0" and "vault-v3.0.0" never claimed this namespace —
+	// one namespace's name is routinely another's leading substring —
+	// and a bare "v" names no version at all.
+	if len(got) != 2 {
+		t.Fatalf("Versions = %v, want the two v-namespace versions", got)
+	}
+
+	if len(skipped) != 1 || skipped[0] != "v0.9-pre-import" {
+		t.Fatalf("skipped = %v, want only the unreadable claim", skipped)
+	}
+
+	base := derive.LatestTag("v", tags)
+	if base.Version.String() != "2.1.0" {
+		t.Errorf("LatestTag = %s, want the highest member of the same set", base.Version)
+	}
+
+	if len(base.Skipped) != len(skipped) {
+		t.Errorf("LatestTag skipped %v, Versions skipped %v — one namespace, two answers", base.Skipped, skipped)
 	}
 }

@@ -407,12 +407,18 @@ func TestPackageAndWorkflowReads(t *testing.T) {
 		t.Fatalf("absent tag = %q, %v — a rolling tag pointing at nothing is an answer", absent, err)
 	}
 
-	contents, err := c.WorkflowContents("acme", "widget")
-	if err != nil || len(contents) != 1 || string(contents[0]) != "jobs: {}\n" {
-		t.Fatalf("WorkflowContents = %q, %v — directories must be skipped", contents, err)
+	contents, err := c.Workflows("acme", "widget")
+	if err != nil || len(contents) != 1 || string(contents[0].Content) != "jobs: {}\n" {
+		t.Fatalf("Workflows = %v, %v — directories must be skipped", contents, err)
 	}
 
-	none, err := c.WorkflowContents("acme", "ghost")
+	// The name travels with the bytes: a workflow set keyed by nothing
+	// cannot answer which file a call names.
+	if contents[0].Name != "ci.yml" {
+		t.Fatalf("workflow name = %q, want the name the repository knows it by", contents[0].Name)
+	}
+
+	none, err := c.Workflows("acme", "ghost")
 	if err != nil || none != nil {
 		t.Fatalf("missing workflows dir = %v, %v — absence is an answer", none, err)
 	}

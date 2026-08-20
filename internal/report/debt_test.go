@@ -68,7 +68,8 @@ func TestParseDebtCarriesTheReviewedLine(t *testing.T) {
 	j := report.NewJournal(debt...)
 	j.Check("widget@v1.0.0", "sbom").Diverged("absent")
 
-	rep := report.Seal("test", "acme", report.PopulationFromEvidence(1, "subjects"), j, report.NoCanary())
+	rep := report.Seal("test", "acme", report.PopulationFromEvidence(1, "subjects"),
+		j, report.NoCanary(), report.NoJudgedSet())
 	if rep.Verdict() != report.VerdictPass {
 		t.Fatalf("verdict = %s, want the declared line to excuse its finding", rep.Verdict())
 	}

@@ -75,7 +75,7 @@ func Tags(
 		return nil, errors.New("assert: the policy declares no tags section")
 	}
 
-	org, repos, err := pop.resolve(forge)
+	org, repos, err := pop.Resolve(forge)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,8 @@ func Tags(
 
 	pop2 := report.PopulationFromListing(w.checked, "release tags")
 
-	return report.Seal("assert tags", pop.Subject(), pop2, j, report.NoCanary(), facts...), nil
+	return report.Seal("assert tags", pop.Subject(), pop2, j,
+		report.NoCanary(), report.NoJudgedSet(), facts...), nil
 }
 
 type tagsWalk struct {

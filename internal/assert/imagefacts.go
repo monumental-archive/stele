@@ -116,7 +116,7 @@ func ImageFacts(
 
 	pop := report.PopulationFromEvidence(len(children), "platform manifests in the index")
 
-	return report.Seal("assert image-facts", subject, pop, j, report.NoCanary()), nil
+	return report.Seal("assert image-facts", subject, pop, j, report.NoCanary(), report.NoJudgedSet()), nil
 }
 
 // hygieneChecks re-checks every fact value: non-empty, no control

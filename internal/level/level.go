@@ -347,7 +347,8 @@ func Seal(t Track, lad *Ladder, in *Inputs) *Assessment {
 			DivergedFrom(findings[i].Expected, findings[i].Actual, findings[i].Detail)
 	}
 
-	rep := report.Seal("level "+strings.ToLower(t.name), in.Subject, pop, j, report.NoCanary(), facts...)
+	rep := report.Seal("level "+strings.ToLower(t.name), in.Subject, pop, j,
+		report.NoCanary(), report.NoJudgedSet(), facts...)
 
 	return &Assessment{
 		rungs: lad.Rungs(),

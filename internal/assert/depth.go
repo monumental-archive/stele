@@ -17,9 +17,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -31,7 +31,7 @@ import (
 type DeepVerifier interface {
 	// Release proves the release; decision=false runs the provenance
 	// half alone (pre-decision-epoch history verifies what it can).
-	Release(c verify.Coords, subjects, sboms []verify.Subject, pins verify.Pins, decision bool) error
+	Release(c verify.Coords, subjects []verify.Subject, sboms verify.SBOMs, pins verify.Pins, decision bool) error
 	// VSA proves the store-resident verdict over every subject;
 	// a nil demand leaves a declared enrichment obligation unasked
 	// (pre-enrichment-epoch history proves what it can), and a
@@ -79,7 +79,15 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		w.log("assert: evidence: %s predates the decision epoch — deep release check bounded to provenance", subject)
 	}
 
-	if rerr := w.full.Verifier.Release(c, subjects, sboms, pins, contract.Decision); rerr != nil {
+	// The plan as the decision's denominator (stele#158): what this
+	// release planned to inventory, recovered from the obligations its
+	// classes owed at its own machinery version — derived once, beside
+	// the vocabulary it reads, never re-spelled here.
+	planned := w.pol.PlannedInventories(contract, sboms)
+
+	if rerr := w.full.Verifier.Release(
+		c, subjects, verify.SBOMs{Assets: sboms, Planned: planned}, pins, contract.Decision,
+	); rerr != nil {
 		deep.Diverged(rerr.Error())
 	}
 
@@ -150,11 +158,13 @@ func (w *evidenceWalk) checksumSubjects(repo, tag string) ([]verify.Subject, []v
 		// of its build (measured on v0.5.0: provenance covers exactly
 		// the artifacts — a bundle cannot vouch for itself). Documents
 		// are excluded from the provenance subject set; SBOMs travel
-		// separately as the decision candidates.
+		// separately as the decision candidates, which is why they are
+		// taken FIRST: the shared classifier calls an SBOM a document,
+		// and this walk needs the subset by name.
 		switch {
 		case strings.HasSuffix(s.Name, *w.pol.SBOMSuffix):
 			sboms = append(sboms, s)
-		case w.evidenceDocument(s.Name):
+		case w.pol.Classify(s.Name) == evidence.TypeEvidence:
 		default:
 			subjects = append(subjects, s)
 		}
@@ -166,40 +176,6 @@ func (w *evidenceWalk) checksumSubjects(repo, tag string) ([]verify.Subject, []v
 	}
 
 	return subjects, sboms, nil
-}
-
-// evidenceDocument reports whether a checksum entry is one of the
-// release's own evidence documents rather than an artifact: the
-// policy-known bundles, the umbrella, the contract manifest, and any
-// declared evidence suffixes (the org's VEX documents, for one).
-func (w *evidenceWalk) evidenceDocument(name string) bool {
-	if name == *w.pol.Checksums || name == *w.pol.UmbrellaBundle || name == *w.pol.ManifestAsset {
-		return true
-	}
-
-	for _, cp := range w.pol.Classes {
-		if slices.Contains(cp.Bundles, name) || slices.Contains(cp.LegacyVSABundles, name) {
-			return true
-		}
-
-		// Deliberately epoch-free: whether an obligation is OWED is a
-		// per-release question, but a shipped document is a document —
-		// a pre-epoch release that published the asset anyway must not
-		// have it counted as a build subject.
-		for _, ob := range cp.AssetPrefixes {
-			if strings.HasPrefix(name, *ob.Prefix) {
-				return true
-			}
-		}
-	}
-
-	for _, suffix := range w.pol.EvidenceSuffixes {
-		if strings.HasSuffix(name, suffix) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // resolvePins derives the machinery and signer pins for one release from

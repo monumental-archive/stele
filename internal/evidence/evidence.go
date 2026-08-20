@@ -17,12 +17,22 @@
 // would excuse obligations silently. Nothing emitted the manifest
 // before this writer existed, which is why the fields were free to
 // require.
+//
+// The manifest also TYPES what the release published (stele#156).
+// Three legs needed to know which released assets are build subjects
+// — the level walk, the reproducibility walk, the publish machinery's
+// own resume guard — and each derived its own answer, so agreement
+// was maintained by memory. The classification is stamped once, here,
+// at the only moment the publisher holds it natively; downstream
+// walks READ it. Deriving it again at every walk is the defect, not
+// the mechanism.
 package evidence
 
 import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -31,32 +41,90 @@ import (
 
 // Schema is the manifest's own format number — outside the
 // live-document epoch (docs/versioning.md), because manifests are
-// published release assets, immutable once shipped.
-const Schema = 1
+// published release assets, immutable once shipped. It moved to 2
+// when entries gained their type (stele#156); pre-v1 there is no
+// dual-version reader, so a schema-1 manifest is refused and the
+// manifests already published re-emit typed at the canon train (the
+// note-format v3 precedent).
+const Schema = 2
+
+// The entry types — what a released asset IS. The two carry opposite
+// obligations, which is the whole reason the distinction is worth a
+// field: a build artifact must rebuild bit-for-bit, while a signature
+// bundle CANNOT, because a Sigstore signature embeds a fresh
+// timestamp and certificate on every signing. That non-reproducibility
+// is a security property, and a walk that could not tell the two apart
+// reported it as a defect.
+//
+// The vocabulary is deliberately closed: an asset that is neither is
+// a manifest this reader refuses, because unknown defaulting into
+// either population is the failure this typing exists to prevent.
+const (
+	// TypeBuildSubject: an artifact OF the build.
+	TypeBuildSubject = "build-subject"
+	// TypeEvidence: a document ABOUT the release — an attestation
+	// bundle, an inventory, a triage decision, a digest manifest.
+	TypeEvidence = "evidence"
+)
+
+// sha256RE is this format's digest spelling: lowercase hex, 64 of it.
+// An entry whose digest is not one pins nothing.
+var sha256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Manifest is the release evidence manifest. Pointer fields, because
 // the reader must tell absent from zero: a manifest missing storeVsa
 // is malformed, not a store-layout release.
 //
 // It declares FACTS — the classes shipped, the verdict layout, the
-// machinery version that published the release — never obligations;
-// those are always derived by the reader through the policy epochs.
+// machinery version that published the release, what it published and
+// what each asset is — never obligations; those are always derived by
+// the reader through the policy epochs.
 type Manifest struct {
 	Schema           *int     `json:"schema"`
 	Classes          []string `json:"classes"`
 	StoreVSA         *bool    `json:"storeVsa"`
 	MachineryVersion *string  `json:"machineryVersion"`
+	Entries          []Entry  `json:"entries"`
+}
+
+// Entry is one asset the release published, pinned and typed.
+// Pointer fields for the manifest's own reason: an entry whose type
+// is ABSENT is malformed, and absent must never decode into one of
+// the two populations.
+//
+// A manifest cannot pin itself — a document carrying its own digest
+// is not a document — so the entries are the assets published BESIDE
+// it. Nothing is lost: the manifest is an evidence document, and so
+// is the checksum manifest that pins it.
+type Entry struct {
+	Name   *string `json:"name"`
+	SHA256 *string `json:"sha256"`
+	Type   *string `json:"type"`
+}
+
+// NewEntry builds one typed entry — the writing side's spelling, so
+// callers never hold the pointers the decode contract requires.
+func NewEntry(name, sha256, entryType string) Entry {
+	return Entry{Name: &name, SHA256: &sha256, Type: &entryType}
+}
+
+// Asset is one entry read back as values — the shape a walk consumes
+// once Validate has proven every field present.
+type Asset struct {
+	Name   string
+	SHA256 string
 }
 
 // New builds a valid manifest or refuses — the only constructor, so
 // an invalid manifest exists nowhere on the writing side.
-func New(classes []string, storeVSA bool, machineryVersion string) (*Manifest, error) {
+func New(classes []string, storeVSA bool, machineryVersion string, entries []Entry) (*Manifest, error) {
 	schema := Schema
 	m := &Manifest{
 		Schema:           &schema,
 		Classes:          classes,
 		StoreVSA:         &storeVSA,
 		MachineryVersion: &machineryVersion,
+		Entries:          entries,
 	}
 
 	if err := m.Validate(); err != nil {
@@ -64,6 +132,25 @@ func New(classes []string, storeVSA bool, machineryVersion string) (*Manifest, e
 	}
 
 	return m, nil
+}
+
+// Subjects lists the entries typed as build subjects, in the order
+// the manifest carries them — the population a reproducibility walk
+// judges. READ from the manifest's own typing: a walk that re-derived
+// it here would be the second answer this field exists to retire.
+func (m *Manifest) Subjects() []Asset {
+	var out []Asset
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Name == nil || e.SHA256 == nil || e.Type == nil || *e.Type != TypeBuildSubject {
+			continue
+		}
+
+		out = append(out, Asset{Name: *e.Name, SHA256: *e.SHA256})
+	}
+
+	return out
 }
 
 // Validate holds the shared shape rules. Both legs call it: the
@@ -97,7 +184,7 @@ func (m *Manifest) Validate() error {
 			" epochs excuses nothing silently", *m.MachineryVersion, err)
 	}
 
-	return nil
+	return m.validateEntries()
 }
 
 // Parse decodes and validates one manifest — the reader's entry, and
@@ -121,6 +208,47 @@ func Parse(raw []byte) (*Manifest, error) {
 func (m *Manifest) Encode(w io.Writer) error {
 	if err := jsonx.Encode(w, m); err != nil {
 		return fmt.Errorf("evidence: %w", err)
+	}
+
+	return nil
+}
+
+// validateEntries holds the typing rules. Every entry names an asset,
+// pins its bytes and says what it is; a manifest carrying an entry
+// that fails any of the three is refused whole, because the failure
+// mode this typing exists to prevent is precisely an asset landing in
+// a population it does not belong to.
+func (m *Manifest) validateEntries() error {
+	if len(m.Entries) == 0 {
+		return errors.New("evidence: entries is required — a manifest that lists nothing says nothing about" +
+			" what the release published")
+	}
+
+	seen := make(map[string]bool, len(m.Entries))
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+
+		switch {
+		case e.Name == nil || *e.Name == "":
+			return fmt.Errorf("evidence: entries[%d] has no name — an entry naming no asset types nothing", i)
+		case e.SHA256 == nil:
+			return fmt.Errorf("evidence: entries[%d] (%s) has no sha256 — an entry that pins no bytes"+
+				" pins nothing", i, *e.Name)
+		case !sha256RE.MatchString(*e.SHA256):
+			return fmt.Errorf("evidence: entries[%d] (%s): sha256 %q is not a sha256 digest",
+				i, *e.Name, *e.SHA256)
+		case e.Type == nil:
+			return fmt.Errorf("evidence: entries[%d] (%s) has no type — an unclassified asset must never"+
+				" default into either population", i, *e.Name)
+		case *e.Type != TypeBuildSubject && *e.Type != TypeEvidence:
+			return fmt.Errorf("evidence: entries[%d] (%s): type %q is neither %q nor %q — the vocabulary is"+
+				" closed on purpose", i, *e.Name, *e.Type, TypeBuildSubject, TypeEvidence)
+		case seen[*e.Name]:
+			return fmt.Errorf("evidence: entry %q appears twice — what a release published is a set", *e.Name)
+		}
+
+		seen[*e.Name] = true
 	}
 
 	return nil

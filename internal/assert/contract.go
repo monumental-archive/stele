@@ -21,6 +21,7 @@ import (
 	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/verify"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 // Contract is what one release owes.
@@ -69,6 +70,57 @@ func (e *EvidencePolicy) EnrichmentDemand(c *Contract) *verify.EnrichmentDemand 
 	slices.Sort(names)
 
 	return &verify.EnrichmentDemand{AlsoRequired: slices.Compact(names)}
+}
+
+// PlannedInventories selects, from a release's SBOM assets, the
+// documents its inventory plan named — the denominator the release
+// decision is measured against (stele#158), derived HERE for the same
+// reason EnrichmentDemand is: the obligation is per-class, and the
+// class list joins the policy only in the walk.
+//
+// The plan itself is a build-leg artifact that no longer exists by
+// the time history is walked, so what a release planned is recovered
+// through the one vocabulary that outlives it: the planned prefix
+// obligations its classes owed at ITS machinery version (stele#142's
+// `planned: true`, through the one owedFrom semantics). A release
+// whose classes owed no planned prefix planned no inventories — which
+// is every release published before per-artifact inventories existed,
+// and the whole-release decision invariant is exactly what those
+// releases were published under.
+//
+// Never epoch-free: whether a document is one a class could EVER owe
+// is a naming question, but whether the release owed it is a time
+// question (stele#143), and this is the time one — measuring a 2026
+// obligation against a 2025 release would demand a decision over a
+// document that machinery could not yet write.
+func (e *EvidencePolicy) PlannedInventories(c *Contract, sboms []verify.Subject) []verify.Subject {
+	var prefixes []string
+
+	for _, class := range c.Classes {
+		cp, ok := e.Classes[class]
+		if !ok {
+			// A class no policy declares owes unknowable evidence; the
+			// walk's own class check speaks for it, and inventing an
+			// obligation here would be this reader answering that.
+			continue
+		}
+
+		prefixes = append(prefixes, cp.owedPlannedPrefixes(c.MachineryVersion)...)
+	}
+
+	var planned []verify.Subject
+
+	for _, s := range sboms {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(s.Name, prefix) {
+				planned = append(planned, s)
+
+				break
+			}
+		}
+	}
+
+	return planned
 }
 
 // ContractSource resolves one release's contract. ok=false means the
@@ -148,9 +200,8 @@ type WorkflowSource struct {
 }
 
 var (
-	workflowCallRE = regexp.MustCompile(`(?m)^\s*workflow_call:`)
-	classesRE      = regexp.MustCompile(`(?m)^[^#\n]*classes:\s*(.+)$`)
-	pinCommentRE   = regexp.MustCompile(`uses:.*(?:publish|release)\.ya?ml@[^#\n]*#\s*v(\d+\.\d+\.\d+)`)
+	classesRE    = regexp.MustCompile(`(?m)^[^#\n]*classes:\s*(.+)$`)
+	pinCommentRE = regexp.MustCompile(`uses:.*(?:publish|release)\.ya?ml@[^#\n]*#\s*v(\d+\.\d+\.\d+)`)
 )
 
 // Contract implements ContractSource.
@@ -164,7 +215,7 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		return nil, false, nil
 	}
 
-	if workflowCallRE.Match(wf) {
+	if callable(wf) {
 		wf, ok, err = w.Forge.FileAt(owner, repo, ".github/workflows/self-publish.yml", tag)
 		if err != nil {
 			return nil, false, fmt.Errorf("assert: workflow contract of %s/%s@%s: %w", owner, repo, tag, err)
@@ -201,6 +252,25 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		MachineryVersion: machineryVersion,
 		Origin:           "publish workflow at " + tag,
 	}, true, nil
+}
+
+// callable answers "may anything call this workflow" through the ONE
+// workflow parser (internal/workflow), so this legacy adapter and the
+// permissions join cannot hold two definitions of what a
+// workflow_call trigger IS.
+//
+// Bytes that will not parse are not a callable workflow. This
+// adapter's whole shape is fall-through — a file that does not speak
+// for the release hands the question to the next source — and a file
+// nothing can read does not speak for it either. The two regexes
+// above stay where they are: they mine a literal an author wrote (a
+// class list in an input, a version in a pin comment) out of
+// history's spelling of it, which is a different question from what
+// the format says, and one this adapter's sunset carries away.
+func callable(content []byte) bool {
+	doc, err := workflow.Parse(content)
+
+	return err == nil && doc.Reusable
 }
 
 // splitClasses reads the workflow input's class list. The separator
