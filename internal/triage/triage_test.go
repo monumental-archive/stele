@@ -201,7 +201,7 @@ func TestStale(t *testing.T) {
 	t.Parallel()
 
 	none := triage.Stale(nil, decisions(t, decidedDoc))
-	if len(none) != 1 || none[0].Key.Advisory != "CVE-1" {
+	if len(none) != 1 || none[0].Key.Advisory() != "CVE-1" {
 		t.Fatalf("Stale = %+v, want the unmatched decision", none)
 	}
 
@@ -286,7 +286,7 @@ func TestStatementInheritsTheDocumentMoment(t *testing.T) {
 
 	byAdvisory := map[string]string{}
 	for _, dec := range d.All() {
-		byAdvisory[dec.Key.Advisory] = dec.Decided.UTC().Format("2006-01-02")
+		byAdvisory[dec.Key.Advisory()] = dec.Decided.UTC().Format("2006-01-02")
 	}
 
 	if byAdvisory["X"] != "2026-01-01" {
@@ -295,5 +295,60 @@ func TestStatementInheritsTheDocumentMoment(t *testing.T) {
 
 	if byAdvisory["Y"] != "2026-06-01" {
 		t.Errorf("Y dated %s, want its own moment", byAdvisory["Y"])
+	}
+}
+
+// TestAPublishedPurlDecidesTheModuleItNames walks the whole join for
+// a mixed-case Go module: a scanner report naming the module as it is
+// written, and a decision whose product purl is the one a stele SBOM
+// publishes for it (lowercased, the purl golang type's canonical
+// form — docs/vex-join.md).
+//
+// This is the pairing the defect made impossible. The two sides never
+// meet in one package elsewhere, so the fold is only proven where
+// they do: findings from a scanner, decisions from a document.
+func TestAPublishedPurlDecidesTheModuleItNames(t *testing.T) {
+	t.Parallel()
+
+	const (
+		module    = "github.com/Masterminds/semver/v3"
+		published = "pkg:golang/github.com/masterminds/semver/v3@v3.5.0"
+	)
+
+	findings, err := policy().Findings([]byte(report(module, "v3.5.0", "Go", true)))
+	if err != nil {
+		t.Fatalf("Findings: %v", err)
+	}
+
+	// The finding carries the module path as the scanner wrote it, so
+	// a report names what a reader will find in go.mod; the key
+	// carries the canonical form, which is what joins.
+	if got := findings[0].Package; got != module {
+		t.Errorf("Finding.Package = %q, want the scanner's own spelling %q", got, module)
+	}
+
+	// Spelled out, not computed: an expectation derived by the same
+	// operation the code under test performs agrees with itself
+	// whatever that operation is.
+	if got, want := findings[0].Key.Package(), "github.com/masterminds/semver/v3"; got != want {
+		t.Errorf("Key.Package() = %q, want the canonical form %q", got, want)
+	}
+
+	doc := `{"timestamp": "2026-08-20T00:00:00Z",
+	  "statements": [{"vulnerability": {"name": "CVE-1"},
+	   "status": "not_affected", "justification": "vulnerable_code_not_present",
+	   "products": [{"@id": "` + published + `"}]}]}`
+
+	split := triage.Join(findings, decisions(t, doc))
+	if len(split.Decided) != 1 || len(split.Undecided) != 0 {
+		t.Fatalf("Join = %d decided, %d undecided; the published purl decided nothing",
+			len(split.Decided), len(split.Undecided))
+	}
+
+	// The same decision must not read as a retirement candidate: a
+	// join that matched and a staleness check that did not would be
+	// two answers to one question.
+	if stale := triage.Stale(findings, decisions(t, doc)); len(stale) != 0 {
+		t.Fatalf("Stale = %+v, want none — the decision matched a live finding", stale)
 	}
 }

@@ -395,7 +395,10 @@ matched decision appears in the report as a declared exception whose
 origin is the reviewed statement file; a decision matching no current
 finding surfaces as stale — a retirement candidate, never an
 archaeology project. An empty or absent VEX directory decides
-NOTHING, never everything.
+NOTHING, never everything. When a decision and a finding name the same
+package is its own question, answered once in
+[vex-join.md](vex-join.md) — golang names compare case-insensitively,
+everything else compares as written.
 
 ## The release evidence manifest
 

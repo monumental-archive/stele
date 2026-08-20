@@ -177,7 +177,7 @@ func (a *affected) inventory(inv *sbomwalk.Inventory) error {
 	}
 
 	for i := range split.Decided {
-		seen[split.Decided[i].Finding.Key.Advisory] = true
+		seen[split.Decided[i].Finding.Key.Advisory()] = true
 	}
 
 	a.releases[len(a.releases)-1].Advisories = sortedKeys(seen)

@@ -3,7 +3,15 @@
 // package, version) triple — keyed by the dependency, never by
 // release tag, so coverage is derived rather than stored, and a
 // release that bumps a decided package's version matches no decision
-// and surfaces for a fresh judgment. The empty-set semantics are
+// and surfaces for a fresh judgment.
+//
+// Exact is per component, and the package name's identity is its
+// ecosystem's, not this package's opinion: a golang purl name is
+// case-insensitive because its purl type declares it so, everything
+// else compares as written. The rule is written once in
+// docs/vex-join.md and implemented once below: anything joining these
+// decisions a second time has to reach the same answers, and two
+// dialects decide different things about one finding. The empty-set semantics are
 // explicit and tested by name: an empty VEX directory means NOTHING
 // decided, never everything — the grep -f landmine this package
 // exists to make unrepresentable. Shared by `assert blast-radius`
@@ -22,18 +30,103 @@ import (
 )
 
 // Key is the exact triple a decision matches on.
+//
+// The fields are sealed behind KeyFromFinding and KeyFromPurl because
+// the package name carries a normalisation the two sides of the join
+// must reach independently (docs/vex-join.md): a hand-built literal
+// is a second spelling of that rule, and a key that spells it
+// differently does not fail — it silently decides nothing. This key
+// has already missed silently twice, once on the namespace and once
+// on case, so construction is the one door.
 type Key struct {
-	Advisory string
-	Package  string
-	Version  string
+	advisory string
+	pkg      string
+	version  string
 }
+
+// Advisory is the vulnerability identifier the key joins on.
+func (k Key) Advisory() string { return k.advisory }
+
+// Package is the package name in its canonical form for the
+// ecosystem — the spelling both sides of the join compare, which for
+// a case-insensitive type is not necessarily the spelling either side
+// arrived in (docs/vex-join.md).
+func (k Key) Package() string { return k.pkg }
+
+// Version is the package version the key joins on, verbatim: no purl
+// type declares versions case-insensitive, so nothing normalises them.
+func (k Key) Version() string { return k.version }
 
 // String renders the triple the way a report names it — one
 // definition, shared by the finding that carries the key and by the
 // decision that excuses it, so the two can never disagree about what
 // they are talking about.
 func (k Key) String() string {
-	return k.Advisory + ":" + k.Package + "@" + k.Version
+	return k.advisory + ":" + k.pkg + "@" + k.version
+}
+
+// KeyFromFinding mints the key one scanner finding joins on.
+// ecosystem is the label the scanner reports it under — OSV's
+// vocabulary ("Go", "crates.io", "Debian:12"), not a purl type.
+func KeyFromFinding(advisory, ecosystem, name, version string) Key {
+	return Key{advisory: advisory, pkg: canonicalName(ecosystem, name), version: version}
+}
+
+// KeyFromPurl mints the key one VEX product identifies, and reports
+// whether the product can join at all: a product that is not a
+// versioned package URL names no triple.
+//
+// The purl carries its own ecosystem in the type, so the caller never
+// states one — the decision side cannot disagree with the document it
+// is reading.
+func KeyFromPurl(advisory, purl string) (Key, bool) {
+	typ, name, version, ok := parsePurl(purl)
+	if !ok {
+		return Key{}, false
+	}
+
+	return Key{advisory: advisory, pkg: canonicalName(typ, name), version: version}, true
+}
+
+// canonicalName renders a package name in the form both sides of the
+// join must reach independently. The rule is written once, in
+// docs/vex-join.md, and cited from every implementation of it — this
+// one and the canon's mirrored join.
+func canonicalName(ecosystem, name string) string {
+	if !foldsNames(ecosystem) {
+		return name
+	}
+
+	return strings.ToLower(name)
+}
+
+// foldsNames reports whether names in the named ecosystem compare
+// case-insensitively, per the purl spec's definition of that
+// ecosystem's type. The label arrives in either vocabulary — a purl
+// TYPE from a decision, an OSV ECOSYSTEM from a finding — because the
+// two sides of the join speak different ones and there is exactly one
+// rule between them.
+//
+// The default is case-SENSITIVE: purl declares a name case-sensitive
+// unless its type says otherwise, so an ecosystem nobody has read the
+// spec for folds nothing. That is the safe direction. A missed fold
+// surfaces a finding as undecided, which is loud; a wrong fold
+// excuses a vulnerability in some OTHER package, which is silent.
+func foldsNames(ecosystem string) bool {
+	// OSV qualifies distro ecosystems with a release ("Debian:12",
+	// "Alpine:v3.18"); the release names no different ecosystem.
+	label, _, _ := strings.Cut(strings.ToLower(ecosystem), ":")
+
+	switch label {
+	// The purl golang type declares the namespace and name lowercased,
+	// which makes them case-insensitive: pkg:golang/github.com/A and
+	// pkg:golang/github.com/a name one module. OSV reports the same
+	// ecosystem as "Go".
+	case "golang", "go":
+		return true
+	default:
+		return false
+	}
 }
 
 // Decision is one parsed VEX decision: the triple it matches, the
@@ -111,12 +204,14 @@ func (d *Decisions) Len() int {
 	return len(d.byKey)
 }
 
-// purlPrefixRE strips a package URL's scheme and type, leaving the
-// namespace, name and version a decision joins on.
-var purlPrefixRE = regexp.MustCompile(`^pkg:[A-Za-z0-9.+-]+/`)
+// purlPrefixRE splits a package URL's scheme and type from the
+// namespace, name and version a decision joins on. The type is
+// captured, not discarded: it is the purl's own statement of which
+// ecosystem's rules the name is read under.
+var purlPrefixRE = regexp.MustCompile(`^pkg:([A-Za-z0-9.+-]+)/`)
 
-// parsePurl splits a product package URL into the package name and
-// version a scanner finding is keyed by.
+// parsePurl splits a product package URL into the type, package name
+// and version a scanner finding is keyed by.
 //
 // The name is the NAMESPACE AND NAME TOGETHER, not the last path
 // segment. A purl's namespace is part of the package's identity —
@@ -131,12 +226,14 @@ var purlPrefixRE = regexp.MustCompile(`^pkg:[A-Za-z0-9.+-]+/`)
 // names serde_cbor either way, which is why the narrower reading
 // survived until a Go module needed a decision.
 //
-//nolint:gocritic // unnamedResult: name, version, ok — the stdlib shape
-func parsePurl(purl string) (string, string, bool) {
-	rest := purlPrefixRE.ReplaceAllString(purl, "")
-	if rest == purl {
-		return "", "", false // no scheme and type: not a package URL
+//nolint:gocritic // unnamedResult: type, name, version, ok — the stdlib shape
+func parsePurl(purl string) (string, string, string, bool) {
+	m := purlPrefixRE.FindStringSubmatch(purl)
+	if m == nil {
+		return "", "", "", false // no scheme and type: not a package URL
 	}
+
+	typ, rest := m[1], purl[len(m[0]):]
 
 	// Qualifiers and subpath are not part of the identity.
 	rest, _, _ = strings.Cut(rest, "?")
@@ -146,15 +243,15 @@ func parsePurl(purl string) (string, string, bool) {
 	// one, so cutting at the first would split the name in half.
 	at := strings.LastIndex(rest, "@")
 	if at <= 0 || at == len(rest)-1 {
-		return "", "", false // unversioned products cannot join
+		return "", "", "", false // unversioned products cannot join
 	}
 
 	name, err := url.PathUnescape(rest[:at])
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 
-	return name, rest[at+1:], true
+	return typ, name, rest[at+1:], true
 }
 
 // openVEX is the OpenVEX shape this parse reads — a foreign format
@@ -214,12 +311,10 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 				continue
 			}
 
-			name, version, ok := parsePurl(*p.ID)
+			k, ok := KeyFromPurl(*stmt.Vulnerability.Name, *p.ID)
 			if !ok {
 				continue // a product that is not a versioned purl cannot join
 			}
-
-			k := Key{Advisory: *stmt.Vulnerability.Name, Package: name, Version: version}
 
 			// Two decisions for one triple is a contradiction to
 			// surface, never a race the parse order settles: the files
@@ -228,7 +323,7 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 			// The human retires one; this code picks neither.
 			if prior, dup := d.byKey[k]; dup {
 				return fmt.Errorf("vexjoin: %s and %s both decide %s on %s@%s — one finding, one decision;"+
-					" retire one", prior.Origin, origin, k.Advisory, k.Package, k.Version)
+					" retire one", prior.Origin, origin, k.Advisory(), k.Package(), k.Version())
 			}
 
 			d.byKey[k] = Decision{
