@@ -308,6 +308,13 @@ func TestLevelOrgDeclaredPopulation(t *testing.T) {
 func TestLevelPolicyRefusals(t *testing.T) {
 	swapLevelSeams(t, &levelForge{repos: []string{"widget"}}, nil)
 
+	// A policy written against a retired schema: the decode leg of the
+	// same guard, which fails with the file already open.
+	stale := filepath.Join(t.TempDir(), "stale-policy.json")
+	if err := os.WriteFile(stale, []byte(`{"schema": 6}`), 0o600); err != nil {
+		t.Fatalf("writing the policy: %v", err)
+	}
+
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -325,7 +332,18 @@ func TestLevelPolicyRefusals(t *testing.T) {
 			want: exitBlind,
 			// The cause rides IN the document: a board consumer must be
 			// able to tell "nobody could look" from "nobody is here".
-			doc: "absent.json",
+			// Attributed to the verb that ran — the loader is shared with
+			// `derive vex-subjects`, and it once lent that verb's name to
+			// this report (stele#260).
+			doc: "level: open absent.json",
+		},
+		{
+			name: "a policy this schema cannot read is not a population",
+			args: []string{"level", "build", "--org", "acme", "--policy", stale},
+			want: exitBlind,
+			// The decode leg of the same guard: the loader owns the path,
+			// the caller owns the verb.
+			doc: "level: " + stale + ": assert: policy:",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

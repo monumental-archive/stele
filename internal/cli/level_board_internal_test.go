@@ -221,7 +221,10 @@ func TestLevelBoardRefusals(t *testing.T) {
 			name:  "a policy that is not there is not a population",
 			forge: &levelForge{repos: []string{"widget"}},
 			args:  []string{"level", "--org", "acme", "--out-dir", dir, "--policy", "absent.json"},
-			want:  exitBlind, says: "absent.json",
+			// Attributed to the verb that ran: the loader is shared with
+			// `derive vex-subjects` and once lent that verb's name to a
+			// board run nobody had asked it for (stele#260).
+			want: exitBlind, says: "level: open absent.json",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

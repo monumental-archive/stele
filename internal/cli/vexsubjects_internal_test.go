@@ -122,51 +122,77 @@ func TestDeriveVEXSubjectsEndToEnd(t *testing.T) {
 func TestDeriveVEXSubjectsRefusals(t *testing.T) {
 	snap, policy, decision := vexSubjectsSnapshot(t)
 
+	// A policy written against a retired schema: the leg that fails
+	// with the file already open.
+	stale := filepath.Join(t.TempDir(), "stale-policy.json")
+	if err := os.WriteFile(stale, []byte(`{"schema": 6}`), 0o600); err != nil {
+		t.Fatalf("writing the policy: %v", err)
+	}
+
 	tests := []struct {
 		name string
 		args []string
 		want int
+		says string
 	}{
-		{"no policy", []string{"derive", "vex-subjects", "--org", "acme"}, exitUsage},
 		{
-			"no decision",
-			[]string{"derive", "vex-subjects", "--org", "acme", "--policy", policy},
-			exitUsage,
+			name: "no policy",
+			args: []string{"derive", "vex-subjects", "--org", "acme"},
+			want: exitUsage,
 		},
 		{
-			"no population",
-			[]string{"derive", "vex-subjects", "--policy", policy, "--decision", decision},
-			exitUsage,
+			name: "no decision",
+			args: []string{"derive", "vex-subjects", "--org", "acme", "--policy", policy},
+			want: exitUsage,
 		},
 		{
-			"two populations",
-			[]string{
+			name: "no population",
+			args: []string{"derive", "vex-subjects", "--policy", policy, "--decision", decision},
+			want: exitUsage,
+		},
+		{
+			name: "two populations",
+			args: []string{
 				"derive", "vex-subjects", "--policy", policy, "--decision", decision,
 				"--org", "acme", "--repo", "acme/widget",
 			},
-			exitUsage,
+			want: exitUsage,
 		},
 		{
-			"a repo that is not owner/name",
-			[]string{"derive", "vex-subjects", "--policy", policy, "--decision", decision, "--repo", "widget"},
-			exitUsage,
+			name: "a repo that is not owner/name",
+			args: []string{"derive", "vex-subjects", "--policy", policy, "--decision", decision, "--repo", "widget"},
+			want: exitUsage,
 		},
 		{
-			"a decision document that is not there",
-			[]string{
+			name: "a decision document that is not there",
+			args: []string{
 				"derive", "vex-subjects", "--org", "acme", "--policy", policy,
 				"--decision", filepath.Join(t.TempDir(), "absent.openvex.json"), "--snapshot", snap,
 			},
-			exitRefused,
+			want: exitRefused,
 		},
 		{
-			"a policy that is not there",
-			[]string{
+			name: "a policy that is not there",
+			args: []string{
 				"derive", "vex-subjects", "--org", "acme",
 				"--policy", filepath.Join(t.TempDir(), "absent.json"),
 				"--decision", decision, "--snapshot", snap,
 			},
-			exitRefused,
+			want: exitRefused,
+			// The loader is shared with `stele level`; this verb keeps
+			// its own name on its own failures (stele#260).
+			says: "derive vex-subjects: open ",
+		},
+		{
+			name: "a policy this schema cannot read",
+			args: []string{
+				"derive", "vex-subjects", "--org", "acme", "--policy", stale,
+				"--decision", decision, "--snapshot", snap,
+			},
+			want: exitRefused,
+			// The decode leg of the same guard: the loader owns the
+			// path, the caller owns the verb.
+			says: "derive vex-subjects: " + stale + ": assert: policy:",
 		},
 	}
 
@@ -178,6 +204,10 @@ func TestDeriveVEXSubjectsRefusals(t *testing.T) {
 
 			if code := Run(tt.args, &stdout, &stderr); code != tt.want {
 				t.Fatalf("Run = %d, want %d; stderr: %s", code, tt.want, stderr.String())
+			}
+
+			if tt.says != "" && !strings.Contains(stderr.String(), tt.says) {
+				t.Errorf("the refusal does not say %q:\nstderr: %s", tt.says, stderr.String())
 			}
 		})
 	}
