@@ -65,6 +65,10 @@ type boardArgs struct {
 type plan struct {
 	cells    []board.Cell
 	unlooked []string
+	// set is the resolved population the cells came out of, asked
+	// again per cell for where that repository publishes — the one
+	// enumeration, consulted twice rather than run twice.
+	set *population.Set
 }
 
 // levelBoard measures every cell the population holds and publishes
@@ -87,7 +91,7 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 	kept := 0
 
 	for _, c := range p.cells {
-		outcome, err := b.Publish(c, opts.measure(c, forge, out))
+		outcome, err := b.Publish(c, opts.measure(c, p, forge, out))
 		if err != nil {
 			if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 				return exitIO
@@ -168,7 +172,7 @@ func (opts *boardArgs) plan(forge gh.Forge, out *latch) (plan, int) {
 		cells = append(cells, board.Cell{Repo: m.Repo, Track: m.Track})
 	}
 
-	p := plan{cells: cells, unlooked: pop.UnexercisedRoster()}
+	p := plan{cells: cells, unlooked: pop.UnexercisedRoster(), set: pop}
 
 	for _, name := range p.unlooked {
 		out.logf("level: %s: not looked at — outside the declared enumeration coverage;"+
@@ -209,11 +213,14 @@ func (opts *boardArgs) empty(out *latch) int {
 
 // measure judges one cell through the single-cell path, so the board
 // and `stele level <track> --repo …` cannot answer differently.
-func (opts *boardArgs) measure(c board.Cell, forge gh.Forge, out *latch) *level.Assessment {
+func (opts *boardArgs) measure(c board.Cell, p plan, forge gh.Forge, out *latch) *level.Assessment {
 	la := &levelArgs{
 		track: c.Track.Key(), owner: opts.owner, name: c.Repo,
-		repo: opts.owner + "/" + c.Repo,
-		ref:  opts.ref, notesRef: opts.notesRef, root: opts.root,
+		repo:     opts.owner + "/" + c.Repo,
+		ref:      opts.ref,
+		notesRef: opts.notesRef,
+		root:     opts.root,
+		surfaces: p.set.Surfaces(c.Repo),
 	}
 
 	return level.Assess(c.Track, la.gather(forge, out))

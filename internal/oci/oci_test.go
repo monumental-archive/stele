@@ -291,3 +291,81 @@ func (w *world) pushConfiglessManifest() string {
 
 	return resp.Header.Get("Docker-Content-Digest")
 }
+
+// TestResolveNamesWhatTheTagHolds covers the whole contract of the
+// one read here that takes a tag: a tag the registry holds resolves
+// to the digest of those exact bytes, and a tag it does not hold
+// comes back EMPTY rather than as an error.
+//
+// The second half is the one that matters. A rolling tag pointing at
+// nothing is a stream that has not published yet — an answer a
+// judgment reports as an absence — and an error there would make it
+// indistinguishable from a registry that could not be reached, which
+// is the confusion the whole surface exists to avoid.
+func TestResolveNamesWhatTheTagHolds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a tag the registry holds", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		pushed := w.pushImage(nil)
+
+		got, err := oci.Client{}.Resolve(w.repo, "latest")
+		if err != nil {
+			t.Fatalf("Resolve = %v", err)
+		}
+
+		if got != pushed {
+			t.Errorf("Resolve = %q, want the digest the tag was pushed at (%q)", got, pushed)
+		}
+	})
+
+	t.Run("an index resolves to the index's own digest", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		pushed := w.pushIndex()
+
+		got, err := oci.Client{}.Resolve(w.repo, "index")
+		if err != nil {
+			t.Fatalf("Resolve = %v", err)
+		}
+
+		if got != pushed {
+			t.Errorf("Resolve = %q, want the index digest (%q)", got, pushed)
+		}
+	})
+
+	t.Run("a tag the registry does not hold is empty, never an error", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		w.pushImage(nil) // the repository exists; this tag does not
+
+		got, err := oci.Client{}.Resolve(w.repo, "rolling")
+		if err != nil {
+			t.Fatalf("Resolve = %v, want an absence rather than a failure", err)
+		}
+
+		if got != "" {
+			t.Errorf("Resolve = %q, want empty for a tag nothing was pushed at", got)
+		}
+	})
+
+	t.Run("a reference that is not a tag at all", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := (oci.Client{}).Resolve("NOT A REGISTRY", "rolling"); err == nil {
+			t.Error("Resolve accepted a reference no registry could serve")
+		}
+	})
+
+	t.Run("a registry that is not there", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := (oci.Client{}).Resolve("localhost:1/app", "rolling"); err == nil {
+			t.Error("Resolve reported an absence for a registry it never reached")
+		}
+	})
+}

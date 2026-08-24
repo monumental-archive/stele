@@ -34,6 +34,12 @@ type fakeRegistry struct {
 	labelsErr error
 }
 
+// Resolve is unused by the image-facts walk, which is handed a digest
+// and never a tag. It exists so this fake still satisfies the reader
+// interface — a registry seam that can answer "what does this tag name
+// now" is what the continuous publish surface reads (stele#249).
+func (fakeRegistry) Resolve(_, _ string) (string, error) { return "", nil }
+
 func (f fakeRegistry) Index(_, _ string) ([]byte, error) {
 	if f.indexErr != nil {
 		return nil, f.indexErr

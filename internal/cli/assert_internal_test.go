@@ -34,9 +34,19 @@ const (
 
 // scriptedOCI serves one index and one label map for every read.
 type scriptedOCI struct {
-	index    string
-	indexErr error
-	labels   map[string]string
+	index      string
+	indexErr   error
+	labels     map[string]string
+	resolved   string
+	resolveErr error
+}
+
+func (s scriptedOCI) Resolve(_, _ string) (string, error) {
+	if s.resolveErr != nil {
+		return "", s.resolveErr
+	}
+
+	return s.resolved, nil
 }
 
 func (s scriptedOCI) Index(_, _ string) ([]byte, error) {

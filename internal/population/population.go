@@ -44,6 +44,15 @@
 // member inside the coverage that the listing does not show still
 // refuses, because deleted is still deleted.
 //
+// A ROSTER ROW carries one more fact, and it is neither membership
+// nor coverage: WHERE a repository publishes (surfaces.go). It rides
+// here because the roster is already the closed list of repositories
+// and a publish surface is a per-repository fact, and it is walled
+// off from both other vocabularies — it can neither narrow a
+// population nor excuse anything, and the level judge that consumes
+// it receives evidence and never a declaration. The file beside this
+// one says why it had to be declared at all.
+//
 // TWO KINDS of population live here, and they are one law wearing two
 // shapes. A repository population answers "who does this walk cover"
 // against a forge listing. A rebuild-target population (targets.go,
@@ -169,6 +178,15 @@ type Entry struct {
 	// everything it owed, and the run says so by reporting it
 	// unexercised rather than by leaving it out.
 	Visibility *string `json:"visibility,omitempty"`
+	// Surfaces are the publish surfaces this repository publishes on
+	// (surfaces.go). Absent takes the default expression — the release
+	// surface alone — and an empty list declares that this repository
+	// publishes on none this engine can read. It narrows nothing and
+	// no reason is required for it: like visibility, it says where to
+	// look rather than who is asked, and unlike a track exclusion it
+	// is loud, because a surface that yields no publish leaves an
+	// unevaluated rung naming what was sought.
+	Surfaces *[]Surface `json:"surfaces,omitempty"`
 }
 
 // Validate refuses a declaration that cannot mean what it says.
@@ -240,6 +258,12 @@ func (e Entry) validate(i int) error {
 				" against the declared coverage", i)
 	}
 
+	if e.Surfaces != nil {
+		if err := validateSurfaces(*e.Surfaces, fmt.Sprintf("population.repositories[%d]", i)); err != nil {
+			return err
+		}
+	}
+
 	if e.Tracks == nil {
 		return nil
 	}
@@ -306,6 +330,10 @@ type member struct {
 	name string
 	all  bool
 	in   map[string]bool
+	// surfaces is where this member publishes, nil where it declared
+	// nothing — which is not the same as declaring none, and the two
+	// resolve to opposite sets (Set.Surfaces).
+	surfaces *[]Surface
 }
 
 func (m member) bears(t level.Track) bool { return m.all || m.in[t.Key()] }
@@ -611,7 +639,7 @@ func entryFor(d *Declaration, name string) (Entry, bool) {
 // membership turns one entry into the resolved member it declares.
 func membership(e Entry) member {
 	if e.Tracks == nil {
-		return member{name: *e.Repo, all: true}
+		return member{name: *e.Repo, all: true, surfaces: e.Surfaces}
 	}
 
 	in := make(map[string]bool, len(*e.Tracks))
@@ -619,7 +647,7 @@ func membership(e Entry) member {
 		in[name] = true
 	}
 
-	return member{name: *e.Repo, in: in}
+	return member{name: *e.Repo, in: in, surfaces: e.Surfaces}
 }
 
 // roster resolves an organisation against a declared roster, refusing

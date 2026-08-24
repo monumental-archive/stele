@@ -116,6 +116,33 @@ type Subject struct {
 	Verified bool
 }
 
+// PublishSurface is one place this run looked for a publish, and what
+// it sought there and did not find.
+//
+// The KINDS of surface live in the caller, deliberately: this package
+// judges what a publish produced and must not learn where publishes
+// live, or the next surface anyone adds becomes an edit here. What
+// arrives is a name a reader can go and look at, and a list of
+// absences in the caller's own words.
+type PublishSurface struct {
+	// Name is how the surface names itself — enough to send a reader
+	// to the same place this run looked.
+	Name string
+	// Missing is what was sought there and not found, one clause each.
+	// Empty means the surface yielded a publish, and the artifacts it
+	// yielded are among the subjects below.
+	//
+	// One clause per absence rather than one sentence for all of them,
+	// because they are cleared one at a time: a reason that narrows as
+	// a producer publishes more of its evidence tells them what is
+	// left, and a single sentence would go on saying the same thing
+	// until the last of them was fixed.
+	Missing []string
+}
+
+// Reached reports whether this run found a publish on this surface.
+func (s PublishSurface) Reached() bool { return len(s.Missing) == 0 }
+
 // Evidence is everything one run fetched. A nil or empty field means
 // "not reached", which detectors turn into UNDETERMINED rather than
 // into a pass — the difference between looking and not looking is the
@@ -164,7 +191,22 @@ type Evidence struct {
 	// nil when the check could not be performed.
 	SignerRunsTenantCode func(uri, digest string) (bool, error)
 
-	// Inventoried and Uninventoried split the released artifacts by
+	// PublishSurfaces are the places this run went looking for a
+	// publish, and what it did not find at each. A repository publishes
+	// where it publishes — on releases, on a rolling digest, on both,
+	// on neither — and which of those a repository has is a fact about
+	// it that the gather establishes and this package is merely told
+	// (stele#249).
+	//
+	// It reaches no rung and it cannot: a surface with everything found
+	// contributes subjects, which the detectors below judge, and a
+	// surface with something missing contributes only the WORDS for an
+	// unevaluated rung. Nothing here can hold or refute a requirement,
+	// which is what keeps a declaration about where to look from ever
+	// becoming a statement about what is true.
+	PublishSurfaces []PublishSurface
+
+	// Inventoried and Uninventoried split the published artifacts by
 	// whether a published inventory covers them.
 	Inventoried, Uninventoried []string
 	// Findings and Triaged count advisory findings over those
