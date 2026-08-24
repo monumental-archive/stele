@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -16,7 +17,9 @@ import (
 
 	"github.com/monumental-archive/stele/internal/convcommit"
 	"github.com/monumental-archive/stele/internal/derive"
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/gitrepo"
+	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
 // The derivation modes, the dispatch vocabulary.
@@ -34,9 +37,30 @@ var openDeriveGit = func(dir string) (deriveHistory, error) {
 	return gitrepo.Open(dir, notesRefUnused)
 }
 
+// The forge seam for the ONE question this verb asks a network:
+// which release hangs on the previous tag. Asked only when the caller
+// names a repository, so an unflagged run stays the offline
+// derivation it has always been.
+//
+// Concrete, like the claims and facts seams: tests point it at their
+// own server, which exercises the real decode and the real
+// absent-release answer rather than a stub's opinion of them.
+//
+//nolint:gochecknoglobals // test seam, written only by test setup
+var newReleaseClient = func() *gh.Client {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+
+	return gh.New(token)
+}
+
 // deriveHistory is the history a version decision reads. Narrow on
-// purpose: this verb never writes, never networks, and never touches
-// the ledger, and a seam that could is a seam that will.
+// purpose: the decision never writes, never networks, and never
+// touches the ledger, and a seam that could is a seam that will. The
+// one forge read this verb can make is a separate seam above, so no
+// history read can grow into one by accident.
 type deriveHistory interface {
 	Tags(ref string) ([]string, error)
 	AllTags() ([]string, error)
@@ -93,6 +117,7 @@ type deriveArgs struct {
 	silent    string
 	paths     string
 	releaseAs string
+	repo      string
 	zeroX     bool
 }
 
@@ -244,6 +269,13 @@ func parseDeriveArgs(
 	fs.BoolVar(&da.zeroX, "zero-major-bumps-minor", true,
 		"below 1.0.0, raise the minor for a breaking change rather than declaring 1.0.0")
 
+	if mode == deriveVersion {
+		fs.StringVar(&da.repo, "repo", "",
+			"owner/name to ask which release hangs on the previous tag; the previous block reports the "+
+				"release and where its assets live. Omitted, the tag is still reported and the block says "+
+				"plainly that no forge was asked — never that the tag carries nothing")
+	}
+
 	if mode == deriveNotes || mode == deriveReleasePlan {
 		fs.StringVar(&na.groups, "groups", "feat=Added,fix=Fixed,perf=Changed,docs=Documentation",
 			"comma-separated type=Heading pairs, scoped keys like chore(deps)=Deps win over the bare type;"+
@@ -284,6 +316,14 @@ func parseDeriveArgs(
 
 	if da.gitDir == "" {
 		if _, err := fmt.Fprintf(stderr, "stele derive %s: --git-dir is required\n", mode); err != nil {
+			return da, na, bump, plan, exitIO
+		}
+
+		return da, na, bump, plan, exitUsage
+	}
+
+	if da.repo != "" && !strings.Contains(da.repo, "/") {
+		if _, err := fmt.Fprintf(stderr, "stele derive %s: --repo must be owner/name\n", mode); err != nil {
 			return da, na, bump, plan, exitIO
 		}
 
@@ -432,7 +472,61 @@ func runDeriveVersion(da *deriveArgs, out *latch) error {
 		return err
 	}
 
-	return reportVersion(da.prefix, d, out)
+	previous, err := resolvePrevious(da, d.base, out)
+	if err != nil {
+		return err
+	}
+
+	return reportVersion(da.prefix, d, previous, out)
+}
+
+// resolvePrevious states the release this range was measured from,
+// and — when the caller named a repository — what the forge hangs on
+// its tag.
+//
+// The tag half is free: the base resolution already found it. The
+// forge half exists because the alternative is every consumer
+// re-deriving it, which is what the canon's pgrx upgrade derivation
+// did in bash, three assumptions deep, wrong on each of them for an
+// imported repository (.github#762, #780).
+//
+// A forge that answers with an error REFUSES the run rather than
+// reporting no release. The caller asked; a run that swallowed the
+// failure would publish "there is no previous release" as a derived
+// fact when what happened was that nobody could see.
+func resolvePrevious(da *deriveArgs, base derive.Base, out *latch) (*derive.Previous, error) {
+	previous := derive.PreviousOf(base)
+
+	if !previous.Exists || da.repo == "" {
+		return &previous, nil
+	}
+
+	owner, name, _ := strings.Cut(da.repo, "/")
+
+	release, found, err := newReleaseClient().ReleaseByTag(owner, name, previous.Tag)
+	if err != nil {
+		return nil, fmt.Errorf("derive version: the release on %s: %w", previous.Tag, err)
+	}
+
+	previous.ForgeAsked = true
+
+	if !found {
+		out.logf("no release hangs on %s; the previous artifacts are not this tag's", previous.Tag)
+
+		return &previous, nil
+	}
+
+	previous.Release = &derive.ForgeRelease{
+		ID: release.ID, Name: release.Name, URL: release.URL,
+		Assets: make([]derive.ForgeAsset, 0, len(release.Assets)),
+	}
+
+	for _, asset := range release.Assets {
+		previous.Release.Assets = append(previous.Release.Assets,
+			derive.ForgeAsset{Name: asset.Name, URL: asset.URL})
+	}
+
+	return &previous, nil
 }
 
 // readRange lists the commits a release would cover and parses each
@@ -470,7 +564,18 @@ func readRange(history deriveHistory, from, to string, paths []string) ([]convco
 }
 
 // reportVersion renders the decision.
-func reportVersion(prefix string, d *derived, out *latch) error {
+//
+// The previous block is reported FIRST and unconditionally, before
+// the branch on whether anything releases. It describes the
+// derivation's input, not its outcome: which release this range was
+// measured from is the same fact whether or not the range calls for a
+// new one, and a consumer that had to run a release to learn it would
+// be back to guessing.
+func reportVersion(prefix string, d *derived, previous *derive.Previous, out *latch) error {
+	if err := reportPrevious(previous, out); err != nil {
+		return err
+	}
+
 	decision := d.decision
 
 	next, releases := decision.Next()
@@ -498,6 +603,25 @@ func reportVersion(prefix string, d *derived, out *latch) error {
 	out.logf("release=true")
 	out.logf("version=%s", next)
 	out.logf("tag=%s", derive.Tag(prefix, next))
+
+	return nil
+}
+
+// reportPrevious renders the previous block as one line of JSON, the
+// shape `derive facts` established for a value a caller decodes
+// rather than reads.
+//
+// One encoded object rather than a spray of flat keys, because the
+// distinctions it carries are structural: a first release has no
+// version and no tag, and flat keys can only spell that as empty
+// strings — the very thing a consumer would then have to interpret.
+func reportPrevious(previous *derive.Previous, out *latch) error {
+	encoded, err := jsonx.Marshal(previous)
+	if err != nil {
+		return fmt.Errorf("derive version: %w", err)
+	}
+
+	out.logf("previous=%s", encoded)
 
 	return nil
 }

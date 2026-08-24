@@ -123,15 +123,16 @@ func TestLatestTag(t *testing.T) {
 		prefix      string
 		tags        []string
 		wantVersion string
+		wantTag     string
 		wantSkipped []string
 	}{
 		{
 			name:   "workspace namespace ignores component tags",
-			prefix: "v", tags: monorepo, wantVersion: "1.2.3",
+			prefix: "v", tags: monorepo, wantVersion: "1.2.3", wantTag: "v1.2.3",
 		},
 		{
 			name:   "component namespace ignores the workspace and its siblings",
-			prefix: "edtf-core-v", tags: monorepo, wantVersion: "1.1.0",
+			prefix: "edtf-core-v", tags: monorepo, wantVersion: "1.1.0", wantTag: "edtf-core-v1.1.0",
 		},
 		{
 			name:   "a namespace nothing has released is empty, not zero",
@@ -145,11 +146,13 @@ func TestLatestTag(t *testing.T) {
 		// "1.9.0" lexically, and the org has releases past .9.
 		{
 			name:   "ordering is by version, not by string",
-			prefix: "v", tags: []string{"v1.9.0", "v1.10.0", "v1.8.0"}, wantVersion: "1.10.0",
+			prefix: "v", tags: []string{"v1.9.0", "v1.10.0", "v1.8.0"},
+			wantVersion: "1.10.0", wantTag: "v1.10.0",
 		},
 		{
 			name:   "a release outranks its own candidate",
-			prefix: "v", tags: []string{"v1.0.0-rc.1", "v1.0.0", "v1.0.0-rc.2"}, wantVersion: "1.0.0",
+			prefix: "v", tags: []string{"v1.0.0-rc.1", "v1.0.0", "v1.0.0-rc.2"},
+			wantVersion: "1.0.0", wantTag: "v1.0.0",
 		},
 		// monument-legacy, exactly as it is on disk.
 		{
@@ -160,7 +163,7 @@ func TestLatestTag(t *testing.T) {
 		{
 			name:   "debris does not hide a real release",
 			prefix: "v", tags: []string{"v0.9-pre-import", "v1.0.0"},
-			wantVersion: "1.0.0", wantSkipped: []string{"v0.9-pre-import"},
+			wantVersion: "1.0.0", wantTag: "v1.0.0", wantSkipped: []string{"v0.9-pre-import"},
 		},
 		// One namespace's name is another's leading substring: "vault-v"
 		// begins with "v". A sibling's tags are outside the namespace,
@@ -168,7 +171,16 @@ func TestLatestTag(t *testing.T) {
 		{
 			name:   "a sibling namespace sharing the prefix is not debris",
 			prefix: "v", tags: []string{"vault-v1.2.3", "vlatest", "v1.0.0"},
-			wantVersion: "1.0.0",
+			wantVersion: "1.0.0", wantTag: "v1.0.0",
+		},
+		// The tag is REPORTED, not recomposed. edtf published its
+		// extension under a per-crate scheme before the import, and the
+		// build metadata a tag may carry is the case where the two
+		// spellings could part company (stele#250).
+		{
+			name:   "the tag a version was read from travels with it",
+			prefix: "edtf-postgres-v", tags: []string{"v1.2.3", "edtf-postgres-v1.2.3"},
+			wantVersion: "1.2.3", wantTag: "edtf-postgres-v1.2.3",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +195,13 @@ func TestLatestTag(t *testing.T) {
 				t.Errorf("Version = nil, want %s", tc.wantVersion)
 			case got.Version.String() != tc.wantVersion:
 				t.Errorf("Version = %s, want %s", got.Version, tc.wantVersion)
+			}
+
+			// Empty exactly when there is no version: an unreleased
+			// namespace has no tag to name, and naming one would be the
+			// first release inventing its own predecessor.
+			if got.Tag != tc.wantTag {
+				t.Errorf("Tag = %q, want %q", got.Tag, tc.wantTag)
 			}
 
 			if len(got.Skipped) != len(tc.wantSkipped) {
