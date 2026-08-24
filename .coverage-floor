@@ -1,1 +1,14 @@
-90
+# Coverage floor -- DERIVED STATE, not a number to edit (#652).
+#
+# The release machinery re-derives this file at every release:
+# floor = measured - band, and the floor only rises. A release whose
+# measurement falls below floor + band FAILS, loudly; the resolution is
+# tests, or a conscious reset recorded in place of the derivation below
+# (replace the `measured` and `derived` lines with `reset: <reason>`).
+# `coverage:check` refuses a floor that disagrees with this record as
+# drift, and never repairs it.
+#
+# band: 2
+# measured: 95.4
+# derived: coverage:adopt
+93.4

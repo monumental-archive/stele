@@ -5,6 +5,23 @@
 [settings]
 lockfile = true
 
+# Kept whatever else this file loses (canon #700). mise's
+# `[task_config]` governs the file it is written in and layers
+# nowhere, so the belt's own copy covers the belt's task bodies and
+# reaches none of the ones below. The belt does set the same string as
+# mise's default inline shell, which covers the gate and any machine
+# wearing the belt; this line is what makes THIS file true without
+# that layer — a bare clone, or anything that runs `mise run` with no
+# belt in front of it.
+#
+# Not cosmetic. mise's own default is `sh`, which is dash on an Ubuntu
+# runner: `[[ ]]` and `<<<` are syntax errors, and — the quiet half —
+# a failing command inside a pipeline does not fail the task, so a
+# check goes green having not checked. `lint:belt-shell` reds a config
+# that defines tasks and omits this.
+[task_config]
+shell = "bash -euo pipefail -c"
+
 [tools]
 # The toolchain, exact-pinned; GOTOOLCHAIN=local below makes go.mod's
 # `go` directive and this pin agree loudly instead of auto-downloading.
