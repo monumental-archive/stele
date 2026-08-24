@@ -28,9 +28,17 @@ type levelForge struct {
 	files    map[string][]byte
 	released time.Time
 	err      error
+	// listErr is the listing seam refusing ALONE — the credential a
+	// repository's own run holds, which can read that repository and
+	// cannot enumerate the organisation it sits in.
+	listErr error
 }
 
 func (f *levelForge) ListRepos(string) ([]gh.Repo, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+
 	out := make([]gh.Repo, 0, len(f.repos))
 	for _, name := range f.repos {
 		out = append(out, gh.Repo{Name: name})
@@ -805,5 +813,56 @@ func TestLevelBuildWithoutTrustMaterial(t *testing.T) {
 
 	if code := Run([]string{"level", "build", "--repo", "acme/widget"}, &stdout, &stderr); code != exitBlind {
 		t.Errorf("Run = %d, want could-not-judge without trust material", code)
+	}
+}
+
+// TestLevelOrgNamesWhatItCouldNotLookAt (stele#252): the single-track
+// org form over a population whose declared coverage does not reach
+// every member.
+//
+// The member outside the coverage is not folded — it was measured on
+// nothing, and a fold over evidence nobody gathered is not a
+// measurement — but it is counted against the population and named in
+// the document, so the report cannot read as a population-wide answer
+// when it covered less than the population. The declaration decides
+// who is asked; it still reaches no rung.
+func TestLevelOrgNamesWhatItCouldNotLookAt(t *testing.T) {
+	swapLevelSeams(t, &levelForge{repos: []string{"widget"}}, nil)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "assert-policy.json")
+	policy := `{
+	  "schema": 7,
+	  "population": {
+	    "coverage": {"visibility": ["public"]},
+	    "repositories": [
+	      {"repo": "widget"},
+	      {"repo": "vault", "visibility": "private"}
+	    ]
+	  },
+	  "evidence": {
+	    "sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+	    "storeVsaFromVersion": "1.0.0",
+	    "classes": {"go-binary": {"bundles": ["attestations-go-binaries.intoto.jsonl"]}}
+	  }
+	}`
+
+	if err := os.WriteFile(path, []byte(policy), 0o600); err != nil {
+		t.Fatalf("writing the policy: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	Run([]string{"level", "source", "--org", "acme", "--policy", path, "--json"}, &stdout, &stderr)
+
+	for _, want := range []string{"1 repositories", "unexercised:acme/vault", `"size":0,"expected":2`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("the report does not carry %q:\n%s", want, stdout.String())
+		}
+	}
+
+	if !strings.Contains(stderr.String(), "acme/vault: not looked at") {
+		t.Errorf("the run does not say what it could not look at:\n%s", stderr.String())
 	}
 }

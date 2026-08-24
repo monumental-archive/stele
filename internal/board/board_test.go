@@ -317,7 +317,7 @@ func TestBoardCannotBeBuilt(t *testing.T) {
 		//nolint:errcheck,gosec // a DIRECTORY mode, restored so TempDir can clean up
 		t.Cleanup(func() { _ = os.Chmod(repo, 0o750) })
 
-		if _, err := b.Prune(nil); err == nil || !strings.Contains(err.Error(), c.Repo) {
+		if _, err := b.Prune(nil, nil); err == nil || !strings.Contains(err.Error(), c.Repo) {
 			t.Fatalf("Prune = %v, want a refusal naming the directory it could not read", err)
 		}
 	})
@@ -409,7 +409,7 @@ func TestPruneRefusesWhatItCannotRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := board.Board{Dir: dir}.Prune(nil)
+	_, err := board.Board{Dir: dir}.Prune(nil, nil)
 	if err == nil || !strings.Contains(err.Error(), c.String()) {
 		t.Fatalf("Prune = %v, want a refusal naming the cell it could not remove", err)
 	}
@@ -427,7 +427,7 @@ func TestPruneRefusesABoardThatIsNotADirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := (board.Board{Dir: file}).Prune(nil); err == nil {
+	if _, err := (board.Board{Dir: file}).Prune(nil, nil); err == nil {
 		t.Fatal("Prune read a regular file as an empty board")
 	}
 }
@@ -459,7 +459,7 @@ func TestTidyRefusesADirectoryItCannotRemove(t *testing.T) {
 	//nolint:errcheck,gosec // a DIRECTORY mode, restored so TempDir can clean up
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
 
-	if _, err := b.Prune(nil); err == nil || !strings.Contains(err.Error(), c.Repo) {
+	if _, err := b.Prune(nil, nil); err == nil || !strings.Contains(err.Error(), c.Repo) {
 		t.Fatalf("Prune = %v, want a refusal naming the directory it could not remove", err)
 	}
 }
@@ -500,7 +500,7 @@ func TestPrune(t *testing.T) {
 		{Repo: "signer", Track: level.TrackSource},
 	}
 
-	removed, err := b.Prune(keep)
+	removed, err := b.Prune(keep, nil)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestPruneEdges(t *testing.T) {
 
 		b := board.Board{Dir: filepath.Join(t.TempDir(), "absent")}
 
-		removed, err := b.Prune(nil)
+		removed, err := b.Prune(nil, nil)
 		if err != nil || len(removed) != 0 {
 			t.Fatalf("Prune = %v, %v", removed, err)
 		}
@@ -585,7 +585,7 @@ func TestPruneEdges(t *testing.T) {
 
 		b := board.Board{Dir: dir}
 
-		removed, err := b.Prune(nil)
+		removed, err := b.Prune(nil, nil)
 		if err != nil || len(removed) != 0 {
 			t.Fatalf("Prune = %v, %v", removed, err)
 		}
@@ -606,7 +606,7 @@ func TestPruneEdges(t *testing.T) {
 		}
 
 		b := board.Board{Dir: dir}
-		if _, err := b.Prune(nil); err != nil {
+		if _, err := b.Prune(nil, nil); err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
 
@@ -614,4 +614,214 @@ func TestPruneEdges(t *testing.T) {
 			t.Fatalf("Prune deleted a file at the board root: %v", err)
 		}
 	})
+}
+
+// populate publishes one measured cell per name, so a prune has
+// something to be wrong about.
+func populate(t *testing.T, b board.Board, cells ...board.Cell) {
+	t.Helper()
+
+	for _, c := range cells {
+		if _, err := b.Publish(c, measured(t, c.Track)); err != nil {
+			t.Fatalf("Publish %s: %v", c, err)
+		}
+	}
+}
+
+func exists(t *testing.T, dir string, c board.Cell) bool {
+	t.Helper()
+
+	at := paths(dir, c)
+
+	_, rerr := os.Stat(at.report)
+	_, serr := os.Stat(at.shield)
+
+	if rerr == nil && serr == nil {
+		return true
+	}
+
+	if errors.Is(rerr, os.ErrNotExist) && errors.Is(serr, os.ErrNotExist) {
+		return false
+	}
+
+	t.Fatalf("%s is half a cell: %v / %v", c, rerr, serr)
+
+	return false
+}
+
+// TestPruneSpares: the difference between a repository the population
+// no longer holds and one this run could not look at. Both are absent
+// from the cells a run measured, and merging them lets a narrowed
+// enumeration delete a level somebody proved — the never-overwrite law
+// evaded by the back door, because a deleted cell is one no reader can
+// find.
+func TestPruneSpares(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	b := board.Board{Dir: dir}
+
+	var (
+		mine    = board.Cell{Repo: "canon", Track: level.TrackSource}
+		unseen  = board.Cell{Repo: "vault", Track: level.TrackSource}
+		deleted = board.Cell{Repo: "gone", Track: level.TrackBuild}
+	)
+
+	populate(t, b, mine, unseen, deleted)
+
+	removed, err := b.Prune([]board.Cell{mine}, []string{"vault"})
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	if len(removed) != 1 || removed[0] != deleted {
+		t.Fatalf("removed = %v, want the repository the population no longer holds", removed)
+	}
+
+	if !exists(t, dir, unseen) {
+		t.Error("a repository this run could not look at lost the level somebody proved for it")
+	}
+
+	if exists(t, dir, deleted) {
+		t.Error("a repository the population no longer holds kept a cell nobody measured")
+	}
+
+	if !exists(t, dir, mine) {
+		t.Error("a measured cell was pruned")
+	}
+
+	// The spared repository keeps its directory too: tidy is bounded
+	// by the same predicate the prune ran under.
+	if _, err := os.Stat(filepath.Join(dir, "vault")); err != nil {
+		t.Errorf("the spared repository's directory went: %v", err)
+	}
+}
+
+// TestPruneRepo: a run that judged ONE repository answered for that
+// repository and said nothing whatever about anybody else's cells.
+// "Said nothing" must not publish as "removed", which is exactly what
+// a whole-board prune would make it — the board another run maintains
+// would be a board this run just emptied.
+func TestPruneRepo(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	b := board.Board{Dir: dir}
+
+	var (
+		mine      = board.Cell{Repo: "canon", Track: level.TrackSource}
+		stale     = board.Cell{Repo: "canon", Track: level.TrackBuild}
+		neighbour = board.Cell{Repo: "lab", Track: level.TrackSource}
+	)
+
+	populate(t, b, mine, stale, neighbour)
+
+	removed, err := b.PruneRepo("canon", []board.Cell{mine})
+	if err != nil {
+		t.Fatalf("PruneRepo: %v", err)
+	}
+
+	if len(removed) != 1 || removed[0] != stale {
+		t.Fatalf("removed = %v, want the one cell this repository no longer holds", removed)
+	}
+
+	if exists(t, dir, stale) {
+		t.Error("a cell this repository stopped declaring survived its own run")
+	}
+
+	if !exists(t, dir, neighbour) {
+		t.Error("a run over one repository deleted another repository's cell")
+	}
+
+	if !exists(t, dir, mine) {
+		t.Error("a measured cell was pruned")
+	}
+}
+
+// TestPruneRepoEmptiesOnlyItself: a repository that declares no track
+// at all removes its own cells and leaves the board otherwise exactly
+// as it found it — including a neighbour's empty directory, which is
+// not this run's to tidy.
+func TestPruneRepoEmptiesOnlyItself(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	b := board.Board{Dir: dir}
+
+	mine := board.Cell{Repo: "canon", Track: level.TrackSource}
+	populate(t, b, mine, board.Cell{Repo: "lab", Track: level.TrackSource})
+
+	// A neighbour another run emptied but has not tidied.
+	hollow := filepath.Join(dir, "hollow")
+	if err := os.MkdirAll(hollow, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := b.PruneRepo("canon", nil)
+	if err != nil {
+		t.Fatalf("PruneRepo: %v", err)
+	}
+
+	if len(removed) != 1 || removed[0] != mine {
+		t.Fatalf("removed = %v, want this repository's one cell", removed)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "canon")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the emptied repository's own directory survived: %v", err)
+	}
+
+	if _, err := os.Stat(hollow); err != nil {
+		t.Errorf("a run over one repository tidied a directory it did not answer for: %v", err)
+	}
+}
+
+// TestNeverOverwriteHoldsUnderBothDoors: the publish law is untouched
+// by which door prunes. A cell that cannot be judged today never
+// publishes over a level somebody proved yesterday, whether the run
+// judged an organisation or one repository.
+func TestNeverOverwriteHoldsUnderBothDoors(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		prune func(b board.Board, keep []board.Cell) ([]board.Cell, error)
+	}{
+		{
+			name:  "an organisation's run",
+			prune: func(b board.Board, keep []board.Cell) ([]board.Cell, error) { return b.Prune(keep, nil) },
+		},
+		{
+			name:  "one repository's own run",
+			prune: func(b board.Board, keep []board.Cell) ([]board.Cell, error) { return b.PruneRepo("canon", keep) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			b := board.Board{Dir: dir}
+			c := board.Cell{Repo: "canon", Track: level.TrackSource}
+
+			populate(t, b, c)
+
+			proven := read(t, paths(dir, c).shield)
+
+			outcome, err := b.Publish(c, blind(t, c.Track))
+			if err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+
+			if outcome != board.Kept {
+				t.Fatalf("outcome = %s, want the proven judgment kept", outcome)
+			}
+
+			if _, err := tc.prune(b, []board.Cell{c}); err != nil {
+				t.Fatalf("prune: %v", err)
+			}
+
+			if got := read(t, paths(dir, c).shield); got != proven {
+				t.Errorf("the published judgment changed:\n got %s\nwant %s", got, proven)
+			}
+		})
+	}
 }

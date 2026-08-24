@@ -637,7 +637,7 @@ func TestPopulationFoldsToItsWeakest(t *testing.T) {
 	weak.Repo = "weak"
 	weak.Subjects[0].Cert.RunnerEnvironment = "self-hosted"
 
-	a := level.AssessPopulation(level.TrackBuild, []*level.Evidence{strong, weak}, epoch)
+	a := level.AssessPopulation(level.TrackBuild, []*level.Evidence{strong, weak}, nil, epoch)
 
 	if got := a.Level(); got != "SLSA_BUILD_LEVEL_1" {
 		t.Errorf("level = %q, want the weakest member's — a population is not at a level because most of it is", got)
@@ -661,7 +661,7 @@ func TestPopulationOfOneAgreesWithTheSingleMeasurement(t *testing.T) {
 	t.Parallel()
 
 	one := level.Assess(level.TrackBuild, buildEvidence())
-	folded := level.AssessPopulation(level.TrackBuild, []*level.Evidence{buildEvidence()}, epoch)
+	folded := level.AssessPopulation(level.TrackBuild, []*level.Evidence{buildEvidence()}, nil, epoch)
 
 	if one.Level() != folded.Level() {
 		t.Errorf("single = %q, folded = %q — folding one measurement must be that measurement",
@@ -674,7 +674,7 @@ func TestPopulationOfOneAgreesWithTheSingleMeasurement(t *testing.T) {
 func TestEmptyPopulationCannotBeJudged(t *testing.T) {
 	t.Parallel()
 
-	a := level.AssessPopulation(level.TrackBuild, nil, epoch)
+	a := level.AssessPopulation(level.TrackBuild, nil, nil, epoch)
 	if got := a.Report().Verdict(); got != report.VerdictCannotJudge {
 		t.Errorf("verdict = %q, want CANNOT_JUDGE for an empty population", got)
 	}
@@ -692,7 +692,7 @@ func TestPopulationBlindnessIsNotAPass(t *testing.T) {
 	unseen.Repo = "unseen"
 	unseen.Subjects = nil
 
-	a := level.AssessPopulation(level.TrackBuild, []*level.Evidence{seen, unseen}, epoch)
+	a := level.AssessPopulation(level.TrackBuild, []*level.Evidence{seen, unseen}, nil, epoch)
 	if got := a.Report().Verdict(); got != report.VerdictCannotJudge {
 		t.Errorf("verdict = %q, want CANNOT_JUDGE — a member nobody could measure is not a member that passed", got)
 	}
@@ -1016,3 +1016,72 @@ type strayDetector struct{}
 func (strayDetector) For() string { return "source/not-in-the-catalogue" }
 
 func (strayDetector) Detect(*level.Evidence) level.Outcome { return level.Established("never reached") }
+
+// TestPopulationUnlooked (stele#252): a member the caller could not
+// look at is named, counted against the population, and judged on
+// nothing.
+//
+// The three properties are one property. Counted, so the report's own
+// coverage law refuses to call the fold a population-wide answer;
+// named, so a reader learns which repository went unmeasured rather
+// than that a number moved; judged on nothing, so it can neither lift
+// nor lower anybody's rung — a declaration decides who is asked and
+// never what the answer is.
+func TestPopulationUnlooked(t *testing.T) {
+	t.Parallel()
+
+	strong := buildEvidence()
+	strong.Repo = "strong"
+
+	a := level.AssessPopulation(level.TrackBuild, []*level.Evidence{strong}, []string{"acme/vault"}, epoch)
+
+	if got := a.Report().Verdict(); got != report.VerdictCannotJudge {
+		t.Errorf("verdict = %q, want CANNOT_JUDGE — a fold that covered less than the population is not"+
+			" the population's answer", got)
+	}
+
+	// The rung the member established is still the rung it
+	// established: what the unlooked member changes is the coverage
+	// claim over the fold, never a determination inside it.
+	measured := level.AssessPopulation(level.TrackBuild, []*level.Evidence{strong}, nil, epoch)
+	if a.Level() != measured.Level() {
+		t.Errorf("level = %q with an unlooked member, %q without — no declaration reaches a rung",
+			a.Level(), measured.Level())
+	}
+
+	var buf strings.Builder
+	if err := a.Report().Encode(&buf); err != nil {
+		t.Fatalf("Encode = %v", err)
+	}
+
+	for _, want := range []string{
+		"unexercised:acme/vault", "not looked at by this run", `"size":1,"expected":2`,
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("the report does not carry %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+// TestEmptyPopulationNamesWhatItCouldNotSee: a run whose every member
+// was outside its enumeration is already CANNOT_JUDGE over nobody, and
+// the one thing it still owes a reader is which repositories those
+// were.
+func TestEmptyPopulationNamesWhatItCouldNotSee(t *testing.T) {
+	t.Parallel()
+
+	a := level.AssessPopulation(level.TrackBuild, nil, []string{"acme/vault"}, epoch)
+
+	if got := a.Report().Verdict(); got != report.VerdictCannotJudge {
+		t.Errorf("verdict = %q, want CANNOT_JUDGE", got)
+	}
+
+	var buf strings.Builder
+	if err := a.Report().Encode(&buf); err != nil {
+		t.Fatalf("Encode = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "unexercised:acme/vault") {
+		t.Errorf("the report does not name what nobody looked at:\n%s", buf.String())
+	}
+}

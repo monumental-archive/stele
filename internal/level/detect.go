@@ -457,14 +457,29 @@ func Unenumerated(t Track, subject string, cause error, now time.Time) *Assessme
 // function is a subject list, and every subject on it is judged the
 // same way — no declaration reaches a rung, because none reaches this
 // package at all.
-func AssessPopulation(t Track, members []*Evidence, now time.Time) *Assessment {
+//
+// Unlooked names the population members the caller could not look at
+// (stele#252). They are the same class of input as the members — a
+// list of names, arriving already enumerated — and they reach no rung
+// either: they are never judged, never folded, and cannot lift or
+// lower anybody's level. What they do is size the population they
+// belong to, so the report's own coverage law seals CANNOT_JUDGE over
+// a fold that covered less than the whole. Dropping them instead
+// would publish the fold of the members that happened to arrive as
+// though it were the population's answer, which is the one reading a
+// run that could not see everything must never produce.
+func AssessPopulation(t Track, members []*Evidence, unlooked []string, now time.Time) *Assessment {
 	if len(members) == 0 {
 		lad := NewLadder(t)
 		lad.Blind(1, "the population is empty, so there is nothing to measure")
 
+		// InScope stays at one unanswerable question rather than
+		// growing with the unlooked: this is already CANNOT_JUDGE over
+		// a population of nobody, and the names are what a reader
+		// needs from here.
 		return Seal(t, lad, &Inputs{
 			Subject: "(empty population)", InScope: 1, Determined: 0,
-			PopulationDetail: populationDetail, Now: now,
+			PopulationDetail: populationDetail, ExtraFacts: unexercisedFacts(unlooked), Now: now,
 		})
 	}
 
@@ -515,13 +530,29 @@ func AssessPopulation(t Track, members []*Evidence, now time.Time) *Assessment {
 	return Seal(t, lad, &Inputs{
 		Subject:          fmt.Sprintf("%d repositories", len(members)),
 		Weakest:          weakest,
-		InScope:          len(members),
+		InScope:          len(members) + len(unlooked),
 		Determined:       determined,
 		PopulationDetail: populationDetail,
 		Findings:         findings,
-		ExtraFacts:       facts,
+		ExtraFacts:       append(facts, unexercisedFacts(unlooked)...),
 		Now:              now,
 	})
+}
+
+// unexercisedFacts names each population member this run did not look
+// at. Names, never a count: the count is already in the population,
+// and a count cannot say which repository went unlooked-at.
+func unexercisedFacts(unlooked []string) []report.Fact {
+	out := make([]report.Fact, 0, len(unlooked))
+
+	for _, name := range unlooked {
+		out = append(out, report.Fact{
+			Name:  "unexercised:" + name,
+			Value: "in the population, not looked at by this run",
+		})
+	}
+
+	return out
 }
 
 // record writes one folded rung, saying how many members it covers.

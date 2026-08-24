@@ -28,6 +28,22 @@
 // checked against the listing in both directions, by NAME. A count
 // cannot say which repository went missing; this does.
 //
+// COVERAGE is what that reconciliation could not say on its own
+// (stele#252). "The listing is complete and something is missing from
+// it" and "the listing was never going to show this" are different
+// facts about the same silence, and a reconciliation that cannot tell
+// them apart is one revoked scope away from refusing for a reason
+// that is not true — with a failure indistinguishable from the real
+// one it exists to catch. So the organisation declares what its
+// enumeration covers, and a declared member outside that coverage is
+// UNEXERCISED: named, counted against the declaration, and never a
+// member of the resolved set. What the declaration can do is bounded
+// in one direction only — it moves an unseen DECLARED member from
+// refusal to loud, and it can never make anything read as clean. An
+// undeclared repository the listing shows still refuses; a declared
+// member inside the coverage that the listing does not show still
+// refuses, because deleted is still deleted.
+//
 // TWO KINDS of population live here, and they are one law wearing two
 // shapes. A repository population answers "who does this walk cover"
 // against a forge listing. A rebuild-target population (targets.go,
@@ -44,6 +60,7 @@ package population
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -61,11 +78,68 @@ import (
 // stranger gets with no configuration at all; declaring this object
 // replaces it with a roster, and a roster is closed.
 type Declaration struct {
+	// Coverage is what this organisation's enumeration can see.
+	// Absent, the enumeration covers every repository — which is what
+	// a run holding a credential over the whole organisation has, and
+	// what a stranger with one public repository has too.
+	Coverage *Coverage `json:"coverage,omitempty"`
 	// Repositories is the roster. Every repository the listing shows
 	// that the default predicate would admit must appear here, and
 	// every entry here must appear in the listing — the reconciliation
-	// runs both ways.
+	// runs both ways, except where the coverage says the listing was
+	// never going to show it.
 	Repositories []Entry `json:"repositories"`
+}
+
+// Coverage is the organisation's statement of which repositories its
+// enumeration can see at all.
+//
+// It is declared rather than detected, and it is stated as VISIBILITY
+// rather than as anything about a credential. Which repositories a
+// token may list is a fact about one forge's authorization model, and
+// a tool that read one would be judging the world from one platform's
+// vocabulary; which repositories are public is a fact the
+// organisation knows about itself and can write down. A forge whose
+// visibilities are spelled some other way needs no change here, which
+// is the test this section had to pass.
+type Coverage struct {
+	// Visibility are the repository visibilities the enumeration
+	// covers, spelled as the forge spells them and compared as
+	// written. The values are never judged: what a visibility IS
+	// belongs to the platform, and a tool holding a vocabulary of them
+	// would refuse an adopter whose forge names them differently.
+	Visibility *[]string `json:"visibility"`
+}
+
+func (c *Coverage) validate() error {
+	if c.Visibility == nil {
+		return errors.New(
+			"population.coverage.visibility is absent — a coverage that names no visibility says nothing;" +
+				" omit the section to declare that the enumeration covers everything")
+	}
+
+	if len(*c.Visibility) == 0 {
+		return errors.New(
+			"population.coverage.visibility is empty — an enumeration covering nothing could show nothing," +
+				" and every declared member would go unexercised; omit the section to cover everything")
+	}
+
+	seen := map[string]bool{}
+
+	for i, v := range *c.Visibility {
+		if v == "" {
+			return fmt.Errorf("population.coverage.visibility[%d] is empty", i)
+		}
+
+		if seen[v] {
+			return fmt.Errorf(
+				"population.coverage.visibility[%d] names %q twice — what an enumeration covers is a set", i, v)
+		}
+
+		seen[v] = true
+	}
+
+	return nil
 }
 
 // Entry is one repository's declared membership.
@@ -87,6 +161,14 @@ type Entry struct {
 	// wrote a reason for is indistinguishable from a mistake, and this
 	// is the one field that tells a later reader which it was.
 	Reason *string `json:"reason,omitempty"`
+	// Visibility is what this repository IS, in the forge's own
+	// spelling. It is read against the declared coverage and nowhere
+	// else: absent means this repository is inside whatever the
+	// enumeration covers, and no reason is required for it because it
+	// narrows nothing — a repository outside the coverage still owes
+	// everything it owed, and the run says so by reporting it
+	// unexercised rather than by leaving it out.
+	Visibility *string `json:"visibility,omitempty"`
 }
 
 // Validate refuses a declaration that cannot mean what it says.
@@ -99,6 +181,12 @@ func (d *Declaration) Validate() error {
 		return errors.New(
 			"population.repositories is empty — a declared population of nothing cannot be reconciled" +
 				" against any listing; omit the section to take the default predicate")
+	}
+
+	if d.Coverage != nil {
+		if err := d.Coverage.validate(); err != nil {
+			return err
+		}
 	}
 
 	seen := map[string]bool{}
@@ -119,6 +207,22 @@ func (d *Declaration) Validate() error {
 	return nil
 }
 
+// covers reports whether a declared repository is one this
+// enumeration could have shown.
+//
+// Absent coverage covers everything, and an entry that declares no
+// visibility is inside whatever coverage there is. Both defaults lean
+// the same way on purpose: an organisation that says nothing gets
+// today's refusal, which is the loud direction, and the only way to
+// reach the quieter reading is to state the fact that makes it true.
+func (d *Declaration) covers(e Entry) bool {
+	if d.Coverage == nil || e.Visibility == nil {
+		return true
+	}
+
+	return slices.Contains(*d.Coverage.Visibility, *e.Visibility)
+}
+
 func (e Entry) validate(i int) error {
 	if e.Repo == nil || *e.Repo == "" {
 		return fmt.Errorf("population.repositories[%d].repo is absent or empty", i)
@@ -128,6 +232,12 @@ func (e Entry) validate(i int) error {
 		return fmt.Errorf(
 			"population.repositories[%d].repo is %q — name the repository alone;"+
 				" the owner is the population's, declared once", i, *e.Repo)
+	}
+
+	if e.Visibility != nil && *e.Visibility == "" {
+		return fmt.Errorf(
+			"population.repositories[%d].visibility is empty — a visibility with no name cannot be read"+
+				" against the declared coverage", i)
 	}
 
 	if e.Tracks == nil {
@@ -205,10 +315,11 @@ func (m member) bears(t level.Track) bool { return m.all || m.in[t.Key()] }
 // set, never the means to enumerate one, so a second population is
 // unrepresentable rather than merely discouraged.
 type Set struct {
-	owner    string
-	subject  string
-	declared bool
-	members  []member
+	owner       string
+	subject     string
+	declared    bool
+	members     []member
+	unexercised []member
 }
 
 // Owner is the account every member sits under.
@@ -311,11 +422,62 @@ func (s *Set) Roster() []string {
 	return out
 }
 
+// UnexercisedMembers are the declared repositories that bear evidence
+// on one track and sit OUTSIDE the declared enumeration coverage, in
+// listing order — the members this run could not look at.
+//
+// Its own door, beside Members, and the two never merge: a member is
+// something this run judged, and an unexercised repository is one it
+// was never going to see. Names, never a count — a count cannot say
+// which repository went unlooked-at, and that repository is the whole
+// statement. A caller with no vocabulary for the answer must refuse
+// rather than measure what happened to arrive; what it may never do
+// is read the shorter list as the population.
+func (s *Set) UnexercisedMembers(t level.Track) []string {
+	out := make([]string, 0, len(s.unexercised))
+
+	for _, m := range s.unexercised {
+		if m.bears(t) {
+			out = append(out, m.name)
+		}
+	}
+
+	return out
+}
+
+// UnexercisedRoster is every declared repository outside the coverage,
+// in listing order, whatever any of them bears evidence on.
+//
+// Its own door beside Roster for the reason Roster has one: a walk
+// that asks no track question reads past exclusions, so a repository
+// declared to bear no evidence anywhere is still one such a walk did
+// not look at. This is also the door a board opens — a cell of a
+// repository this run could not see is not a cell the population
+// stopped holding, and the difference decides whether it is pruned or
+// left standing.
+func (s *Set) UnexercisedRoster() []string {
+	out := make([]string, 0, len(s.unexercised))
+
+	for _, m := range s.unexercised {
+		out = append(out, m.name)
+	}
+
+	return out
+}
+
 // Population is the coverage claim a walk over one track seals with.
 // A declared population says so — provenance travels with the count,
 // because "what a credential happened to show" and "the population
 // the organisation declared" are different claims about the same
 // number (docs/report-schema.md).
+//
+// A member outside the declared enumeration coverage is counted
+// against the declaration and not into the walk, so the report's own
+// coverage law seals CANNOT_JUDGE without this package restating it —
+// the same shape the rebuild-target population takes for a declared
+// target no release could account for (targets.go). Unexercised is
+// not clean and it is not divergence: it is a walk that could not
+// look, said in the vocabulary a reader already has.
 func (s *Set) Population(t level.Track) report.Population {
 	n := len(s.bearers(t))
 	detail := "repositories in the " + t.Key() + " population"
@@ -324,7 +486,12 @@ func (s *Set) Population(t level.Track) report.Population {
 		return report.PopulationFromListing(n, detail)
 	}
 
-	return report.PopulationAgainstDeclared(n, n, detail)
+	unlooked := s.UnexercisedMembers(t)
+	if len(unlooked) > 0 {
+		detail += " (" + strings.Join(unlooked, " ") + " outside the declared enumeration coverage)"
+	}
+
+	return report.PopulationAgainstDeclared(n, n+len(unlooked), detail)
 }
 
 // bearers is the membership filter both public readers share, so the
@@ -465,6 +632,14 @@ func membership(e Entry) member {
 // cannot see it or a roster nobody updated when it was archived or
 // deleted; both mean this run does not know its own population, and a
 // run that does not know its population cannot judge one.
+//
+// The declared coverage is the one thing that moves an entry off that
+// second direction, and it moves it exactly one step: to unexercised,
+// which is loud and is not a member. It never reaches the first
+// direction — a listed repository nobody declared is undeclared
+// whatever the coverage says, because a coverage statement is about
+// what an enumeration can SEE and says nothing about what an
+// organisation has declared.
 func (s Scope) roster(set *Set, listed []gh.Repo, d *Declaration) (*Set, error) {
 	var undeclared []string
 
@@ -488,9 +663,17 @@ func (s Scope) roster(set *Set, listed []gh.Repo, d *Declaration) (*Set, error) 
 	var unlisted []string
 
 	for _, e := range d.Repositories {
-		if !matched[*e.Repo] {
-			unlisted = append(unlisted, *e.Repo)
+		if matched[*e.Repo] {
+			continue
 		}
+
+		if !d.covers(e) {
+			set.unexercised = append(set.unexercised, membership(e))
+
+			continue
+		}
+
+		unlisted = append(unlisted, *e.Repo)
 	}
 
 	if len(undeclared) == 0 && len(unlisted) == 0 {

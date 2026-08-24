@@ -727,3 +727,377 @@ func sealed(t *testing.T, pop report.Population) string {
 
 	return buf.String()
 }
+
+// TestCoverageValidate: a coverage declaration that cannot mean what
+// it says never reaches a reconciliation. Every branch is a guard
+// that fires the day an organisation edits this section and never
+// again, which is exactly the code a table has to carry.
+func TestCoverageValidate(t *testing.T) {
+	t.Parallel()
+
+	roster := []population.Entry{{Repo: new("canon")}}
+
+	for _, tc := range []struct {
+		name string
+		decl *population.Declaration
+		want string
+	}{
+		{
+			name: "no coverage at all is the whole listing, not an error",
+			decl: &population.Declaration{Repositories: roster},
+		},
+		{
+			name: "a coverage that names no visibility",
+			decl: &population.Declaration{
+				Coverage: &population.Coverage{}, Repositories: roster,
+			},
+			want: "population.coverage.visibility is absent",
+		},
+		{
+			name: "an enumeration covering nothing would unexercise everybody",
+			decl: &population.Declaration{
+				Coverage: &population.Coverage{Visibility: new([]string{})}, Repositories: roster,
+			},
+			want: "population.coverage.visibility is empty",
+		},
+		{
+			name: "a visibility with no name",
+			decl: &population.Declaration{
+				Coverage: &population.Coverage{Visibility: new([]string{"public", ""})}, Repositories: roster,
+			},
+			want: "population.coverage.visibility[1] is empty",
+		},
+		{
+			name: "what an enumeration covers is a set",
+			decl: &population.Declaration{
+				Coverage:     &population.Coverage{Visibility: new([]string{"public", "public"})},
+				Repositories: roster,
+			},
+			want: `visibility[1] names "public" twice`,
+		},
+		{
+			name: "a repository whose visibility has no name cannot be read against the coverage",
+			decl: &population.Declaration{
+				Coverage:     &population.Coverage{Visibility: new([]string{"public"})},
+				Repositories: []population.Entry{{Repo: new("canon"), Visibility: new("")}},
+			},
+			want: "repositories[0].visibility is empty",
+		},
+		{
+			name: "a visibility declared where nothing narrows the enumeration is inert, not wrong",
+			decl: &population.Declaration{
+				Repositories: []population.Entry{{Repo: new("canon"), Visibility: new("private")}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.decl.Validate()
+
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Validate = %v, want it accepted", err)
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate = %v, want it to say %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// publicOnly is the adopter this issue was written about: a
+// credential that lists public repositories, and a roster that also
+// names a private member.
+func publicOnly(entries ...population.Entry) *population.Declaration {
+	return &population.Declaration{
+		Coverage:     &population.Coverage{Visibility: new([]string{"public"})},
+		Repositories: entries,
+	}
+}
+
+// TestDeclaredEnumerationCoverage: the four directions, in one table,
+// because the whole value of the declaration is which of them it
+// moves and which it leaves exactly where they were. It may take an
+// unseen DECLARED member from refusal to loud-but-unexercised, and
+// that is all it may ever do — nothing here can make anything read as
+// clean, which is the property that keeps a deleted repository from
+// hiding behind a coverage statement.
+func TestDeclaredEnumerationCoverage(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		repos       []gh.Repo
+		decl        *population.Declaration
+		refuses     []string
+		members     []string
+		unexercised []string
+	}{
+		{
+			name:  "an undeclared repository the listing shows still refuses",
+			repos: []gh.Repo{{Name: "canon"}, {Name: "newcomer"}},
+			decl: publicOnly(
+				population.Entry{Repo: new("canon")},
+				population.Entry{Repo: new("vault"), Visibility: new("private")},
+			),
+			refuses: []string{"the listing shows newcomer", "declare each"},
+		},
+		{
+			name:  "a declared member INSIDE the coverage the listing does not show still refuses",
+			repos: []gh.Repo{{Name: "canon"}},
+			decl: publicOnly(
+				population.Entry{Repo: new("canon")},
+				population.Entry{Repo: new("lab"), Visibility: new("public")},
+			),
+			refuses: []string{"names lab", "unchecked, not clean"},
+		},
+		{
+			name:  "a declared member OUTSIDE the coverage is unexercised, never divergent",
+			repos: []gh.Repo{{Name: "canon"}},
+			decl: publicOnly(
+				population.Entry{Repo: new("canon")},
+				population.Entry{Repo: new("vault"), Visibility: new("private")},
+			),
+			members:     []string{"canon"},
+			unexercised: []string{"vault"},
+		},
+		{
+			name:  "a declared member the listing shows reconciles",
+			repos: []gh.Repo{{Name: "canon"}, {Name: "lab"}},
+			decl: publicOnly(
+				population.Entry{Repo: new("canon")},
+				population.Entry{Repo: new("lab")},
+			),
+			members: []string{"canon", "lab"},
+		},
+		{
+			name:  "a member the coverage did not promise but the listing showed is measured",
+			repos: []gh.Repo{{Name: "canon"}, {Name: "vault"}},
+			decl: publicOnly(
+				population.Entry{Repo: new("canon")},
+				population.Entry{Repo: new("vault"), Visibility: new("private")},
+			),
+			members: []string{"canon", "vault"},
+		},
+		{
+			name:  "a visibility nobody declared coverage for changes nothing",
+			repos: []gh.Repo{{Name: "canon"}},
+			decl: &population.Declaration{Repositories: []population.Entry{
+				{Repo: new("canon")},
+				{Repo: new("vault"), Visibility: new("private")},
+			}},
+			refuses: []string{"names vault", "unchecked, not clean"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			set, err := population.Scope{Org: "acme"}.Resolve(lister{repos: tc.repos}, tc.decl)
+
+			if len(tc.refuses) > 0 {
+				if err == nil {
+					t.Fatalf("Resolve reconciled %v — a run that does not know its population cannot judge one",
+						set.Roster())
+				}
+
+				for _, want := range tc.refuses {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("Resolve = %v, want it to name %q", err, want)
+					}
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Resolve = %v, want a reconciled population", err)
+			}
+
+			if got := set.Roster(); !slices.Equal(got, tc.members) {
+				t.Errorf("Roster = %v, want %v", got, tc.members)
+			}
+
+			if got := set.UnexercisedRoster(); !slices.Equal(got, tc.unexercised) {
+				t.Errorf("UnexercisedRoster = %v, want %v", got, tc.unexercised)
+			}
+		})
+	}
+}
+
+// TestUnexercisedDoors: an unexercised repository answers the same two
+// questions a member does, and the two answers differ for the reason
+// Members and Roster differ. A repository declared to bear evidence
+// nowhere is invisible to a track walk whether or not anybody could
+// see it — an exclusion produces nothing, and "nothing" cannot be
+// made louder by a coverage statement — while a walk that asks no
+// track question reads past the exclusion and is owed its name.
+func TestUnexercisedDoors(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		entry       population.Entry
+		track       level.Track
+		unexercised []string
+		sealed      string
+	}{
+		{
+			name: "a member outside the coverage bearing everything is unexercised on every track",
+			entry: population.Entry{
+				Repo: new("vault"), Visibility: new("private"),
+			},
+			track:       level.TrackBuild,
+			unexercised: []string{"vault"},
+			sealed:      `"size":1,"expected":2,"source":"declared"`,
+		},
+		{
+			name: "a member outside the coverage bearing one track is unexercised on that track",
+			entry: population.Entry{
+				Repo: new("vault"), Visibility: new("private"),
+				Tracks: new([]string{"source"}), Reason: new("publishes no releases"),
+			},
+			track:       level.TrackSource,
+			unexercised: []string{"vault"},
+			sealed:      `"size":1,"expected":2,"source":"declared"`,
+		},
+		{
+			name: "and is invisible on the tracks it does not bear",
+			entry: population.Entry{
+				Repo: new("vault"), Visibility: new("private"),
+				Tracks: new([]string{"source"}), Reason: new("publishes no releases"),
+			},
+			track:  level.TrackBuild,
+			sealed: `"size":1,"expected":1,"source":"declared"`,
+		},
+		{
+			name: "a member excluded from every track is unexercised nowhere and rostered anyway",
+			entry: population.Entry{
+				Repo: new("vault"), Visibility: new("private"),
+				Tracks: new([]string{}), Reason: new("the product site; it bears no evidence"),
+			},
+			track:  level.TrackBuild,
+			sealed: `"size":1,"expected":1,"source":"declared"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			set, err := population.Scope{Org: "acme"}.Resolve(
+				lister{repos: []gh.Repo{{Name: "canon"}}},
+				publicOnly(population.Entry{Repo: new("canon")}, tc.entry))
+			if err != nil {
+				t.Fatalf("Resolve = %v, want a reconciled population", err)
+			}
+
+			if got := set.UnexercisedMembers(tc.track); !slices.Equal(got, tc.unexercised) {
+				t.Errorf("UnexercisedMembers(%s) = %v, want %v", tc.track.Key(), got, tc.unexercised)
+			}
+
+			// The roster door answers for every one of them, whatever
+			// any of them bears: it is what a board opens to learn
+			// whose cells it must not touch.
+			if got := set.UnexercisedRoster(); !slices.Equal(got, []string{"vault"}) {
+				t.Errorf("UnexercisedRoster = %v, want the declared member nobody could see", got)
+			}
+
+			doc := sealed(t, set.Population(tc.track))
+			if !strings.Contains(doc, tc.sealed) {
+				t.Errorf("sealed population = %s, want %s", doc, tc.sealed)
+			}
+
+			if len(tc.unexercised) > 0 && !strings.Contains(doc, "vault outside the declared enumeration coverage") {
+				t.Errorf("sealed population = %s, want it to name the repository nobody looked at", doc)
+			}
+		})
+	}
+}
+
+// TestUnexercisedSealsCannotJudge: the whole point of counting an
+// unexercised member against the declaration. The report's own
+// coverage law reads the shortfall and refuses to call the walk
+// clean, so this package states the fact once and restates the
+// consequence nowhere.
+func TestUnexercisedSealsCannotJudge(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		decl *population.Declaration
+		want report.Verdict
+	}{
+		{
+			name: "a member nobody could look at cannot be part of a clean walk",
+			decl: publicOnly(
+				population.Entry{Repo: new("canon")},
+				population.Entry{Repo: new("vault"), Visibility: new("private")},
+			),
+			want: report.VerdictCannotJudge,
+		},
+		{
+			name: "and a population nobody was hidden from still judges",
+			decl: publicOnly(population.Entry{Repo: new("canon")}),
+			want: report.VerdictPass,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			set, err := population.Scope{Org: "acme"}.Resolve(lister{repos: []gh.Repo{{Name: "canon"}}}, tc.decl)
+			if err != nil {
+				t.Fatalf("Resolve = %v, want a reconciled population", err)
+			}
+
+			rep := report.Seal("t", "acme", set.Population(level.TrackBuild), report.NewJournal(),
+				report.NoCanary(), report.NoJudgedSet())
+			if rep.Verdict() != tc.want {
+				t.Errorf("verdict = %s, want %s", rep.Verdict(), tc.want)
+			}
+		})
+	}
+}
+
+// TestCoverageAbsentChangesNothing: the org-wide mode with no
+// coverage declared is the behaviour that shipped, to the byte. The
+// single-repository scope reads no coverage at all — it enumerates
+// nothing, so there is nothing for a coverage statement to be about.
+func TestCoverageAbsentChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	roster := []population.Entry{{Repo: new("canon")}, {Repo: new("lab")}}
+
+	set, err := population.Scope{Org: "acme"}.Resolve(
+		lister{repos: []gh.Repo{{Name: "canon"}, {Name: "lab"}}},
+		&population.Declaration{Repositories: roster})
+	if err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+
+	if got := set.UnexercisedRoster(); len(got) != 0 {
+		t.Errorf("UnexercisedRoster = %v, want nothing where no coverage was declared", got)
+	}
+
+	if got := sealed(t, set.Population(level.TrackBuild)); !strings.Contains(got, `"size":2,"expected":2`) {
+		t.Errorf("sealed population = %s, want the declared count unchanged", got)
+	}
+
+	single, err := population.Scope{Repo: "acme/vault"}.Resolve(nil, publicOnly(
+		population.Entry{Repo: new("canon")},
+		population.Entry{Repo: new("vault"), Visibility: new("private")},
+	))
+	if err != nil {
+		t.Fatalf("Resolve = %v, want the one repository the caller named", err)
+	}
+
+	if got := single.Roster(); !slices.Equal(got, []string{"vault"}) {
+		t.Errorf("Roster = %v, want the repository the caller named, coverage or no coverage", got)
+	}
+
+	if got := single.UnexercisedRoster(); len(got) != 0 {
+		t.Errorf("UnexercisedRoster = %v, want nothing: a repository judging itself always looked", got)
+	}
+}
