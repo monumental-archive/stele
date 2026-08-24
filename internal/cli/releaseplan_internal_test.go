@@ -288,3 +288,116 @@ func TestReleasePlanSubjectMustNameTheVersion(t *testing.T) {
 		t.Errorf("stderr = %q, want it to name the missing token", stderr)
 	}
 }
+
+// changelogRefusal is one measured shape a changelog can be in that
+// the prepare leg refuses (stele#261): the file's content, or its
+// absence, and the message both legs must carry.
+type changelogRefusal struct {
+	name    string
+	content string
+	absent  bool
+	detail  func(path string) string
+}
+
+// refuse runs one leg against this shape and returns its progress
+// stream with the tree's path elided, so the two legs' refusals
+// compare directly.
+func (tc changelogRefusal) refuse(t *testing.T, prepare bool) string {
+	t.Helper()
+
+	dir := planTree(t, "0.9.0")
+	path := filepath.Join(dir, "CHANGELOG.md")
+
+	if tc.absent {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{"--changelog", "CHANGELOG.md"}
+	if prepare {
+		args = append(args, "--prepare")
+	}
+
+	code, plan, stderr := runPlan(t, dir, bumpHistory(), args...)
+
+	switch {
+	case code != exitRefused:
+		t.Fatalf("--prepare=%t = %d, want %d\nstderr: %s", prepare, code, exitRefused, stderr)
+	case plan != nil:
+		t.Errorf("--prepare=%t emitted a plan over a splice it refuses: %+v", prepare, plan)
+	case !strings.Contains(stderr, tc.detail(path)):
+		t.Errorf("--prepare=%t stderr = %q, want it to carry %q", prepare, stderr, tc.detail(path))
+	// A refused splice leaves the mirrors alone: they are the evidence
+	// of what was last released, and rewriting them on the way to a
+	// refusal destroys it.
+	case !strings.Contains(readFile(t, filepath.Join(dir, "Cargo.toml")), `version = "0.9.0"`):
+		t.Errorf("--prepare=%t prepared the tree it refused", prepare)
+	}
+
+	return strings.ReplaceAll(stderr, dir, "<tree>")
+}
+
+// The changelog refusals must be reachable WITHOUT --prepare
+// (stele#261). A gate runs the plain derive; a splice only the prepare
+// leg judges is a release that burns on main, which is the most
+// expensive place to learn it. Both measured shapes, both legs, one
+// message and one exit — and no document claiming an edit to a
+// changelog state the prepare leg would refuse.
+func TestReleasePlanRefusesTheChangelogWithoutPrepare(t *testing.T) {
+	for _, tc := range []changelogRefusal{
+		{
+			name: "a changelog the tree does not have", absent: true,
+			detail: func(path string) string {
+				return "derive notes: reading " + path + ": open " + path + ": no such file or directory"
+			},
+		},
+		{
+			name:    "an h2 whose prose merely names the version",
+			content: "# Changelog\n\n## demo 0.10.0 ships next\n",
+			detail: func(path string) string {
+				return "derive notes: " + path + " already carries a section for 0.10.0"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Identical, not merely both refused: a gate reading one
+			// message and a release reading another is the same defect
+			// in a quieter form.
+			if plain, prepared := tc.refuse(t, false), tc.refuse(t, true); plain != prepared {
+				t.Errorf("the legs refuse differently:\nplain:   %q\nprepare: %q", plain, prepared)
+			}
+		})
+	}
+}
+
+// A splice that stands derives the same document on both legs: judging
+// the changelog on every run changed what a refused tree reports, and
+// nothing about what a releasable one does.
+func TestReleasePlanDerivesTheSameDocumentOnBothLegs(t *testing.T) {
+	documents := map[bool]string{}
+
+	for _, prepare := range []bool{false, true} {
+		dir := planTree(t, "0.9.0")
+		withHistory(t, bumpHistory(), nil)
+
+		args := []string{"release-plan", "--git-dir", dir, "--changelog", "CHANGELOG.md"}
+		if prepare {
+			args = append(args, "--prepare")
+		}
+
+		var stdout, stderr bytes.Buffer
+
+		if code := deriveCmd(args, &stdout, &stderr); code != exitOK {
+			t.Fatalf("release-plan --prepare=%t = %d, stderr: %s", prepare, code, stderr.String())
+		}
+
+		documents[prepare] = stdout.String()
+	}
+
+	if documents[false] != documents[true] {
+		t.Errorf("the legs emit different plans:\nplain:\n%s\nprepare:\n%s", documents[false], documents[true])
+	}
+}

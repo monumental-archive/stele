@@ -147,9 +147,28 @@ func renderNotes(da *deriveArgs, na *notesArgs, d *derived) (string, error) {
 // on parsing the preamble or understanding what it says. A file with no
 // sections yet gets the first one appended, preamble untouched.
 func splice(path, section, version, tag string, out *latch) error {
+	content, err := spliced(path, section, version, tag)
+	if err != nil {
+		return err
+	}
+
+	return writeSpliced(path, content, version, out)
+}
+
+// spliced is the whole of the splice except the write: the file read,
+// the duplicate guard, and the bytes the write would place. A caller
+// that only needs to know whether the splice STANDS asks this, so it
+// asks the same code the writing caller does.
+//
+// Separated because the release plan judges the splice on every run,
+// not only when it prepares the tree (stele#261). A second reading
+// written beside this one would be free to disagree with it, and that
+// disagreement is exactly what a gate passing green on a tree whose
+// release leg refuses is made of.
+func spliced(path, section, version, tag string) ([]byte, error) {
 	existing, err := os.ReadFile(path) //nolint:gosec // a path the operator named
 	if err != nil {
-		return fmt.Errorf("derive notes: reading %s: %w", path, err)
+		return nil, fmt.Errorf("derive notes: reading %s: %w", path, err)
 	}
 
 	// Refused, not overwritten and not appended twice. A changelog with
@@ -163,7 +182,7 @@ func splice(path, section, version, tag string, out *latch) error {
 	// leading "v" is a version character that breaks the bare match.
 	for line := range strings.Lines(string(existing)) {
 		if strings.HasPrefix(line, sectionMarker) && mentionsVersion(line, version, tag) {
-			return fmt.Errorf("derive notes: %s already carries a section for %s", path, version)
+			return nil, fmt.Errorf("derive notes: %s already carries a section for %s", path, version)
 		}
 	}
 
@@ -187,7 +206,12 @@ func splice(path, section, version, tag string, out *latch) error {
 		b.WriteString(at.sections)
 	}
 
-	if err := os.WriteFile(path, []byte(b.String()), ownerRW); err != nil {
+	return []byte(b.String()), nil
+}
+
+// writeSpliced places the computed content and says so.
+func writeSpliced(path string, content []byte, version string, out *latch) error {
+	if err := os.WriteFile(path, content, ownerRW); err != nil {
 		return fmt.Errorf("derive notes: writing %s: %w", path, err)
 	}
 
