@@ -23,7 +23,7 @@ import (
 )
 
 const testPolicyJSON = `{
-  "schema": 6,
+  "schema": 7,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -302,11 +302,20 @@ type fakeAttestor struct {
 	refuse     map[string]error
 	seen       []string
 	candidates []assert.Candidate
+	// asked records the owner/repo each subject was looked up in, and
+	// predicates the predicate demanded — both derived per scope, so
+	// a row can hold the derivation to its declared inputs.
+	asked      []string
+	predicates []string
 }
 
-func (a *fakeAttestor) Verify(_, _, digest string, candidates []assert.Candidate, _ string) error {
+func (a *fakeAttestor) Verify(
+	owner, repo, digest string, candidates []assert.Candidate, predicateType string,
+) error {
 	a.seen = append(a.seen, digest)
 	a.candidates = append(a.candidates, candidates...)
+	a.asked = append(a.asked, owner+"/"+repo)
+	a.predicates = append(a.predicates, predicateType)
 
 	return a.refuse[digest]
 }

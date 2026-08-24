@@ -745,14 +745,14 @@ func TestPolicyStructuralRefusals(t *testing.T) {
 	}{
 		{
 			name: "no evidence section",
-			doc:  `{"schema": 6}`,
+			doc:  `{"schema": 7}`,
 			want: "evidence is absent",
 		},
 		{
-			name: "a base-image half missing a field",
+			name: "a base-approval scope missing a field",
 			doc: strings.Replace(storePolicyJSON,
 				`"pinFile": "docker/base-images.toml"`, `"pinFile": ""`, 1),
-			want: "evidence.baseImages.pinFile",
+			want: "evidence.baseImages.scopes[pgrx-bases].pinFile",
 		},
 	}
 

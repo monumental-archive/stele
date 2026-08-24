@@ -19,7 +19,7 @@ func boardPolicy(t *testing.T, population string) string {
 
 	path := filepath.Join(t.TempDir(), "assert-policy.json")
 	doc := `{
-	  "schema": 6,
+	  "schema": 7,
 	  ` + population + `
 	  "evidence": {
 	    "sbomSuffix": ".spdx.json", "checksums": "checksums.txt",

@@ -262,34 +262,87 @@ type derivedPins struct {
 	Cause string
 }
 
-// baseRefRE finds pinned base references in the pin file: any
-// registry reference carrying an explicit digest.
+// baseRefRE finds pinned base references in a pin file: any registry
+// reference carrying an explicit digest, quoted as a value in the
+// committed file's own syntax.
 var baseRefRE = regexp.MustCompile(`["']([a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64})["']`)
 
-// baseImages proves every pinned base digest carries its approval
-// attestation. The pin file lives in the policy-owning checkout: a
-// Renovate roll that outran the approval run surfaces here, not at
-// the next release.
-func (w *evidenceWalk) baseImages(pinFileContent []byte) {
-	b := w.pol.BaseImages
-	if b == nil {
-		return
+// fromRefRE finds the digest-pinned bases a build file instantiates.
+// `FROM` is the container build standard, so it is code; which FILE
+// carries it and which of its references this org vouches for are the
+// scope's declarations. Build flags between the keyword and the
+// reference (`--platform=`) are skipped, and a trailing `AS <stage>`
+// is simply not captured.
+var fromRefRE = regexp.MustCompile(
+	`(?im)^[ \t]*FROM[ \t]+(?:--[^ \t]+[ \t]+)*([a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64})`)
+
+// baseScopes is the declared approval scopes, or none.
+func (w *evidenceWalk) baseScopes() []BaseImageScope {
+	if w.pol.BaseImages == nil {
+		return nil
 	}
+
+	return w.pol.BaseImages.Scopes
+}
+
+// scopeAssertion qualifies the shared vocabulary with the scope that
+// demanded it. Two scopes may judge the same reference by different
+// mechanisms, and a finding that cannot say which one asked is a
+// finding nobody can act on.
+func scopeAssertion(s *BaseImageScope) string {
+	return assertBaseImage + ":" + *s.Name
+}
+
+// baseImagesInCheckout runs the pin-file scopes. Each one's committed
+// file lives in the policy-owning checkout and arrives read, keyed by
+// scope name: a Renovate roll that outran the approval run surfaces
+// here, not at the next release.
+func (w *evidenceWalk) baseImagesInCheckout(pinFiles map[string][]byte) {
+	scopes := w.baseScopes()
+	for i := range scopes {
+		if s := &scopes[i]; *s.Mechanism == MechanismPinFile {
+			w.pinFileScope(s, pinFiles[*s.Name])
+		}
+	}
+}
+
+// baseImagesInRepo runs the provenance-verified scopes against one
+// population repository. This mechanism's subjects live in the
+// population rather than in the policy-owning checkout — the caller's
+// build file is where its bases are named — so it rides the repo loop
+// the population already drives.
+func (w *evidenceWalk) baseImagesInRepo(repo string) error {
+	scopes := w.baseScopes()
+	for i := range scopes {
+		if s := &scopes[i]; *s.Mechanism == MechanismProvenanceVerified {
+			if err := w.provenanceScope(s, repo); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// pinFileScope proves every digest-pinned base the scope's file
+// carries holds an approval attestation from the declared attestor.
+func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
+	assertion := scopeAssertion(s)
 
 	// The pin file itself is one check: declared and unreadable, or
 	// declared and pinning nothing, are both defects in the file.
-	file := w.check(*b.PinFile, assertBaseImage)
+	file := w.check(*s.PinFile, assertion)
 
-	if pinFileContent == nil {
-		// The policy declares base images and the walk was handed no
-		// pin file: whatever the caller's reason, the half would be
+	if content == nil {
+		// The policy declares this scope and the walk was handed no
+		// pin file: whatever the caller's reason, the scope would be
 		// checking nothing, and that may never look like PASS.
 		file.Diverged("the declared pin file was not provided to the walk")
 
 		return
 	}
 
-	matches := baseRefRE.FindAllSubmatch(pinFileContent, -1)
+	matches := baseRefRE.FindAllSubmatch(content, -1)
 	if len(matches) == 0 {
 		// A pin file that pins nothing is a defect in the file, not a
 		// clean answer: the walk was told to check something.
@@ -301,23 +354,122 @@ func (w *evidenceWalk) baseImages(pinFileContent []byte) {
 	for _, m := range matches {
 		ref := string(m[1])
 
-		at := strings.LastIndex(ref, "@")
-		digest := ref[at+1:]
-
 		w.checked++
 
-		pin := w.check(ref, assertBaseImage)
+		// Recorded BEFORE the verdict, pass or fail: Journal.Check is
+		// what says this run was in a position to see this
+		// (subject, assertion), which is the question a declared
+		// exception's staleness rests on.
+		pin := w.check(ref, assertion)
 
 		if err := w.attestor.Verify(
-			w.org, *b.AttestorRepo, digest,
-			[]Candidate{{Identity: *b.AttestorIdentity}}, *b.PredicateType,
+			w.org, *s.AttestorRepo, refDigest(ref),
+			[]Candidate{{Identity: *s.AttestorIdentity}}, *s.PredicateType,
 		); err != nil {
 			pin.Diverged(
-				fmt.Sprintf("no %s attestation verifies for this pinned base: %v", *b.PredicateType, err))
+				fmt.Sprintf("no %s attestation verifies for this pinned base: %v", *s.PredicateType, err))
 		}
 
 		w.log("assert: evidence: base pin %s checked", ref)
 	}
+}
+
+// provenanceScope proves every base under the scope's registry prefix
+// that this repository's build file instantiates carries provenance
+// from the identity its own pin implies. Nothing here is a literal:
+// the expected identity is expanded out of the reference, so the
+// identity demanded travels with the pin that names it.
+func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
+	content, ok, err := w.forge.FileAt(w.org, repo, *s.FromFile, defaultRef)
+	if err != nil {
+		return fmt.Errorf("assert: build file of %s: %w", repo, err)
+	}
+
+	if !ok {
+		return nil // this repo builds no image — an answer, not a gap
+	}
+
+	// Compiled here rather than assumed: policy load already refused
+	// an unparsable pattern, and a walk that PANICS on one instead of
+	// refusing would be the wrong failure at the wrong altitude.
+	re, err := regexp.Compile(*s.PinPattern)
+	if err != nil {
+		return fmt.Errorf("assert: base scope %s pinPattern: %w", *s.Name, err)
+	}
+
+	owner, assertion := publisherOwner(*s.RegistryPrefix), scopeAssertion(s)
+
+	for _, m := range fromRefRE.FindAllSubmatch(content, -1) {
+		ref := string(m[1])
+		if !strings.HasPrefix(ref, *s.RegistryPrefix) {
+			// Somebody else's base. Whose bases those are is another
+			// mechanism's question, so this scope reports nothing —
+			// an exclusion produces no finding, no count, no cell.
+			continue
+		}
+
+		w.checked++
+
+		pin := w.check(ref, assertion)
+
+		idx := re.FindStringSubmatchIndex(ref)
+		if idx == nil {
+			// The identity is derived from the pin, so a pin the
+			// pattern cannot read leaves nothing to demand. Fail
+			// closed: an unreadable pin is not an approved one.
+			pin.Diverged("the pinned reference does not match this scope's pinPattern," +
+				" so the identity that should have published it cannot be derived")
+
+			continue
+		}
+
+		identity := string(re.ExpandString(nil, *s.Identity, ref, idx))
+		if identity == "" {
+			pin.Diverged("this scope's identity template expands to nothing for the pinned reference")
+
+			continue
+		}
+
+		if verr := w.attestor.Verify(
+			owner, publisherRepo(ref, *s.RegistryPrefix), refDigest(ref),
+			[]Candidate{{Identity: identity}}, *s.PredicateType,
+		); verr != nil {
+			pin.Diverged(fmt.Sprintf(
+				"no %s attestation verifies for this base under %s: %v", *s.PredicateType, identity, verr))
+		}
+
+		w.log("assert: evidence: %s base %s checked", repo, ref)
+	}
+
+	return nil
+}
+
+// publisherOwner and publisherRepo split the publishing repository
+// out of a reference: the prefix is validated to stop at the owner
+// boundary (`<host>/<owner>/`), so the owner is its last segment and
+// the repository is the first segment of whatever follows. That
+// precondition is checked at policy load, never assumed here.
+func publisherOwner(prefix string) string {
+	trimmed := strings.TrimSuffix(prefix, "/")
+
+	_, owner, _ := strings.Cut(trimmed, "/")
+
+	return owner
+}
+
+func publisherRepo(ref, prefix string) string {
+	rest := strings.TrimPrefix(ref, prefix)
+	if end := strings.IndexAny(rest, "/:@"); end >= 0 {
+		return rest[:end]
+	}
+
+	return rest
+}
+
+// refDigest is the digest half of a digest-pinned reference — the
+// bytes the attestation must cover.
+func refDigest(ref string) string {
+	return ref[strings.LastIndex(ref, "@")+1:]
 }
 
 // defaultRef reads a repository's default branch state — the honest

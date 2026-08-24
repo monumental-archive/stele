@@ -19,7 +19,7 @@ import (
 )
 
 const tagsPolicyJSON = `{
-  "schema": 6,
+  "schema": 7,
   "issuer": "https://token.example.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",
@@ -188,7 +188,7 @@ func conformantTags() *fakeTags {
 // stance and before it certificate transparency. gadget is declared
 // unsigned and never appears in `from`.
 const raisedFloorPolicyJSON = `{
-  "schema": 6,
+  "schema": 7,
   "issuer": "https://token.example.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",

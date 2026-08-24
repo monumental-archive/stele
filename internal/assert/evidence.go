@@ -42,7 +42,7 @@ var hex64OnlyRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // document must record.
 func Evidence(
 	pol *Policy, pop *population.Set, forge gh.Forge, src ContractSource, att Attestor,
-	j *report.Journal, pinFile []byte, full *FullDepth, log Logf, runFacts ...report.Fact,
+	j *report.Journal, pinFiles map[string][]byte, full *FullDepth, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	e := pol.Evidence
 
@@ -64,9 +64,13 @@ func Evidence(
 		if err := w.continuous(repo); err != nil {
 			return nil, err
 		}
+
+		if err := w.baseImagesInRepo(repo); err != nil {
+			return nil, err
+		}
 	}
 
-	w.baseImages(pinFile)
+	w.baseImagesInCheckout(pinFiles)
 
 	facts := append(append([]report.Fact{}, runFacts...),
 		report.Fact{Name: "releasesChecked", Value: strconv.Itoa(w.checked)})

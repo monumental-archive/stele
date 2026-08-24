@@ -19,7 +19,7 @@ import (
 )
 
 const permissionsPolicyJSON = `{
-  "schema": 6,
+  "schema": 7,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -36,7 +36,7 @@ const permissionsPolicyJSON = `{
 // localOnlyPolicyJSON declares no reusable tree: the adopter whose
 // reusable workflows all live beside their callers.
 const localOnlyPolicyJSON = `{
-  "schema": 6,
+  "schema": 7,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

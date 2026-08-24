@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -466,10 +468,12 @@ type EvidencePolicy struct {
 	// rolling digests whose evidence lives ONLY in the attestation
 	// store.
 	Continuous *ContinuousPolicy `json:"continuous,omitempty"`
-	// BaseImages, when set, adds the base-approval half: every pinned
-	// base digest carries its approval attestation, so a dependency
-	// roll that outran the approval run surfaces here rather than at
-	// the next release.
+	// BaseImages, when set, adds the base-approval half: every base
+	// this org builds on carries its approval, so a dependency roll
+	// that outran the approval run surfaces here rather than at the
+	// next release. What "carries its approval" MEANS is the scope's
+	// declared mechanism — there is more than one in the world, and
+	// the section holds as many as the adopter has.
 	BaseImages *BaseImagesPolicy `json:"baseImages,omitempty"`
 	// DecisionFromVersion is the machinery version (inclusive) from
 	// which a release owes a VERIFIABLE release decision — the same
@@ -540,17 +544,88 @@ type ContinuousPolicy struct {
 	SignerPinPattern *string `json:"signerPinPattern"`
 }
 
-// BaseImagesPolicy parameterises the base-approval half.
+// BaseImagesPolicy parameterises the base-approval half as a list of
+// typed approval scopes. Plurality is the ADOPTER'S: an org may
+// approve its bases by one mechanism, by two, or twice over by the
+// same one — two pin files is a valid world. What this engine owns is
+// the set of mechanism KINDS, because each kind names a judgment the
+// walk knows how to compute; how many scopes a policy declares, and
+// with which parameters, is policy and never code (stele#247).
 type BaseImagesPolicy struct {
-	// PinFile is the committed file carrying pinned base references;
-	// absent from the checkout means this org pins no base images.
-	PinFile *string `json:"pinFile"`
+	// Scopes are the declared approval scopes: non-empty, because a
+	// base-approval section that scopes nothing approves nothing, and
+	// their names form a set.
+	Scopes []BaseImageScope `json:"scopes"`
+}
+
+// BaseImageMechanism names one base-approval mechanism this engine
+// implements. The kinds are code and their parameters are policy —
+// the standard/convention split, not a shortage of vocabulary. A kind
+// this version does not implement is refused AT LOAD, by name: a new
+// mechanism is additive engine work, never a policy contortion and
+// never a key that loads and computes nothing.
+type BaseImageMechanism string
+
+const (
+	// MechanismPinFile approves the digest-pinned base references a
+	// committed file carries, each by an approval attestation from a
+	// declared attestor under a declared predicate.
+	MechanismPinFile BaseImageMechanism = "pin-file"
+	// MechanismProvenanceVerified approves the digest-pinned bases a
+	// population repository's own build file names under a declared
+	// registry prefix, each against the provenance of the identity
+	// the pinned reference itself implies — so the approval demanded
+	// cannot drift from the pin that names it.
+	MechanismProvenanceVerified BaseImageMechanism = "provenance-verified"
+)
+
+// BaseImageScope is one approval scope: a name, the mechanism that
+// judges it, and that mechanism's parameters. The parameters sit flat
+// in the scope rather than nested under the kind because a scope IS
+// one mechanism's declaration — and validate refuses a parameter the
+// declared mechanism does not read, so a key that means nothing where
+// it sits is a load refusal rather than a silent no-op.
+type BaseImageScope struct {
+	// Name distinguishes this scope in findings and in the pin-file
+	// override; names form a set across the section.
+	Name *string `json:"name"`
+	// Mechanism selects the judgment. A scope that will not say how
+	// its bases are approved cannot be computed at all.
+	Mechanism *BaseImageMechanism `json:"mechanism"`
+	// PinFile is the committed file carrying pinned base references
+	// (pin-file).
+	PinFile *string `json:"pinFile,omitempty"`
 	// AttestorRepo holds the approval attestations; AttestorIdentity
-	// is the certificate identity they must verify under.
-	AttestorRepo     *string `json:"attestorRepo"`
-	AttestorIdentity *string `json:"attestorIdentity"`
-	// PredicateType is the approval predicate the attestation carries.
-	PredicateType *string `json:"predicateType"`
+	// is the certificate identity they must verify under (pin-file).
+	AttestorRepo     *string `json:"attestorRepo,omitempty"`
+	AttestorIdentity *string `json:"attestorIdentity,omitempty"`
+	// FromFile is the build file read from every population
+	// repository at its default branch; the digest-pinned references
+	// it carries are this scope's candidate subjects
+	// (provenance-verified).
+	FromFile *string `json:"fromFile,omitempty"`
+	// RegistryPrefix selects which of those references this scope
+	// judges. It ends at the OWNER boundary (`<host>/<owner>/`)
+	// because the publishing repository is read off the path that
+	// follows it — the one derivation this mechanism keeps, whose
+	// precondition validate enforces rather than assumes. References
+	// outside the prefix are out of scope, not findings: whose bases
+	// those are is another mechanism's question
+	// (provenance-verified).
+	RegistryPrefix *string `json:"registryPrefix,omitempty"`
+	// PinPattern parses the pinned reference and Identity is built
+	// from its capture groups, so the expected signer is DERIVED FROM
+	// THE PIN and the two can never disagree — the shape the org
+	// applies wherever an identity could otherwise be restated as a
+	// literal. Every group the template names must exist in the
+	// pattern, which validate checks (provenance-verified).
+	PinPattern *string `json:"pinPattern,omitempty"`
+	Identity   *string `json:"identity,omitempty"`
+	// PredicateType is the predicate the approving attestation must
+	// carry. Both mechanisms declare one, because a predicate URI is
+	// policy data and never a literal in this engine
+	// (docs/versioning.md).
+	PredicateType *string `json:"predicateType,omitempty"`
 }
 
 func (c *ContinuousPolicy) validate() error {
@@ -571,16 +646,179 @@ func (c *ContinuousPolicy) validate() error {
 }
 
 func (b *BaseImagesPolicy) validate() error {
-	for name, f := range map[string]*string{
-		"pinFile": b.PinFile, "attestorRepo": b.AttestorRepo,
-		"attestorIdentity": b.AttestorIdentity, "predicateType": b.PredicateType,
-	} {
-		if f == nil || *f == "" {
-			return fmt.Errorf("evidence.baseImages.%s is absent or empty", name)
+	if len(b.Scopes) == 0 {
+		return errors.New(
+			"evidence.baseImages.scopes is empty — a base-approval section that scopes nothing approves nothing")
+	}
+
+	names := map[string]bool{}
+
+	for i := range b.Scopes {
+		s := &b.Scopes[i]
+
+		switch {
+		case s.Name == nil || *s.Name == "":
+			return fmt.Errorf("evidence.baseImages.scopes[%d].name is absent or empty", i)
+		case names[*s.Name]:
+			return fmt.Errorf("evidence.baseImages.scopes names %q twice — scope names are a set", *s.Name)
+		}
+
+		names[*s.Name] = true
+
+		if err := s.validate(); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// paramPredicateType is the one parameter BOTH mechanisms own: a
+// predicate URI is policy data whichever way a base is approved.
+const paramPredicateType = "predicateType"
+
+// params is every parameter this engine knows how to read off a
+// scope, whichever mechanism owns it. One table, so "required by my
+// kind" and "read by nobody here" are answered from the same list and
+// cannot drift apart.
+func (s *BaseImageScope) params() map[string]*string {
+	return map[string]*string{
+		"pinFile":          s.PinFile,
+		"attestorRepo":     s.AttestorRepo,
+		"attestorIdentity": s.AttestorIdentity,
+		"fromFile":         s.FromFile,
+		"registryPrefix":   s.RegistryPrefix,
+		"pinPattern":       s.PinPattern,
+		"identity":         s.Identity,
+		paramPredicateType: s.PredicateType,
+	}
+}
+
+// owns names the parameters one mechanism reads, in the order its
+// refusals report them. A kind absent from this switch is a kind this
+// engine does not implement — the one place that fact is written.
+func owns(m BaseImageMechanism) []string {
+	switch m {
+	case MechanismPinFile:
+		return []string{"pinFile", "attestorRepo", "attestorIdentity", paramPredicateType}
+	case MechanismProvenanceVerified:
+		return []string{"fromFile", "registryPrefix", "pinPattern", "identity", paramPredicateType}
+	default:
+		return nil
+	}
+}
+
+// validate holds one scope to exactly its mechanism's parameters:
+// each one it owns declared, and none it does not. Declaring a
+// parameter the mechanism never reads is refused as firmly as
+// omitting one it needs — a key nothing computes is the descriptive
+// half this section exists to refuse.
+func (s *BaseImageScope) validate() error {
+	where := "evidence.baseImages.scopes[" + *s.Name + "]"
+
+	if s.Mechanism == nil || *s.Mechanism == "" {
+		return fmt.Errorf("%s.mechanism is absent or empty", where)
+	}
+
+	owned := owns(*s.Mechanism)
+	if owned == nil {
+		return fmt.Errorf(
+			"%s.mechanism %q is not a base-approval mechanism this stele implements", where, *s.Mechanism)
+	}
+
+	declared := s.params()
+
+	for _, name := range owned {
+		if f := declared[name]; f == nil || *f == "" {
+			return fmt.Errorf("%s.%s is absent or empty — the %s mechanism requires it",
+				where, name, *s.Mechanism)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
+		if f := declared[name]; f != nil && *f != "" && !slices.Contains(owned, name) {
+			return fmt.Errorf("%s.%s is declared but the %s mechanism does not read it",
+				where, name, *s.Mechanism)
+		}
+	}
+
+	if *s.Mechanism == MechanismProvenanceVerified {
+		return s.validateProvenance(where)
+	}
+
+	return nil
+}
+
+// validateProvenance checks the two preconditions the
+// provenance-verified judgment would otherwise assume: that the
+// prefix stops where the owner does, and that the identity template
+// names only groups the pattern actually captures.
+func (s *BaseImageScope) validateProvenance(where string) error {
+	// The publishing repository is read off the reference path
+	// immediately after the prefix, so the prefix must end where the
+	// owner does. A prefix reaching further would swallow the
+	// repository segment and the derivation would address the wrong
+	// repository — silently, and in the direction of a pass.
+	trimmed, slashed := strings.CutSuffix(*s.RegistryPrefix, "/")
+	if !slashed || strings.Count(trimmed, "/") != 1 || strings.HasSuffix(trimmed, "/") {
+		return fmt.Errorf(
+			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
+				"because the publishing repository is derived from the reference path that follows it",
+			where, *s.RegistryPrefix)
+	}
+
+	re, err := regexp.Compile(*s.PinPattern)
+	if err != nil {
+		return fmt.Errorf("%s.pinPattern: %w", where, err)
+	}
+
+	for _, g := range identityGroups(*s.Identity) {
+		if !slices.Contains(re.SubexpNames(), g) {
+			return fmt.Errorf(
+				"%s.identity names the capture group %q, which pinPattern does not define — "+
+					"the expansion would silently drop that segment and demand the wrong identity", where, g)
+		}
+	}
+
+	return nil
+}
+
+// identityVarRE finds the variables an expansion template names, in
+// regexp.Expand's own vocabulary: $name, ${name}, and $$ for a
+// literal dollar.
+var identityVarRE = regexp.MustCompile(`\$(\$|\{([A-Za-z0-9_]+)\}|([A-Za-z0-9_]+))`)
+
+// identityGroups lists the capture groups an identity template names.
+// Only NAMED groups are reported: a numbered reference is expanded by
+// position, which no policy should depend on and which SubexpNames
+// cannot vouch for either way, so it is left to the pattern.
+func identityGroups(template string) []string {
+	var out []string
+
+	for _, m := range identityVarRE.FindAllStringSubmatch(template, -1) {
+		const (
+			whole = 1
+			brace = 2
+			bare  = 3
+		)
+
+		if m[whole] == "$" {
+			continue // $$ is a literal dollar, not a group
+		}
+
+		name := m[brace]
+		if name == "" {
+			name = m[bare]
+		}
+
+		// A numbered reference names a position, not a name; only the
+		// pattern can say whether the position exists.
+		if name != "" && strings.Trim(name, "0123456789") != "" {
+			out = append(out, name)
+		}
+	}
+
+	return out
 }
 
 // AssetObligation is one non-bundle asset a class requires, matched

@@ -22,18 +22,23 @@ import (
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
-// baseImagesPolicy loads a policy declaring the base-approval half,
-// which is what makes the store halves' inputs required.
+// baseScopeName is the pin-file scope every base-images fixture here
+// declares — the name --base-pins addresses it by.
+const baseScopeName = "org-pins"
+
+// baseImagesPolicy loads a policy declaring one pin-file approval
+// scope, which is what makes the store halves' inputs required.
 func baseImagesPolicy(t *testing.T, pinFile string) *assert.Policy {
 	t.Helper()
 
-	content := `{"schema": 6, "issuer": "https://token.example.com",
+	content := `{"schema": 7, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "classes": {"oci-image": {"bundles": ["b.jsonl"]}},
-	    "baseImages": {"pinFile": "` + pinFile + `", "attestorRepo": ".github",
+	    "baseImages": {"scopes": [{"name": "` + baseScopeName + `", "mechanism": "pin-file",
+	      "pinFile": "` + pinFile + `", "attestorRepo": ".github",
 	      "attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main",
-	      "predicateType": "https://acme.example/approval/v1"}}}`
+	      "predicateType": "https://acme.example/approval/v1"}]}}}`
 
 	pol, err := assert.LoadPolicy(strings.NewReader(content))
 	if err != nil {
@@ -41,6 +46,15 @@ func baseImagesPolicy(t *testing.T, pinFile string) *assert.Policy {
 	}
 
 	return pol
+}
+
+// overridePins spells one --base-pins override for the fixture scope.
+func overridePins(path string) basePins {
+	if path == "" {
+		return nil
+	}
+
+	return basePins{baseScopeName: path}
 }
 
 // swapForge installs a scripted forge for one test, so --capture wraps
@@ -173,7 +187,7 @@ func TestAssertUsageMatrix(t *testing.T) {
 	dir := t.TempDir()
 
 	notAPolicy := filepath.Join(dir, "not-a-policy.json")
-	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 6}`), 0o600); err != nil {
+	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 7}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -533,7 +547,7 @@ func TestLoadStoreInputsGuards(t *testing.T) {
 	root := []byte("not a trusted root")
 
 	t.Run("a root that is not one refuses", func(t *testing.T) {
-		if _, _, err := loadStoreInputs(baseImagesPolicy(t, "no-such-pins.toml"), &storeForge{}, root, ""); err == nil {
+		if _, _, err := loadStoreInputs(baseImagesPolicy(t, "no-such-pins.toml"), &storeForge{}, root, nil); err == nil {
 			t.Fatal("loadStoreInputs accepted a root that is not one")
 		}
 	})
@@ -549,7 +563,7 @@ func TestLoadStoreInputsGuards(t *testing.T) {
 
 		t.Cleanup(func() { newBundleVerifier = orig })
 
-		_, _, err := loadStoreInputs(baseImagesPolicy(t, pins), &storeForge{}, root, pins)
+		_, _, err := loadStoreInputs(baseImagesPolicy(t, pins), &storeForge{}, root, overridePins(pins))
 		if err == nil || strings.Contains(err.Error(), "absent from this checkout") {
 			t.Fatalf("loadStoreInputs = %v, want the read refusal, not the absence one", err)
 		}
@@ -583,13 +597,13 @@ func TestLoadStoreInputsPinFileMessage(t *testing.T) {
 		{
 			name:     "the declared pin file is absent",
 			declared: filepath.Join(dir, "no-such-pins.toml"),
-			want:     "is absent from this checkout — pass --base-pins <path> to supply it from elsewhere",
+			want:     "is absent from this checkout — pass --base-pins org-pins=<path> to supply it from elsewhere",
 		},
 		{
 			name:     "an overridden pin file is absent",
 			declared: present,
 			override: filepath.Join(dir, "elsewhere.toml"),
-			want:     "is absent from this checkout — pass --base-pins <path> to supply it from elsewhere",
+			want:     "is absent from this checkout — pass --base-pins org-pins=<path> to supply it from elsewhere",
 		},
 		{"the declared pin file is there", present, "", ""},
 		{"an overridden pin file is there", filepath.Join(dir, "no-such-pins.toml"), present, ""},
@@ -598,7 +612,7 @@ func TestLoadStoreInputsPinFileMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, pins, err := loadStoreInputs(
-				baseImagesPolicy(t, tt.declared), &storeForge{}, nil, tt.override)
+				baseImagesPolicy(t, tt.declared), &storeForge{}, nil, overridePins(tt.override))
 
 			if tt.want == "" {
 				if err != nil {
@@ -617,6 +631,119 @@ func TestLoadStoreInputsPinFileMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBasePinsFlag walks the override's own parsing. The flag names a
+// scope because a policy may declare several pin-file scopes, so every
+// way it could address the wrong one — or none — is a row.
+func TestBasePinsFlag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want string // empty: accepted
+	}{
+		{"a bare path names no scope", []string{"/tmp/pins.toml"}, "is not <scope>=<path>"},
+		{"an empty scope", []string{"=/tmp/pins.toml"}, "is not <scope>=<path>"},
+		{"an empty path", []string{"org-pins="}, "is not <scope>=<path>"},
+		{"no delimiter at all", []string{"org-pins"}, "is not <scope>=<path>"},
+		{
+			"one scope named twice",
+			[]string{"org-pins=/tmp/a.toml", "org-pins=/tmp/b.toml"},
+			`names scope "org-pins" twice`,
+		},
+		{"two scopes", []string{"a=/tmp/a.toml", "b=/tmp/b.toml"}, ""},
+		{"a path carrying the delimiter", []string{"org-pins=/tmp/od=d/pins.toml"}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				pins basePins
+				err  error
+			)
+
+			for _, arg := range tt.args {
+				if err = pins.Set(arg); err != nil {
+					break
+				}
+			}
+
+			switch {
+			case tt.want == "" && err != nil:
+				t.Fatalf("Set = %v, want it accepted", err)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Fatalf("Set = %v, want it to name %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestBasePinsNamesADeclaredScope: an override for a scope the policy
+// has no pin file for is a typo the caller must see. Silently ignoring
+// it would read as an override that took effect, which is the shape
+// that judges the wrong file while looking green.
+func TestBasePinsNamesADeclaredScope(t *testing.T) {
+	dir := t.TempDir()
+
+	present := filepath.Join(dir, "pins.toml")
+	if err := os.WriteFile(present, []byte("# pins\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := newBundleVerifier
+	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{}, nil }
+
+	t.Cleanup(func() { newBundleVerifier = orig })
+
+	t.Run("a scope the policy never declared", func(t *testing.T) {
+		_, _, err := loadStoreInputs(baseImagesPolicy(t, present), &storeForge{}, nil,
+			basePins{"no-such-scope": present})
+		if err == nil || !strings.Contains(err.Error(), `names scope "no-such-scope"`) {
+			t.Fatalf("loadStoreInputs = %v, want the unknown-scope refusal", err)
+		}
+	})
+
+	t.Run("a scope that takes no pin file", func(t *testing.T) {
+		_, _, err := loadStoreInputs(provenanceScopePolicy(t), &storeForge{}, nil,
+			basePins{"org-bases": present})
+		if err == nil || !strings.Contains(err.Error(), `names scope "org-bases"`) {
+			t.Fatalf("loadStoreInputs = %v, want the refusal — a provenance scope reads no pin file", err)
+		}
+	})
+
+	t.Run("a provenance-only policy needs no pin file at all", func(t *testing.T) {
+		_, pins, err := loadStoreInputs(provenanceScopePolicy(t), &storeForge{}, nil, nil)
+		if err != nil || len(pins) != 0 {
+			t.Fatalf("loadStoreInputs = (%v, %v), want no pin file demanded", pins, err)
+		}
+	})
+}
+
+// provenanceScopePolicy loads a policy whose only approval scope is
+// the mechanism that reads no committed file.
+func provenanceScopePolicy(t *testing.T) *assert.Policy {
+	t.Helper()
+
+	content := `{"schema": 7, "issuer": "https://token.example.com",
+	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+	    "classes": {"oci-image": {"bundles": ["b.jsonl"]}},
+	    "baseImages": {"scopes": [{"name": "org-bases", "mechanism": "provenance-verified",
+	      "fromFile": "Dockerfile", "registryPrefix": "ghcr.io/acme/",
+	      "pinPattern": "^ghcr\\.io/acme/(?P<repo>[a-z-]+):(?P<version>[0-9.]+)@sha256:[0-9a-f]{64}$",
+	      "identity": "https://github.com/acme/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
+	      "predicateType": "https://slsa.dev/provenance/v1"}]}}}`
+
+	pol, err := assert.LoadPolicy(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("loading the provenance-scope policy: %v", err)
+	}
+
+	return pol
 }
 
 // TestLoadFullDepthRefusesABrokenRoot: the deep leg's own trust
