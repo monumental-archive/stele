@@ -69,8 +69,8 @@ func ParseTag(prefix, tag string) (*semver.Version, error) {
 func Tag(prefix string, version *semver.Version) string { return prefix + version.String() }
 
 // Base is the starting point a range is measured from: the highest
-// version in the namespace, plus every tag that claimed the namespace
-// and could not be read.
+// version in the namespace, the tag it was read from, plus every tag
+// that claimed the namespace and could not be read.
 //
 // Skipped is not a diagnostic afterthought. A repository adopting this
 // tool brings whatever its tags were before — "v0.9-pre-import" and
@@ -79,8 +79,17 @@ func Tag(prefix string, version *semver.Version) string { return prefix + versio
 // are exactly the ones carrying them. But dropping them in silence is
 // the same defect as a silent cap: the run would report a clean base it
 // only reached by ignoring things. So they are skipped AND named.
+//
+// Tag is carried rather than re-rendered from prefix+Version. The two
+// agree wherever a tag is the canonical spelling of the version it
+// names, which is every tag this tool has minted — but the tag is the
+// thing a forge is asked about, and recomposing it from the parts the
+// parse produced is reading a derivation's own inverse back as
+// evidence. What was read is what is reported. Empty exactly when
+// Version is nil.
 type Base struct {
 	Version *semver.Version
+	Tag     string
 	Skipped []string
 }
 
@@ -105,9 +114,32 @@ type Base struct {
 //
 //nolint:gocritic // unnamedResult: the namespace's versions, then the tags it could not read
 func Versions(prefix string, tags []string) ([]*semver.Version, []string) {
+	members, skipped := members(prefix, tags)
+
+	var versions []*semver.Version
+
+	for _, m := range members {
+		versions = append(versions, m.version)
+	}
+
+	return versions, skipped
+}
+
+// member is one tag the namespace carries, kept beside the version it
+// was read from so a caller that needs the tag never recomposes it.
+type member struct {
+	tag     string
+	version *semver.Version
+}
+
+// members is the one reading of a namespace. Versions folds away the
+// tags; LatestTag keeps the one it selected.
+//
+//nolint:gocritic // unnamedResult: the namespace's members, then the tags it could not read
+func members(prefix string, tags []string) ([]member, []string) {
 	var (
-		versions []*semver.Version
-		skipped  []string
+		out     []member
+		skipped []string
 	)
 
 	for _, tag := range tags {
@@ -123,28 +155,28 @@ func Versions(prefix string, tags []string) ([]*semver.Version, []string) {
 			continue
 		}
 
-		versions = append(versions, version)
+		out = append(out, member{tag: tag, version: version})
 	}
 
-	return versions, skipped
+	return out, skipped
 }
 
 // LatestTag selects the base from a tag list: the highest version the
-// namespace carries, plus every tag that claimed it and could not be
-// read.
+// namespace carries, the tag that carried it, plus every tag that
+// claimed the namespace and could not be read.
 //
 // An empty namespace yields a nil Version rather than a zero one: "this
 // project has never released" and "this project released 0.0.0" are
 // different facts, and the caller states which base an unreleased
 // project starts from.
 func LatestTag(prefix string, tags []string) Base {
-	versions, skipped := Versions(prefix, tags)
+	members, skipped := members(prefix, tags)
 
 	base := Base{Skipped: skipped}
 
-	for _, version := range versions {
-		if base.Version == nil || version.GreaterThan(base.Version) {
-			base.Version = version
+	for _, m := range members {
+		if base.Version == nil || m.version.GreaterThan(base.Version) {
+			base.Version, base.Tag = m.version, m.tag
 		}
 	}
 

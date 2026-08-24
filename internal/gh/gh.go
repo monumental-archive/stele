@@ -390,12 +390,33 @@ func (c *Client) ListRepos(org string) ([]Repo, error) {
 }
 
 type releaseEntry struct {
+	ID          int64  `json:"id"`
 	TagName     string `json:"tag_name"` //nolint:tagliatelle // the forge's own field name
+	Name        string `json:"name"`
+	HTMLURL     string `json:"html_url"` //nolint:tagliatelle // the forge's own field name
 	Draft       bool   `json:"draft"`
 	PublishedAt string `json:"published_at"` //nolint:tagliatelle // the forge's own field name
 	Assets      []struct {
 		Name string `json:"name"`
+		URL  string `json:"browser_download_url"` //nolint:tagliatelle // the forge's own field name
 	} `json:"assets"`
+}
+
+// Release is one published release, decoded to what a caller can act
+// on: its identity, and the addresses its artifacts are served from.
+// The tag is deliberately not echoed back — the caller named it, and
+// a second copy of one fact is a pair that can disagree.
+type Release struct {
+	ID     int64
+	Name   string
+	URL    string
+	Assets []ReleaseAsset
+}
+
+// ReleaseAsset is one published artifact and where it is served from.
+type ReleaseAsset struct {
+	Name string
+	URL  string
 }
 
 // ReleaseTags implements Forge.
@@ -416,22 +437,38 @@ func (c *Client) ReleaseTags(owner, repo string) ([]string, error) {
 	return out, nil
 }
 
+// ReleaseByTag reads the release hanging on one tag, decoded. An
+// absent release is reported, never raised: a tag carrying no release
+// is exactly what an imported repository's history is full of, and
+// the caller deciding what a previous release is needs to tell that
+// apart from a forge it could not read.
+func (c *Client) ReleaseByTag(owner, repo, tag string) (*Release, bool, error) {
+	rel, ok, err := c.releaseAt(owner, repo, tag)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+
+	out := &Release{
+		ID: rel.ID, Name: rel.Name, URL: rel.HTMLURL,
+		Assets: make([]ReleaseAsset, 0, len(rel.Assets)),
+	}
+
+	for _, a := range rel.Assets {
+		out.Assets = append(out.Assets, ReleaseAsset{Name: a.Name, URL: a.URL})
+	}
+
+	return out, true, nil
+}
+
 // ReleaseDate implements Forge.
 func (c *Client) ReleaseDate(owner, repo, tag string) (time.Time, error) {
-	body, ok, err := c.get(
-		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/releases/tags/"+url.PathEscape(tag),
-		"application/vnd.github+json")
+	rel, ok, err := c.releaseAt(owner, repo, tag)
 	if err != nil {
 		return time.Time{}, err
 	}
 
 	if !ok {
 		return time.Time{}, fmt.Errorf("gh: release %s/%s@%s: not found", owner, repo, tag)
-	}
-
-	rel, err := jsonx.DecodeForeign[releaseEntry](body)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("gh: release %s/%s@%s: %w", owner, repo, tag, err)
 	}
 
 	if rel.PublishedAt == "" {
@@ -448,20 +485,13 @@ func (c *Client) ReleaseDate(owner, repo, tag string) (time.Time, error) {
 
 // ReleaseAssets implements Forge.
 func (c *Client) ReleaseAssets(owner, repo, tag string) ([]string, error) {
-	body, ok, err := c.get(
-		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/releases/tags/"+url.PathEscape(tag),
-		"application/vnd.github+json")
+	rel, ok, err := c.releaseAt(owner, repo, tag)
 	if err != nil {
 		return nil, err
 	}
 
 	if !ok {
 		return nil, fmt.Errorf("gh: release %s/%s@%s: not found", owner, repo, tag)
-	}
-
-	rel, err := jsonx.DecodeForeign[releaseEntry](body)
-	if err != nil {
-		return nil, fmt.Errorf("gh: release %s/%s@%s: %w", owner, repo, tag, err)
 	}
 
 	out := make([]string, 0, len(rel.Assets))
@@ -961,6 +991,42 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 	}
 
 	return pages, nil
+}
+
+// releaseAt reads the release hanging on one tag. The bool is "the
+// forge has one": a bare tag with nothing published on it is a state
+// a caller may act on, and the callers for which it IS a failure say
+// so themselves.
+//
+// One fetch, one decode, three readers — the publication date, the
+// asset names, and the whole decoded release. Which release hangs on
+// a tag is one question, so it has one answer; three copies of this
+// endpoint could drift apart on field spellings or on what an absent
+// release means, and the two nobody was reading at the time would
+// drift silently.
+//
+// Drafts do not arrive here, and not by a filter of ours: the forge's
+// by-tag read serves published releases only. That is the answer this
+// caller wants — a draft's assets are not fetchable by a stranger, so
+// a caller asking where artifacts live must never be handed one.
+func (c *Client) releaseAt(owner, repo, tag string) (*releaseEntry, bool, error) {
+	body, ok, err := c.get(
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/releases/tags/"+url.PathEscape(tag),
+		"application/vnd.github+json")
+	if err != nil {
+		return nil, false, err
+	}
+
+	if !ok {
+		return nil, false, nil
+	}
+
+	rel, err := jsonx.DecodeForeign[releaseEntry](body)
+	if err != nil {
+		return nil, false, fmt.Errorf("gh: release %s/%s@%s: %w", owner, repo, tag, err)
+	}
+
+	return rel, true, nil
 }
 
 func (c *Client) releases(owner, repo string) ([]releaseEntry, error) {
