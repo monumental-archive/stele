@@ -97,6 +97,11 @@ type levelArgs struct {
 	jsonOut     bool
 	root        rootFlags
 	owner, name string
+	// surfaces is where this repository publishes, as its population
+	// row declared it — nil where nothing was declared, which is not
+	// the same as a declared empty set and resolves to the opposite of
+	// it (surfaceSet). It says WHERE to look and reaches no verdict.
+	surfaces []population.Surface
 }
 
 // levelCmd dispatches `stele level <track>`.
@@ -238,7 +243,7 @@ func parseLevelArgs(track string, args []string, stderr io.Writer) (*levelArgs, 
 func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 	forge := newForge()
 
-	repos, unlooked, err := la.members(forge)
+	pop, err := la.members(forge)
 	if err != nil {
 		out.logf("level: the organisation's population could not be enumerated: %v", err)
 
@@ -248,23 +253,37 @@ func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 		return level.Unenumerated(la.trackValue(), la.org, err, clock())
 	}
 
-	members := make([]*level.Evidence, 0, len(repos))
+	members := make([]*level.Evidence, 0, len(pop.members))
 
-	for _, name := range repos {
+	for _, name := range pop.members {
 		member := *la
 		member.name = name
 		member.repo = la.org + "/" + name
+		member.surfaces = pop.set.Surfaces(name)
 
 		members = append(members, member.gather(forge, out))
 	}
 
 	out.logf("level: measured %d of %s's repositories", len(members), la.org)
 
-	for _, name := range unlooked {
+	for _, name := range pop.unlooked {
 		out.logf("level: %s: not looked at — outside the declared enumeration coverage", name)
 	}
 
-	return level.AssessPopulation(la.trackValue(), members, unlooked, clock())
+	return level.AssessPopulation(la.trackValue(), members, pop.unlooked, clock())
+}
+
+// enumerated is one run's population: the members to measure, the
+// ones it could not look at, and the set both came out of.
+//
+// The set travels with them because a second question is asked of it
+// per member — where that repository publishes (surfaceSet) — and
+// re-resolving a population to ask it would be a second enumeration,
+// which is the one thing this tool has exactly one of (stele#153).
+type enumerated struct {
+	set      *population.Set
+	members  []string
+	unlooked []string
 }
 
 // members enumerates the organisation's population for this track,
@@ -284,9 +303,7 @@ func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 // them, because it is judged on nothing and must lower nobody's rung
 // — what it does is keep the fold from being published as though it
 // covered the whole population.
-//
-//nolint:gocritic // unnamedResult: members then unlooked, named in the doc
-func (la *levelArgs) members(forge gh.Forge) ([]string, []string, error) {
+func (la *levelArgs) members(forge gh.Forge) (*enumerated, error) {
 	var declared *population.Declaration
 
 	if la.policyPath != "" {
@@ -294,7 +311,7 @@ func (la *levelArgs) members(forge gh.Forge) ([]string, []string, error) {
 		if err != nil {
 			// Named here, because this cause travels IN the sealed
 			// report and the document carries no other verb.
-			return nil, nil, fmt.Errorf("level: %w", err)
+			return nil, fmt.Errorf("level: %w", err)
 		}
 
 		declared = pol.Population
@@ -302,12 +319,12 @@ func (la *levelArgs) members(forge gh.Forge) ([]string, []string, error) {
 
 	pop, err := resolvePopulation(population.Scope{Org: la.org}, forge, declared)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	members, err := pop.Members(la.trackValue())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	unlooked := pop.UnexercisedMembers(la.trackValue())
@@ -318,7 +335,7 @@ func (la *levelArgs) members(forge gh.Forge) ([]string, []string, error) {
 		unlooked[i] = la.org + "/" + name
 	}
 
-	return members, unlooked, nil
+	return &enumerated{set: pop, members: members, unlooked: unlooked}, nil
 }
 
 // assess gathers what it can and hands it to the judge.
@@ -531,7 +548,7 @@ func (la *levelArgs) liveRules(forge gh.Forge, out *latch) *level.LiveRules {
 // gatherRelease reads the newest release's artifacts and the platform
 // claims behind each one's provenance.
 func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latch) {
-	tag, subjects := la.releaseSubjects(forge, out)
+	tag, subjects, _ := la.releaseSubjects(forge, out)
 	if tag == "" {
 		return
 	}
@@ -808,17 +825,79 @@ func runsTenantCode(workflow []byte) bool {
 	return false
 }
 
-// gatherDependency reads which released artifacts carry a published
-// inventory beside them.
+// gatherDependency reads which published artifacts carry a published
+// inventory beside them — on every surface this repository publishes
+// on, and on nothing else.
+//
+// The surface set is where the defect was. Every detector on this
+// track judged a RELEASE, so a repository that publishes rolling
+// digests instead of releases was permanently unevaluated no matter
+// what its publish path enforced: each answer was correct about what
+// it had looked at, and what it had looked at was the release
+// surface, hard-coded as the only surface a publish can have
+// (stele#249). Which surfaces a repository publishes on is a fact
+// about that repository, so it is declared and it is plural.
+//
+// Every surface is gathered. There is deliberately NO fallback from
+// one to another — a repository declaring both is judged on both, and
+// a release gather that found nothing may not be quietly answered by
+// a continuous one, because absence read as compliance is the failure
+// mode that costs more than the missing rung.
 func (la *levelArgs) gatherDependency(ev *level.Evidence, forge gh.Forge, out *latch) {
-	tag, subjects := la.releaseSubjects(forge, out)
+	for _, s := range la.surfaceSet() {
+		surface := level.PublishSurface{Name: s.Name()}
+
+		switch *s.Kind {
+		case population.SurfaceRelease:
+			la.dependencyOnRelease(ev, &surface, forge, out)
+		case population.SurfaceContinuousDigest:
+			la.dependencyOnContinuous(ev, &surface, s, forge, out)
+		}
+
+		ev.PublishSurfaces = append(ev.PublishSurfaces, surface)
+	}
+}
+
+// surfaceSet is where this repository publishes: what it declared, or
+// the default expression where it declared nothing.
+//
+// The declaration decides WHERE TO LOOK and can reach no further —
+// the same line --org already draws (stele#153). internal/level is
+// handed evidence and never a policy, so there is no route from
+// anything an organisation writes down to a rung; the worst a wrong
+// surface can do is send this run to a place with nothing in it,
+// which reports as unevaluated with the place named.
+func (la *levelArgs) surfaceSet() []population.Surface {
+	if la.surfaces == nil {
+		return population.DefaultSurfaces()
+	}
+
+	return la.surfaces
+}
+
+// dependencyOnRelease gathers the release surface: the newest
+// release's artifacts, the inventories published beside them, and the
+// triage decisions published beside those.
+//
+// An absence HERE is conclusive, which is why this leg refutes where
+// the continuous one cannot. A release's asset list is the complete
+// enumeration of what that publish emitted, so an inventory missing
+// from it is an inventory the publish did not emit.
+func (la *levelArgs) dependencyOnRelease(
+	ev *level.Evidence, surface *level.PublishSurface, forge gh.Forge, out *latch,
+) {
+	tag, subjects, missing := la.releaseSubjects(forge, out)
 	if tag == "" {
+		surface.Missing = append(surface.Missing, missing)
+
 		return
 	}
 
 	assets, err := forge.ReleaseAssets(la.owner, la.name, tag)
 	if err != nil {
 		out.logf("level: release %s: assets unreadable: %v", tag, err)
+		surface.Missing = append(surface.Missing,
+			fmt.Sprintf("release %s was found and its assets could not be listed: %v", tag, err))
 
 		return
 	}
@@ -911,7 +990,24 @@ func (la *levelArgs) gatherTriage(
 	ev *level.Evidence, forge gh.Forge, tag string, assets []string, invs map[string][]byte, out *latch,
 ) {
 	decisions := publishedDecisions(la, forge, tag, assets, out)
+
+	scanAndJoin(ev, invs, decisions, "release "+tag, out)
+}
+
+// scanAndJoin scans one surface's inventories and joins their findings
+// against that surface's published decisions.
+//
+// Shared by both surfaces on purpose. A release publishes its
+// inventory as an asset and a stream publishes it as an attestation
+// over the digest, but what "scanned" and "triaged" MEAN cannot differ
+// between them — two copies of this join would be two definitions of a
+// decided finding, and the rung would quietly mean something different
+// depending on where a repository publishes.
+func scanAndJoin(
+	ev *level.Evidence, invs map[string][]byte, decisions *vexjoin.Decisions, where string, out *latch,
+) {
 	scanner := newScanner()
+	scanned := false
 
 	for name, raw := range invs {
 		report, err := scanner.Scan(raw)
@@ -921,16 +1017,16 @@ func (la *levelArgs) gatherTriage(
 			return
 		}
 
-		ev.Scanned = true
+		ev.Scanned, scanned = true, true
 
 		found, decided := joinFindings(report, decisions)
 		ev.Findings += found
 		ev.Triaged += decided
 	}
 
-	if ev.Scanned {
-		out.logf("level: release %s: %d advisory finding(s), %d carrying a published decision",
-			tag, ev.Findings, ev.Triaged)
+	if scanned {
+		out.logf("level: %s: %d advisory finding(s), %d carrying a published decision",
+			where, ev.Findings, ev.Triaged)
 	}
 }
 
@@ -1060,7 +1156,9 @@ func (la *levelArgs) gatherSources(ev *level.Evidence, invs map[string][]byte) {
 	}
 
 	for where := range unrecognised {
-		ev.UnrecognisedSources = append(ev.UnrecognisedSources, where)
+		if !slices.Contains(ev.UnrecognisedSources, where) {
+			ev.UnrecognisedSources = append(ev.UnrecognisedSources, where)
+		}
 	}
 
 	sort.Strings(ev.UnrecognisedSources)
@@ -1069,7 +1167,25 @@ func (la *levelArgs) gatherSources(ev *level.Evidence, invs map[string][]byte) {
 		return
 	}
 
-	ev.DependencySources = sources
+	// Merged, never replaced. A repository publishing on two surfaces
+	// fetched its dependencies from wherever both of them record, and a
+	// second surface that overwrote the first would answer this
+	// requirement from whichever gather happened to run last.
+	if ev.DependencySources == nil {
+		ev.DependencySources = map[string]bool{}
+	}
+
+	for where, producerOwned := range sources {
+		// A location either surface records as upstream is upstream:
+		// this map's true means "the producer controls it", and one
+		// publish taking a dependency from upstream is not undone by
+		// another taking it from a mirror.
+		if was, seen := ev.DependencySources[where]; seen && !was {
+			continue
+		}
+
+		ev.DependencySources[where] = producerOwned
+	}
 }
 
 // inventoryPackages is the part of an inventory this check reads: each
@@ -1329,8 +1445,15 @@ func inventoryCovers(invs map[string][]byte) bool {
 // releaseSubjects finds the release to measure and the artifacts it
 // published, keyed name to digest.
 //
-//nolint:gocritic // unnamedResult: tag then subjects, named in the doc
-func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[string]string) {
+// The third result is the absence to report when there is no release
+// to measure. It is returned rather than only logged because a
+// dependency judgment now says which surfaces it looked at and what
+// was missing on each, and "no release" is one of four different
+// facts here — never published, unreadable, assets unreadable, or
+// published with nothing naming its artifacts.
+//
+//nolint:gocritic // unnamedResult: tag, subjects, then the absence to report
+func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[string]string, string) {
 	tag := la.tag
 
 	if tag == "" {
@@ -1338,7 +1461,7 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[st
 		if err != nil {
 			out.logf("level: releases unreadable: %v", err)
 
-			return "", nil
+			return "", nil, fmt.Sprintf("this repository's releases could not be listed: %v", err)
 		}
 
 		tag = newestRelease(tags)
@@ -1347,24 +1470,25 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[st
 	if tag == "" {
 		out.logf("level: this repository has published no release this tool can order")
 
-		return "", nil
+		return "", nil, "this repository has published no release this tool can order"
 	}
 
 	assets, err := forge.ReleaseAssets(la.owner, la.name, tag)
 	if err != nil {
 		out.logf("level: release %s: assets unreadable: %v", tag, err)
 
-		return "", nil
+		return "", nil, fmt.Sprintf("release %s was found and its assets could not be listed: %v", tag, err)
 	}
 
 	subjects := la.findManifest(forge, tag, assets, out)
 	if len(subjects) == 0 {
 		out.logf("level: release %s: no asset lists artifact digests, so its artifacts cannot be located", tag)
 
-		return "", nil
+		return "", nil, fmt.Sprintf(
+			"release %s publishes no asset listing artifact digests, so its artifacts cannot be located", tag)
 	}
 
-	return tag, subjects
+	return tag, subjects, ""
 }
 
 // findManifest locates the release's digest manifest BY CONTENT: an

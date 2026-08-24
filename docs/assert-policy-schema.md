@@ -213,7 +213,13 @@ with no configuration at all.
       "reason": "publishes no releases; it is the signing workflow repository" },
     { "repo": "www", "tracks": [],
       "reason": "the product site; it bears no evidence" },
-    { "repo": "vault", "visibility": "private" }
+    { "repo": "vault", "visibility": "private" },
+    { "repo": "db", "surfaces": [
+        { "kind": "continuous-digest",
+          "registry": "ghcr.io/acme/db",
+          "tag": "latest",
+          "identity": "^https://github\\.com/acme/signer/\\.github/workflows/sign\\.yml@" }
+      ] }
   ]
 }
 ```
@@ -245,6 +251,70 @@ with no configuration at all.
   Required whenever `tracks` is present. A narrowing nobody wrote a
   reason for is indistinguishable from a mistake, and this is the one
   field that tells a later reader which it was.
+- `surfaces` — where this repository publishes. See below; read by
+  `stele level` alone, and by nothing that decides membership.
+
+### Where a repository publishes
+
+`surfaces` is the third fact a roster row carries, and it is neither
+of the other two. Membership says whether a repository is asked;
+`visibility` says whether the enumeration could have shown it; a
+surface says WHERE to go and look once it has been asked.
+
+It exists because the engine had encoded the answer as a constant.
+Every Dependency-track detector judged a RELEASE, so a repository
+publishing rolling digests instead of releases was permanently
+Unevaluated on that track no matter what its publish path enforced —
+each answer correct about what it had looked at, and what it had
+looked at was the release surface, hard-coded as the only surface a
+publish can have. Which surfaces a repository publishes on is a fact
+about that repository.
+
+**Absent means the release surface alone**, which is what an adopter
+cutting releases has and what a stranger gets with no configuration.
+An EMPTY list is legal and means something different: this repository
+publishes on no surface this engine can read. That is not silence —
+the dependency rung comes back unevaluated naming what was sought —
+which is why, unlike a `tracks` narrowing, it needs no written reason.
+
+Plurality is the adopter's. A row may declare one surface, both, two
+of one kind at two registries, or none. What this engine owns is the
+set of surface KINDS, because each names a place the gather knows how
+to look; how many a row declares, and with which parameters, is
+policy.
+
+| kind | parameters | what is read |
+| --- | --- | --- |
+| `release` | none | the newest release, the artifacts its digest manifest names, and the inventories and decisions published beside them as assets |
+| `continuous-digest` | `registry`, `tag`, `identity` | what the rolling tag names now, and the inventories and decisions attested over those digests |
+
+- `kind` — required. A kind this release cannot look at is REFUSED at
+  load, by name: a key that loaded and computed nothing would read as
+  a surface nobody publishes on. The vocabulary is open upward — a
+  surface this release does not yet read is absent from it, never
+  refused as a concept.
+- `registry` — the image repository the rolling tag lives in, without
+  a tag or digest. The tag is resolved AT THE REGISTRY rather than at
+  a platform's package API, so a surface declaring a registry is
+  readable at any registry, a stranger's included.
+- `tag` — the rolling tag the publish moves.
+- `identity` — a regular expression over the signing certificate's
+  subject alternative name: whose attestations are this surface's
+  evidence. A pattern rather than a literal because a workflow
+  identity carries the ref it ran at, which moves every publish.
+
+A parameter the declared kind does not read is refused as firmly as
+one it needs, and a surface declared twice with identical parameters
+is refused as one place looked at twice.
+
+**No declaration reaches a verdict.** A surface decides where the
+judge looks and can do nothing else: `internal/level` receives
+evidence and never a policy, so a pattern pointed at the wrong
+publisher yields "looked there, found nothing" — unevaluated, which
+is a statement about the run's sight and never a level. Nor can a
+declaration lift one: an attestation still has to CARRY an inventory
+or a decision to establish anything, and the declaration only says
+whose bundles are read.
 
 ### What the enumeration covers
 

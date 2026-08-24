@@ -246,12 +246,54 @@ resolve through the checksummed proxy a Go build already fetches
 through; a type with no resolver answers "unknown", which becomes an
 unevaluated requirement rather than a pass.
 
-Every rung of this track is fed from the release's own published
-artifacts and nothing else: the inventory names the packages, the scan
-finds the advisories, the triage decisions published beside it settle
-them, the inventory's download locations say where the build fetched
-from, and the registry says when each version appeared. No
-configuration is read anywhere in that chain.
+Every rung of this track is fed from the publish's own artifacts and
+nothing else: the inventory names the packages, the scan finds the
+advisories, the published triage decisions settle them, the
+inventory's download locations say where the build fetched from, and
+the registry says when each version appeared. No configuration is
+read anywhere in that chain.
+
+### Where a publish is
+
+A release is not the only shape a publish has, and for two releases
+this tool behaved as though it were. Every detector above judged a
+release, so a repository publishing rolling digests instead — no tag,
+no version surface — was permanently `UNEVALUATED` on this track no
+matter what its publish path enforced. Each answer was correct about
+what it had looked at; what it had looked at was hard-coded.
+
+So a repository's publish surfaces are
+[declared, and plural](assert-policy-schema.md#where-a-repository-publishes):
+a set that may hold the release surface, a continuous-digest surface,
+both, or neither. Absent, the release surface stands alone, which is
+what an adopter cutting releases has and what a stranger gets with no
+configuration.
+
+Every declared surface is gathered, and there is **no fallback from
+one to another**. A repository declaring both is judged on both, and a
+release gather that found nothing is never quietly answered by a
+continuous one: absence read as compliance costs more than a missing
+rung.
+
+The declaration says WHERE to look and nothing else — the same line
+`--org` draws. `internal/level` receives evidence and never a policy,
+so a surface pointed at the wrong place yields "looked there, found
+nothing", which is unevaluated: a statement about this run's sight,
+never a level.
+
+**A continuous surface's absences are inconclusive, and the two legs
+differ there deliberately.** A release's asset list enumerates
+everything that publish emitted, so an inventory missing from it is an
+inventory the producer did not publish — that refutes. Reading a
+digest's attestations enumerates nothing of the kind: the store is
+keyed by subject digest, so evidence a publish emitted about *other*
+bytes is invisible from the image however completely it exists. A
+continuous surface therefore contributes no artifact unless it found
+an inventory, and reports unevaluated with each absence named
+separately — no inventory attested over the digest, no decision, and
+how many of the artifact digests carry nothing at all. Separately,
+because a producer clears them one at a time and the account should
+narrow as they do.
 
 ### Continuity recovers
 
@@ -299,6 +341,12 @@ refused rather than reinterpreted. The board form below is the
 opposite case and accepts both: naming no track, it asks the
 declaration *which rows does this repository have*, which the
 declaration answers positively.
+
+That is also where a single repository's own declaration reaches its
+own judgment. A repository publishing a stream rather than releases
+declares its surfaces in its roster row, and the board form over
+`--repo` reads them — which is the same run a repository already makes
+to publish its own cells with a credential over itself.
 
 ### What the enumeration could see
 

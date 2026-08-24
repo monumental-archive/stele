@@ -578,7 +578,7 @@ func TestUnionInventoryCoversEveryArtifact(t *testing.T) {
 
 	Run([]string{"level", "dependency", "--repo", "acme/widget", "--json"}, &stdout, &stderr)
 
-	if !strings.Contains(stdout.String(), "a published inventory covers all 2 released artifact(s)") {
+	if !strings.Contains(stdout.String(), "a published inventory covers all 2 published artifact(s)") {
 		t.Errorf("one union inventory did not cover the release's artifacts:\n%s", stdout.String())
 	}
 }
