@@ -10,6 +10,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.20.0](https://github.com/monumental-archive/stele/compare/v0.19.1...v0.20.0) - 2026-08-24
+
+### Breaking
+
+- type the base-approval scopes and move the epoch to 7 ([#257](https://github.com/monumental-archive/stele/pull/257))
+
+### Added
+
+- expose the previous release derive version resolves ([#256](https://github.com/monumental-archive/stele/pull/256))
+- scope a board to one repository, declare coverage ([#259](https://github.com/monumental-archive/stele/pull/259))
+- judge every publish surface a repository declares ([#267](https://github.com/monumental-archive/stele/pull/267))
+
+### Fixed
+
+- attribute a policy-load failure to the verb that ran ([#262](https://github.com/monumental-archive/stele/pull/262))
+- judge the release plan's changelog splice on every run ([#263](https://github.com/monumental-archive/stele/pull/263))
+
+### Documentation
+
+- record the cardinality defect class in the stranger test ([#255](https://github.com/monumental-archive/stele/pull/255))
+- state the current schema epoch in the three stale examples ([#265](https://github.com/monumental-archive/stele/pull/265))
+
+### Testing
+
+- give every test client its own transport ([#244](https://github.com/monumental-archive/stele/pull/244))
+
 ## [0.19.1](https://github.com/monumental-archive/stele/compare/v0.19.0...v0.19.1) - 2026-08-20
 
 ### Fixed

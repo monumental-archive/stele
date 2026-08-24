@@ -9,6 +9,6 @@
 # drift, and never repairs it.
 #
 # band: 2
-# measured: 95.4
-# derived: coverage:adopt
-93.4
+# measured: 95.5
+# derived: v0.20.0
+93.5
