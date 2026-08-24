@@ -62,7 +62,7 @@ decisions.
 
 ```json
 {
-  "schema": 4,
+  "schema": 7,
   "release": true,
   "version": "0.16.0",
   "base": "0.15.0",
@@ -127,7 +127,7 @@ the org.
 
 ```json
 {
-  "schema": 4,
+  "schema": 7,
   "release": false,
   "refusals": [
     { "cause": "mirror-drift", "detail": "the mirrors carry \"0.14.7\" but the last release is 0.15.0 …" }
