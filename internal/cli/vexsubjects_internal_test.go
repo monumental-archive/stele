@@ -40,7 +40,7 @@ func vexSubjectsSnapshot(t *testing.T) (string, string, string) {
 		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,
 		"snap/acme/widget/releases/v1.0.0/assets/checksums.txt": sums,
 		"snap/acme/widget/attestations/" + digest + ".json":     `[{"bundle": 1}]`,
-		"policy.json": `{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 7, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
@@ -191,7 +191,7 @@ func TestDeriveVEXSubjectsWithoutBlastRadius(t *testing.T) {
 	swapScanner(t, cliScanner{out: vexSubjectsScan})
 
 	policy := filepath.Join(t.TempDir(), "policy.json")
-	body := `{"schema": 6, "evidence": {"sbomSuffix": ".spdx.json", ` +
+	body := `{"schema": 7, "evidence": {"sbomSuffix": ".spdx.json", ` +
 		`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 		`"manifestAsset": "evidence-manifest.json", ` +
 		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`

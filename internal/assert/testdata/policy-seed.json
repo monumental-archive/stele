@@ -1,5 +1,5 @@
 {
-  "schema": 6,
+  "schema": 7,
   "issuer": "https://token.actions.githubusercontent.com",
   "population": {
     "repositories": [
@@ -47,10 +47,25 @@
       "signerPinPattern": "monumental-archive/signer/.github/workflows/sign\\.yml@([0-9a-f]{40})"
     },
     "baseImages": {
-      "pinFile": "docker/pgrx-base-images.toml",
-      "attestorRepo": ".github",
-      "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
-      "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+      "scopes": [
+        {
+          "name": "pgrx-bases",
+          "mechanism": "pin-file",
+          "pinFile": "docker/pgrx-base-images.toml",
+          "attestorRepo": ".github",
+          "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
+          "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+        },
+        {
+          "name": "org-bases",
+          "mechanism": "provenance-verified",
+          "fromFile": "Dockerfile",
+          "registryPrefix": "ghcr.io/monumental-archive/",
+          "pinPattern": "^ghcr\\.io/monumental-archive/(?P<repo>[a-z0-9-]+):(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)[^@]*@sha256:[0-9a-f]{64}$",
+          "identity": "https://github.com/monumental-archive/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
+          "predicateType": "https://slsa.dev/provenance/v1"
+        }
+      ]
     }
   },
   "blastRadius": {

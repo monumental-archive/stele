@@ -222,7 +222,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		org, policyPath, debtPath string
 		repo                      string
 		root                      rootFlags
-		pinPath                   string
+		pins                      basePins
 		depth, verifyPolicyPath   string
 		snapshotDir, captureDir   string
 	)
@@ -235,8 +235,9 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	debtFlag(flags, &debtPath)
 	root.register(flags)
-	flags.StringVar(&pinPath, "base-pins", "",
-		"path to the committed base-image pin file (defaults to the policy's baseImages.pinFile)")
+	flags.Var(&pins, "base-pins",
+		"override one pin-file scope's committed file: <scope>=<path>, repeatable"+
+			" (each scope defaults to its own baseImages.scopes[].pinFile)")
 	flags.StringVar(&depth, "depth", depthPresence,
 		"presence (default) or full — full re-verifies every covered release through the verify engine (#4)")
 	flags.StringVar(&verifyPolicyPath, "verify-policy", "",
@@ -321,7 +322,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	attestor, pinFile, serr := loadStoreInputs(pol, forge, rootJSON, pinPath)
+	attestor, pinFiles, serr := loadStoreInputs(pol, forge, rootJSON, pins)
 	if serr != nil {
 		return usageFail(serr.Error())
 	}
@@ -352,7 +353,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		return refuseToStart(targetEvidence, scope.Subject(), perr, jsonOut, stdout, stderr)
 	}
 
-	rep, err := assert.Evidence(pol, pop, forge, src, attestor, j, pinFile, full, out.logf, root.facts()...)
+	rep, err := assert.Evidence(pol, pop, forge, src, attestor, j, pinFiles, full, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}

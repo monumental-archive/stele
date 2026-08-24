@@ -22,7 +22,7 @@ func FuzzLoad(f *testing.F) {
 	}
 
 	f.Add(b)
-	f.Add([]byte(`{"schema": 6}`))
+	f.Add([]byte(`{"schema": 7}`))
 	f.Add([]byte(`{`))
 
 	f.Fuzz(func(_ *testing.T, data []byte) {

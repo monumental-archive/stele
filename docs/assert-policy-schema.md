@@ -23,7 +23,7 @@ version mismatch, never as an unknown-field error.
 
 ```json
 {
-  "schema": 6,
+  "schema": 7,
   "debtFile": "security/attestation-debt.txt",
   "population": {
     "repositories": [
@@ -352,10 +352,25 @@ point is that nobody else checks these artifacts.
       "signerPinPattern": "monumental-archive/signer/.github/workflows/sign\\.yml@([0-9a-f]{40})"
     },
     "baseImages": {
-      "pinFile": "docker/pgrx-base-images.toml",
-      "attestorRepo": ".github",
-      "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
-      "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+      "scopes": [
+        {
+          "name": "pgrx-bases",
+          "mechanism": "pin-file",
+          "pinFile": "docker/pgrx-base-images.toml",
+          "attestorRepo": ".github",
+          "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
+          "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+        },
+        {
+          "name": "org-bases",
+          "mechanism": "provenance-verified",
+          "fromFile": "Dockerfile",
+          "registryPrefix": "ghcr.io/monumental-archive/",
+          "pinPattern": "^ghcr\\.io/monumental-archive/(?P<repo>[a-z0-9-]+):(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)[^@]*@sha256:[0-9a-f]{64}$",
+          "identity": "https://github.com/monumental-archive/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
+          "predicateType": "https://slsa.dev/provenance/v1"
+        }
+      ]
     }
   }
 }
@@ -390,14 +405,62 @@ is unreadable at its pin or declares no signer pin (the identity
 cannot be derived, so the image cannot be vouched for), and an
 attestation that refuses.
 
-**baseImages** — every digest-pinned base reference in `pinFile` must
+**baseImages** — a non-empty list of `scopes`, each a `name`, a
+`mechanism`, and that mechanism's parameters. There is more than one
+way to approve a base image, and how many an org uses is the org's
+fact: declare one scope, several, or several of the same kind. Names
+form a set, because a finding names the scope that demanded it.
+
+The MECHANISM KINDS are this engine's, because each names a judgment
+the walk computes; the parameters and the plurality are yours. A
+`mechanism` this stele has no judgment for is refused at load with the
+kind named — absent, not refused: a new mechanism is engine work, so
+it can never become a key that loads and computes nothing. Each kind
+requires exactly its own parameters: one it needs and you omit is
+refused by name, and one it does not read is refused too, for the same
+reason.
+
+Scopes never reference another section. A `provenance-verified` scope
+declares its own signer fields even where `evidence.continuous`
+carries the same values — coupling the two would make base approval
+inexpressible for an adopter who verifies bases and publishes no
+rolling digests. Keeping one org's document free of internal
+repetition is that org's authoring problem, never the schema's.
+
+**pin-file** — every digest-pinned base reference in `pinFile` must
 carry a `predicateType` attestation verifying under
-`attestorIdentity`. A pin file present but pinning nothing is a
-finding, not a clean answer: the walk was told to check something. A
-declared pin file absent from the checkout is a usage refusal, like
-the missing trusted root — the likelier cause is the wrong working
-directory, and proceeding would judge nothing while looking green. An
-org that pins no base images says so by omitting this section.
+`attestorIdentity`, looked up in `attestorRepo`. A pin file present
+but pinning nothing is a finding, not a clean answer: the walk was
+told to check something. A declared pin file absent from the checkout
+is a usage refusal, like the missing trusted root — the likelier cause
+is the wrong working directory, and proceeding would judge nothing
+while looking green. `--base-pins <scope>=<path>` supplies one from
+elsewhere; naming a scope the policy has no pin file for is refused
+rather than ignored.
+
+**provenance-verified** — for every repository in the population, the
+digest-pinned bases its `fromFile` instantiates under
+`registryPrefix` must carry a `predicateType` attestation verifying
+under the identity their own pin implies. `pinPattern` parses the
+reference and `identity` is expanded from its capture groups, so the
+signer demanded is DERIVED FROM THE PIN and the two cannot drift
+apart; a template naming a group the pattern never captures is
+refused at load rather than expanded into an identity missing a
+segment. `registryPrefix` must end at the owner boundary
+(`<host>/<owner>/`), because the publishing repository is read off the
+path that follows it.
+
+Bases OUTSIDE the prefix produce nothing at all — no finding, no
+count. Whose bases those are is another mechanism's question, and an
+exclusion that reported would be an exception wearing the wrong
+clothes. Three things fail closed, each its own finding: a pinned
+reference the pattern cannot read (no identity can be derived, and an
+unreadable pin is not an approved one), an identity template that
+expands to nothing, and an attestation that refuses. A repository
+whose `fromFile` is absent builds no image — an answer, not a gap.
+
+An org that approves no base images at all says so by omitting the
+whole section.
 
 ## The blastRadius section
 

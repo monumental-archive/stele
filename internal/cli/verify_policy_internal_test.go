@@ -26,7 +26,7 @@ import (
 // demands, so a row that breaks one field breaks exactly that field.
 const (
 	cleanVerifyPolicy = `{
-	  "schema": 6,
+	  "schema": 7,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "trust": {
 	    "provenance": {
@@ -36,7 +36,7 @@ const (
 	}`
 
 	cleanAssertPolicy = `{
-	  "schema": 6,
+	  "schema": 7,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {
 	    "sbomSuffix": ".spdx.json",
@@ -44,6 +44,66 @@ const (
 	    "umbrellaBundle": "attestations.intoto.jsonl",
 	    "manifestAsset": "evidence-manifest.json",
 	    "classes": {"go-binary": {"bundles": ["attestations-go-binaries.intoto.jsonl"]}}
+	  }
+	}`
+)
+
+// The two base-approval shapes the epoch moved between (stele#247),
+// as whole documents a consumer could have committed. The command is
+// how an adopter asks "does what I committed still load against what
+// I pin", so both directions are measured through it.
+const (
+	// bothScopesAssertPolicy names both mechanisms — the world the
+	// closed four-field block could not describe at any value.
+	bothScopesAssertPolicy = `{
+	  "schema": 7,
+	  "issuer": "https://token.actions.githubusercontent.com",
+	  "evidence": {
+	    "sbomSuffix": ".spdx.json",
+	    "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl",
+	    "manifestAsset": "evidence-manifest.json",
+	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
+	    "baseImages": {"scopes": [
+	      {
+	        "name": "pgrx-bases",
+	        "mechanism": "pin-file",
+	        "pinFile": "docker/pgrx-base-images.toml",
+	        "attestorRepo": ".github",
+	        "attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main",
+	        "predicateType": "https://acme.example/attestations/base-image-approval/v1"
+	      },
+	      {
+	        "name": "org-bases",
+	        "mechanism": "provenance-verified",
+	        "fromFile": "Dockerfile",
+	        "registryPrefix": "ghcr.io/acme/",
+	        "pinPattern": "^ghcr\\.io/acme/(?P<repo>[a-z-]+):(?P<version>[0-9.]+)[^@]*@sha256:[0-9a-f]{64}$",
+	        "identity": "https://github.com/acme/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
+	        "predicateType": "https://slsa.dev/provenance/v1"
+	      }
+	    ]}
+	  }
+	}`
+
+	// preScopesAssertPolicy is the block as it stood before the
+	// reshape, at the CURRENT epoch: the document a consumer holds
+	// when the pin moves ahead of the policy edit.
+	preScopesAssertPolicy = `{
+	  "schema": 7,
+	  "issuer": "https://token.actions.githubusercontent.com",
+	  "evidence": {
+	    "sbomSuffix": ".spdx.json",
+	    "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl",
+	    "manifestAsset": "evidence-manifest.json",
+	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
+	    "baseImages": {
+	      "pinFile": "docker/pgrx-base-images.toml",
+	      "attestorRepo": ".github",
+	      "attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main",
+	      "predicateType": "https://acme.example/attestations/base-image-approval/v1"
+	    }
 	  }
 	}`
 )
@@ -83,11 +143,11 @@ func TestVerifyPolicyMirrorsTheLoader(t *testing.T) {
 		{"a clean assert policy", "--assert-policy", cleanAssertPolicy, exitOK},
 		{
 			"a verify policy one epoch behind", "--verify-policy",
-			strings.Replace(cleanVerifyPolicy, `"schema": 6`, `"schema": 5`, 1), exitRefused,
+			strings.Replace(cleanVerifyPolicy, `"schema": 7`, `"schema": 5`, 1), exitRefused,
 		},
 		{
 			"an assert policy one epoch behind", "--assert-policy",
-			strings.Replace(cleanAssertPolicy, `"schema": 6`, `"schema": 5`, 1), exitRefused,
+			strings.Replace(cleanAssertPolicy, `"schema": 7`, `"schema": 5`, 1), exitRefused,
 		},
 		{
 			// proofFloor as a string is the shape the live incident
@@ -100,12 +160,18 @@ func TestVerifyPolicyMirrorsTheLoader(t *testing.T) {
 		},
 		{
 			"a verify policy declaring a key this engine has no field for", "--verify-policy",
-			strings.Replace(cleanVerifyPolicy, `"schema": 6`, `"schema": 6, "sourceLevel": 4`, 1), exitRefused,
+			strings.Replace(cleanVerifyPolicy, `"schema": 7`, `"schema": 7, "sourceLevel": 4`, 1), exitRefused,
 		},
 		{
 			"a document carrying no schema at all", "--verify-policy",
-			strings.Replace(cleanVerifyPolicy, `"schema": 6,`, ``, 1), exitRefused,
+			strings.Replace(cleanVerifyPolicy, `"schema": 7,`, ``, 1), exitRefused,
 		},
+		// The stele#247 reshape, measured from outside in both
+		// directions: the scoped shape loads at this epoch, and the
+		// block it replaced refuses here rather than at whatever verb
+		// the consumer next runs.
+		{"an assert policy naming both approval scopes", "--assert-policy", bothScopesAssertPolicy, exitOK},
+		{"an assert policy carrying the pre-scopes block", "--assert-policy", preScopesAssertPolicy, exitRefused},
 	}
 
 	for _, row := range rows {
@@ -301,7 +367,7 @@ func TestVerifyPolicyReachesNothing(t *testing.T) {
 	}
 
 	clean := writePolicyDoc(t, "clean.json", cleanVerifyPolicy)
-	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanVerifyPolicy, `"schema": 6`, `"schema": 5`, 1))
+	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanVerifyPolicy, `"schema": 7`, `"schema": 5`, 1))
 
 	for _, row := range []struct {
 		name string
@@ -325,7 +391,7 @@ func TestVerifyPolicyReachesNothing(t *testing.T) {
 // loader's refusal and the command's own usage error. A clean load
 // writes nothing, so there is no stream on it to fail.
 func TestVerifyPolicyStreamGuards(t *testing.T) {
-	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanAssertPolicy, `"schema": 6`, `"schema": 5`, 1))
+	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanAssertPolicy, `"schema": 7`, `"schema": 5`, 1))
 
 	t.Run("a refused document", func(t *testing.T) {
 		sweepWriteFailures(t, []string{"verify", modePolicy, "--assert-policy", stale})
