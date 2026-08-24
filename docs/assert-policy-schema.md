@@ -556,7 +556,7 @@ publisher's CI. Writer and reader share one definition
 this reader admits cannot drift apart:
 
 ```json
-{ "schema": 4, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+{ "schema": 7, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
   "machineryVersion": "1.40.0",
   "entries": [
     { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject",
