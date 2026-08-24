@@ -20,7 +20,7 @@ What deliberately does **not** move here: signing, token capability,
 the job graph, the OIDC grants. The plan is JSON, not capability
 (.github#392's "not signing / not workflows" boundary is untouched).
 
-## Two properties
+## Three properties
 
 **It is safe to compute twice.** Assembling reads; nothing in it
 writes. `--prepare` writes the tree the plan names — the version
@@ -29,6 +29,19 @@ that preparation is the plan's own file list applied, never a second
 reading of the tree. So the leg that prepares and the leg that commits
 cannot disagree about what was prepared, and a later leg (the one that
 mints the tag) can recompute the same plan without touching anything.
+
+**The changelog is judged on every run.** The splice `--prepare` would
+write is computed on the plain run too — the same read and the same
+duplicate guard, without the write — and a splice the prepare leg
+would refuse refuses here as well, with the same message and the same
+exit 1 (stele#261). A plan is a claim about what the prepare leg will
+do, so `release: true` over a splice that leg cannot perform is a
+false claim, and a gate running the plain derive would otherwise pass
+green on a tree whose release burns after the merge. The judgement
+lands before the document is placed, so nothing is ever emitted
+describing an edit to a changelog state this refuses — including the
+`deletions` entry a plan once carried for a changelog the tree does
+not have.
 
 **A refused plan is a document saying why.** A tree state that forbids
 the release produces a plan carrying `refusals` and no instructions —

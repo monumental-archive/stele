@@ -82,6 +82,19 @@ func runDeriveReleasePlan(da *deriveArgs, na *notesArgs, pa *planArgs, doc io.Wr
 		return err
 	}
 
+	// The changelog splice is judged on EVERY run, not only the one
+	// that writes it (stele#261). A plan is a claim about what the
+	// prepare leg will do, so a splice that leg would refuse must
+	// refuse here too — a gate running the plain derive that passes on
+	// a tree whose release refuses learns it on main, which is the most
+	// expensive place to learn it. Judged before the plan is reported
+	// or placed, so no document and no progress line ever claims an
+	// edit to a changelog state this refuses.
+	edit, err := planSplice(da, na, plan)
+	if err != nil {
+		return err
+	}
+
 	if err := reportPlan(plan, out); err != nil {
 		return err
 	}
@@ -91,7 +104,7 @@ func runDeriveReleasePlan(da *deriveArgs, na *notesArgs, pa *planArgs, doc io.Wr
 	// mirrors anyway would be the tool overwriting the very evidence it
 	// just refused on.
 	if pa.prepare && plan.Release {
-		if err := preparePlan(da, na, d, plan, out); err != nil {
+		if err := preparePlan(da, na, d, plan, edit, out); err != nil {
 			return err
 		}
 	}
@@ -162,12 +175,49 @@ func planInputs(
 	return in, nil
 }
 
+// changelogEdit is the changelog splice a plan names: the path, and
+// the bytes the prepare leg places there. Computed once, so the run
+// that only judges the splice and the run that performs it cannot be
+// two readings of one file.
+//
+// The zero value names nothing, which is a state and not a defect: no
+// changelog was given, or the range releases nothing, and neither has
+// a splice to judge.
+type changelogEdit struct {
+	path    string
+	content []byte
+}
+
+// named reports whether this edit names a splice at all.
+func (e changelogEdit) named() bool { return e.path != "" }
+
+// planSplice computes the plan's changelog edit and writes nothing.
+func planSplice(da *deriveArgs, na *notesArgs, plan *release.Plan) (changelogEdit, error) {
+	if na.changelog == "" || !plan.Release {
+		return changelogEdit{}, nil
+	}
+
+	// Tree-relative, like every other path the plan names: the
+	// changelog is one of the release commit's contents, and a
+	// commit's contents are paths inside the tree.
+	path := filepath.Join(da.gitDir, na.changelog)
+
+	content, err := spliced(path, plan.Notes, plan.Version, plan.Tag)
+	if err != nil {
+		return changelogEdit{}, err
+	}
+
+	return changelogEdit{path: path, content: content}, nil
+}
+
 // preparePlan writes the tree the plan names: the mirrors to the
 // planned version, and the changelog section that is the plan's own
 // notes — one rendering reaching the file and the document, so the
 // text a reviewer approves and the text a release carries cannot be
 // two renderings.
-func preparePlan(da *deriveArgs, na *notesArgs, d *derived, plan *release.Plan, out *latch) error {
+func preparePlan(
+	da *deriveArgs, na *notesArgs, d *derived, plan *release.Plan, edit changelogEdit, out *latch,
+) error {
 	set, err := manifest.Detect(da.gitDir)
 	if err != nil {
 		return err
@@ -189,11 +239,11 @@ func preparePlan(da *deriveArgs, na *notesArgs, d *derived, plan *release.Plan, 
 		out.logf("prepared mirrors: %s", strings.Join(files, " "))
 	}
 
-	if na.changelog != "" {
-		// Tree-relative, like every other path the plan names: the
-		// changelog is one of the release commit's contents, and a
-		// commit's contents are paths inside the tree.
-		if err := splice(filepath.Join(da.gitDir, na.changelog), plan.Notes, plan.Version, plan.Tag, out); err != nil {
+	// The bytes already computed, never a second splice: the run that
+	// judged the changelog and the run that writes it are one reading,
+	// so what was judged is what lands.
+	if edit.named() {
+		if err := writeSpliced(edit.path, edit.content, plan.Version, out); err != nil {
 			return err
 		}
 
