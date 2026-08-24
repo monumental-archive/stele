@@ -143,6 +143,9 @@ func (opts *boardArgs) plan(forge gh.Forge, out *latch) (plan, int) {
 	if opts.policyPath != "" {
 		pol, err := loadAssertPolicy(opts.policyPath)
 		if err != nil {
+			// This call site's verb, on the one line the cause reaches:
+			// the loader names none, and a board that refused before it
+			// planned publishes no document to carry one.
 			out.logf("level: %v", err)
 
 			return plan{}, exitBlind

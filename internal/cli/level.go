@@ -292,7 +292,9 @@ func (la *levelArgs) members(forge gh.Forge) ([]string, []string, error) {
 	if la.policyPath != "" {
 		pol, err := loadAssertPolicy(la.policyPath)
 		if err != nil {
-			return nil, nil, err
+			// Named here, because this cause travels IN the sealed
+			// report and the document carries no other verb.
+			return nil, nil, fmt.Errorf("level: %w", err)
 		}
 
 		declared = pol.Population

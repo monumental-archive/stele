@@ -86,7 +86,7 @@ func parseVEXSubjectsArgs(args []string, stderr io.Writer) (*vexSubjectsArgs, in
 func runDeriveVEXSubjects(va *vexSubjectsArgs, doc io.Writer, out *latch) error {
 	pol, err := loadAssertPolicy(va.policyPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("derive vex-subjects: %w", err)
 	}
 
 	if pol.BlastRadius == nil {
@@ -145,16 +145,27 @@ func runDeriveVEXSubjects(va *vexSubjectsArgs, doc io.Writer, out *latch) error 
 }
 
 // loadAssertPolicy opens and decodes the committed assert policy.
+//
+// It names NO verb. Three commands load a policy through here, and a
+// helper that stamped its home file's verb on all of them told a
+// `stele level` board consumer that `derive vex-subjects` had failed —
+// a verb they never ran, in a published evidence document (stele#260).
+// The verb belongs to the command that ran, so each caller adds its
+// own at its own call site.
+//
+// What this DOES own is the path, because every caller named the same
+// one: os.Open carries it already, the decoder never sees it, so only
+// the decode leg gains it here.
 func loadAssertPolicy(path string) (*assert.Policy, error) {
 	f, err := os.Open(path) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
-		return nil, fmt.Errorf("derive vex-subjects: %w", err)
+		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
 	}
 	defer f.Close() //nolint:errcheck // read-only close
 
 	pol, err := assert.LoadPolicy(f)
 	if err != nil {
-		return nil, fmt.Errorf("derive vex-subjects: %w", err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
 	return pol, nil
