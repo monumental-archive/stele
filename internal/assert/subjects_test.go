@@ -156,3 +156,91 @@ func TestSubjectsEmptyListing(t *testing.T) {
 		})
 	}
 }
+
+// TestSubjectsRefuseWhatTheyCannotReport (stele#252): a population
+// carrying members this run could not look at is refused at the door
+// rather than measured short.
+//
+// These targets seal a population sized by what they measured — the
+// subjects a release published, the tags an epoch covers, the workflow
+// files a tree holds — so a shorter subject list arrives with nowhere
+// to say it was shorter, and a walk that measured eight of nine would
+// publish as a walk over eight. Refusing is what the reconciliation
+// already did for this same population before a coverage could be
+// declared; naming the repository is the part that is new. Each door
+// refuses over its OWN question, which is why the roster door refuses
+// for a repository the track doors cannot see at all.
+func TestSubjectsRefuseWhatTheyCannotReport(t *testing.T) {
+	t.Parallel()
+
+	// A public-only enumeration over an org holding one private
+	// member that bears source evidence, and one that bears none.
+	pop := orgPop(t, &fakeForge{repos: []string{"canon"}},
+		&population.Declaration{
+			Coverage: &population.Coverage{Visibility: new([]string{"public"})},
+			Repositories: []population.Entry{
+				{Repo: new("canon")},
+				{
+					Repo: new("vault"), Visibility: new("private"),
+					Tracks: &[]string{"source"}, Reason: new("publishes no releases"),
+				},
+				{
+					Repo: new("attic"), Visibility: new("private"),
+					Tracks: &[]string{}, Reason: new("bears no evidence"),
+				},
+			},
+		})
+
+	for _, tc := range []struct {
+		name    string
+		door    assert.Subjects
+		refuses string
+		want    []string
+	}{
+		{
+			name: "the build track cannot see either private member", door: assert.EvidenceSubjects,
+			want: []string{"canon"},
+		},
+		{
+			name: "the source track is owed the one that bears source evidence", door: assert.ChainsSubjects,
+			refuses: "vault",
+		},
+		{name: "and so is every other source walk", door: assert.TagsSubjects, refuses: "vault"},
+		{
+			name: "the dependency track cannot see either", door: assert.BlastRadiusSubjects,
+			want: []string{"canon"},
+		},
+		{
+			// The roster door reads past exclusions, so the member
+			// that bears nothing anywhere is still one it did not look
+			// at.
+			name: "the roster door is owed both", door: assert.PermissionsSubjects,
+			refuses: "vault attic",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tc.door.Enumerate(pop)
+
+			if tc.refuses == "" {
+				if err != nil || !slices.Equal(got, tc.want) {
+					t.Fatalf("Enumerate = %v, %v — want %v measured", got, err, tc.want)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("Enumerate = %v, want a refusal: this target cannot report a subject it could not"+
+					" look at", got)
+			}
+
+			for _, want := range []string{tc.refuses, "declared enumeration coverage"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Enumerate = %v, want it to say %q", err, want)
+				}
+			}
+		})
+	}
+}

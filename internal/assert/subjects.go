@@ -23,6 +23,9 @@
 package assert
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/monumental-archive/stele/internal/level"
 	"github.com/monumental-archive/stele/internal/population"
 )
@@ -84,10 +87,42 @@ var (
 )
 
 // Enumerate opens the population at this target's door.
+//
+// A population carrying members this run could not look at is refused
+// here rather than measured (stele#252). The reclassification a
+// declared enumeration coverage performs is real, but it hands the
+// caller a shorter list plus a statement about the difference, and
+// these targets seal a population sized by what they measured — so
+// the statement would go nowhere and the shorter list would read as
+// the whole. Refusing is what today's reconciliation already does for
+// the same population; naming the repositories is the part that is
+// new. A target that grows a vocabulary for an unexercised subject
+// stops needing this.
 func (s Subjects) Enumerate(pop *population.Set) ([]string, error) {
+	if unlooked := s.unexercised(pop); len(unlooked) > 0 {
+		return nil, fmt.Errorf(
+			"population: %s is outside this run's declared enumeration coverage, and this target has no"+
+				" way to report a subject it could not look at — enumerate with a credential that covers it,"+
+				" or declare the coverage this run actually has",
+			strings.Join(unlooked, " "))
+	}
+
 	if !s.evidence {
 		return pop.Roster(), nil
 	}
 
 	return pop.Members(s.track)
+}
+
+// unexercised opens the SAME door for the members this run could not
+// look at. Sharing the door decision with Enumerate is the whole
+// point: a target that asked the roster and then checked the track's
+// unexercised members would be answering two different questions
+// about one population.
+func (s Subjects) unexercised(pop *population.Set) []string {
+	if !s.evidence {
+		return pop.UnexercisedRoster()
+	}
+
+	return pop.UnexercisedMembers(s.track)
 }

@@ -292,16 +292,53 @@ evidence to a declaration, and still not asked here: a repository in
 the population is judged on the platform's own facts, and nothing
 written down can lift its rung or hide a shortfall it established.
 
-`--policy` is meaningful only with `--org`. Over the one repository
-`--repo` names, a declared population could do nothing but veto the
-question that was asked, so the combination is refused rather than
-reinterpreted.
+With a track named, `--policy` is meaningful only with `--org`. Over
+the one repository `--repo` names, a declared population could do
+nothing but veto the question that was asked, so the combination is
+refused rather than reinterpreted. The board form below is the
+opposite case and accepts both: naming no track, it asks the
+declaration *which rows does this repository have*, which the
+declaration answers positively.
+
+### What the enumeration could see
+
+A declared population is reconciled against the listing in both
+directions, and an unseen member refuses: **an unseen repository is
+unchecked, not clean**, and softening that would let a deleted
+repository read as fine.
+
+That rule cannot tell "the listing is complete and something is
+missing from it" from "the listing was never going to show this",
+which leaves every reconciliation one revoked scope away from refusing
+for a reason that is not true. So an organisation may declare what its
+enumeration covers
+([`population.coverage`](assert-policy-schema.md#population)), and a
+declared member outside that coverage is reported **unexercised**:
+named on the run's output, counted against the declared population so
+the report seals `CANNOT_JUDGE` rather than a clean verdict, and never
+measured.
+
+The declaration moves exactly one thing and can never make anything
+read as clean:
+
+| the listing | the declaration | outcome |
+| --- | --- | --- |
+| shows it | does not name it | **refuses** — nobody has said anything about this repository |
+| does not show it | names it, inside the coverage | **refuses** — deleted is still deleted |
+| does not show it | names it, outside the coverage | **unexercised** — loud, uncounted, unjudged |
+| shows it | names it | reconciled, and measured |
+
+An organisation adopting stele on two repositories of forty, holding
+private members, or handing a run a deliberately scoped credential is
+a normal adopter rather than a degraded one. Absent a `coverage`
+declaration, every member is inside the coverage — which is the
+behaviour that shipped before this existed.
 
 ## The board
 
-`stele level --org <org> --out-dir <dir>`, with no track named,
-measures every cell the population holds and publishes each as its own
-pair of documents:
+`stele level --out-dir <dir>`, with no track named, measures every
+cell a population holds and publishes each as its own pair of
+documents:
 
 ```text
 <dir>/<repo>/<track>.report.json
@@ -317,6 +354,25 @@ The board form folds nothing. `--org` with a track answers *what does
 this organisation support*, which is a fold to its weakest member;
 `--out-dir` answers *what does each cell support*, which is a
 different question and keeps every answer separate.
+
+### Two scopes
+
+| scope | population | who can run it |
+| --- | --- | --- |
+| `--org <org>` | the forge's listing, as the declaration narrows it | a credential that can list the organisation |
+| `--repo <owner>/<name>` | that repository's declared rows, and nothing else | a credential over that repository |
+
+The per-repository scope **enumerates nothing and reconciles
+nothing**. It reads the declaration only where it names the repository
+the caller named — so one committed policy serves every repository's
+own run, and a repository publishing its own badge never needs a
+credential that can read its organisation. A repository the
+declaration places on no track publishes no cell and exits clean: an
+exclusion produces nothing, and there is no exit code for a fact.
+
+The two scopes measure identically. Neither learns anything about a
+level the other does not, and the org form is unchanged by the
+existence of the other.
 
 ### What may replace what
 
@@ -353,6 +409,14 @@ named on the run's own output. A board is this engine's output whole —
 nothing else writes it — so a cell left behind after the population
 stopped holding it is not history worth keeping; it is a published
 level for a repository and track nobody measured.
+
+**A cell this run could not look at is not such a cell.** A repository
+outside the declared coverage, and every repository other than the one
+a `--repo` run judged, keeps everything it has: the population still
+holds it, and a run that could not see a repository has no standing to
+delete what a run that could see it wrote. Removing it would evade the
+replacement rule by the back door, since a deleted cell is one no
+reader can find.
 
 Only the cell layout is touched. A file the board did not write is not
 the board's to delete, and neither is a track this release does not

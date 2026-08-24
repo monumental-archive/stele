@@ -238,7 +238,7 @@ func parseLevelArgs(track string, args []string, stderr io.Writer) (*levelArgs, 
 func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 	forge := newForge()
 
-	repos, err := la.members(forge)
+	repos, unlooked, err := la.members(forge)
 	if err != nil {
 		out.logf("level: the organisation's population could not be enumerated: %v", err)
 
@@ -260,11 +260,16 @@ func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 
 	out.logf("level: measured %d of %s's repositories", len(members), la.org)
 
-	return level.AssessPopulation(la.trackValue(), members, clock())
+	for _, name := range unlooked {
+		out.logf("level: %s: not looked at — outside the declared enumeration coverage", name)
+	}
+
+	return level.AssessPopulation(la.trackValue(), members, unlooked, clock())
 }
 
 // members enumerates the organisation's population for this track,
-// through the one component allowed to enumerate one.
+// through the one component allowed to enumerate one: the repositories
+// to measure, then the ones this run could not look at.
 //
 // A failure here is not survivable by measuring what happened to
 // arrive: a partial listing, or a listing that does not reconcile
@@ -272,13 +277,22 @@ func (la *levelArgs) assessOrg(out *latch) *level.Assessment {
 // population — and AssessPopulation folds an empty population into a
 // blind ladder, which is the honest answer to a question nobody could
 // ask.
-func (la *levelArgs) members(forge gh.Forge) ([]string, error) {
+//
+// A member outside the declared enumeration coverage is the one thing
+// that is neither: the run knows it is there and knows it did not see
+// it. It is carried out of here BESIDE the members rather than among
+// them, because it is judged on nothing and must lower nobody's rung
+// — what it does is keep the fold from being published as though it
+// covered the whole population.
+//
+//nolint:gocritic // unnamedResult: members then unlooked, named in the doc
+func (la *levelArgs) members(forge gh.Forge) ([]string, []string, error) {
 	var declared *population.Declaration
 
 	if la.policyPath != "" {
 		pol, err := loadAssertPolicy(la.policyPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		declared = pol.Population
@@ -286,10 +300,23 @@ func (la *levelArgs) members(forge gh.Forge) ([]string, error) {
 
 	pop, err := resolvePopulation(population.Scope{Org: la.org}, forge, declared)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return pop.Members(la.trackValue())
+	members, err := pop.Members(la.trackValue())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	unlooked := pop.UnexercisedMembers(la.trackValue())
+	for i, name := range unlooked {
+		// Spelled as the members are, because they end up in one
+		// document: a subject named two ways in one report is two
+		// subjects to anything reading it.
+		unlooked[i] = la.org + "/" + name
+	}
+
+	return members, unlooked, nil
 }
 
 // assess gathers what it can and hands it to the judge.

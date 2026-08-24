@@ -1,5 +1,4 @@
-// The board form: `stele level --org <org> --out-dir <dir>`, every
-// track at once, published as files.
+// The board form: every track at once, published as files.
 //
 // It exists because the canon's cron carried the loop AND the publish
 // rule as workflow bash — enumerate the org, iterate repo × track,
@@ -8,6 +7,15 @@
 // judgment and the published state, which is a place the two can
 // disagree; the rule is the judge's (stele#152, stele#135) and it
 // lives in internal/board now.
+//
+// TWO SCOPES, one form. `--org <org>` publishes the organisation's
+// whole board. `--repo <owner>/<name>` publishes ONE repository's own
+// cells (stele#252): it enumerates nothing, reconciles nothing, and
+// touches no other repository's cells — so a repository can publish
+// its own levels with a credential over itself, which is all a
+// repository judging itself ever needed. The org form is unchanged by
+// its arrival, and neither form learns anything about levels the
+// other does not.
 //
 // What this file does is fetching and reporting. It measures each
 // cell through exactly the same path the single-cell form uses, so a
@@ -21,6 +29,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/monumental-archive/stele/internal/board"
 	"github.com/monumental-archive/stele/internal/gh"
@@ -28,14 +37,34 @@ import (
 	"github.com/monumental-archive/stele/internal/population"
 )
 
-// boardArgs is the board form's input.
+// boardArgs is the board form's input. Exactly one of org and repo is
+// set; owner and name are the resolved coordinates both scopes
+// measure through, so nothing below asks which scope it is in to find
+// out who it is looking at.
 type boardArgs struct {
-	org        string
-	outDir     string
-	policyPath string
-	ref        string
-	notesRef   string
-	root       rootFlags
+	org         string
+	repo        string
+	owner, name string
+	outDir      string
+	policyPath  string
+	ref         string
+	notesRef    string
+	root        rootFlags
+}
+
+// plan is what one run answers for: the cells it measures, and the
+// population members it could not look at.
+//
+// The second list is not a smaller version of the first. A cell in
+// `cells` gets measured and published under the never-overwrite law;
+// a repository in `unlooked` gets nothing done to it at all, INCLUDING
+// not being pruned — its published cells are exactly as proven as
+// they were before this run started, and a run that could not see a
+// repository has no standing to delete what a run that could see it
+// wrote.
+type plan struct {
+	cells    []board.Cell
+	unlooked []string
 }
 
 // levelBoard measures every cell the population holds and publishes
@@ -49,7 +78,7 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 	out := &latch{w: stdout}
 	forge := newForge()
 
-	cells, code := opts.cells(forge, out)
+	p, code := opts.plan(forge, out)
 	if code != exitOK {
 		return code
 	}
@@ -57,7 +86,7 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 	b := board.Board{Dir: opts.outDir}
 	kept := 0
 
-	for _, c := range cells {
+	for _, c := range p.cells {
 		outcome, err := b.Publish(c, opts.measure(c, forge, out))
 		if err != nil {
 			if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
@@ -74,7 +103,7 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 		out.logf("level: %s: %s", c, outcome)
 	}
 
-	if code := opts.prune(b, cells, out); code != exitOK {
+	if code := opts.prune(b, p, out); code != exitOK {
 		return code
 	}
 
@@ -104,15 +133,11 @@ func boardExit(kept int, stderr io.Writer) int {
 	return exitBlind
 }
 
-// cells enumerates the board's grid through the population component.
-//
-// An empty grid ends the run rather than publishing an empty board: a
-// walk over nobody has measured nothing, and a board that quietly
-// became empty is indistinguishable from an org that lost every
-// repository.
+// plan enumerates what this run answers for, through the population
+// component and nothing else.
 //
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
-func (opts *boardArgs) cells(forge gh.Forge, out *latch) ([]board.Cell, int) {
+func (opts *boardArgs) plan(forge gh.Forge, out *latch) (plan, int) {
 	var declared *population.Declaration
 
 	if opts.policyPath != "" {
@@ -120,40 +145,71 @@ func (opts *boardArgs) cells(forge gh.Forge, out *latch) ([]board.Cell, int) {
 		if err != nil {
 			out.logf("level: %v", err)
 
-			return nil, exitBlind
+			return plan{}, exitBlind
 		}
 
 		declared = pol.Population
 	}
 
-	pop, err := resolvePopulation(population.Scope{Org: opts.org}, forge, declared)
+	pop, err := resolvePopulation(population.Scope{Org: opts.org, Repo: opts.repo}, forge, declared)
 	if err != nil {
-		out.logf("level: the organisation's population could not be enumerated: %v", err)
+		out.logf("level: the population could not be enumerated: %v", err)
 
-		return nil, exitBlind
+		return plan{}, exitBlind
 	}
 
 	grid := pop.Grid()
-	if len(grid) == 0 {
-		out.logf("level: %s's population holds no cell — a board over nobody publishes nothing", opts.org)
-
-		return nil, exitBlind
-	}
 
 	cells := make([]board.Cell, 0, len(grid))
 	for _, m := range grid {
 		cells = append(cells, board.Cell{Repo: m.Repo, Track: m.Track})
 	}
 
-	return cells, exitOK
+	p := plan{cells: cells, unlooked: pop.UnexercisedRoster()}
+
+	for _, name := range p.unlooked {
+		out.logf("level: %s: not looked at — outside the declared enumeration coverage;"+
+			" its published cells stand", name)
+	}
+
+	if len(cells) == 0 {
+		return p, opts.empty(out)
+	}
+
+	return p, exitOK
+}
+
+// empty decides what an empty grid means, which depends entirely on
+// which question was asked.
+//
+// Over an ORGANISATION it ends the run: a walk over nobody has
+// measured nothing, and a board that quietly became empty is
+// indistinguishable from an org that lost every repository.
+//
+// Over ONE REPOSITORY it is the declaration working. A repository
+// declared to bear evidence on no track owes no cell, and the only
+// way to reach this point is a policy that said so in as many words —
+// so the run publishes nothing, removes any cell that declaration
+// used to hold, and exits clean. An exclusion produces nothing: no
+// finding, no count, no cell, and no exit code either.
+func (opts *boardArgs) empty(out *latch) int {
+	if opts.repo != "" {
+		out.logf("level: %s bears evidence on no track — nothing to publish", opts.repo)
+
+		return exitOK
+	}
+
+	out.logf("level: %s's population holds no cell — a board over nobody publishes nothing", opts.org)
+
+	return exitBlind
 }
 
 // measure judges one cell through the single-cell path, so the board
 // and `stele level <track> --repo …` cannot answer differently.
 func (opts *boardArgs) measure(c board.Cell, forge gh.Forge, out *latch) *level.Assessment {
 	la := &levelArgs{
-		track: c.Track.Key(), owner: opts.org, name: c.Repo,
-		repo: opts.org + "/" + c.Repo,
+		track: c.Track.Key(), owner: opts.owner, name: c.Repo,
+		repo: opts.owner + "/" + c.Repo,
 		ref:  opts.ref, notesRef: opts.notesRef, root: opts.root,
 	}
 
@@ -163,8 +219,15 @@ func (opts *boardArgs) measure(c board.Cell, forge gh.Forge, out *latch) *level.
 // prune drops cells the population no longer holds, naming each: a
 // board that quietly shrank is one whose reader cannot tell a
 // deletion from an absence.
-func (opts *boardArgs) prune(b board.Board, cells []board.Cell, out *latch) int {
-	removed, err := b.Prune(cells)
+//
+// Which cells are even eligible is the scope's answer, not this
+// function's. A run over one repository may remove that repository's
+// cells and no others — every other cell on the board belongs to a
+// run this one knows nothing about — and a run over an organisation
+// spares the members it could not look at, for the same reason at a
+// different grain.
+func (opts *boardArgs) prune(b board.Board, p plan, out *latch) int {
+	removed, err := opts.removals(b, p)
 	if err != nil {
 		out.logf("level: %v", err)
 
@@ -178,13 +241,23 @@ func (opts *boardArgs) prune(b board.Board, cells []board.Cell, out *latch) int 
 	return exitOK
 }
 
+func (opts *boardArgs) removals(b board.Board, p plan) ([]board.Cell, error) {
+	if opts.repo != "" {
+		return b.PruneRepo(opts.name, p.cells)
+	}
+
+	return b.Prune(p.cells, p.unlooked)
+}
+
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
 func parseBoardArgs(args []string, stderr io.Writer) (*boardArgs, int) {
 	opts := &boardArgs{}
 
 	fs := flag.NewFlagSet("stele level", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&opts.org, "org", "", "organisation whose repositories to measure")
+	fs.StringVar(&opts.org, "org", "", "organisation whose repositories to measure (this or --repo)")
+	fs.StringVar(&opts.repo, "repo", "",
+		"owner/repo whose own cells to publish, enumerating nothing (this or --org)")
 	fs.StringVar(&opts.outDir, "out-dir", "",
 		"publish every cell here as <repo>/<track>.report.json and <repo>/<track>.shield.json")
 	fs.StringVar(&opts.policyPath, "policy", "",
@@ -206,15 +279,31 @@ func parseBoardArgs(args []string, stderr io.Writer) (*boardArgs, int) {
 	}
 
 	switch {
-	case opts.org == "":
-		return fail("--out-dir publishes an organisation's board, so --org is required")
+	case opts.org != "" && opts.repo != "":
+		// Two populations is two questions; answering one and
+		// labelling it the other is how a measurement stops meaning
+		// anything. The single-cell form refuses the same pair.
+		return fail("--repo and --org name two different populations — choose one")
+	case opts.org == "" && opts.repo == "":
+		return fail("--out-dir publishes a board, so --org or --repo is required")
 	case opts.outDir == "":
 		// The track-less form measures every track, and there is
 		// nowhere but a directory to put the answer: one document per
 		// cell is the format, and there is no combined one.
 		return fail("a track is required: build, source or dependency\n" +
 			"stele level: or --out-dir <dir> to publish every track as its own document")
+	case opts.repo == "":
+		opts.owner = opts.org
+
+		return opts, exitOK
 	}
+
+	owner, name, ok := strings.Cut(opts.repo, "/")
+	if !ok || owner == "" || name == "" {
+		return fail("--repo must be owner/repo")
+	}
+
+	opts.owner, opts.name = owner, name
 
 	return opts, exitOK
 }

@@ -182,10 +182,22 @@ func TestLevelBoardRefusals(t *testing.T) {
 		says  string
 	}{
 		{
-			name:  "--out-dir publishes an organisation's board",
+			name:  "--out-dir publishes somebody's board, and nobody was named",
 			forge: &levelForge{},
 			args:  []string{"level", "--out-dir", dir},
-			want:  exitUsage, says: "--org is required",
+			want:  exitUsage, says: "--org or --repo is required",
+		},
+		{
+			name:  "two populations is two questions",
+			forge: &levelForge{},
+			args:  []string{"level", "--org", "acme", "--repo", "acme/widget", "--out-dir", dir},
+			want:  exitUsage, says: "two different populations",
+		},
+		{
+			name:  "a repository scope names one repository",
+			forge: &levelForge{},
+			args:  []string{"level", "--repo", "widget", "--out-dir", dir},
+			want:  exitUsage, says: "--repo must be owner/repo",
 		},
 		{
 			name:  "--org with no track and nowhere to put the answer",
@@ -248,4 +260,258 @@ func TestLevelBoardWriterFails(t *testing.T) {
 	if got := Run([]string{"level", "--org", "acme", "--out-dir", dir}, &stdout, &stderr); got != exitIO {
 		t.Fatalf("Run = %d, want %d\nstderr: %s", got, exitIO, stderr.String())
 	}
+}
+
+// noOrgListing is the credential the defect was measured with: it can
+// read the repository it belongs to and cannot enumerate the
+// organisation that repository sits in.
+func noOrgListing() *levelForge {
+	return &levelForge{
+		repos:   []string{"widget", "signer"},
+		listErr: errors.New("Resource not accessible by integration"),
+	}
+}
+
+// TestLevelBoardPerRepoNeedsNoOrgListing (stele#252) is the whole
+// first half: a repository publishes its own cells with a credential
+// over itself. The listing seam refuses throughout — so if this mode
+// enumerated anything at all, the run would end blind instead of
+// publishing.
+func TestLevelBoardPerRepoNeedsNoOrgListing(t *testing.T) {
+	swapLevelSeams(t, noOrgListing(), nil)
+
+	dir := t.TempDir()
+
+	// A neighbour's cell, published by the run that owns it. This run
+	// says nothing whatever about it.
+	neighbour := cellPath(dir, "signer", "source", ".shield.json")
+	if err := os.MkdirAll(filepath.Dir(neighbour), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	proven := `{"schemaVersion":1,"label":"SLSA Source","message":"L3","color":"brightgreen"}`
+	if err := os.WriteFile(neighbour, []byte(proven), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	if got := Run([]string{"level", "--repo", "acme/widget", "--out-dir", dir}, &stdout, &stderr); got != exitOK {
+		t.Fatalf("Run = %d, want 0 — a repository judging itself enumerates nothing\nstderr: %s",
+			got, stderr.String())
+	}
+
+	for _, track := range []string{"build", "source", "dependency"} {
+		for _, suffix := range []string{".report.json", ".shield.json"} {
+			if !exists(t, cellPath(dir, "widget", track, suffix)) {
+				t.Errorf("widget %s%s was not published", track, suffix)
+			}
+		}
+	}
+
+	held, err := os.ReadFile(cellPath(dir, "signer", "source", ".shield.json"))
+	if err != nil || string(held) != proven {
+		t.Fatalf("a run over one repository touched another's cell: %s (%v)", held, err)
+	}
+}
+
+// TestLevelBoardPerRepoTakesItsRowFromThePolicy: the declaration
+// SELECTS this repository's rows here, where the single-cell form
+// refuses it. Nothing about the rest of the roster is consulted —
+// there is no reconciliation to fail, which is what lets one canon
+// policy serve every repository's own run.
+func TestLevelBoardPerRepoTakesItsRowFromThePolicy(t *testing.T) {
+	swapLevelSeams(t, noOrgListing(), nil)
+
+	dir := t.TempDir()
+	policy := boardPolicy(t, `"population": {"repositories": [
+	    {"repo": "widget", "tracks": ["source"], "reason": "publishes no releases"},
+	    {"repo": "signer"},
+	    {"repo": "vault", "visibility": "private"}
+	  ]},`)
+
+	var stdout, stderr bytes.Buffer
+
+	if got := Run([]string{"level", "--repo", "acme/widget", "--out-dir", dir, "--policy", policy},
+		&stdout, &stderr); got != exitOK {
+		t.Fatalf("Run = %d\nstderr: %s", got, stderr.String())
+	}
+
+	if !exists(t, cellPath(dir, "widget", "source", ".report.json")) {
+		t.Error("the row this repository declares was not published")
+	}
+
+	for _, track := range []string{"build", "dependency"} {
+		if exists(t, cellPath(dir, "widget", track, ".report.json")) {
+			t.Errorf("widget %s was published — the declaration says it bears no evidence there", track)
+		}
+	}
+
+	if exists(t, cellPath(dir, "signer", "source", ".report.json")) {
+		t.Error("a run over one repository published another repository's cell")
+	}
+}
+
+// TestLevelBoardPerRepoBearingNothing: a repository the policy
+// declares out of every track publishes nothing and exits clean — an
+// exclusion produces no finding, no count, no cell and no exit code
+// — while still clearing the cells that declaration used to hold, and
+// still leaving every other repository's alone.
+func TestLevelBoardPerRepoBearingNothing(t *testing.T) {
+	swapLevelSeams(t, noOrgListing(), nil)
+
+	dir := t.TempDir()
+	policy := boardPolicy(t, `"population": {"repositories": [
+	    {"repo": "widget", "tracks": [], "reason": "the product site; it bears no evidence"},
+	    {"repo": "signer"}
+	  ]},`)
+
+	mine := cellPath(dir, "widget", "source", ".report.json")
+	neighbour := cellPath(dir, "signer", "source", ".report.json")
+
+	for _, path := range []string{mine, neighbour} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	if got := Run([]string{"level", "--repo", "acme/widget", "--out-dir", dir, "--policy", policy},
+		&stdout, &stderr); got != exitOK {
+		t.Fatalf("Run = %d, want 0 — a declared exclusion is a fact, not a fault\nstderr: %s",
+			got, stderr.String())
+	}
+
+	if exists(t, mine) {
+		t.Error("a cell this repository stopped declaring survived its own run")
+	}
+
+	if !exists(t, neighbour) {
+		t.Error("a repository that publishes nothing deleted somebody else's cell")
+	}
+
+	if !strings.Contains(stdout.String(), "bears evidence on no track") {
+		t.Errorf("the run does not say why it published nothing:\n%s", stdout.String())
+	}
+}
+
+// TestLevelBoardSparesWhatItCouldNotSee (stele#252, second half): an
+// org-wide run whose declared coverage does not reach a declared
+// member publishes the rest, names the one it could not look at, and
+// leaves that repository's published cells exactly where it found
+// them. A narrowed enumeration deleting a proven level is the
+// never-overwrite law evaded by the back door.
+func TestLevelBoardSparesWhatItCouldNotSee(t *testing.T) {
+	swapLevelSeams(t, &levelForge{repos: []string{"widget"}}, nil)
+
+	dir := t.TempDir()
+	policy := boardPolicy(t, `"population": {
+	    "coverage": {"visibility": ["public"]},
+	    "repositories": [
+	      {"repo": "widget"},
+	      {"repo": "vault", "visibility": "private"}
+	    ]
+	  },`)
+
+	proven := `{"schemaVersion":1,"label":"SLSA Source","message":"L3","color":"brightgreen"}`
+	held := cellPath(dir, "vault", "source", ".shield.json")
+
+	if err := os.MkdirAll(filepath.Dir(held), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(held, []byte(proven), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	if got := Run([]string{"level", "--org", "acme", "--out-dir", dir, "--policy", policy},
+		&stdout, &stderr); got != exitOK {
+		t.Fatalf("Run = %d, want 0 — a member outside the coverage is declared, not degraded\nstderr: %s",
+			got, stderr.String())
+	}
+
+	if !exists(t, cellPath(dir, "widget", "source", ".report.json")) {
+		t.Error("the member the run could see was not published")
+	}
+
+	got, err := os.ReadFile(cellPath(dir, "vault", "source", ".shield.json"))
+	if err != nil || string(got) != proven {
+		t.Fatalf("the cell of a repository nobody looked at changed: %s (%v)", got, err)
+	}
+
+	if !strings.Contains(stdout.String(), "vault: not looked at") {
+		t.Errorf("the run does not name what it could not see:\n%s", stdout.String())
+	}
+}
+
+// strangerPolicy is the adopter the universality law is tested
+// against: two repositories declared out of a forty-repository
+// organisation, public-only enumeration, and thirty-eight private
+// members that are neither declared nor listed. Nothing about this
+// shape is the home org's, and nothing about it requires an edit to
+// this tool.
+func strangerPolicy(t *testing.T) string {
+	t.Helper()
+
+	return boardPolicy(t, `"population": {
+	    "coverage": {"visibility": ["public"]},
+	    "repositories": [{"repo": "widget"}, {"repo": "signer"}]
+	  },`)
+}
+
+// TestStrangerExpressesBothModes: the stranger condition, both modes,
+// one minimal policy.
+func TestStrangerExpressesBothModes(t *testing.T) {
+	policy := strangerPolicy(t)
+
+	t.Run("the org-wide mode reconciles what its enumeration covers", func(t *testing.T) {
+		// The listing is what a public-only credential returns: the two
+		// declared repositories, and no sign of the other thirty-eight.
+		swapLevelSeams(t, &levelForge{repos: []string{"widget", "signer"}}, nil)
+
+		dir := t.TempDir()
+
+		var stdout, stderr bytes.Buffer
+
+		if got := Run([]string{"level", "--org", "acme", "--out-dir", dir, "--policy", policy},
+			&stdout, &stderr); got != exitOK {
+			t.Fatalf("Run = %d, want 0 — two repositories of forty is a normal adopter\nstderr: %s",
+				got, stderr.String())
+		}
+
+		for _, repo := range []string{"widget", "signer"} {
+			if !exists(t, cellPath(dir, repo, "source", ".report.json")) {
+				t.Errorf("%s's cell was not published", repo)
+			}
+		}
+	})
+
+	t.Run("the per-repository mode needs no enumeration at all", func(t *testing.T) {
+		swapLevelSeams(t, noOrgListing(), nil)
+
+		dir := t.TempDir()
+
+		var stdout, stderr bytes.Buffer
+
+		if got := Run([]string{"level", "--repo", "acme/widget", "--out-dir", dir, "--policy", policy},
+			&stdout, &stderr); got != exitOK {
+			t.Fatalf("Run = %d, want 0 — publishing your own cells must not need an org-read credential\nstderr: %s",
+				got, stderr.String())
+		}
+
+		if !exists(t, cellPath(dir, "widget", "source", ".report.json")) {
+			t.Error("the repository's own cell was not published")
+		}
+
+		if exists(t, cellPath(dir, "signer", "source", ".report.json")) {
+			t.Error("a run over one repository published another's cell")
+		}
+	})
 }

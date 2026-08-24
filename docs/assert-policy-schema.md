@@ -206,18 +206,33 @@ with no configuration at all.
 
 ```json
 "population": {
+  "coverage": { "visibility": ["public"] },
   "repositories": [
     { "repo": ".github" },
     { "repo": "signer", "tracks": ["source"],
       "reason": "publishes no releases; it is the signing workflow repository" },
     { "repo": "www", "tracks": [],
-      "reason": "the product site; it bears no evidence" }
+      "reason": "the product site; it bears no evidence" },
+    { "repo": "vault", "visibility": "private" }
   ]
 }
 ```
 
+- `coverage.visibility` — the repository visibilities this
+  organisation's enumeration can see, spelled as the forge spells them
+  and compared as written. **Absent means the enumeration covers
+  everything**, which is what a credential over the whole organisation
+  has. The values are never judged: what a visibility IS belongs to
+  the platform, and a tool holding a vocabulary of them would refuse
+  an adopter whose forge names them differently.
 - `repo` — the bare repository name within the population's owner.
   The owner is the population's, named once at the command line.
+- `visibility` — what this repository is, in the same spelling. Read
+  against `coverage` and nowhere else; absent means inside whatever
+  the enumeration covers. No reason is required, because it narrows
+  nothing: a repository outside the coverage still owes everything it
+  owed, and a run says so by reporting it **unexercised** rather than
+  by leaving it out.
 - `tracks` — the tracks this repository bears evidence on, spelled
   `build`, `source`, `dependency`. **Absent means every track,
   present and future** — the ordinary case, and the one that needs no
@@ -230,6 +245,40 @@ with no configuration at all.
   Required whenever `tracks` is present. A narrowing nobody wrote a
   reason for is indistinguishable from a mistake, and this is the one
   field that tells a later reader which it was.
+
+### What the enumeration covers
+
+The roster is reconciled against the forge's listing in both
+directions, and the refusal it produces is right in general: **an
+unseen repository is unchecked, not clean**, and softening it would
+let a genuinely deleted repository read as fine.
+
+What that rule cannot say on its own is that the listing it was handed
+was PARTIAL BY PERMISSION — a different fact from a complete listing
+that is missing something, and one every reconciliation is otherwise
+one revoked scope away from reporting as the other. `coverage` is that
+statement, and it moves exactly one case:
+
+| the listing | the declaration | outcome |
+| --- | --- | --- |
+| shows it | does not name it | **refuses** — the onboarding signal, working |
+| does not show it | names it, inside the coverage | **refuses** — deleted is still deleted |
+| does not show it | names it, outside the coverage | **unexercised** |
+| shows it | names it | reconciled, whatever the coverage said |
+
+An **unexercised** member is named, counted against the declared
+population, and never judged — so a walk that covered less than the
+population cannot seal as though it covered all of it. It is not
+clean and it is not divergence: it is a check that could not look.
+
+The `assert` targets refuse to start over such a population rather
+than measuring what they can see. Each of them seals a population
+sized by what it measured — the subjects a release published, the tags
+an epoch covers, the workflow files a tree holds — so a shorter
+subject list would arrive with nowhere to record that it was shorter.
+The repositories are named in the refusal. `stele level` reports them
+instead, because a board has a cell to leave standing and a fold to
+size honestly.
 
 ### Which door a target opens
 

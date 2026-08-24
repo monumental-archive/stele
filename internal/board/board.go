@@ -111,7 +111,8 @@ func (b Board) Publish(c Cell, a *level.Assessment) (Outcome, error) {
 }
 
 // Prune removes every cell the board holds that keep does not name,
-// and returns them.
+// SPARING the repositories this run could not look at, and returns
+// what it removed.
 //
 // A board is derived state whole: it is this engine's own output and
 // nothing else writes it, so a cell left behind after the population
@@ -121,9 +122,38 @@ func (b Board) Publish(c Cell, a *level.Assessment) (Outcome, error) {
 // are returned so the caller can name each one: a board that quietly
 // shrank is a board whose reader cannot tell deletion from absence.
 //
+// Spare is the other half of that sentence and the two must never
+// merge. "The population no longer holds this" is a removal; "this
+// run was never going to see it" is a repository whose cells are
+// exactly as proven as they were yesterday. Deleting the second would
+// let a narrowed enumeration erase a level somebody proved — the
+// never-overwrite law (stele#135) evaded by the back door, since a
+// deleted cell is a cell no reader can find.
+//
 // Only the cell layout is touched. A file the board did not write is
 // not the board's to delete.
-func (b Board) Prune(keep []Cell) ([]Cell, error) {
+func (b Board) Prune(keep []Cell, spare []string) ([]Cell, error) {
+	return b.prune(keep, func(repo string) bool { return !slices.Contains(spare, repo) })
+}
+
+// PruneRepo removes the cells ONE repository holds that keep does not
+// name, and touches no other repository's cells at all.
+//
+// Its own door beside Prune because it answers a different question. A
+// run that judged an organisation answered for every cell on the
+// board, so a cell it did not name is a cell the population no longer
+// holds. A run that judged ONE repository answered for that
+// repository and said nothing whatever about anybody else's — and
+// "said nothing" must not publish as "removed", which is what a
+// whole-board prune would make it. That is the difference between a
+// board another run maintains and a board this run just emptied.
+func (b Board) PruneRepo(repo string, keep []Cell) ([]Cell, error) {
+	return b.prune(keep, func(name string) bool { return name == repo })
+}
+
+// prune is the one walk both doors share, so the two can differ in
+// which repositories they answer for and in nothing else.
+func (b Board) prune(keep []Cell, mine func(repo string) bool) ([]Cell, error) {
 	held, err := b.cells()
 	if err != nil {
 		return nil, err
@@ -132,7 +162,7 @@ func (b Board) Prune(keep []Cell) ([]Cell, error) {
 	var removed []Cell
 
 	for _, c := range held {
-		if slices.ContainsFunc(keep, func(k Cell) bool { return k == c }) {
+		if !mine(c.Repo) || slices.ContainsFunc(keep, func(k Cell) bool { return k == c }) {
 			continue
 		}
 
@@ -145,7 +175,7 @@ func (b Board) Prune(keep []Cell) ([]Cell, error) {
 		removed = append(removed, c)
 	}
 
-	return removed, b.tidy()
+	return removed, b.tidy(mine)
 }
 
 // priorMeasured reports whether this cell already holds a level.
@@ -281,7 +311,11 @@ func (b Board) cells() ([]Cell, error) {
 // tidy removes repository directories the prune emptied. An empty
 // directory is not a cell, and leaving one behind names a repository
 // the board no longer says anything about.
-func (b Board) tidy() error {
+//
+// Bounded by the same predicate the prune ran under: a directory this
+// run did not answer for is not this run's to remove, however empty
+// another run left it.
+func (b Board) tidy(mine func(repo string) bool) error {
 	repos, err := os.ReadDir(b.Dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -292,7 +326,7 @@ func (b Board) tidy() error {
 	}
 
 	for _, repo := range repos {
-		if !repo.IsDir() {
+		if !repo.IsDir() || !mine(repo.Name()) {
 			continue
 		}
 
