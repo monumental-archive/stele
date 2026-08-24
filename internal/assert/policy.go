@@ -462,8 +462,9 @@ type EvidencePolicy struct {
 	// version (docs/assert-policy-schema.md defines it once).
 	StoreVSAFromVersion *string `json:"storeVsaFromVersion"`
 	// Continuous, when set, adds the continuous-digest half: repos
-	// whose stub calls the org's continuous workflow publish rolling
-	// digests whose evidence lives ONLY in the attestation store.
+	// whose stub calls the declared continuous workflow publish
+	// rolling digests whose evidence lives ONLY in the attestation
+	// store.
 	Continuous *ContinuousPolicy `json:"continuous,omitempty"`
 	// BaseImages, when set, adds the base-approval half: every pinned
 	// base digest carries its approval attestation, so a dependency
@@ -516,14 +517,15 @@ type EvidencePolicy struct {
 }
 
 // ContinuousPolicy parameterises the continuous-digest half. Every
-// field is an org convention: which stub marks a publishing repo,
-// where its images live, and which workflow's identity signs them.
+// field is the adopter's declared convention — which stub marks a
+// publishing repo, where its images live, and which workflow's
+// identity signs them — never a shape this engine assumes.
 type ContinuousPolicy struct {
 	// StubPath is the caller stub whose presence marks a repo as
 	// publishing continuous digests.
 	StubPath *string `json:"stubPath"`
 	// StubUses is the substring the stub must call for the repo to
-	// count — the org's own reusable workflow.
+	// count — the adopter's declared reusable workflow.
 	StubUses *string `json:"stubUses"`
 	// Registry and Tag address the rolling image.
 	Registry *string `json:"registry"`

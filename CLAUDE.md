@@ -8,7 +8,9 @@ with code in this repository.
 `monumental-archive/stele` — a **universal SLSA evidence engine and its
 verifier**, in Go. Standard formats live in code; org conventions live
 in a committed policy file; the org is the first conforming consumer,
-never a hardcoded name. Four verbs, which are the command surface:
+never a hardcoded name. Four verbs, which are the command surface (the mechanisms
+enumerated under each describe what is BUILT today, not a closed
+universe — the vocabulary stays open, per the first Rule):
 
 - **derive** — versions from conventional commits, SBOM assembly, VEX
   from triage decisions, OCI image facts
@@ -175,6 +177,12 @@ The canon speaks for the org; stele speaks for the mechanism.
   dependency track whose upper levels the judge called unknowable
   because this org has no evidence for them, and a rung-to-requirement
   mapping fixed in code because our controls happen to sit there.
+  A fourth member, found 2026-08-24: CARDINALITY baked into a
+  schema — parameters declared in policy but the block singular and
+  closed because this org currently has exactly one (a base-approval
+  block one mechanism wide, stele#247; its recorded siblings are
+  listed there). Plurality of mechanism is part of the stranger's
+  claim: "how many of this thing exist" is policy, never code.
   Every one of them read as a reasonable comment at the time.
 
   A track or level this tool does not YET judge is absent, not
