@@ -10,6 +10,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.20.1](https://github.com/monumental-archive/stele/compare/v0.20.0...v0.20.1) - 2026-09-03
+
+### Fixed
+
+- update go-securesystemslib to v0.11.1 ([#272](https://github.com/monumental-archive/stele/pull/272))
+- update github.com/sigstore/rekor to v1.5.4 ([#275](https://github.com/monumental-archive/stele/pull/275))
+- update protobuf-specs to v0.5.2 ([#278](https://github.com/monumental-archive/stele/pull/278))
+- update go-containerregistry to v0.22.0 ([#279](https://github.com/monumental-archive/stele/pull/279))
+- update google.golang.org/grpc to v1.83.1 [security] ([#281](https://github.com/monumental-archive/stele/pull/281))
+- update golang.org/x/crypto to v0.56.0 [security] ([#282](https://github.com/monumental-archive/stele/pull/282))
+
+### Dependencies
+
+- update github/codeql-action to v4.37.8 ([#277](https://github.com/monumental-archive/stele/pull/277))
+- update github/codeql-action to v4.37.9 ([#283](https://github.com/monumental-archive/stele/pull/283))
+
 ## [0.20.0](https://github.com/monumental-archive/stele/compare/v0.19.1...v0.20.0) - 2026-08-24
 
 ### Breaking
