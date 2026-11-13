@@ -18,6 +18,12 @@ name: gate
   push:
     branches:
       - main
+  # The merge queue runs the gate on its own temporary branch; without
+  # this trigger a queued pull request waits for a check that cannot
+  # report (monumental-archive/.github#1117, lint:gate-stub).
+  merge_group:
+    types:
+      - checks_requested
 
 permissions:
   contents: read
