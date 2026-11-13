@@ -581,7 +581,8 @@ type contentsResponse struct {
 func (c *Client) FileAt(owner, repo, path, ref string) ([]byte, bool, error) {
 	body, found, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/"+path+"?ref="+url.QueryEscape(ref),
-		"application/vnd.github.raw+json")
+		"application/vnd.github.raw+json",
+	)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -611,7 +612,8 @@ type attestationsResponse struct {
 func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
 	body, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/attestations/sha256:"+sha256Hex+"?per_page=100",
-		"application/vnd.github+json")
+		"application/vnd.github+json",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +688,8 @@ const WorkflowDir = ".github/workflows"
 func (c *Client) Workflows(owner, repo string) ([]workflow.File, error) {
 	body, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/"+WorkflowDir,
-		"application/vnd.github+json")
+		"application/vnd.github+json",
+	)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -728,7 +731,8 @@ func (c *Client) FailedRuns(owner, repo, branch string) ([]string, error) {
 	body, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/actions/runs?branch="+url.QueryEscape(branch)+
 			"&per_page=100",
-		"application/vnd.github+json")
+		"application/vnd.github+json",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -790,7 +794,8 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 		// own wait, read through the same one place the 403's is.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return nil, transientRefusal(
-				fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), retryAfter(resp.Header))
+				fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), retryAfter(resp.Header),
+			)
 		}
 
 		if resp.StatusCode >= http.StatusInternalServerError {
@@ -901,7 +906,8 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
 	case http.StatusTooManyRequests:
 		return nil, false, transientRefusal(
-			fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), retryAfter(resp.Header))
+			fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), retryAfter(resp.Header),
+		)
 	default:
 		// The status alone: the body is server-controlled prose.
 		if resp.StatusCode >= http.StatusInternalServerError {
@@ -1012,7 +1018,8 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 func (c *Client) releaseAt(owner, repo, tag string) (*releaseEntry, bool, error) {
 	body, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/releases/tags/"+url.PathEscape(tag),
-		"application/vnd.github+json")
+		"application/vnd.github+json",
+	)
 	if err != nil {
 		return nil, false, err
 	}

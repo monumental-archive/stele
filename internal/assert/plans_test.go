@@ -198,7 +198,8 @@ func TestPlans(t *testing.T) {
 			"1.43.0",
 			[]assert.PlanFile{{Name: "p", Content: []byte(
 				`[{"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"cargoPackage": "a"}},
-				  {"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"cargoPackage": "b"}}]`)}},
+				  {"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"cargoPackage": "b"}}]`,
+			)}},
 			report.VerdictFail, "legs disagree about what was built",
 		},
 		{
@@ -206,7 +207,8 @@ func TestPlans(t *testing.T) {
 			[]string{"wasm-npm", "pgrx-extension"},
 			"1.43.0",
 			[]assert.PlanFile{{Name: "p", Content: []byte(
-				`[{"class": "wasm-npm", "doc": "sbom-npm-x"}, {"class": "pgrx-extension", "doc": "sbom-npm-x"}]`)}},
+				`[{"class": "wasm-npm", "doc": "sbom-npm-x"}, {"class": "pgrx-extension", "doc": "sbom-npm-x"}]`,
+			)}},
 			report.VerdictFail, "legs disagree about what was built",
 		},
 		{
@@ -223,9 +225,11 @@ func TestPlans(t *testing.T) {
 			"1.43.0",
 			[]assert.PlanFile{
 				{Name: "a", Content: []byte(
-					`[{"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"a": 1, "b": "two"}}]`)},
+					`[{"class": "wasm-npm", "doc": "sbom-npm-x", "params": {"a": 1, "b": "two"}}]`,
+				)},
 				{Name: "b", Content: []byte(
-					`[{"class":"wasm-npm","doc":"sbom-npm-x","params":{ "b" : "two", "a" : 1 }}]`)},
+					`[{"class":"wasm-npm","doc":"sbom-npm-x","params":{ "b" : "two", "a" : 1 }}]`,
+				)},
 			},
 			report.VerdictPass, "",
 		},
@@ -347,7 +351,8 @@ func TestPlansEmitsTheJudgedSet(t *testing.T) {
 		{
 			"the entries are the ones judged, params canonical",
 			[]assert.PlanFile{{Name: "a", Content: []byte(
-				`[{"class": "wasm-npm", "doc": "sbom-npm-x", "artifact": "x.tgz", "params": {"b": "two", "a": 1}}]`)}},
+				`[{"class": "wasm-npm", "doc": "sbom-npm-x", "artifact": "x.tgz", "params": {"b": "two", "a": 1}}]`,
+			)}},
 			`[{"class":"wasm-npm","doc":"sbom-npm-x","artifact":"x.tgz","params":{"a":1,"b":"two"}}]`,
 		},
 		{
@@ -370,7 +375,8 @@ func TestPlansEmitsTheJudgedSet(t *testing.T) {
 			"a refused entry is judged and dropped, never emitted",
 			[]assert.PlanFile{{Name: "a", Content: []byte(
 				`[{"class": "wasm-npm", "doc": "sbom-npm-x"},` +
-					`{"class": "wasm-npm", "doc": "sbom-npm-y", "params": {"cargoPackage": "a; rm -rf"}}]`)}},
+					`{"class": "wasm-npm", "doc": "sbom-npm-y", "params": {"cargoPackage": "a; rm -rf"}}]`,
+			)}},
 			`[{"class":"wasm-npm","doc":"sbom-npm-x"}]`,
 		},
 		{

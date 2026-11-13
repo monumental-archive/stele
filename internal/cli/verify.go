@@ -386,7 +386,8 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	}
 
 	divergences := verify.Repro(
-		verify.ReproSets{Judged: subjects, Rebuilt: built, Published: pop.published()}, out.logf)
+		verify.ReproSets{Judged: subjects, Rebuilt: built, Published: pop.published()}, out.logf,
+	)
 	if out.err != nil {
 		return exitIO
 	}
@@ -1022,7 +1023,8 @@ func parsePlan(text string) ([]verify.Subject, error) {
 
 	if len(planned) == 0 {
 		return nil, errors.New(
-			"the inventory plan names no document — a declared plan that plans nothing is not an absent plan")
+			"the inventory plan names no document — a declared plan that plans nothing is not an absent plan",
+		)
 	}
 
 	return planned, nil
@@ -1064,7 +1066,8 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 		sboms := verify.SBOMs{Assets: va.sbomList, Planned: va.inventoryList}
 
 		verdict, err := verify.Release(
-			va.p, va.coords, va.subjectList, sboms, pins, newStore(va.noRetry), va.bv, out.logf)
+			va.p, va.coords, va.subjectList, sboms, pins, newStore(va.noRetry), va.bv, out.logf,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1078,7 +1081,8 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 		// classes, and gets the whole universal obligation.
 		verdict, err := verify.VSA(
 			va.p, va.coords, va.subjectList, pins, newStore(va.noRetry), va.bv, out.logf,
-			&verify.EnrichmentDemand{})
+			&verify.EnrichmentDemand{},
+		)
 		if err != nil {
 			return nil, err
 		}

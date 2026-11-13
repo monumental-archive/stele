@@ -202,7 +202,8 @@ func validateSurfaces(surfaces []Surface, where string) error {
 		if seen[key] {
 			return fmt.Errorf(
 				"%s.surfaces[%d] declares %s a second time with the same parameters — two identical surfaces"+
-					" are one place looked at twice", where, i, key)
+					" are one place looked at twice", where, i, key,
+			)
 		}
 
 		seen[key] = true

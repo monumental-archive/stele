@@ -76,8 +76,7 @@ func (r Runner) Tree(dir string) ([]byte, error) {
 
 	out, err := cmd.Output()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, fmt.Errorf("npm: ls in %s: %w: %s", dir, err,
 				strings.TrimSpace(string(exitErr.Stderr)))
 		}

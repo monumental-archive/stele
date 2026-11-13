@@ -68,7 +68,8 @@ func runDeriveBump(da *deriveArgs, bump *bumpArgs, out *latch) error {
 			return fmt.Errorf(
 				"derive bump: mirrors carry %q but the last release is %s; "+
 					"a mirror that moved on its own is evidence, not something to overwrite",
-				current, base)
+				current, base,
+			)
 		}
 
 		date := bump.date

@@ -546,7 +546,8 @@ func (pp *provenancePass) close(subjects []Subject) error {
 
 		return fmt.Errorf(
 			"verify: verified provenance disagrees on the source revision: %s — one release, one revision, or no claim",
-			strings.Join(revs, " "))
+			strings.Join(revs, " "),
+		)
 	}
 
 	if rev := pp.oneRevision(); !hex40RE.MatchString(rev) {
@@ -634,7 +635,8 @@ func validateSBOMs(s SBOMs) error {
 		if !carried[subjectKey(inv)] {
 			return fmt.Errorf(
 				"verify: the plan names inventory %s, which is not among the release's SBOM assets — "+
-					"a planned document that did not ship decides nothing", inv.Name)
+					"a planned document that did not ship decides nothing", inv.Name,
+			)
 		}
 	}
 
@@ -735,7 +737,8 @@ func (dp *decisionPass) perInventory(sboms SBOMs, log Logf) ([]Ref, error) {
 		if len(found) == 0 {
 			return nil, fmt.Errorf(
 				"verify: %s: the release plans this inventory but no verified decision covers it — "+
-					"refusing the verdict", inv.Name)
+					"refusing the verdict", inv.Name,
+			)
 		}
 
 		for _, d := range found {
@@ -772,7 +775,8 @@ func (dp *decisionPass) wholeRelease(assets []Subject, log Logf) ([]Ref, error) 
 
 		if winner != nil {
 			return nil, errors.New(
-				"verify: more than one SBOM asset carries a release decision — ambiguous, refusing the verdict")
+				"verify: more than one SBOM asset carries a release decision — ambiguous, refusing the verdict",
+			)
 		}
 
 		winner = &assets[i]
@@ -852,7 +856,8 @@ func coversPlanOnly(d decision, planned map[string]bool) error {
 			}
 
 			return fmt.Errorf(
-				"verify: a release decision names %s, which the release's plan does not — refusing the verdict", name)
+				"verify: a release decision names %s, which the release's plan does not — refusing the verdict", name,
+			)
 		}
 	}
 

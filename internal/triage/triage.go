@@ -145,7 +145,8 @@ func (p *Policy) Findings(report []byte) ([]Finding, error) {
 		for _, pkg := range res.Packages {
 			for _, vuln := range pkg.Vulnerabilities {
 				key := vexjoin.KeyFromFinding(
-					vuln.ID, pkg.Package.Ecosystem, pkg.Package.Name, pkg.Package.Version)
+					vuln.ID, pkg.Package.Ecosystem, pkg.Package.Name, pkg.Package.Version,
+				)
 				if key.Advisory() == "" || seen[key] {
 					continue
 				}

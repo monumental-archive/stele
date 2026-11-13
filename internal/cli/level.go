@@ -411,7 +411,8 @@ func (la *levelArgs) gatherSource(ev *level.Evidence, forge gh.Forge, out *latch
 	}
 
 	measured, err := verify.MeasureChain(
-		verify.Coords{Owner: la.owner, Repo: la.name}, la.ref, hist, measurer, out.logf)
+		verify.Coords{Owner: la.owner, Repo: la.name}, la.ref, hist, measurer, out.logf,
+	)
 
 	switch {
 	case errors.Is(err, verify.ErrNoChain):
@@ -1485,7 +1486,8 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[st
 		out.logf("level: release %s: no asset lists artifact digests, so its artifacts cannot be located", tag)
 
 		return "", nil, fmt.Sprintf(
-			"release %s publishes no asset listing artifact digests, so its artifacts cannot be located", tag)
+			"release %s publishes no asset listing artifact digests, so its artifacts cannot be located", tag,
+		)
 	}
 
 	return tag, subjects, ""

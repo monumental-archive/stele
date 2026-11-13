@@ -436,7 +436,8 @@ func TestClassedSchemaCarriesNoTargetAnswer(t *testing.T) {
 	m, err := evidence.Parse([]byte(
 		`{"schema": 3, "classes": ["go-binary"], "storeVsa": true, "machineryVersion": "1.47.0",` +
 			` "entries": [{"name": "a.tar.gz", "sha256": "` + digestA + `", "type": "build-subject",` +
-			` "class": "go-binary"}]}`))
+			` "class": "go-binary"}]}`,
+	))
 	if err != nil {
 		t.Fatalf("Parse = %v, want history to read", err)
 	}

@@ -62,7 +62,8 @@ func checkLicence(expr string) (string, error) {
 	}
 
 	normalised, invalid := spdxexp.ValidateAndNormalizeLicensesWithOptions(
-		[]string{expr}, spdxexp.ValidateLicensesOptions{})
+		[]string{expr}, spdxexp.ValidateLicensesOptions{},
+	)
 	if len(invalid) > 0 || len(normalised) != 1 {
 		return "", fmt.Errorf("imagefacts: licence %q is not a valid SPDX expression%s", expr, operatorHint(expr))
 	}

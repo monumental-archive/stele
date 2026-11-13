@@ -180,7 +180,8 @@ func (externalParametersComplete) Detect(ev *Evidence) Outcome {
 			return Contradicted(
 				"the provenance for %s carries externalParameters outside its buildType's published schema: %v"+
 					" — a parameter the schema does not describe is one a consumer cannot form an expectation about",
-				s.Name, s.UnrecognisedParameters)
+				s.Name, s.UnrecognisedParameters,
+			)
 		}
 	}
 
@@ -218,7 +219,8 @@ func (unforgeableProvenance) Detect(ev *Evidence) Outcome {
 			return Contradicted(
 				"the workflow holding the signing capability (%s at %.12s) executes caller-controlled steps,"+
 					" so the signing material is reachable from tenant code",
-				trimRef(uri), digest)
+				trimRef(uri), digest,
+			)
 		}
 	}
 

@@ -326,7 +326,8 @@ func (h *stored) absences(identity string, pub publish) []string {
 	if len(h.inventories) == 0 {
 		out = append(out, fmt.Sprintf(
 			"no attestation over the published digest %s or its %d artifact digest(s) carries a dependency"+
-				" inventory (an SPDX or CycloneDX document)", shortDigest(pub.index), len(pub.artifacts)))
+				" inventory (an SPDX or CycloneDX document)", shortDigest(pub.index), len(pub.artifacts),
+		))
 	}
 
 	if h.decided == 0 {
@@ -336,13 +337,15 @@ func (h *stored) absences(identity string, pub publish) []string {
 	if len(h.bare) > 0 {
 		out = append(out, fmt.Sprintf(
 			"%d of the %d artifact digest(s) the publish names carry no attestation at all",
-			len(h.bare), len(pub.artifacts)))
+			len(h.bare), len(pub.artifacts),
+		))
 	}
 
 	if h.bundles > 0 && h.mine == 0 {
 		out = append(out, fmt.Sprintf(
 			"%d attestation(s) were held over these digests and none verifies under the declared signer %q",
-			h.bundles, identity))
+			h.bundles, identity,
+		))
 	}
 
 	return out

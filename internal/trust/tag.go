@@ -167,7 +167,8 @@ func (t *Verifier) judgeTag(
 	if floor == TagFloorObserverTimestamp && len(receipts.entries) == 0 && len(pieces.timestamps) == 0 {
 		return nil, ObservedInstant{}, errors.New(
 			"trust: the tag signature carries no transparency-log entry and no signed timestamp — " +
-				"nothing countersigns an observation of the signature, and the declared floor requires one")
+				"nothing countersigns an observation of the signature, and the declared floor requires one",
+		)
 	}
 
 	if len(receipts.entries) > 0 || len(pieces.timestamps) > 0 {
@@ -198,7 +199,8 @@ func (t *Verifier) judgeTagObserved(
 	))
 	if err != nil {
 		return nil, ObservedInstant{}, fmt.Errorf(
-			"trust: tag signature countersignatures do not verify%s: %w", receipts.rebuiltNote(), err)
+			"trust: tag signature countersignatures do not verify%s: %w", receipts.rebuiltNote(), err,
+		)
 	}
 
 	ctInstant, err := t.observeCT(leaf)
@@ -208,7 +210,8 @@ func (t *Verifier) judgeTagObserved(
 
 	if result.Signature == nil || result.Signature.Certificate == nil {
 		return nil, ObservedInstant{}, errors.New(
-			"trust: verification returned no certificate — nothing to hold the policy against")
+			"trust: verification returned no certificate — nothing to hold the policy against",
+		)
 	}
 
 	return &TagVerdict{
@@ -349,17 +352,20 @@ func requireTagEntryFields(pb *protorekor.TransparencyLogEntry) error {
 	case kv.GetKind() == "" || kv.GetVersion() == "":
 		return errors.New(
 			"trust: tag signature transparency-log entry names no kind and version — " +
-				"nothing says what shape the entry is, so nothing can be held against it")
+				"nothing says what shape the entry is, so nothing can be held against it",
+		)
 
 	case len(pb.GetLogId().GetKeyId()) == 0:
 		return errors.New(
 			"trust: tag signature transparency-log entry names no log key ID — " +
-				"nothing says which transparency log is supposed to have recorded it")
+				"nothing says which transparency log is supposed to have recorded it",
+		)
 
 	case pb.GetLogIndex() < 0:
 		return fmt.Errorf(
 			"trust: tag signature transparency-log entry declares log index %d, which no log ever issues",
-			pb.GetLogIndex())
+			pb.GetLogIndex(),
+		)
 
 	default:
 		return nil
@@ -467,7 +473,8 @@ func taggerConsistent(payload []byte, leaf *x509.Certificate, observed ObservedI
 			"trust: the tag is stamped %s, outside the window its countersigned issuance allows (%s to %s)",
 			tagged.UTC().Format(time.RFC3339),
 			earliest.UTC().Format(time.RFC3339),
-			leaf.NotAfter.UTC().Format(time.RFC3339))
+			leaf.NotAfter.UTC().Format(time.RFC3339),
+		)
 	}
 
 	return nil

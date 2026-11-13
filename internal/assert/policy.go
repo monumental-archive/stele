@@ -262,7 +262,8 @@ func (tp *TagsPolicy) validate() error {
 
 	if tp.ProofFloor == nil {
 		return errors.New(
-			"tags.proofFloor is absent — the org declares how much proof is enough, the tool never does")
+			"tags.proofFloor is absent — the org declares how much proof is enough, the tool never does",
+		)
 	}
 
 	if err := tp.ProofFloor.validate(); err != nil {
@@ -367,20 +368,23 @@ func (f *TagProofFloor) validate() error {
 	if f.Floor == nil || *f.Floor == "" {
 		return errors.New(
 			"tags.proofFloor.floor is absent or empty — the org declares how much proof is enough, " +
-				"the tool never does")
+				"the tool never does",
+		)
 	}
 
 	if !knownTagFloor(*f.Floor) {
 		return fmt.Errorf(
 			"tags.proofFloor.floor %q is not a floor this verifier judges (%s, %s)",
-			*f.Floor, tagFloorCertificateTransparency, tagFloorObserverTimestamp)
+			*f.Floor, tagFloorCertificateTransparency, tagFloorObserverTimestamp,
+		)
 	}
 
 	if (len(f.From) == 0) != (f.Before == nil) {
 		return errors.New(
 			"tags.proofFloor declares `from` and `before` together or not at all — " +
 				"a floor that rises from a point says nothing about the tags before it, " +
-				"and a floor for tags before a point that is never named binds nothing")
+				"and a floor for tags before a point that is never named binds nothing",
+		)
 	}
 
 	if f.Before == nil {
@@ -390,7 +394,8 @@ func (f *TagProofFloor) validate() error {
 	if !knownTagFloor(*f.Before) {
 		return fmt.Errorf(
 			"tags.proofFloor.before %q is not a floor this verifier judges (%s, %s)",
-			*f.Before, tagFloorCertificateTransparency, tagFloorObserverTimestamp)
+			*f.Before, tagFloorCertificateTransparency, tagFloorObserverTimestamp,
+		)
 	}
 
 	// Equal floors are refused; unequal ones are not ordered here. A
@@ -401,7 +406,8 @@ func (f *TagProofFloor) validate() error {
 	if *f.Before == *f.Floor {
 		return fmt.Errorf(
 			"tags.proofFloor.before is %q, the floor it is already — a boundary with one floor on both sides "+
-				"declares nothing", *f.Before)
+				"declares nothing", *f.Before,
+		)
 	}
 
 	for repo, from := range f.From {
@@ -424,17 +430,20 @@ func (f *TagProofFloor) validateAgainst(epochs map[string]string) error {
 		case !declared:
 			return fmt.Errorf(
 				"tags.proofFloor.from[%s] raises the floor for a repository tags.epochs does not name — "+
-					"a heavier obligation on tags that owe no signature at all", repo)
+					"a heavier obligation on tags that owe no signature at all", repo,
+			)
 
 		case epoch == EpochPending:
 			return fmt.Errorf(
 				"tags.proofFloor.from[%s] raises the floor for a repository declared unsigned — "+
-					"tags.epochs says it has not begun signing", repo)
+					"tags.epochs says it has not begun signing", repo,
+			)
 
 		case !tagAtOrAfter(from, epoch):
 			return fmt.Errorf(
 				"tags.proofFloor.from[%s] is %s, before the signing epoch %s — "+
-					"the floor cannot rise for tags that owe no signature", repo, from, epoch)
+					"the floor cannot rise for tags that owe no signature", repo, from, epoch,
+			)
 		}
 	}
 
@@ -648,7 +657,8 @@ func (c *ContinuousPolicy) validate() error {
 func (b *BaseImagesPolicy) validate() error {
 	if len(b.Scopes) == 0 {
 		return errors.New(
-			"evidence.baseImages.scopes is empty — a base-approval section that scopes nothing approves nothing")
+			"evidence.baseImages.scopes is empty — a base-approval section that scopes nothing approves nothing",
+		)
 	}
 
 	names := map[string]bool{}
@@ -723,7 +733,8 @@ func (s *BaseImageScope) validate() error {
 	owned := owns(*s.Mechanism)
 	if owned == nil {
 		return fmt.Errorf(
-			"%s.mechanism %q is not a base-approval mechanism this stele implements", where, *s.Mechanism)
+			"%s.mechanism %q is not a base-approval mechanism this stele implements", where, *s.Mechanism,
+		)
 	}
 
 	declared := s.params()
@@ -764,7 +775,8 @@ func (s *BaseImageScope) validateProvenance(where string) error {
 		return fmt.Errorf(
 			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
 				"because the publishing repository is derived from the reference path that follows it",
-			where, *s.RegistryPrefix)
+			where, *s.RegistryPrefix,
+		)
 	}
 
 	re, err := regexp.Compile(*s.PinPattern)
@@ -776,7 +788,8 @@ func (s *BaseImageScope) validateProvenance(where string) error {
 		if !slices.Contains(re.SubexpNames(), g) {
 			return fmt.Errorf(
 				"%s.identity names the capture group %q, which pinPattern does not define — "+
-					"the expansion would silently drop that segment and demand the wrong identity", where, g)
+					"the expansion would silently drop that segment and demand the wrong identity", where, g,
+			)
 		}
 	}
 
@@ -913,7 +926,8 @@ func validateClasses(classes map[string]ClassPolicy) error {
 			case seen[n]:
 				return fmt.Errorf(
 					"evidence.classes.%s.enrichment names %q twice — what a class owes is a set, and a name is in it once",
-					name, n)
+					name, n,
+				)
 			}
 
 			seen[n] = true

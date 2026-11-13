@@ -326,14 +326,16 @@ func (p *Policy) validateRoots() error {
 		if seenAttester[*r.AttesterID] {
 			return fmt.Errorf(
 				"slsaRootsOfTrust[%d] names attester %s twice — two entries for one attester are two answers",
-				i, *r.AttesterID)
+				i, *r.AttesterID,
+			)
 		}
 
 		seenAttester[*r.AttesterID] = true
 
 		if len(r.MaxLevels) == 0 {
 			return fmt.Errorf(
-				"slsaRootsOfTrust[%d].maxLevels is absent or empty — an attester trusted to nothing is not a root of trust", i)
+				"slsaRootsOfTrust[%d].maxLevels is absent or empty — an attester trusted to nothing is not a root of trust", i,
+			)
 		}
 
 		tracks := map[string]bool{}
@@ -347,7 +349,8 @@ func (p *Policy) validateRoots() error {
 			if tracks[track] {
 				return fmt.Errorf(
 					"slsaRootsOfTrust[%d].maxLevels claims track %s more than once — a level implies those below it",
-					i, track)
+					i, track,
+				)
 			}
 
 			tracks[track] = true
@@ -403,7 +406,8 @@ func (p *Policy) reachable(field, want string) error {
 
 	return fmt.Errorf(
 		"%s demands %s but no slsaRootsOfTrust entry is trusted that far on the %s track",
-		field, want, track)
+		field, want, track,
+	)
 }
 
 // max reports this attester's maximum level on one track.
@@ -543,7 +547,8 @@ func (p *Policy) validateEnrichment() error {
 	if p.Trust.Verdict == nil {
 		return errors.New(
 			"build.enrichment is declared but trust.verdict is not — " +
-				"the enrichment verifies under the verdict identity, so the obligation could never be proven")
+				"the enrichment verifies under the verdict identity, so the obligation could never be proven",
+		)
 	}
 
 	if e.PredicateType == nil || !strings.HasPrefix(*e.PredicateType, "https://") {
@@ -555,7 +560,8 @@ func (p *Policy) validateEnrichment() error {
 	// exists to end.
 	if len(e.Required) == 0 {
 		return errors.New(
-			"build.enrichment.required is absent or empty — an obligation requiring nothing is not an obligation")
+			"build.enrichment.required is absent or empty — an obligation requiring nothing is not an obligation",
+		)
 	}
 
 	seen := map[string]bool{}
@@ -568,7 +574,8 @@ func (p *Policy) validateEnrichment() error {
 			case seen[name]:
 				return fmt.Errorf(
 					"build.enrichment names %q twice — required and permitted are one closed set, and a name is in it once",
-					name)
+					name,
+				)
 			}
 
 			seen[name] = true
@@ -668,7 +675,8 @@ func (p *Policy) validateClaims() error {
 					return fmt.Errorf(
 						"source.protectedBranches[%d].levels[%d].requiredProperties[%d] requires %q, which"+
 							" source.claims does not declare — the branch could never reach %s",
-						i, j, k, *rp.Name, *lc.Level)
+						i, j, k, *rp.Name, *lc.Level,
+					)
 				}
 			}
 		}
@@ -689,11 +697,13 @@ func (p *Policy) validateBranch(i int, b ProtectedBranch) error {
 	if len(b.Levels) == 0 {
 		return fmt.Errorf(
 			"source.protectedBranches[%d].levels is absent or empty"+
-				" — a level established by nothing is claimed by anything", i)
+				" — a level established by nothing is claimed by anything", i,
+		)
 	}
 
 	return validateLevelClaims(
-		fmt.Sprintf("source.protectedBranches[%d]", i), b.Levels, p.Source.PropertyPrefix)
+		fmt.Sprintf("source.protectedBranches[%d]", i), b.Levels, p.Source.PropertyPrefix,
+	)
 }
 
 // validateLevelClaims validates one track's per-level claims. prefix
@@ -718,7 +728,8 @@ func validateLevelClaims(field string, levels []LevelClaim, prefix *string) erro
 		if len(lc.RequiredProperties) == 0 {
 			return fmt.Errorf(
 				"%s.levels[%d].requiredProperties is absent or empty"+
-					" — a level required by nothing is claimed by anything", field, i)
+					" — a level required by nothing is claimed by anything", field, i,
+			)
 		}
 
 		for j, rp := range lc.RequiredProperties {

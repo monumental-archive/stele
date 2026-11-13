@@ -179,7 +179,8 @@ func measured(t *testing.T, signer string, links ...linkOpts) *verify.Measured {
 
 	got, err := verify.MeasureChain(
 		verify.Coords{Owner: "acme", Repo: "widget"}, sourceRef, h,
-		scriptedSigner{san: signer}, func(string, ...any) {})
+		scriptedSigner{san: signer}, func(string, ...any) {},
+	)
 	if err != nil {
 		t.Fatalf("MeasureChain = %v", err)
 	}
@@ -378,7 +379,8 @@ func TestSourceLadderFromADegradedChain(t *testing.T) {
 
 				m, err := verify.MeasureChain(
 					verify.Coords{Owner: "acme", Repo: "widget"}, sourceRef, h,
-					scriptedSigner{san: linkSigner}, func(string, ...any) {})
+					scriptedSigner{san: linkSigner}, func(string, ...any) {},
+				)
 				if err != nil {
 					t.Fatalf("MeasureChain = %v", err)
 				}

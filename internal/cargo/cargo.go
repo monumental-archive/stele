@@ -145,8 +145,7 @@ func (r Runner) Metadata(manifestDir string, sel Selection) ([]byte, error) {
 
 	out, err := cmd.Output()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, fmt.Errorf("cargo: metadata in %s: %w: %s", manifestDir, err,
 				strings.TrimSpace(string(exitErr.Stderr)))
 		}

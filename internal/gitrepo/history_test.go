@@ -200,8 +200,7 @@ func TestShallowCloneIsRefused(t *testing.T) {
 			t.Fatalf("Tags() = %v on a shallow clone, want a refusal", got)
 		}
 
-		var shallowErr *gitrepo.ShallowError
-		if !errors.As(err, &shallowErr) {
+		if _, ok := errors.AsType[*gitrepo.ShallowError](err); !ok {
 			t.Errorf("Tags() error = %v, want an ShallowError", err)
 		}
 
@@ -216,8 +215,7 @@ func TestShallowCloneIsRefused(t *testing.T) {
 			t.Fatalf("Commits() = %v on a shallow clone, want a refusal", got)
 		}
 
-		var shallowErr *gitrepo.ShallowError
-		if !errors.As(err, &shallowErr) {
+		if _, ok := errors.AsType[*gitrepo.ShallowError](err); !ok {
 			t.Errorf("Commits() error = %v, want an ShallowError", err)
 		}
 	})

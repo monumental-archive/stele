@@ -61,7 +61,8 @@ func cargoSites(data []byte) (string, []Site, error) {
 	// escapes the rewrite.
 	return "", nil, fmt.Errorf(
 		"manifest: %s carries neither workspace.package.version nor package.version; "+
-			"an unknown manifest shape is added at the kind, not guessed at", cargoFile)
+			"an unknown manifest shape is added at the kind, not guessed at", cargoFile,
+	)
 }
 
 // versionSite finds the version key directly under the named table.

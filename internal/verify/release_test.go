@@ -227,7 +227,8 @@ func TestReleaseProvenance(t *testing.T) {
 	}
 
 	if _, perr := verify.ReleaseProvenance(
-		loadPolicy(t), coords, nil, pins, w.store, fakeBV{}, discardLog); perr == nil {
+		loadPolicy(t), coords, nil, pins, w.store, fakeBV{}, discardLog,
+	); perr == nil {
 		t.Error("ReleaseProvenance verified an empty subject manifest")
 	}
 }

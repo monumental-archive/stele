@@ -245,7 +245,8 @@ func (w *blastWalk) record(subject string, f *triage.Finding) {
 	// find in the manifest; for all but a case-folded ecosystem the
 	// two are one string (docs/vex-join.md).
 	w.j.Check(subject, f.String()).Diverged(
-		fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory(), f.Package, f.Key.Version(), f.Ecosystem))
+		fmt.Sprintf("%s affects %s@%s (%s)", f.Key.Advisory(), f.Package, f.Key.Version(), f.Ecosystem),
+	)
 }
 
 // noteCanary records whether this scan reproduced the declared

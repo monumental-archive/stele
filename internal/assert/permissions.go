@@ -90,7 +90,8 @@ func Permissions(
 	if pp.Reusable != nil && len(tree) == 0 {
 		return nil, errors.New(
 			"assert: the policy declares a reusable tree and this run holds no file from it — " +
-				"every call into it would read as absent")
+				"every call into it would read as absent",
+		)
 	}
 
 	w := &permWalk{pp: pp, tree: indexWorkflows(tree), j: j, log: log}

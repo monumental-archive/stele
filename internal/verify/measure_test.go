@@ -41,7 +41,8 @@ func measure(t *testing.T, h fakeHistory, m verify.Measurer) (*verify.Measured, 
 	t.Helper()
 
 	return verify.MeasureChain(
-		verify.Coords{Owner: "acme", Repo: "widget"}, "refs/heads/main", h, m, func(string, ...any) {})
+		verify.Coords{Owner: "acme", Repo: "widget"}, "refs/heads/main", h, m, func(string, ...any) {},
+	)
 }
 
 // TestMeasureChainAssertsNoIdentity is the point of the measurement
@@ -105,7 +106,8 @@ func TestMeasureChainRefusals(t *testing.T) {
 
 		_, err := verify.MeasureChain(
 			verify.Coords{Owner: "acme", Repo: "widget"}, "main", defaultChain(t),
-			fakeMeasurer{}, func(string, ...any) {})
+			fakeMeasurer{}, func(string, ...any) {},
+		)
 		if err == nil || !strings.Contains(err.Error(), "fully qualified") {
 			t.Errorf("MeasureChain = %v, want the ref refusal", err)
 		}
@@ -116,7 +118,8 @@ func TestMeasureChainRefusals(t *testing.T) {
 
 		_, err := verify.MeasureChain(
 			verify.Coords{Owner: "", Repo: ""}, "refs/heads/main", defaultChain(t),
-			fakeMeasurer{}, func(string, ...any) {})
+			fakeMeasurer{}, func(string, ...any) {},
+		)
 		if err == nil || !strings.Contains(err.Error(), "plausible repository") {
 			t.Errorf("MeasureChain = %v, want the coordinate refusal", err)
 		}

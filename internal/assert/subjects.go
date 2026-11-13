@@ -104,7 +104,8 @@ func (s Subjects) Enumerate(pop *population.Set) ([]string, error) {
 			"population: %s is outside this run's declared enumeration coverage, and this target has no"+
 				" way to report a subject it could not look at — enumerate with a credential that covers it,"+
 				" or declare the coverage this run actually has",
-			strings.Join(unlooked, " "))
+			strings.Join(unlooked, " "),
+		)
 	}
 
 	if !s.evidence {

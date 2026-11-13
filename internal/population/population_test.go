@@ -418,7 +418,8 @@ func TestReconciliation(t *testing.T) {
 			t.Parallel()
 
 			set, err := population.Scope{Org: "acme"}.Resolve(
-				lister{repos: tc.repos}, &population.Declaration{Repositories: tc.decl})
+				lister{repos: tc.repos}, &population.Declaration{Repositories: tc.decl},
+			)
 
 			if len(tc.want) == 0 {
 				if err != nil {
@@ -453,7 +454,8 @@ func TestArchivedOverrideIsJudged(t *testing.T) {
 		lister{repos: []gh.Repo{{Name: "canon"}, {Name: "attic", Archived: true}}},
 		&population.Declaration{Repositories: []population.Entry{
 			{Repo: new("canon")}, {Repo: new("attic")},
-		}})
+		}},
+	)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -679,7 +681,8 @@ func TestEmptyPopulation(t *testing.T) {
 			lister{repos: []gh.Repo{{Name: "www"}}},
 			&population.Declaration{Repositories: []population.Entry{
 				{Repo: new("www"), Tracks: &[]string{}, Reason: new("bears no evidence")},
-			}})
+			}},
+		)
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
@@ -989,7 +992,8 @@ func TestUnexercisedDoors(t *testing.T) {
 
 			set, err := population.Scope{Org: "acme"}.Resolve(
 				lister{repos: []gh.Repo{{Name: "canon"}}},
-				publicOnly(population.Entry{Repo: new("canon")}, tc.entry))
+				publicOnly(population.Entry{Repo: new("canon")}, tc.entry),
+			)
 			if err != nil {
 				t.Fatalf("Resolve = %v, want a reconciled population", err)
 			}
@@ -1072,7 +1076,8 @@ func TestCoverageAbsentChangesNothing(t *testing.T) {
 
 	set, err := population.Scope{Org: "acme"}.Resolve(
 		lister{repos: []gh.Repo{{Name: "canon"}, {Name: "lab"}}},
-		&population.Declaration{Repositories: roster})
+		&population.Declaration{Repositories: roster},
+	)
 	if err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}

@@ -612,7 +612,8 @@ func TestLoadStoreInputsPinFileMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, pins, err := loadStoreInputs(
-				baseImagesPolicy(t, tt.declared), &storeForge{}, nil, overridePins(tt.override))
+				baseImagesPolicy(t, tt.declared), &storeForge{}, nil, overridePins(tt.override),
+			)
 
 			if tt.want == "" {
 				if err != nil {

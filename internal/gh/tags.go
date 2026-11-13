@@ -234,7 +234,8 @@ func (c *Client) notesTree(owner, repo, commitSHA string) ([]ChainNote, error) {
 	}
 
 	body, ok, err = c.get(
-		fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, *commit.Tree.SHA), ghJSON)
+		fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, *commit.Tree.SHA), ghJSON,
+	)
 	if err != nil || !ok {
 		return nil, fmt.Errorf("gh: notes tree of %s/%s: %w", owner, repo, err)
 	}

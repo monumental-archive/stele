@@ -66,7 +66,8 @@ func citationScalar(data []byte, doc *yaml.Node, key string) (Site, error) {
 		if v.Kind != yaml.ScalarNode || v.Style != 0 {
 			return Site{}, fmt.Errorf(
 				"manifest: %s %s is not a plain scalar; rewrite refused for a shape it might corrupt",
-				citationFile, key)
+				citationFile, key,
+			)
 		}
 
 		off, err := offsetAt(data, v.Line, v.Column)

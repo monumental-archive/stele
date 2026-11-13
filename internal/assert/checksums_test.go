@@ -68,7 +68,8 @@ func TestChecksumAgreement(t *testing.T) {
 			name: "one name carrying two digests is the finding",
 			arrange: func(f *fakeForge) {
 				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = pinningManifest(
-					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64", otherDigest))
+					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64", otherDigest),
+				)
 			},
 			want: []string{"widget-v1.0.0.tar.gz", subjectDigest, otherDigest},
 		},
@@ -77,7 +78,8 @@ func TestChecksumAgreement(t *testing.T) {
 			arrange: func(f *fakeForge) {
 				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = pinningManifest(
 					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64", otherDigest),
-					manifestEntryPinned("app.spdx.json", "evidence", "", "", otherDigest))
+					manifestEntryPinned("app.spdx.json", "evidence", "", "", otherDigest),
+				)
 			},
 			want: []string{"widget-v1.0.0.tar.gz", "app.spdx.json", strings.Repeat("d", 64)},
 		},
@@ -96,7 +98,8 @@ func TestChecksumAgreement(t *testing.T) {
 				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = pinningManifest(
 					manifestEntryPinned("widget-v1.0.0.tar.gz", "build-subject", "oci-image", "linux-amd64",
 						subjectDigest),
-					manifestEntryPinned("unshipped.json", "evidence", "", "", otherDigest))
+					manifestEntryPinned("unshipped.json", "evidence", "", "", otherDigest),
+				)
 			},
 		},
 		{

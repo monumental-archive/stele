@@ -180,7 +180,8 @@ func TestVerifyReproReadsTheManifestTyping(t *testing.T) {
 	released := typedManifest(
 		typedEntry("odd-name-no-convention-would-match", digestA, "build-subject", "go-binary", "linux-amd64") + ", " +
 			// Named exactly like an artifact, typed as a document.
-			typedEntry("widget-linux-amd64.tar.gz", digestB, "evidence", "", ""))
+			typedEntry("widget-linux-amd64.tar.gz", digestB, "evidence", "", ""),
+	)
 
 	sub, reb := reproManifests(t, released, digestA+"  odd-name-no-convention-would-match\n")
 
@@ -250,7 +251,8 @@ func TestVerifyReproEmptySubjectPopulationCannotJudge(t *testing.T) {
 		"an empty manifest":        "",
 		"documents alone, untyped": digestB + "  attestations.intoto.jsonl\n",
 		"documents alone, self-typed": typedManifest(
-			typedEntry("attestations.intoto.jsonl", digestB, "evidence", "", "")),
+			typedEntry("attestations.intoto.jsonl", digestB, "evidence", "", ""),
+		),
 		// A manifest from before entries existed lists nothing, so it
 		// is a population of zero — an honest CANNOT_JUDGE, and the
 		// reason the canon hands those releases their checksum
@@ -471,7 +473,8 @@ func TestVerifyReproStatesWhatItCovered(t *testing.T) {
 			// just not which class built one.
 			"a class asked of a manifest that predates the answer",
 			legacyTypedManifest(
-				`{"name": "widget-linux-amd64.tar.gz", "sha256": "` + digestA + `", "type": "build-subject"}`),
+				`{"name": "widget-linux-amd64.tar.gz", "sha256": "` + digestA + `", "type": "build-subject"}`,
+			),
 			"go-binary", "whole-release", "no-class-answer",
 		},
 		{
@@ -735,7 +738,8 @@ func TestVerifyReproDeclaredTargetTheReleaseCannotPlace(t *testing.T) {
 			// the publisher's.
 			"a manifest that predates the target answer",
 			preTargetManifest(
-				typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", "")),
+				typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", ""),
+			),
 			muslX86, "types no targets",
 		},
 		{
@@ -886,7 +890,8 @@ func TestVerifyReproRefusesADeclarationWithAHole(t *testing.T) {
 // a silent widening to every build subject the release published.
 func TestVerifyReproUnmetClassSaysWhatTheTargetsBecame(t *testing.T) {
 	released := legacyTypedManifest(
-		`{"name": "lab-x86_64-linux.tar.gz", "sha256": "` + digestA + `", "type": "build-subject"}`)
+		`{"name": "lab-x86_64-linux.tar.gz", "sha256": "` + digestA + `", "type": "build-subject"}`,
+	)
 
 	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
 

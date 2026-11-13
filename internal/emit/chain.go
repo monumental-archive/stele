@@ -138,7 +138,8 @@ func validateChainInputs(p *policy.Policy, in *ChainInputs) (*policy.ProtectedBr
 	case !revRE.MatchString(in.MachineryRef):
 		return nil, fmt.Errorf(
 			"emit: machinery ref %q is not a commit digest — the policy tree must be pinned by full SHA so the VSA can carry"+
-				" its digest", in.MachineryRef)
+				" its digest", in.MachineryRef,
+		)
 	case in.PolicyURI == "":
 		return nil, errors.New("emit: a policy URI is required — a signed verdict naming no policy must never recur")
 	case in.ActorLogin == "" || in.ActorID == "":
@@ -195,12 +196,14 @@ func (e *chainRun) preflight() error {
 		// unprovable identity must not sign. The logged-skip grace
 		// existed only for the cutover window (stele#69 item 4).
 		return errors.New(
-			"emit: the runtime offered no workflow identity (GITHUB_WORKFLOW_REF) — the reserved-path guard cannot run")
+			"emit: the runtime offered no workflow identity (GITHUB_WORKFLOW_REF) — the reserved-path guard cannot run",
+		)
 	}
 
 	if got := serverURL + "/" + e.in.WorkflowRef; got != e.id.SAN {
 		return fmt.Errorf(
-			"emit: invoked from %q — the emitter runs only under the reserved identity %q", got, e.id.SAN)
+			"emit: invoked from %q — the emitter runs only under the reserved identity %q", got, e.id.SAN,
+		)
 	}
 
 	if err := e.s.Check(); err != nil {
@@ -308,7 +311,8 @@ func (e *chainRun) discover() ([]string, string, error) {
 	if e.in.Genesis {
 		if sawLink {
 			return nil, "", errors.New(
-				"emit: genesis refused — a chain link already exists on this history; a gap is debt, not a new founding")
+				"emit: genesis refused — a chain link already exists on this history; a gap is debt, not a new founding",
+			)
 		}
 
 		e.log("emit: genesis: founding the chain at %s", e.in.Rev)
@@ -318,7 +322,8 @@ func (e *chainRun) discover() ([]string, string, error) {
 
 	if !genesisFound {
 		return nil, "", errors.New(
-			"emit: no genesis link on this history — found the chain first with a genesis dispatch")
+			"emit: no genesis link on this history — found the chain first with a genesis dispatch",
+		)
 	}
 
 	// A walk that found genesis and left holes necessarily passed a
@@ -410,7 +415,8 @@ func (e *chainRun) verifyTail(rev string) error {
 		chain.SHA256Hex(dsse.PAE(chain.StatementType, stmtBytes))); verr != nil {
 		return fmt.Errorf(
 			"emit: link at %s does not verify against %s — refusing to extend a chain that fails the published root"+
-				" of trust: %w", rev, e.id.SAN, verr)
+				" of trust: %w", rev, e.id.SAN, verr,
+		)
 	}
 
 	stmt, err := jsonx.DecodeBytes[intoto.Statement](stmtBytes)
@@ -691,7 +697,8 @@ func (e *chainRun) signAndProve(stmtBytes []byte) (jsonx.Raw, error) {
 	if _, verr := e.bv.Blob(bundle, e.id, chain.SHA256Hex(pae)); verr != nil {
 		return nil, fmt.Errorf(
 			"the bundle just signed does not verify against %s — the certificate identity is not the published"+
-				" contract: %w", e.id.SAN, verr)
+				" contract: %w", e.id.SAN, verr,
+		)
 	}
 
 	return bundle, nil

@@ -174,10 +174,12 @@ func (e *EvidencePolicy) artifactOwes(c *Contract, artifact string, declared []s
 		// release shipped.
 		return declared, fmt.Sprintf(
 			"schema %d attributes every artifact to a class and this one to none%s",
-			c.ManifestSchema, heldTo(declared))
+			c.ManifestSchema, heldTo(declared),
+		)
 	case !e.definesClass(class):
 		return declared, fmt.Sprintf(
-			"built by class %q, which the policy does not define%s", class, heldTo(declared))
+			"built by class %q, which the policy does not define%s", class, heldTo(declared),
+		)
 	}
 
 	// Sorted for the same reason the union is: what one artifact owes is
@@ -371,7 +373,8 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		if m.Policy.manifestSchema(*doc.MachineryVersion) {
 			return nil, false, fmt.Errorf(
 				"assert: manifest of %s/%s@%s: schema %d, but machinery %s owes schema %d",
-				owner, repo, tag, *doc.Schema, *doc.MachineryVersion, evidence.Schema)
+				owner, repo, tag, *doc.Schema, *doc.MachineryVersion, evidence.Schema,
+			)
 		}
 
 		origin = fmt.Sprintf("%s (schema %d, before the schema epoch)", origin, *doc.Schema)
