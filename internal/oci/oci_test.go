@@ -103,8 +103,8 @@ func (w *world) pushIndex() string {
 	}
 
 	idx := mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
-		Add:        img,
-		Descriptor: v1.Descriptor{Platform: &v1.Platform{OS: "linux", Architecture: "amd64"}},
+		Add:      img,
+		Platform: &v1.Platform{OS: "linux", Architecture: "amd64"},
 	})
 
 	if writeErr := remote.WriteIndex(w.tag("index"), idx); writeErr != nil {

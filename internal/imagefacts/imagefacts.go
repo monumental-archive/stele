@@ -271,8 +271,8 @@ func sourceURL(p *Provenance) (string, error) {
 
 // defaultTitle is the repository's own name, the last path segment.
 func defaultTitle(repository string) string {
-	if i := strings.LastIndex(repository, "/"); i >= 0 {
-		return repository[i+1:]
+	if _, after, ok := strings.CutLast(repository, "/"); ok {
+		return after
 	}
 
 	return repository
