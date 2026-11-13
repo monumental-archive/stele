@@ -1,6 +1,6 @@
 module github.com/monumental-archive/stele
 
-go 1.26.6
+go 1.27
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
