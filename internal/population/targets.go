@@ -60,7 +60,8 @@ func (s TargetScope) Validate() error {
 	if len(s.Targets) == 0 {
 		return errors.New(
 			"population: no target was declared — a declared population of nothing cannot be reconciled" +
-				" against any manifest; declare the targets the rebuild covered, or none at all")
+				" against any manifest; declare the targets the rebuild covered, or none at all",
+		)
 	}
 
 	seen := make(map[string]bool, len(s.Targets))

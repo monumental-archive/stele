@@ -79,7 +79,8 @@ func Chains(
 	// condition rather than a guess.
 	for _, e := range cp.Exceptions {
 		j.Except(
-			report.Declared(org+"/"+*e.Repo, assertionUnactivated, "assert policy chains.exceptions: "+*e.Reason))
+			report.Declared(org+"/"+*e.Repo, assertionUnactivated, "assert policy chains.exceptions: "+*e.Reason),
+		)
 	}
 
 	w := &chainsWalk{org: org, tags: tags, cv: cv, notesRef: notesRef, refs: refs, j: j, log: log}

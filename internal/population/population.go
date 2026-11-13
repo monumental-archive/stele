@@ -124,13 +124,15 @@ func (c *Coverage) validate() error {
 	if c.Visibility == nil {
 		return errors.New(
 			"population.coverage.visibility is absent — a coverage that names no visibility says nothing;" +
-				" omit the section to declare that the enumeration covers everything")
+				" omit the section to declare that the enumeration covers everything",
+		)
 	}
 
 	if len(*c.Visibility) == 0 {
 		return errors.New(
 			"population.coverage.visibility is empty — an enumeration covering nothing could show nothing," +
-				" and every declared member would go unexercised; omit the section to cover everything")
+				" and every declared member would go unexercised; omit the section to cover everything",
+		)
 	}
 
 	seen := map[string]bool{}
@@ -142,7 +144,8 @@ func (c *Coverage) validate() error {
 
 		if seen[v] {
 			return fmt.Errorf(
-				"population.coverage.visibility[%d] names %q twice — what an enumeration covers is a set", i, v)
+				"population.coverage.visibility[%d] names %q twice — what an enumeration covers is a set", i, v,
+			)
 		}
 
 		seen[v] = true
@@ -198,7 +201,8 @@ func (d *Declaration) Validate() error {
 	if len(d.Repositories) == 0 {
 		return errors.New(
 			"population.repositories is empty — a declared population of nothing cannot be reconciled" +
-				" against any listing; omit the section to take the default predicate")
+				" against any listing; omit the section to take the default predicate",
+		)
 	}
 
 	if d.Coverage != nil {
@@ -216,7 +220,8 @@ func (d *Declaration) Validate() error {
 
 		if seen[*e.Repo] {
 			return fmt.Errorf(
-				"population.repositories[%d] names %s twice — one repository, one membership", i, *e.Repo)
+				"population.repositories[%d] names %s twice — one repository, one membership", i, *e.Repo,
+			)
 		}
 
 		seen[*e.Repo] = true
@@ -249,13 +254,15 @@ func (e Entry) validate(i int) error {
 	if strings.Contains(*e.Repo, "/") {
 		return fmt.Errorf(
 			"population.repositories[%d].repo is %q — name the repository alone;"+
-				" the owner is the population's, declared once", i, *e.Repo)
+				" the owner is the population's, declared once", i, *e.Repo,
+		)
 	}
 
 	if e.Visibility != nil && *e.Visibility == "" {
 		return fmt.Errorf(
 			"population.repositories[%d].visibility is empty — a visibility with no name cannot be read"+
-				" against the declared coverage", i)
+				" against the declared coverage", i,
+		)
 	}
 
 	if e.Surfaces != nil {
@@ -273,7 +280,8 @@ func (e Entry) validate(i int) error {
 			return fmt.Errorf(
 				"population.repositories[%d].tracks names %q, which is no track this release judges (%s)"+
 					" — a track that does not parse would silently narrow the population",
-				i, name, strings.Join(trackKeys(), ", "))
+				i, name, strings.Join(trackKeys(), ", "),
+			)
 		}
 	}
 
@@ -281,7 +289,8 @@ func (e Entry) validate(i int) error {
 		return fmt.Errorf(
 			"population.repositories[%d].reason is absent or empty — %s bears evidence on fewer tracks"+
 				" than the default, and a narrowing nobody wrote a reason for reads as a mistake",
-			i, *e.Repo)
+			i, *e.Repo,
+		)
 	}
 
 	return nil
@@ -380,7 +389,8 @@ func (s *Set) Members(t level.Track) ([]string, error) {
 		return nil, fmt.Errorf(
 			"population: the policy declares %s outside the %s track, and this walk judges %s"+
 				" — what owes nothing there has nothing to judge",
-			s.subject, t.Key(), t.Key())
+			s.subject, t.Key(), t.Key(),
+		)
 	}
 
 	return out, nil
@@ -724,14 +734,16 @@ func reconcileError(org string, undeclared, unlisted []string) error {
 		parts = append(parts, fmt.Sprintf(
 			"the listing shows %s, which the declared population does not account for"+
 				" (declare each, with its tracks, or with an empty track list and a reason)",
-			strings.Join(undeclared, " ")))
+			strings.Join(undeclared, " "),
+		))
 	}
 
 	if len(unlisted) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"the declared population names %s, which the listing does not show"+
 				" (an unseen repository is unchecked, not clean)",
-			strings.Join(unlisted, " ")))
+			strings.Join(unlisted, " "),
+		))
 	}
 
 	return fmt.Errorf("population: %s does not reconcile with its declaration: %s",

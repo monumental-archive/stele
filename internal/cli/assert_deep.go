@@ -142,7 +142,8 @@ func loadStoreInputs(
 	for _, name := range slices.Sorted(maps.Keys(overrides)) {
 		if !slices.ContainsFunc(scopes, func(s *assert.BaseImageScope) bool { return *s.Name == name }) {
 			return nil, nil, fmt.Errorf(
-				"--base-pins names scope %q, which this policy declares no pin-file scope for", name)
+				"--base-pins names scope %q, which this policy declares no pin-file scope for", name,
+			)
 		}
 	}
 
@@ -188,7 +189,8 @@ func readPinFiles(scopes []*assert.BaseImageScope, overrides basePins) (map[stri
 		case errors.Is(perr, fs.ErrNotExist):
 			return nil, fmt.Errorf(
 				"the policy declares baseImages scope %q but %s is absent from this checkout"+
-					" — pass --base-pins %s=<path> to supply it from elsewhere", *s.Name, pinPath, *s.Name)
+					" — pass --base-pins %s=<path> to supply it from elsewhere", *s.Name, pinPath, *s.Name,
+			)
 		case perr != nil:
 			return nil, perr //nolint:wrapcheck // the refusal names the path already
 		default:

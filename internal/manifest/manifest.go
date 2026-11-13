@@ -190,7 +190,8 @@ func (s *Set) Version() (string, error) {
 		return "", fmt.Errorf(
 			"manifest: mirrors disagree — %s %s = %q, but %s; "+
 				"a disagreeing mirror is evidence of a broken earlier release, not something to repair here",
-			s.Sites[0].Path, s.Sites[0].Field, version, strings.Join(disagree, ", "))
+			s.Sites[0].Path, s.Sites[0].Field, version, strings.Join(disagree, ", "),
+		)
 	}
 
 	return version, nil

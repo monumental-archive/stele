@@ -97,7 +97,8 @@ func (t *Verifier) observeCT(leaf *x509.Certificate) (ObservedInstant, error) {
 
 	if len(scts) == 0 {
 		return ObservedInstant{}, errors.New(
-			"trust: the signing certificate carries no signed certificate timestamp — nothing countersigns its issuance")
+			"trust: the signing certificate carries no signed certificate timestamp — nothing countersigns its issuance",
+		)
 	}
 
 	leafCT, err := ctx509.ParseCertificates(leaf.Raw)
@@ -142,7 +143,8 @@ func (t *Verifier) observeCT(leaf *x509.Certificate) (ObservedInstant, error) {
 	}
 
 	return ObservedInstant{}, fmt.Errorf(
-		"trust: no trusted certificate transparency log countersigns the signing certificate: %w", last)
+		"trust: no trusted certificate transparency log countersigns the signing certificate: %w", last,
+	)
 }
 
 // verifySCTOverChains proves one SCT against one trusted CT log key,

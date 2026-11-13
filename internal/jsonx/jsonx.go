@@ -152,7 +152,8 @@ func DecodeVersioned[T any](r io.Reader, want int) (*T, error) {
 		return nil, errors.New("jsonx: schema is absent")
 	case *peek.Schema != want:
 		return nil, fmt.Errorf(
-			"jsonx: schema %d is not the implemented schema %d — refusing, never best-efforting", *peek.Schema, want)
+			"jsonx: schema %d is not the implemented schema %d — refusing, never best-efforting", *peek.Schema, want,
+		)
 	}
 
 	return DecodeBytes[T](b)

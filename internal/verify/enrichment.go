@@ -78,7 +78,8 @@ func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
 	if e == nil {
 		return fmt.Errorf(
 			"verify: the demand requires enrichment names %v but the policy declares no build.enrichment — "+
-				"a class demands what no obligation covers", names)
+				"a class demands what no obligation covers", names,
+		)
 	}
 
 	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
@@ -94,7 +95,8 @@ func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
 		if !allowed[n] {
 			return fmt.Errorf(
 				"verify: the demand requires enrichment name %q, which the policy neither requires nor permits — "+
-					"class expectations and the closed set have diverged", n)
+					"class expectations and the closed set have diverged", n,
+			)
 		}
 	}
 
@@ -133,11 +135,13 @@ func judgeEnrichment(
 	case 0:
 		return nil, fmt.Errorf(
 			"verify: %s: the policy declares an enrichment obligation and no enrichment claim covers this subject",
-			s.Name)
+			s.Name,
+		)
 	default:
 		return nil, fmt.Errorf(
 			"verify: %s: %d enrichment claims cover this subject — two claims are two answers, not more evidence",
-			s.Name, len(found))
+			s.Name, len(found),
+		)
 	}
 
 	verified, err := bv.Attestation(found[0].Bundle, root.id, s.SHA256)
@@ -159,13 +163,15 @@ func judgeEnrichment(
 	if *pred.ResourceURI != resource {
 		return nil, fmt.Errorf(
 			"verify: %s: enrichment names resource %q, expected %q — facts about another resource are not these facts",
-			s.Name, *pred.ResourceURI, resource)
+			s.Name, *pred.ResourceURI, resource,
+		)
 	}
 
 	if srcRepo := expand(*p.Build.SourceRepository, c); *pred.SourceRevision.URI != srcRepo {
 		return nil, fmt.Errorf(
 			"verify: %s: enrichment binds to source repository %q, expected %q",
-			s.Name, *pred.SourceRevision.URI, srcRepo)
+			s.Name, *pred.SourceRevision.URI, srcRepo,
+		)
 	}
 
 	if err := judgeNames(p.Build.Enrichment, extras, pred, s); err != nil {
@@ -229,7 +235,8 @@ func judgeNames(e *policy.Enrichment, extras []string, pred *enrichment.Predicat
 		if !allowed[n] {
 			return fmt.Errorf(
 				"verify: %s: enrichment claims %q, which the policy neither requires nor permits — "+
-					"the declared set is closed", s.Name, n)
+					"the declared set is closed", s.Name, n,
+			)
 		}
 
 		claimed[n] = true
@@ -245,7 +252,8 @@ func judgeNames(e *policy.Enrichment, extras []string, pred *enrichment.Predicat
 		if !claimed[n] {
 			return fmt.Errorf(
 				"verify: %s: enrichment claims no %q, which this release's evidence classes require of it",
-				s.Name, n)
+				s.Name, n,
+			)
 		}
 	}
 

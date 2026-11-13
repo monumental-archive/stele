@@ -295,7 +295,8 @@ func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subje
 
 	if len(subjects) == 0 {
 		return nil, nil, fmt.Errorf(
-			"%s names no artifact subjects — a manifest that pins nothing verifies nothing", *w.pol.Checksums)
+			"%s names no artifact subjects — a manifest that pins nothing verifies nothing", *w.pol.Checksums,
+		)
 	}
 
 	return subjects, sboms, nil
@@ -327,7 +328,8 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 	if machineryOwner == "" {
 		return verify.Pins{}, errors.New(
 			"the verify policy names no machinery repository (no trust.verdict) and the signer identity is not" +
-				" templated — pins cannot be derived; declare one or the other")
+				" templated — pins cannot be derived; declare one or the other",
+		)
 	}
 
 	var machineryPin string
@@ -348,17 +350,20 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 		m := uses40RE.FindSubmatch(wf)
 		if !ok || m == nil {
 			return verify.Pins{}, fmt.Errorf(
-				"no full-commit machinery pin on the publish workflow at %s — the verifier identity cannot be derived", tag)
+				"no full-commit machinery pin on the publish workflow at %s — the verifier identity cannot be derived", tag,
+			)
 		}
 
 		machineryPin = string(m[1])
 	}
 
 	machineryPublish, ok, err := w.forge.FileAt(
-		machineryOwner, machineryRepo, ".github/workflows/publish.yml", machineryPin)
+		machineryOwner, machineryRepo, ".github/workflows/publish.yml", machineryPin,
+	)
 	if err != nil {
 		return verify.Pins{}, fmt.Errorf(
-			"the machinery publish workflow at %.12s is unreadable: %w", machineryPin, err)
+			"the machinery publish workflow at %.12s is unreadable: %w", machineryPin, err,
+		)
 	}
 
 	if !ok {
@@ -374,7 +379,8 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 	if sm == nil {
 		return verify.Pins{}, fmt.Errorf(
 			"the machinery repository at %.12s declares no signer pin for %s — the provenance identity cannot be derived",
-			machineryPin, signerWorkflow)
+			machineryPin, signerWorkflow,
+		)
 	}
 
 	return verify.Pins{Machinery: machineryPin, Signer: string(sm[1])}, nil

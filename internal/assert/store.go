@@ -101,7 +101,8 @@ func (w *evidenceWalk) continuous(repo string) error {
 
 	if len(pins) == 0 {
 		continuous.Diverged(
-			derived.Cause + " — the expected identity cannot be derived, so the image cannot be vouched for")
+			derived.Cause + " — the expected identity cannot be derived, so the image cannot be vouched for",
+		)
 
 		return nil
 	}
@@ -119,7 +120,8 @@ func (w *evidenceWalk) continuous(repo string) error {
 	if verr := w.attestor.Verify(w.org, repo, digest, candidates, ""); verr != nil {
 		continuous.Diverged(
 			fmt.Sprintf("%s@%s carries no attestation verifying under %s at any of the %d declared pin(s): %v",
-				*c.Registry, shortDigest(digest), *c.SignerWorkflow, len(pins), verr))
+				*c.Registry, shortDigest(digest), *c.SignerWorkflow, len(pins), verr),
+		)
 	}
 
 	w.log("assert: evidence: %s continuous digest %s checked", repo, shortDigest(digest))
@@ -225,7 +227,8 @@ func (w *evidenceWalk) signerPins(stub []byte, stubUses, pattern string) (derive
 	if len(missed) > 0 {
 		return derivedPins{Cause: fmt.Sprintf(
 			"the pinned reusable workflow the stub calls is not readable at its pin (%s)",
-			strings.Join(missed, ", "))}, nil
+			strings.Join(missed, ", "),
+		)}, nil
 	}
 
 	return derivedPins{Cause: "no signer pin found in the released tree the stub's pin names"}, nil
@@ -274,7 +277,8 @@ var baseRefRE = regexp.MustCompile(`["']([a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{
 // reference (`--platform=`) are skipped, and a trailing `AS <stage>`
 // is simply not captured.
 var fromRefRE = regexp.MustCompile(
-	`(?im)^[ \t]*FROM[ \t]+(?:--[^ \t]+[ \t]+)*([a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64})`)
+	`(?im)^[ \t]*FROM[ \t]+(?:--[^ \t]+[ \t]+)*([a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64})`,
+)
 
 // baseScopes is the declared approval scopes, or none.
 func (w *evidenceWalk) baseScopes() []BaseImageScope {
@@ -367,7 +371,8 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
 			[]Candidate{{Identity: *s.AttestorIdentity}}, *s.PredicateType,
 		); err != nil {
 			pin.Diverged(
-				fmt.Sprintf("no %s attestation verifies for this pinned base: %v", *s.PredicateType, err))
+				fmt.Sprintf("no %s attestation verifies for this pinned base: %v", *s.PredicateType, err),
+			)
 		}
 
 		w.log("assert: evidence: base pin %s checked", ref)
@@ -435,7 +440,8 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 			[]Candidate{{Identity: identity}}, *s.PredicateType,
 		); verr != nil {
 			pin.Diverged(fmt.Sprintf(
-				"no %s attestation verifies for this base under %s: %v", *s.PredicateType, identity, verr))
+				"no %s attestation verifies for this base under %s: %v", *s.PredicateType, identity, verr,
+			))
 		}
 
 		w.log("assert: evidence: %s base %s checked", repo, ref)

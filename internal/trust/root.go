@@ -93,12 +93,14 @@ func PlanRoot(file, anchor, mirror string) (RootPlan, error) {
 	switch {
 	case file != "" && (anchor != "" || mirror != ""):
 		return RootPlan{}, errors.New(
-			"trust: a trusted-root file and a TUF instance are exclusive — one root, named once")
+			"trust: a trusted-root file and a TUF instance are exclusive — one root, named once",
+		)
 
 	case (anchor == "") != (mirror == ""):
 		return RootPlan{}, errors.New(
 			"trust: the TUF anchor and its mirror are declared together or not at all — " +
-				"an anchor without its instance verifies nothing, an instance without its anchor is fetched blind")
+				"an anchor without its instance verifies nothing, an instance without its anchor is fetched blind",
+		)
 
 	case file != "":
 		return RootPlan{Origin: OriginFile, File: file}, nil

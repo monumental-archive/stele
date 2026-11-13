@@ -112,7 +112,8 @@ func TestParseAbsentIsNotEmpty(t *testing.T) {
 	t.Parallel()
 
 	doc, err := workflow.Parse([]byte(
-		"permissions:\n  contents: write\njobs:\n  inherits:\n    runs-on: x\n  restates:\n    permissions: {}\n"))
+		"permissions:\n  contents: write\njobs:\n  inherits:\n    runs-on: x\n  restates:\n    permissions: {}\n",
+	))
 	if err != nil {
 		t.Fatalf("Parse = %v", err)
 	}
@@ -223,7 +224,8 @@ func TestRequirementCarriesTheBlanketAsk(t *testing.T) {
 	t.Parallel()
 
 	doc, err := workflow.Parse([]byte(
-		"jobs:\n  a:\n    permissions:\n      contents: read\n  b:\n    permissions: write-all\n"))
+		"jobs:\n  a:\n    permissions:\n      contents: read\n  b:\n    permissions: write-all\n",
+	))
 	if err != nil {
 		t.Fatalf("Parse = %v", err)
 	}

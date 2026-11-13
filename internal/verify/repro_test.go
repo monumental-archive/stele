@@ -117,7 +117,8 @@ func TestRepro(t *testing.T) {
 
 			got := verify.Repro(
 				verify.ReproSets{Judged: released, Rebuilt: tc.rebuilt, Published: published},
-				func(string, ...any) {})
+				func(string, ...any) {},
+			)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("Repro = %+v, want %+v", got, tc.want)
 			}

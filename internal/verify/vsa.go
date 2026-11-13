@@ -205,7 +205,8 @@ func oneEnrichmentRevision(revisions map[string]bool) (string, error) {
 
 	return "", fmt.Errorf(
 		"verify: the release's enrichment claims name %d source revisions %v — one release was built from one commit",
-		len(got), got)
+		len(got), got,
+	)
 }
 
 // verdictIdentity resolves which root of trust this release's
@@ -384,7 +385,8 @@ func judgeVSA(
 	if *pred.ResourceURI != resource {
 		return nil, fmt.Errorf(
 			"verify: %s: verdict names resource %q, expected %q — a VSA naming another resource is rejected",
-			s.Name, *pred.ResourceURI, resource)
+			s.Name, *pred.ResourceURI, resource,
+		)
 	}
 
 	if *pred.VerificationResult != vsa.ResultPassed {

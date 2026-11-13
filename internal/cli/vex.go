@@ -250,7 +250,8 @@ func renderVEX(
 	va *vexArgs, released time.Time, complete *vex.Complete, rebuilds int, doc io.Writer, out *latch,
 ) error {
 	document, err := vex.Render(
-		vex.Options{ID: va.id, Author: va.author, Released: released}, complete)
+		vex.Options{ID: va.id, Author: va.author, Released: released}, complete,
+	)
 	if errors.Is(err, vex.ErrNoCoverage) {
 		out.logf("derived=false")
 		out.logf("no recorded decision applies to this release; %d finding(s) on the rebuild cadence", rebuilds)

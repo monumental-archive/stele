@@ -325,7 +325,8 @@ func (t *Verifier) transparency(entity verify.SignedEntity) (ObservedInstant, er
 	leaf := vc.Certificate()
 	if leaf == nil {
 		return ObservedInstant{}, errors.New(
-			"trust: the entity carries no certificate — the stance holds identity and transparency against one")
+			"trust: the entity carries no certificate — the stance holds identity and transparency against one",
+		)
 	}
 
 	return t.observeCT(leaf)

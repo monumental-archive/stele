@@ -962,7 +962,8 @@ func TestTagsDebtStalenessFollowsWhatWasChecked(t *testing.T) {
 	t.Parallel()
 
 	debt, err := report.ParseDebt(
-		[]byte("widget@v1.1.0(tag:signature)\nwidget@v1.0.0(tag:signature)\n"), "debt.txt")
+		[]byte("widget@v1.1.0(tag:signature)\nwidget@v1.0.0(tag:signature)\n"), "debt.txt",
+	)
 	if err != nil {
 		t.Fatalf("debt: %v", err)
 	}

@@ -127,7 +127,8 @@ func Plans(
 		cp, ok := pol.Evidence.Classes[class]
 		if c := j.Check(class, assertPlanClass); !ok {
 			c.Diverged(
-				"requested class is not declared in the policy — an undeclared class owes unknowable evidence")
+				"requested class is not declared in the policy — an undeclared class owes unknowable evidence",
+			)
 
 			continue
 		}
@@ -137,7 +138,8 @@ func Plans(
 			if c := j.Check(class, assertPlanned); !classPlansPrefix(entries, class, prefix) {
 				c.DivergedFrom(prefix, "", fmt.Sprintf(
 					"no plan of this class names a document under %q — the release would publish and then red on the evidence walk",
-					prefix))
+					prefix,
+				))
 			}
 		}
 
@@ -208,7 +210,8 @@ func parsePlans(j *report.Journal, files []PlanFile) []PlanEntry {
 
 			if prior, ok := byDoc[*e.Doc]; ok {
 				j.Check(f.Name, assertPlanConflict).DivergedFrom(prior, key, fmt.Sprintf(
-					"document %q is claimed by two different plans — the legs disagree about what was built", *e.Doc))
+					"document %q is claimed by two different plans — the legs disagree about what was built", *e.Doc,
+				))
 
 				continue
 			}
@@ -359,7 +362,8 @@ func vocabularyChecks(j *report.Journal, pol *Policy, entries []PlanEntry, reque
 		if c := j.Check(*e.Doc, assertPlanDrift); !requested[class] {
 			c.DivergedFrom("", class, fmt.Sprintf(
 				"the plan names class %q, which this release does not declare — a leg ran for an undeclared class",
-				class))
+				class,
+			))
 
 			continue
 		}
@@ -380,7 +384,8 @@ func vocabularyChecks(j *report.Journal, pol *Policy, entries []PlanEntry, reque
 		if c := j.Check(*e.Doc, assertPlanOrphan); !docInVocabulary(*e.Doc, vocabulary) {
 			c.DivergedFrom("", class, fmt.Sprintf(
 				"no planned prefix class %q declares claims this document — "+
-					"a misnamed obligation-bearer or an undeclared obligation", class))
+					"a misnamed obligation-bearer or an undeclared obligation", class,
+			))
 		}
 	}
 }

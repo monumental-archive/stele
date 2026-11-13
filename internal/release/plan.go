@@ -194,7 +194,8 @@ func Assemble(in *Inputs) (*Plan, error) {
 	if !strings.Contains(in.Subject, VersionToken) {
 		return nil, fmt.Errorf(
 			"release: the commit subject template %q names no %s — the tag leg would compare against a constant",
-			in.Subject, VersionToken)
+			in.Subject, VersionToken,
+		)
 	}
 
 	version := in.Next.String()
@@ -239,7 +240,8 @@ func (in *Inputs) refusals(version, tag string) []Refusal {
 			out = append(out, Refusal{
 				Cause: CauseTagTaken,
 				Detail: fmt.Sprintf(
-					"the namespace already carries %s, so minting %s would name one release twice", version, tag),
+					"the namespace already carries %s, so minting %s would name one release twice", version, tag,
+				),
 			})
 
 			break
@@ -256,14 +258,16 @@ func (in *Inputs) refusals(version, tag string) []Refusal {
 				Cause: CauseMirrorDrift,
 				Detail: fmt.Sprintf(
 					"the mirrors carry %q before any release in this namespace; nothing released them",
-					in.MirrorVersion),
+					in.MirrorVersion,
+				),
 			})
 		} else if in.MirrorVersion != in.Base.String() {
 			out = append(out, Refusal{
 				Cause: CauseMirrorDrift,
 				Detail: fmt.Sprintf(
 					"the mirrors carry %q but the last release is %s; a mirror that moved on its own is evidence",
-					in.MirrorVersion, in.Base),
+					in.MirrorVersion, in.Base,
+				),
 			})
 		}
 	}
@@ -305,7 +309,8 @@ func (in *Inputs) contents() ([]string, []string, error) {
 		// would produce a plausible path pointing somewhere else.
 		if filepath.IsAbs(path) || strings.HasPrefix(filepath.Clean(path), "..") {
 			return nil, nil, fmt.Errorf(
-				"release: %q is not a path inside the tree — a release commit carries tree-relative files", path)
+				"release: %q is not a path inside the tree — a release commit carries tree-relative files", path,
+			)
 		}
 
 		info, err := os.Stat(filepath.Join(in.Root, path))

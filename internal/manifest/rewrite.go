@@ -77,7 +77,8 @@ func (s *Set) verify(rewritten map[string][]byte, next, date string) error {
 	after, err := detect(rewritten)
 	if err != nil {
 		return fmt.Errorf(
-			"manifest: the rewritten tree no longer parses, which a rewrite cannot have been meant to do: %w", err)
+			"manifest: the rewritten tree no longer parses, which a rewrite cannot have been meant to do: %w", err,
+		)
 	}
 
 	if len(after.Sites) != len(s.Sites) {

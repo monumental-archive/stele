@@ -118,7 +118,8 @@ func TestChainSignedNonsense(t *testing.T) {
 				w := chainWorld{t: t}
 				h.notes[revC2] = w.noteHalves(
 					w.rawHalf([]byte("not json")),
-					w.half(w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})))
+					w.half(w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})),
+				)
 
 				return h
 			},
@@ -132,7 +133,8 @@ func TestChainSignedNonsense(t *testing.T) {
 				w := chainWorld{t: t}
 				h.notes[revC2] = w.noteHalves(
 					w.rawHalf([]byte(`{}`)),
-					w.half(w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})))
+					w.half(w.vsaStmt(revC2, []any{"SLSA_SOURCE_LEVEL_3"})),
+				)
 
 				return h
 			},
@@ -253,7 +255,8 @@ func TestChainLedgerStepRefusals(t *testing.T) {
 
 				return w.noteHalves(
 					w.rawHalf([]byte("not json")),
-					w.half(w.vsaStmt(revC3, []any{"SLSA_SOURCE_LEVEL_3"})))
+					w.half(w.vsaStmt(revC3, []any{"SLSA_SOURCE_LEVEL_3"})),
+				)
 			},
 			"statement",
 		},

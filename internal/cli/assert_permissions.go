@@ -213,7 +213,8 @@ func reusableTree(pp *assert.PermissionsPolicy, root string) ([]workflow.File, e
 		return nil, fmt.Errorf(
 			"the policy declares the reusable tree %s of %s and %s holds no such directory"+
 				" — pass --tree <path> to supply it from elsewhere",
-			*pp.Reusable.Dir, *pp.Reusable.Repo, root)
+			*pp.Reusable.Dir, *pp.Reusable.Repo, root,
+		)
 	}
 
 	return files, nil

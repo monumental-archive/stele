@@ -124,7 +124,8 @@ func TestLevelComesFromTheVulnerableFrame(t *testing.T) {
 			t.Parallel()
 
 			scan, err := govulncheck.Read(strings.NewReader(
-				configMsg + `{"finding":{"osv":"GO-1","trace":[{` + tt.frame + `}]}}`))
+				configMsg + `{"finding":{"osv":"GO-1","trace":[{` + tt.frame + `}]}}`,
+			))
 			if err != nil {
 				t.Fatalf("Read: %v", err)
 			}

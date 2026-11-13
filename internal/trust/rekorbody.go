@@ -89,7 +89,8 @@ func rebuildRekorBody(kv *protorekor.KindVersion, leaf *x509.Certificate, pieces
 		return nil, fmt.Errorf(
 			"trust: tag signature transparency-log entry carries no canonicalized body and declares kind %s/%s — "+
 				"this tool rebuilds %s/%s only, and will not guess another entry shape",
-			kind, version, hashedrekord.KIND, hashedrekordv001.APIVERSION)
+			kind, version, hashedrekord.KIND, hashedrekordv001.APIVERSION,
+		)
 	}
 
 	leafPEM, err := cryptoutils.MarshalCertificateToPEM(leaf)
@@ -109,10 +110,12 @@ func rebuildRekorBody(kv *protorekor.KindVersion, leaf *x509.Certificate, pieces
 			PublicKeyBytes: [][]byte{leafPEM},
 			ArtifactHash:   hex.EncodeToString(digest[:]),
 			SignatureBytes: pieces.signature,
-		})
+		},
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"trust: rebuilding the %s/%s transparency-log entry body from the tag signature: %w", kind, version, err)
+			"trust: rebuilding the %s/%s transparency-log entry body from the tag signature: %w", kind, version, err,
+		)
 	}
 
 	// Read back through Rekor's own decoder rather than canonicalizing

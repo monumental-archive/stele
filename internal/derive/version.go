@@ -410,7 +410,8 @@ func (d *Decision) Declare(version *semver.Version, taken []*semver.Version) (De
 		return Decision{}, fmt.Errorf(
 			"derive: declared version %s is not an increase over the derived base %s;"+
 				" a declaration chooses the next release, never a published one",
-			version, d.base)
+			version, d.base,
+		)
 	}
 
 	for _, t := range taken {
@@ -418,7 +419,8 @@ func (d *Decision) Declare(version *semver.Version, taken []*semver.Version) (De
 			return Decision{}, fmt.Errorf(
 				"derive: the namespace already carries %s (derived base %s);"+
 					" a released version is a name, and a name is taken once",
-				version, d.base)
+				version, d.base,
+			)
 		}
 	}
 

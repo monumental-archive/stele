@@ -104,7 +104,8 @@ func (linearHistory) Evaluate(revs []Revision) (bool, string) {
 		if r.Parents > 1 {
 			return false, fmt.Sprintf(
 				"revision %.12s has %d parents — a merge commit makes every unreviewed topic-branch"+
-					" revision reachable from this branch", r.ID, r.Parents)
+					" revision reachable from this branch", r.ID, r.Parents,
+			)
 		}
 	}
 

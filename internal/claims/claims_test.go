@@ -913,7 +913,8 @@ func TestPayloadAccessors(t *testing.T) {
 
 		rulesOnly, err := jsonx.DecodeBytes[claims.Table]([]byte(
 			`{"properties": [{"name": "P", "scope": "branchRules",
-			  "match": {"$contains": [{"type": "deletion"}]}}]}`))
+			  "match": {"$contains": [{"type": "deletion"}]}}]}`,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -143,7 +143,8 @@ func TestWorkflowSourceEnrichmentEpoch(t *testing.T) {
 	src := assert.WorkflowSource{
 		Forge: workflowForge(
 			"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
-				"    with:\n      classes: rust-crate\n", ""),
+				"    with:\n      classes: rust-crate\n", "",
+		),
 		Policy: pol.Evidence,
 	}
 
@@ -186,35 +187,40 @@ func TestWorkflowSource(t *testing.T) {
 			"entry workflow with a pin comment past the epoch",
 			workflowForge(
 				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
-					"    with:\n      classes: oci-image,rust-crate\n", ""),
+					"    with:\n      classes: oci-image,rust-crate\n", "",
+			),
 			true, "oci-image rust-crate", true,
 		},
 		{
 			"the class list is comma-separated, spaces and quotes are noise",
 			workflowForge(
 				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
-					"    with:\n      classes: \"oci-image, rust-crate ,, wasm-npm\"\n", ""),
+					"    with:\n      classes: \"oci-image, rust-crate ,, wasm-npm\"\n", "",
+			),
 			true, "oci-image rust-crate wasm-npm", true,
 		},
 		{
 			"a single class needs no separator",
 			workflowForge(
 				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.14.0\n"+
-					"    with:\n      classes: oci-image\n", ""),
+					"    with:\n      classes: oci-image\n", "",
+			),
 			true, "oci-image", true,
 		},
 		{
 			"entry workflow pinned before the epoch",
 			workflowForge(
 				"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@abc123 # v1.12.0\n"+
-					"    with:\n      classes: rust-crate\n", ""),
+					"    with:\n      classes: rust-crate\n", "",
+			),
 			true, "rust-crate", false,
 		},
 		{
 			"reusable publish.yml defers to the self-publish stub",
 			workflowForge(
 				"on:\n  workflow_call:\n    inputs:\n      classes: {type: string}\n",
-				"jobs:\n  publish:\n    uses: ./.github/workflows/publish.yml\n    with:\n      classes: source-archive\n"),
+				"jobs:\n  publish:\n    uses: ./.github/workflows/publish.yml\n    with:\n      classes: source-archive\n",
+			),
 			true, "source-archive", true, // canon's own stub: version = the tag (1.0.0 < 1.13.0)... asserted below
 		},
 		{
@@ -265,7 +271,8 @@ func TestWorkflowSourceLocalReferenceVersion(t *testing.T) {
 	src := assert.WorkflowSource{
 		Forge: workflowForge(
 			"on:\n  workflow_call:\n    inputs:\n      classes: {type: string}\n",
-			"jobs:\n  publish:\n    uses: ./.github/workflows/publish.yml\n    with:\n      classes: source-archive\n"),
+			"jobs:\n  publish:\n    uses: ./.github/workflows/publish.yml\n    with:\n      classes: source-archive\n",
+		),
 		Policy: loadTestPolicy(t).Evidence,
 	}
 
@@ -402,7 +409,8 @@ func TestPlannedInventories(t *testing.T) {
 			t.Parallel()
 
 			got := pol.Evidence.PlannedInventories(
-				&assert.Contract{Classes: tt.classes, MachineryVersion: tt.machinery}, sboms)
+				&assert.Contract{Classes: tt.classes, MachineryVersion: tt.machinery}, sboms,
+			)
 
 			names := make([]string, 0, len(got))
 			for _, s := range got {
