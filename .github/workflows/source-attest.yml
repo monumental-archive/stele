@@ -59,7 +59,7 @@ concurrency:
 jobs:
   claims:
     name: source-attest / claims
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The read token lives in this environment, not repo-wide: scoped to
     # the environment, only jobs that declare it are ever issued the
     # secret (the audit.yml baseline-drift pattern, zizmor
@@ -83,7 +83,7 @@ jobs:
   attest:
     name: source-attest
     needs: claims
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write # append the signed link to refs/notes/commits
       id-token: write # mint the Sigstore identity — see the boundary marker
