@@ -72,7 +72,7 @@ jobs:
     steps:
       - name: Read enforcement and derive the claims
         id: claims
-        uses: monumental-archive/.github/.github/actions/source-attest@3172a8ce641221b974eeb0efc4e531f91557d780 # v1.63.1
+        uses: monumental-archive/.github/.github/actions/source-attest@b71accd110c96757f80f3d39cc20f0adb0bdab8e # v1.63.2
         env:
           # Fine-grained read-only PAT that can see org-level ruleset
           # details — the ambient GITHUB_TOKEN cannot (#240).
@@ -89,7 +89,7 @@ jobs:
       id-token: write # mint the Sigstore identity — see the boundary marker
     steps:
       - name: Emit provenance and VSA, append the chain link
-        uses: monumental-archive/.github/.github/actions/source-attest@3172a8ce641221b974eeb0efc4e531f91557d780 # v1.63.1
+        uses: monumental-archive/.github/.github/actions/source-attest@b71accd110c96757f80f3d39cc20f0adb0bdab8e # v1.63.2
         with:
           stage: attest
           claims: ${{ needs.claims.outputs.claims }}
