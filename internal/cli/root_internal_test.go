@@ -15,13 +15,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/standin"
 	"github.com/monumental-archive/stele/internal/trust"
 )
 
 // TestMain fences the network out of the package's test binary. The
 // file origin resolves for real (it is just a read); the TUF origin
 // refuses, so any test that reaches it must swap this seam
-// deliberately and say what it is proving.
+// deliberately and say what it is proving. It also lets the binary
+// serve as its own stand-in cosign (internal/standin, stele#320).
 func TestMain(m *testing.M) {
 	resolveTrustedRoot = func(p trust.RootPlan) ([]byte, error) {
 		if p.Origin == trust.OriginTUF {
@@ -31,7 +33,7 @@ func TestMain(m *testing.M) {
 		return trust.ResolveRoot(p)
 	}
 
-	os.Exit(m.Run())
+	os.Exit(standin.Main(m))
 }
 
 // trustedRootBytes stands in for a real trusted-root document. The

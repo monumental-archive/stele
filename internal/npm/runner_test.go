@@ -17,11 +17,11 @@ package npm_test
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/npm"
+	"github.com/monumental-archive/stele/internal/standin"
 )
 
 // wantArgv is the whole invocation, spelled out. The list is asserted
@@ -34,36 +34,23 @@ var wantArgv = []string{
 	"--omit=dev", "--omit=peer", "--omit=optional",
 }
 
-// stubNPM writes a stand-in npm into a fresh directory under the name
+// stubNPM plants a stand-in npm into a fresh directory under the name
 // the toolchain installs, and returns that directory. It records argv
 // one entry per line, drops a marker into whatever directory it was
-// run in, and replays canned streams from files so no fixture text
-// needs shell quoting. /bin/cat is spelled absolutely because one test
-// narrows PATH to this directory alone.
+// run in, and replays canned streams. It is the test binary itself
+// behind a symlink (internal/standin): a written script races on "text
+// file busy" under a concurrent fork (stele#320).
 func stubNPM(t *testing.T, stdout, stderr string, exit int) string {
 	t.Helper()
 
-	dir := t.TempDir()
+	return standin.Plant(t, "npm", &standin.Spec{
+		Stdout: stdout, Stderr: stderr, Exit: exit, Marker: "stele-npm-ran-here",
+	})
+}
 
-	for name, content := range map[string]string{"stdout": stdout, "stderr": stderr} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	script := "#!/bin/sh\n" +
-		"for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" + dir + "/argv'\n" +
-		": > 'stele-npm-ran-here'\n" +
-		"/bin/cat '" + dir + "/stdout'\n" +
-		"/bin/cat '" + dir + "/stderr' >&2\n" +
-		"exit " + strconv.Itoa(exit) + "\n"
-
-	//nolint:gosec // a test script must execute
-	if err := os.WriteFile(filepath.Join(dir, "npm"), []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	return dir
+// TestMain lets this test binary serve as its own stand-in npm.
+func TestMain(m *testing.M) {
+	os.Exit(standin.Main(m))
 }
 
 // TestTreeResolvesFromTheLockfileAlone asserts the invocation the
@@ -86,13 +73,7 @@ func TestTreeResolvesFromTheLockfileAlone(t *testing.T) {
 		t.Errorf("Tree returned %q, want npm's stdout verbatim", out)
 	}
 
-	//nolint:gosec // G304: a path this test just built in its own temp dir
-	raw, rerr := os.ReadFile(filepath.Join(dir, "argv"))
-	if rerr != nil {
-		t.Fatalf("the stand-in npm was never run: %v", rerr)
-	}
-
-	if got := strings.TrimRight(string(raw), "\n"); got != strings.Join(wantArgv, "\n") {
+	if got := strings.Join(standin.Argv(t, dir), "\n"); got != strings.Join(wantArgv, "\n") {
 		t.Errorf("npm argv =\n%s\nwant\n%s", got, strings.Join(wantArgv, "\n"))
 	}
 

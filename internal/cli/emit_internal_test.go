@@ -18,6 +18,7 @@ import (
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/policy"
+	"github.com/monumental-archive/stele/internal/standin"
 )
 
 const emitRev = "1111111111111111111111111111111111111111"
@@ -339,23 +340,12 @@ func TestEmitOutputFailures(t *testing.T) {
 	})
 }
 
-// TestCosignSigner proves the exec seam against a stub cosign on
-// PATH: the success path (bundle read back) and the failure path
-// (non-zero exit surfaces cosign's own words).
+// TestCosignSigner proves the exec seam against a stand-in cosign on
+// PATH (internal/standin — never a written script, stele#320): the
+// success path (bundle read back) and the failure path (non-zero exit
+// surfaces cosign's own words).
 func TestCosignSigner(t *testing.T) {
-	dir := t.TempDir()
-	stub := filepath.Join(dir, "cosign")
-
-	const script = `#!/bin/sh
-# args: sign-blob --yes --bundle <bundle> <payload>
-if [ "$STUB_FAIL" = "1" ]; then echo "no ambient identity" >&2; exit 1; fi
-printf '{"stub":"bundle"}' > "$4"
-`
-
-	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test stub
-		t.Fatal(err)
-	}
-
+	dir := standin.Plant(t, "cosign", &standin.Spec{WriteAfter: "--bundle", Write: `{"stub":"bundle"}`})
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	s := newSigner(t.TempDir())
@@ -369,7 +359,8 @@ printf '{"stub":"bundle"}' > "$4"
 		t.Errorf("Sign returned %q, want the bundle the tool wrote", bundle)
 	}
 
-	t.Setenv("STUB_FAIL", "1")
+	failing := standin.Plant(t, "cosign", &standin.Spec{Stderr: "no ambient identity\n", Exit: 1})
+	t.Setenv("PATH", failing+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	if _, err := s.Sign([]byte(`{}`)); err == nil || !strings.Contains(err.Error(), "no ambient identity") {
 		t.Errorf("Sign = %v, want cosign's own failure words", err)
