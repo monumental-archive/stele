@@ -30,6 +30,16 @@
 // silently omitted it, which is the same defect as an untyped entry
 // one field over.
 //
+// What the release published somewhere OTHER than its assets — a
+// container image, a registry package — is the third such fact
+// (stele#329), and the one with no asset to join against: nothing in
+// `--assets` can name it, so a release that shipped only an image
+// listed no artifact at all and every walk downstream had to recover
+// the subject from the proofs about it. It arrives the way a leg's
+// artifacts do, `--registry-subjects <class>:<target>=<path>`, and is
+// held to the one rule the join can still make: a registry subject is
+// not also an asset.
+//
 // What leaves this command is proven readable, not assumed: the
 // rendered bytes are read back through the same internal/evidence
 // seam the assert reader uses, so a manifest this writer can produce
@@ -109,24 +119,43 @@ func (l *legSubjects) String() string {
 // either delimiter; class and target may carry neither, which is the
 // price of a delimiter and is paid where the values are short and the
 // publisher chooses them.
-func (l *legSubjects) Set(v string) error {
+func (l *legSubjects) Set(v string) error { return l.add(flagLegSubjects, v) }
+
+// registrySubjects is `--registry-subjects`: the same leg-keyed shape
+// for what a leg published to a registry instead of beside the
+// manifest. Its own type only so a refusal names the flag the caller
+// typed; the grammar and the duplicate rule are the one definition.
+type registrySubjects struct{ legSubjects }
+
+// Set implements flag.Value.
+func (r *registrySubjects) Set(v string) error { return r.add(flagRegistrySubjects, v) }
+
+// The two flags that take a leg's subject manifest.
+const (
+	flagLegSubjects      = "--leg-subjects"
+	flagRegistrySubjects = "--registry-subjects"
+)
+
+// add parses one `<class>:<target>=<path>` occurrence of the named
+// flag — the one grammar both flags share.
+func (l *legSubjects) add(flagName, v string) error {
 	leg, path, ok := strings.Cut(v, "=")
 	if !ok {
-		return fmt.Errorf("--leg-subjects %q is not <class>:<target>=<path>", v)
+		return fmt.Errorf("%s %q is not <class>:<target>=<path>", flagName, v)
 	}
 
 	class, target, named := strings.Cut(leg, ":")
 
 	class, target, path = strings.TrimSpace(class), strings.TrimSpace(target), strings.TrimSpace(path)
 	if !named || class == "" || target == "" || path == "" {
-		return fmt.Errorf("--leg-subjects %q is not <class>:<target>=<path>", v)
+		return fmt.Errorf("%s %q is not <class>:<target>=<path>", flagName, v)
 	}
 
 	set := legSubjectSet{class: class, target: target, path: path}
 
 	for _, other := range *l {
 		if other.key() == set.key() {
-			return fmt.Errorf("--leg-subjects names %s twice — one build leg has one subject set", set.key())
+			return fmt.Errorf("%s names %s twice — one build leg has one subject set", flagName, set.key())
 		}
 	}
 
@@ -144,6 +173,7 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	var (
 		classes, storeVSA, assets, policyPath string
 		perLeg                                legSubjects
+		registry                              registrySubjects
 	)
 
 	flags := flag.NewFlagSet("stele emit manifest", flag.ContinueOnError)
@@ -168,6 +198,10 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 			"repeatable once per leg — the split only the publisher holds, and the answer a rebuild "+
 			"scopes its population by, at the grain a rebuild actually covers. Every build subject in "+
 			"--assets must be claimed by exactly one of these")
+	flags.Var(&registry, "registry-subjects",
+		"the sha256sum manifest of what ONE build leg published somewhere other than the release's assets "+
+			"— a container image, a registry package — as `<class>:<target>=<path>`, repeatable once per "+
+			"leg. Each line is the digest and the name its provenance attests; none may also be an asset")
 	flags.StringVar(&ma.out, "out", "", "file to write the manifest to; empty prints to stdout")
 
 	if err := flags.Parse(args); err != nil {
@@ -203,7 +237,7 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 		return ma, usageFail(fmt.Sprintf("--store-vsa %q is not true or false", storeVSA))
 	}
 
-	entries, err := typedEntries(assets, policyPath, perLeg)
+	entries, err := typedEntries(assets, policyPath, perLeg, registry.legSubjects)
 	if err != nil {
 		return ma, usageFail(err.Error())
 	}
@@ -229,7 +263,7 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 // subject manifest per leg and is joined to the release's assets by
 // name and digest — never trusted as a second list of what shipped
 // (stele#185, at target grain stele#223).
-func typedEntries(assets, policyPath string, perLeg legSubjects) ([]evidence.Entry, error) {
+func typedEntries(assets, policyPath string, perLeg, registry legSubjects) ([]evidence.Entry, error) {
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
@@ -268,6 +302,51 @@ func typedEntries(assets, policyPath string, perLeg legSubjects) ([]evidence.Ent
 		}
 
 		entries = append(entries, evidence.NewSubject(a.Name, a.SHA256, leg.class, leg.target))
+	}
+
+	published, err := registryEntries(listed, registry)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(entries, published...), nil
+}
+
+// registryEntries reads what each leg published somewhere other than
+// the release's assets (stele#329).
+//
+// There is no second list to join these against — that absence is the
+// reason the flag exists — so the one cross-statement check left is
+// the one that keeps the two populations apart: a name the release
+// publishes as an asset is an asset, claimed by --leg-subjects and
+// pinned by the checksum manifest, and stating it here as well would
+// hand a walk two answers about where one artifact lives. Everything
+// else about an entry (a class the release declared, one answer per
+// name, no subject twice) is the manifest's own rule and is refused
+// where every writer and reader shares it.
+func registryEntries(listed []verify.Subject, registry legSubjects) ([]evidence.Entry, error) {
+	shipped := make(map[string]bool, len(listed))
+	for _, a := range listed {
+		shipped[a.Name] = true
+	}
+
+	var entries []evidence.Entry
+
+	for _, leg := range registry {
+		subjects, err := digestManifest(leg.path)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, s := range subjects {
+			if shipped[s.Name] {
+				return nil, fmt.Errorf("%s %s names %s, which this release publishes as an asset — an"+
+					" asset is claimed by %s, and one artifact lives in one place",
+					flagRegistrySubjects, leg.key(), s.Name, flagLegSubjects)
+			}
+
+			entries = append(entries, evidence.NewRegistrySubject(s.Name, s.SHA256, leg.class, leg.target))
+		}
 	}
 
 	return entries, nil
@@ -359,8 +438,11 @@ func runEmitManifest(ma *manifestArgs, doc io.Writer, out *latch) error {
 		return err
 	}
 
-	out.logf("manifest: %d class(es), %d entr(ies) of which %d build subject(s), storeVsa=%t, machinery %s",
-		len(ma.classes), len(ma.entries), len(manifest.Subjects()), ma.storeVSA, ma.machineryVersion)
+	registry, _ := manifest.RegistrySubjects()
+
+	out.logf("manifest: %d class(es), %d entr(ies) of which %d build subject(s) and %d registry subject(s),"+
+		" storeVsa=%t, machinery %s", len(ma.classes), len(ma.entries), len(manifest.Subjects()), len(registry),
+		ma.storeVSA, ma.machineryVersion)
 
 	return nil
 }

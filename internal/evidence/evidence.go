@@ -46,7 +46,8 @@ import (
 // published release assets, immutable once shipped. It moved to 2
 // when entries gained their type (stele#156), to 3 when they gained
 // the class that built them (stele#185), and to 4 when they gained
-// the target that produced them (stele#223).
+// the target that produced them (stele#223), and to 5 when a release
+// could name what it published to a registry (stele#329).
 //
 // A manifest below this number is HISTORY, and history is admitted by
 // a declared epoch or not at all: the reader answers what that
@@ -55,7 +56,7 @@ import (
 // `manifestSchemaFromVersion` to say (internal/assert). Absent an
 // epoch, only the current schema is admitted — which is the correct
 // default for an adopter with no history to excuse.
-const Schema = 4
+const Schema = 5
 
 // The schema each part of the document arrived at — the manifest's
 // own numbers, not the live-document epoch. firstSchema is the oldest
@@ -72,6 +73,9 @@ const (
 	// targetFrom: the schema from which each artifact names the build
 	// target that produced it.
 	targetFrom = 4
+	// registryFrom: the schema from which a manifest can name an
+	// artifact the release published somewhere other than its assets.
+	registryFrom = 5
 )
 
 // The entry types — what a released asset IS. The two carry opposite
@@ -82,15 +86,30 @@ const (
 // is a security property, and a walk that could not tell the two apart
 // reported it as a defect.
 //
-// The vocabulary is deliberately closed: an asset that is neither is
-// a manifest this reader refuses, because unknown defaulting into
-// either population is the failure this typing exists to prevent.
+// A third type says WHERE, not what (stele#329). A container image or
+// a registry package is an artifact of the build exactly as a tarball
+// is, and it is not an asset: it has no file beside the manifest, so
+// no checksum manifest can pin it and a walk that read "what shipped"
+// from the assets alone never saw it. An image-only release then named
+// no subject at all, and a mixed one had its registry half skipped in
+// silence. It is its own type rather than a build subject with a flag
+// because every walk over build subjects compares them against the
+// release's ASSETS, and an entry with no asset landing in that
+// population is the failure the typing exists to prevent.
+//
+// The vocabulary is deliberately closed: an entry that is none of the
+// three is a manifest this reader refuses, because unknown defaulting
+// into any population is the failure this typing exists to prevent.
 const (
-	// TypeBuildSubject: an artifact OF the build.
+	// TypeBuildSubject: an artifact OF the build, published as an
+	// asset of the release.
 	TypeBuildSubject = "build-subject"
 	// TypeEvidence: a document ABOUT the release — an attestation
 	// bundle, an inventory, a triage decision, a digest manifest.
 	TypeEvidence = "evidence"
+	// TypeRegistrySubject: an artifact OF the build, published
+	// somewhere other than the release's assets.
+	TypeRegistrySubject = "registry-subject"
 )
 
 // sha256RE is this format's digest spelling: lowercase hex, 64 of it.
@@ -103,7 +122,8 @@ var sha256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 //
 // It declares FACTS — the classes shipped, the verdict layout, the
 // machinery version that published the release, what it published,
-// what each asset is, and which class and target built it — never
+// what each asset is, which class and target built it, and what it
+// published somewhere other than its own assets — never
 // obligations; those are always derived by the reader through the
 // policy epochs.
 type Manifest struct {
@@ -114,8 +134,11 @@ type Manifest struct {
 	Entries          []Entry  `json:"entries,omitempty"`
 }
 
-// Entry is one asset the release published, pinned, typed, and — for
+// Entry is one thing the release published, pinned, typed, and — for
 // an artifact — attributed to the class and target that built it.
+// For an asset the name is the asset's; for a registry subject it is
+// the name its provenance attests, which is how a verifier asks for
+// it.
 // Pointer fields for the manifest's own reason: an entry whose type
 // is ABSENT is malformed, and absent must never decode into one of
 // the two populations.
@@ -161,6 +184,16 @@ type Entry struct {
 // writer that can build one and a validate that catches it.
 func NewSubject(name, sha256, class, target string) Entry {
 	t := TypeBuildSubject
+
+	return Entry{Name: &name, SHA256: &sha256, Type: &t, Class: &class, Target: &target}
+}
+
+// NewRegistrySubject builds one registry-subject entry — an artifact
+// OF the build that the release published somewhere other than its
+// assets. It names a class and a target for the reason a build subject
+// does: the same leg built it.
+func NewRegistrySubject(name, sha256, class, target string) Entry {
+	t := TypeRegistrySubject
 
 	return Entry{Name: &name, SHA256: &sha256, Type: &t, Class: &class, Target: &target}
 }
@@ -229,6 +262,27 @@ func (m *Manifest) Subjects() []Asset {
 	return m.subjects(nil)
 }
 
+// Registers reports whether this manifest's schema can name what the
+// release published outside its assets — the ONE spelling of that
+// question, for the reason Attributes is. A walk asks it to tell "this
+// release published nothing to a registry" apart from "this document
+// could not say": only the second may send a walk to another source.
+func (m *Manifest) Registers() bool {
+	return m.Schema != nil && *m.Schema >= registryFrom
+}
+
+// RegistrySubjects lists the artifacts the release published
+// somewhere other than its assets, in the order the manifest carries
+// them. ok=false means this manifest's schema cannot name one (below
+// 5) — "no answer", which a caller must never read as "none".
+func (m *Manifest) RegistrySubjects() ([]Asset, bool) {
+	if !m.Registers() {
+		return nil, false
+	}
+
+	return m.typed(TypeRegistrySubject, nil), true
+}
+
 // Attributes reports whether this manifest's schema says which class
 // built each artifact. It is the ONE spelling of that question: a
 // second reading of the same schema number would let two callers
@@ -266,15 +320,17 @@ func (m *Manifest) SubjectsOf(class string) ([]Asset, bool) {
 	return m.subjects(&class), true
 }
 
-// ArtifactClasses maps each build subject's asset name to the class
-// that built it. ok=false means this manifest's schema cannot
+// ArtifactClasses maps each artifact's name — an asset's or a registry
+// subject's — to the class that built it. ok=false means this manifest's schema cannot
 // attribute at all (below 3) — the same "no answer" SubjectsOf keeps,
 // and for the same reason: a consumer that read an empty map as "no
 // artifact owes anything class-specific" would excuse obligations a
 // class-attributed manifest does state.
 //
-// The key is the asset NAME, which Validate has already proven unique
-// across entries; digests are not unique by construction, because two
+// The key is the NAME. Validate has proven an asset's name unique, and
+// that registry subjects sharing one — a repository published at
+// several digests — share their class, so the map has one answer per
+// name; digests are not unique by construction, because two
 // identically built artifacts share one.
 func (m *Manifest) ArtifactClasses() (map[string]string, bool) {
 	if !m.Attributes() {
@@ -285,7 +341,7 @@ func (m *Manifest) ArtifactClasses() (map[string]string, bool) {
 
 	for i := range m.Entries {
 		e := &m.Entries[i]
-		if e.Name == nil || e.Type == nil || *e.Type != TypeBuildSubject || e.Class == nil {
+		if e.Name == nil || e.Type == nil || *e.Type == TypeEvidence || e.Class == nil {
 			continue
 		}
 
@@ -295,8 +351,10 @@ func (m *Manifest) ArtifactClasses() (map[string]string, bool) {
 	return out, true
 }
 
-// Pins maps every entry's asset name to the bytes it pins — the
-// manifest's whole half of the release's pinning, documents included,
+// Pins maps every ASSET entry's name to the bytes it pins — the
+// manifest's whole half of the release's asset pinning, documents
+// included and registry subjects not, because a registry subject is
+// not an asset and no checksum manifest can name it,
 // so a cross-check against the release's checksum manifest asks about
 // everything both documents name (stele#219). ok=false means this
 // manifest's schema carries no entries at all (below 2), which is
@@ -318,7 +376,7 @@ func (m *Manifest) Pins() (map[string]string, bool) {
 
 	for i := range m.Entries {
 		e := &m.Entries[i]
-		if e.Name == nil || e.SHA256 == nil {
+		if e.Name == nil || e.SHA256 == nil || e.Type == nil || *e.Type == TypeRegistrySubject {
 			continue
 		}
 
@@ -417,11 +475,17 @@ func (m *Manifest) Encode(w io.Writer) error {
 // class. One walk, so the whole-release and per-class populations
 // cannot disagree about what a build subject is.
 func (m *Manifest) subjects(class *string) []Asset {
+	return m.typed(TypeBuildSubject, class)
+}
+
+// typed is the one entry filter: every entry of one type, narrowed to
+// a class where one is given.
+func (m *Manifest) typed(entryType string, class *string) []Asset {
 	var out []Asset
 
 	for i := range m.Entries {
 		e := &m.Entries[i]
-		if e.Name == nil || e.SHA256 == nil || e.Type == nil || *e.Type != TypeBuildSubject {
+		if e.Name == nil || e.SHA256 == nil || e.Type == nil || *e.Type != entryType {
 			continue
 		}
 
@@ -464,7 +528,7 @@ func (m *Manifest) validateEntries(declared map[string]bool) error {
 			" what the release published")
 	}
 
-	seen := make(map[string]bool, len(m.Entries))
+	seen := newEntrySet(len(m.Entries))
 
 	for i := range m.Entries {
 		e := &m.Entries[i]
@@ -473,12 +537,68 @@ func (m *Manifest) validateEntries(declared map[string]bool) error {
 			return err
 		}
 
-		if seen[*e.Name] {
+		if err := seen.add(e); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// entrySet holds what "the same thing twice" means, which differs by
+// where the thing lives. An asset is its name: a release has one file
+// of a given name. A registry subject is its name AND its digest: one
+// repository published at several digests — one image per runtime
+// major — is several artifacts under one attested name, and refusing
+// that would refuse a release for a shape a registry has by design.
+type entrySet struct {
+	assets   map[string]bool
+	registry map[string]bool
+	// classOf is the class each registry name was built by: the
+	// attribution is read back by name, so one name must have one
+	// answer.
+	classOf map[string]string
+}
+
+func newEntrySet(n int) *entrySet {
+	return &entrySet{
+		assets:   make(map[string]bool, n),
+		registry: map[string]bool{},
+		classOf:  map[string]string{},
+	}
+}
+
+// add admits one validated entry or says which rule it broke.
+func (s *entrySet) add(e *Entry) error {
+	if *e.Type != TypeRegistrySubject {
+		if s.assets[*e.Name] {
 			return fmt.Errorf("evidence: entry %q appears twice — what a release published is a set", *e.Name)
 		}
 
-		seen[*e.Name] = true
+		if _, taken := s.classOf[*e.Name]; taken {
+			return fmt.Errorf("evidence: %q is both an asset and a %s — one name, two places", *e.Name, TypeRegistrySubject)
+		}
+
+		s.assets[*e.Name] = true
+
+		return nil
 	}
+
+	key := *e.SHA256 + "  " + *e.Name
+
+	switch class, named := s.classOf[*e.Name]; {
+	case s.assets[*e.Name]:
+		return fmt.Errorf("evidence: %q is both an asset and a %s — one name, two places", *e.Name, TypeRegistrySubject)
+	case s.registry[key]:
+		return fmt.Errorf("evidence: %s %q appears twice at %s — what a release published is a set",
+			TypeRegistrySubject, *e.Name, *e.SHA256)
+	case named && class != *e.Class:
+		return fmt.Errorf("evidence: %s %q is attributed to both %q and %q — the class is read back by name,"+
+			" and one name has one answer", TypeRegistrySubject, *e.Name, class, *e.Class)
+	}
+
+	s.registry[key] = true
+	s.classOf[*e.Name] = *e.Class
 
 	return nil
 }
@@ -499,9 +619,12 @@ func (m *Manifest) validateEntry(i int, e *Entry, declared map[string]bool) erro
 	case e.Type == nil:
 		return fmt.Errorf("evidence: entries[%d] (%s) has no type — an unclassified asset must never"+
 			" default into either population", i, *e.Name)
-	case *e.Type != TypeBuildSubject && *e.Type != TypeEvidence:
-		return fmt.Errorf("evidence: entries[%d] (%s): type %q is neither %q nor %q — the vocabulary is"+
-			" closed on purpose", i, *e.Name, *e.Type, TypeBuildSubject, TypeEvidence)
+	case *e.Type != TypeBuildSubject && *e.Type != TypeEvidence && *e.Type != TypeRegistrySubject:
+		return fmt.Errorf("evidence: entries[%d] (%s): type %q is none of %q, %q and %q — the vocabulary is"+
+			" closed on purpose", i, *e.Name, *e.Type, TypeBuildSubject, TypeEvidence, TypeRegistrySubject)
+	case *e.Type == TypeRegistrySubject && !m.Registers():
+		return fmt.Errorf("evidence: entries[%d] (%s) is a %s, which schema %d does not have — a document"+
+			" that lies about its own format reads worse than an old one", i, *e.Name, TypeRegistrySubject, *m.Schema)
 	}
 
 	if err := m.validateEntryClass(i, e, declared); err != nil {

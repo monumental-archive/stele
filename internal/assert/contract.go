@@ -63,6 +63,16 @@ type Contract struct {
 	// Pins maps each named asset to the bytes the source pins for it —
 	// meaningful only where Pinned.
 	Pins map[string]string
+	// Registered reports whether the source can name what the release
+	// published somewhere other than its assets — its own fact for the
+	// reason Attributed and Pinned are: a release that published
+	// nothing to a registry and a source that could not say are
+	// different facts, and only the second may send the deep walk to
+	// the release's bundles for the answer (stele#329).
+	Registered bool
+	// RegistrySubjects are those artifacts, as the verify engine names
+	// a subject — meaningful only where Registered.
+	RegistrySubjects []verify.Subject
 	// ManifestSchema is the schema the manifest declared, 0 when no
 	// manifest spoke for the release. It says WHY attribution is
 	// missing, so a narrowing states its own cause instead of asserting
@@ -123,7 +133,15 @@ type ArtifactDemand struct {
 // DEFECT, not a narrowing, and it stays held to the whole declared set
 // — omission must not buy the leniency that only structural silence
 // earns.
-func (e *EvidencePolicy) EnrichmentDemand(c *Contract, subjects []verify.Subject) *ArtifactDemand {
+//
+// unplaced are the subjects the source had no way to NAME — registry
+// subjects read back out of the release's bundles because its manifest
+// predates the schema that lists them (stele#329). They are structural
+// silence exactly as an unattributing schema is, one entry type over:
+// the manifest attributes every artifact it could list, and it could
+// not list these. So they narrow, loudly, and are never the defect an
+// asset the manifest omitted is.
+func (e *EvidencePolicy) EnrichmentDemand(c *Contract, subjects, unplaced []verify.Subject) *ArtifactDemand {
 	if !c.Enrichment {
 		return &ArtifactDemand{}
 	}
@@ -131,10 +149,18 @@ func (e *EvidencePolicy) EnrichmentDemand(c *Contract, subjects []verify.Subject
 	declared := e.declaredEnrichment(c)
 
 	if !c.Attributed {
-		return &ArtifactDemand{Demand: &verify.EnrichmentDemand{}, Excused: excusals(c, subjects, declared)}
+		return &ArtifactDemand{
+			Demand:  &verify.EnrichmentDemand{},
+			Excused: excusals(slices.Concat(subjects, unplaced), declared, unknowableClass(c)),
+		}
 	}
 
-	out := &ArtifactDemand{Demand: &verify.EnrichmentDemand{ByArtifact: map[string][]string{}}}
+	out := &ArtifactDemand{
+		Demand: &verify.EnrichmentDemand{ByArtifact: map[string][]string{}},
+		Excused: excusals(unplaced, declared, fmt.Sprintf(
+			"class unknowable: schema %d names no registry subject", c.ManifestSchema,
+		)),
+	}
 
 	for _, s := range subjects {
 		owed, defect := e.artifactOwes(c, s.Name, declared)
@@ -231,14 +257,9 @@ func (e *EvidencePolicy) definesClass(class string) bool {
 // classes owe nothing class-specific narrows nothing, so it says
 // nothing: an excusal naming no obligation is noise wearing the
 // vocabulary of an exception.
-func excusals(c *Contract, subjects []verify.Subject, declared []string) []ArtifactNote {
-	if len(declared) == 0 {
+func excusals(subjects []verify.Subject, declared []string, cause string) []ArtifactNote {
+	if len(declared) == 0 || len(subjects) == 0 {
 		return nil
-	}
-
-	cause := fmt.Sprintf("class unknowable under schema %d", c.ManifestSchema)
-	if c.ManifestSchema == 0 {
-		cause = "class unknowable: no manifest attributes this release's artifacts"
 	}
 
 	out := make([]ArtifactNote, 0, len(subjects))
@@ -251,6 +272,15 @@ func excusals(c *Contract, subjects []verify.Subject, declared []string) []Artif
 	}
 
 	return out
+}
+
+// unknowableClass says why a source that cannot attribute cannot.
+func unknowableClass(c *Contract) string {
+	if c.ManifestSchema == 0 {
+		return "class unknowable: no manifest attributes this release's artifacts"
+	}
+
+	return fmt.Sprintf("class unknowable under schema %d", c.ManifestSchema)
 }
 
 // PlannedInventories selects, from a release's SBOM assets, the
@@ -394,6 +424,7 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	// (stele#206).
 	artifactClasses, attributed := doc.ArtifactClasses()
 	pins, pinned := doc.Pins()
+	registry, registered := doc.RegistrySubjects()
 
 	return &Contract{
 		Classes:          doc.Classes,
@@ -405,9 +436,22 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		ArtifactClasses:  artifactClasses,
 		Pinned:           pinned,
 		Pins:             pins,
+		Registered:       registered,
+		RegistrySubjects: registrySubjects(registry),
 		ManifestSchema:   *doc.Schema,
 		Origin:           origin,
 	}, true, nil
+}
+
+// registrySubjects restates the manifest's registry entries as the
+// verify engine names a subject.
+func registrySubjects(entries []evidence.Asset) []verify.Subject {
+	out := make([]verify.Subject, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, verify.Subject{Name: e.Name, SHA256: e.SHA256})
+	}
+
+	return out
 }
 
 // WorkflowSource is the GitHub-workflow-convention adapter: the

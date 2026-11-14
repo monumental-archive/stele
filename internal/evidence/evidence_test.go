@@ -193,7 +193,7 @@ func TestEntryRefusals(t *testing.T) {
 		{
 			"a type outside the closed vocabulary",
 			[]evidence.Entry{{Name: new("a.tar.gz"), SHA256: new(digestA), Type: new("artefact")}},
-			"is neither",
+			"is none of",
 		},
 		{
 			"the same asset twice",
@@ -202,6 +202,41 @@ func TestEntryRefusals(t *testing.T) {
 				evidence.NewEvidence("a.tar.gz", digestB),
 			},
 			"appears twice",
+		},
+		{
+			// What "twice" means for a registry subject (stele#329): the
+			// same name at the same digest. The three rows after it are
+			// the ways one name could carry two answers.
+			"the same registry subject twice",
+			[]evidence.Entry{
+				evidence.NewRegistrySubject("ghcr.io/acme/widget", digestA, "go-binary", "image"),
+				evidence.NewRegistrySubject("ghcr.io/acme/widget", digestA, "go-binary", "image"),
+			},
+			"appears twice at",
+		},
+		{
+			"a registry subject named like an asset before it",
+			[]evidence.Entry{
+				evidence.NewSubject("widget.tgz", digestA, "go-binary", "linux-amd64"),
+				evidence.NewRegistrySubject("widget.tgz", digestB, "go-binary", "npm"),
+			},
+			"one name, two places",
+		},
+		{
+			"an asset named like a registry subject before it",
+			[]evidence.Entry{
+				evidence.NewRegistrySubject("widget.tgz", digestB, "go-binary", "npm"),
+				evidence.NewEvidence("widget.tgz", digestA),
+			},
+			"one name, two places",
+		},
+		{
+			"one registry name attributed to two classes",
+			[]evidence.Entry{
+				evidence.NewRegistrySubject("ghcr.io/acme/widget", digestA, "go-binary", "pg16"),
+				evidence.NewRegistrySubject("ghcr.io/acme/widget", digestB, "oci-image", "pg17"),
+			},
+			"one name has one answer",
 		},
 		{
 			// The target's own guard, from the writing side: the
@@ -218,11 +253,78 @@ func TestEntryRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := evidence.New([]string{"go-binary"}, false, "1.0.0", tt.entries)
+			_, err := evidence.New([]string{"go-binary", "oci-image"}, false, "1.0.0", tt.entries)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("New = %v, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestRegistrySubjectsAreTheirOwnPopulation: an artifact published
+// somewhere other than the release's assets is read by exactly the
+// walks that ask for it (stele#329). It is no asset, so it is in
+// neither the build-subject population a rebuild compares against the
+// assets nor the pins a checksum manifest is cross-checked against;
+// it IS an artifact, so its class is read back like any other's. One
+// repository at two digests — an image per runtime major — is two
+// subjects under one name, and both survive.
+func TestRegistrySubjectsAreTheirOwnPopulation(t *testing.T) {
+	t.Parallel()
+
+	m, err := evidence.New([]string{"go-binary", "oci-image"}, true, "1.0.0", append(oneOfEach(),
+		evidence.NewRegistrySubject("ghcr.io/acme/widget", digestC, "oci-image", "pg16"),
+		evidence.NewRegistrySubject("ghcr.io/acme/widget", digestD, "oci-image", "pg17"),
+	))
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	registry, ok := m.RegistrySubjects()
+	if !ok || len(registry) != 2 || registry[0].SHA256 != digestC || registry[1].Target != "pg17" {
+		t.Fatalf("RegistrySubjects = %+v, %t, want both digests in order", registry, ok)
+	}
+
+	if got := m.Subjects(); len(got) != 1 || got[0].Name != "widget-x86_64.tar.gz" {
+		t.Fatalf("Subjects = %+v, want the one asset artifact", got)
+	}
+
+	pins, _ := m.Pins()
+	if _, pinned := pins["ghcr.io/acme/widget"]; pinned || len(pins) != 2 {
+		t.Fatalf("Pins = %v, want the two assets and no registry subject", pins)
+	}
+
+	classes, _ := m.ArtifactClasses()
+	if classes["ghcr.io/acme/widget"] != "oci-image" || classes["widget-x86_64.tar.gz"] != "go-binary" {
+		t.Fatalf("ArtifactClasses = %v, want both artifacts attributed", classes)
+	}
+}
+
+// TestRegistrySubjectsCannotAnswerBelowTheirSchema: "this release
+// published nothing to a registry" and "this document could not say"
+// are different facts, and only the second may send a walk elsewhere
+// for the answer.
+func TestRegistrySubjectsCannotAnswerBelowTheirSchema(t *testing.T) {
+	t.Parallel()
+
+	old, err := evidence.Parse([]byte(`{"schema": 4, "classes": ["a"], "storeVsa": true, ` +
+		`"machineryVersion": "1.0.0", "entries": [{"name": "sbom.spdx.json", "sha256": "` + digestA +
+		`", "type": "evidence"}]}`))
+	if err != nil {
+		t.Fatalf("Parse = %v", err)
+	}
+
+	if got, ok := old.RegistrySubjects(); ok || got != nil || old.Registers() {
+		t.Fatalf("schema 4 RegistrySubjects = %v, %t, want no answer", got, ok)
+	}
+
+	current, err := evidence.New([]string{"go-binary"}, true, "1.0.0", oneOfEach())
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	if got, ok := current.RegistrySubjects(); !ok || len(got) != 0 {
+		t.Fatalf("current RegistrySubjects = %v, %t, want an answer of none", got, ok)
 	}
 }
 
@@ -250,7 +352,7 @@ func TestParseRefusals(t *testing.T) {
 		},
 		{
 			"a schema above the current one",
-			`{"schema": 5, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` + entries + `}`,
+			`{"schema": 6, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` + entries + `}`,
 			"not a manifest schema this build reads",
 		},
 		{
@@ -325,6 +427,30 @@ func TestParseRefusals(t *testing.T) {
 				`"entries": [{"name": "sbom.spdx.json", "sha256": "` + digestA + `", "type": "evidence",` +
 				` "target": "linux-amd64"}]}`,
 			"produced by no build leg",
+		},
+		{
+			// The registry rules, from the reader's side: a schema that
+			// never had the type carrying one is the same lie about its
+			// own format a stray class or target is.
+			"a targeted schema carrying a registry subject it never had",
+			`{"schema": 4, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` +
+				`"entries": [{"name": "ghcr.io/acme/widget", "sha256": "` + digestA + `",` +
+				` "type": "registry-subject", "class": "a", "target": "image"}]}`,
+			"which schema 4 does not have",
+		},
+		{
+			"a registry subject no class claims",
+			`{"schema": 5, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` +
+				`"entries": [{"name": "ghcr.io/acme/widget", "sha256": "` + digestA + `",` +
+				` "type": "registry-subject", "target": "image"}]}`,
+			"has no class",
+		},
+		{
+			"a registry subject no target claims",
+			`{"schema": 5, "classes": ["a"], "storeVsa": true, "machineryVersion": "1.0.0", ` +
+				`"entries": [{"name": "ghcr.io/acme/widget", "sha256": "` + digestA + `",` +
+				` "type": "registry-subject", "class": "a"}]}`,
+			"has no target",
 		},
 		{
 			"a field outside the format",

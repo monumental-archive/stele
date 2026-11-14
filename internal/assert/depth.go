@@ -17,10 +17,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/evidence"
-	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/provenance"
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
@@ -52,7 +53,7 @@ var uses40RE = regexp.MustCompile(`uses:\s*\S*/(?:publish|release)\.ya?ml@([0-9a
 // apply to them exactly as to presence findings; everything else is
 // the release engine's own refusal under the "deep" assertion,
 // excusable only by a written debt line naming it.
-func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
+func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles []string) error {
 	subject := repo + "@" + tag
 
 	// One check for the deep release leg, taken before its outcome is
@@ -66,9 +67,24 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		return nil
 	}
 
-	subjects, sboms, err := w.checksumSubjects(pinned)
+	files, sboms := w.checksumSubjects(pinned)
+
+	// What the release published somewhere other than its assets
+	// (stele#329): no checksum manifest can name it, so it is read
+	// from the document that can.
+	registry, unplaced, err := w.registrySubjects(repo, tag, contract, files, bundles)
 	if err != nil {
 		deep.Diverged(err.Error())
+
+		return nil
+	}
+
+	subjects := slices.Concat(files, registry)
+	if len(subjects) == 0 {
+		deep.Diverged(fmt.Sprintf(
+			"the release names no artifact subjects — %s pins no artifact and %s names none: a release that"+
+				" claims nothing verifies nothing", *w.pol.Checksums, registrySource(contract),
+		))
 
 		return nil
 	}
@@ -134,7 +150,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 		return nil
 	}
 
-	demand := w.enrichmentDemand(subject, contract, subjects)
+	demand := w.enrichmentDemand(subject, contract, slices.Concat(files, placed(registry, unplaced)), unplaced)
 
 	vc := w.check(subject, "vsa:deep")
 	if verr := w.full.Verifier.VSA(c, subjects, pins, demand); verr != nil {
@@ -166,9 +182,9 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract) error {
 // journal, and an exception written against it would read as stale
 // forever.
 func (w *evidenceWalk) enrichmentDemand(
-	subject string, contract *Contract, subjects []verify.Subject,
+	subject string, contract *Contract, subjects, unplaced []verify.Subject,
 ) *verify.EnrichmentDemand {
-	ad := w.pol.EnrichmentDemand(contract, subjects)
+	ad := w.pol.EnrichmentDemand(contract, subjects, unplaced)
 
 	for _, n := range ad.Excused {
 		w.log("assert: evidence: %s: %s: %s", subject, n.Artifact, n.Detail)
@@ -271,8 +287,14 @@ func (w *evidenceWalk) checksumAgreement(subject string, contract *Contract, pin
 // bytes against. SBOM candidates are the subset carrying the policy's
 // SBOM suffix.
 //
+// It answers for the release's ASSETS and nothing else, so an empty
+// answer is not a refusal here: a release whose every artifact lives
+// in a registry pins only documents, correctly (stele#329). Whether
+// the release names any subject at all is asked once, by the caller,
+// with both halves in hand.
+//
 //nolint:gocritic // unnamedResult: subjects then sboms, documented above
-func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subject, []verify.Subject, error) {
+func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subject, []verify.Subject) {
 	var subjects, sboms []verify.Subject
 
 	for _, s := range pinned {
@@ -293,13 +315,183 @@ func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subje
 		}
 	}
 
-	if len(subjects) == 0 {
-		return nil, nil, fmt.Errorf(
-			"%s names no artifact subjects — a manifest that pins nothing verifies nothing", *w.pol.Checksums,
-		)
+	return subjects, sboms
+}
+
+// registrySubjects answers what the release published somewhere other
+// than its assets — a container image, a registry package — as the
+// verify engine names a subject (stele#329).
+//
+// Where the contract can say, the contract is READ, and the release's
+// own provenance is held against it: a subject a class bundle attests
+// that neither pinning document names is a release whose claim and
+// whose evidence disagree about what it shipped, and that is the
+// `manifest:subjects` finding. The claim comes first on purpose. A
+// list read back out of the proofs can only ever say that the proofs
+// which exist are sound; an artifact published with no proof at all is
+// invisible to it, and visible to a list the release wrote.
+//
+// Where the contract cannot say — a manifest whose schema predates
+// registry entries, or no manifest at all — the bundles are the only
+// document that names these subjects, so they are read from there, and
+// the walk says so per release. That is history proving what it CAN
+// prove: an immutable manifest cannot be re-emitted, and refusing the
+// release would red it forever for a format it was never offered. The
+// second return names those subjects, because nothing attributed them
+// to a class and the demand derivation must narrow rather than accuse.
+//
+//nolint:gocritic // unnamedResult: the registry subjects, then the ones no source placed — named above
+func (w *evidenceWalk) registrySubjects(
+	repo, tag string, contract *Contract, files []verify.Subject, bundles []string,
+) ([]verify.Subject, []verify.Subject, error) {
+	subject := repo + "@" + tag
+
+	attested, err := w.provenanceSubjects(repo, tag, bundles)
+
+	if contract.Registered {
+		claimed := subjectSet(slices.Concat(files, contract.RegistrySubjects))
+
+		// One check for one obligation, taken whether it holds or not —
+		// an excuse for a cross-check this run never performed must not
+		// read as stale.
+		switch c := w.check(subject, "manifest:subjects"); {
+		case err != nil:
+			c.Diverged(err.Error())
+		default:
+			if stray := unclaimed(attested, claimed); len(stray) > 0 {
+				c.Diverged("provenance attests subject(s) neither " + *w.pol.Checksums +
+					" nor the evidence manifest names: " + strings.Join(stray, "; "))
+			}
+		}
+
+		return contract.RegistrySubjects, nil, nil
 	}
 
-	return subjects, sboms, nil
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var derived []verify.Subject
+
+	claimed := subjectSet(files)
+
+	for _, s := range attested {
+		if line := s.SHA256 + "  " + s.Name; !claimed[line] {
+			claimed[line] = true
+
+			derived = append(derived, s)
+		}
+	}
+
+	if len(derived) > 0 {
+		w.log("assert: evidence: %s: %s names no registry subject — %d read from the release's own provenance",
+			subject, registrySource(contract), len(derived))
+	}
+
+	return derived, derived, nil
+}
+
+// registrySource names the document that did, or could not, say what
+// the release published outside its assets.
+func registrySource(contract *Contract) string {
+	if contract.ManifestSchema == 0 {
+		return "the contract (" + contract.Origin + ")"
+	}
+
+	return fmt.Sprintf("the evidence manifest (schema %d)", contract.ManifestSchema)
+}
+
+// subjectSet keys subjects the way the verify engine does: digest and
+// name together, because two artifacts may share either one alone.
+func subjectSet(subjects []verify.Subject) map[string]bool {
+	out := make(map[string]bool, len(subjects))
+	for _, s := range subjects {
+		out[s.SHA256+"  "+s.Name] = true
+	}
+
+	return out
+}
+
+// unclaimed lists the attested subjects the claim does not name.
+func unclaimed(attested []verify.Subject, claimed map[string]bool) []string {
+	var out []string
+
+	for _, s := range attested {
+		if line := s.SHA256 + "  " + s.Name; !claimed[line] {
+			claimed[line] = true
+
+			out = append(out, s.Name+" (sha256:"+s.SHA256+")")
+		}
+	}
+
+	return out
+}
+
+// placed is the registry subjects a source attributed: all of them
+// where the contract named them, none where they were read back out of
+// the bundles.
+func placed(registry, unplaced []verify.Subject) []verify.Subject {
+	if len(unplaced) > 0 {
+		return nil
+	}
+
+	return registry
+}
+
+// provenanceSubjects reads every subject the release's present class
+// bundles attest PROVENANCE over, named and digested. Provenance only:
+// its subjects are the artifacts of the build by definition, while a
+// verdict or a triage statement riding the same asset is a claim about
+// them and names nothing new.
+//
+// The bundles are the ones the presence leg already judged — the same
+// list, so the two legs cannot disagree about which assets carry the
+// release's evidence.
+func (w *evidenceWalk) provenanceSubjects(repo, tag string, bundles []string) ([]verify.Subject, error) {
+	var out []verify.Subject
+
+	for _, asset := range bundles {
+		raw, err := w.forge.Asset(w.org, repo, tag, asset)
+		if err != nil {
+			return nil, fmt.Errorf("%s is unreadable: %w", asset, err)
+		}
+
+		subjects, err := bundleSubjects(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", asset, err)
+		}
+
+		out = append(out, subjects...)
+	}
+
+	return out, nil
+}
+
+// bundleSubjects reads the provenance subjects out of one bundle
+// asset. A provenance subject with no name or no sha256 digest is a
+// refusal, not a skip: the verify engine asks for a subject by both,
+// and one this walk dropped would be an artifact nobody verified.
+func bundleSubjects(raw []byte) ([]verify.Subject, error) {
+	var out []verify.Subject
+
+	err := eachStatement(raw, func(line int, stmt *stmtSubjects) error {
+		if stmt.PredicateType == nil || *stmt.PredicateType != provenance.PredicateType {
+			return nil
+		}
+
+		for _, s := range stmt.Subject {
+			d, ok := s.Digest["sha256"]
+			if s.Name == nil || *s.Name == "" || !ok || !hex64OnlyRE.MatchString(d) {
+				return fmt.Errorf("bundle line %d: a provenance subject carries no name or no sha256 digest", line)
+			}
+
+			out = append(out, verify.Subject{Name: *s.Name, SHA256: d})
+		}
+
+		return nil
+	})
+
+	return out, err
 }
 
 // resolvePins derives the machinery and signer pins for one release from
@@ -429,44 +621,6 @@ func NewFullDepth(v DeepVerifier, verifierWorkflow, signerWorkflow string) (*Ful
 	fd.MachineryOwner, fd.MachineryRepo = parts[0], parts[1]
 
 	return fd, nil
-}
-
-// ReleaseInputs derives the verify engine's inputs for one release
-// from the forge alone: the subjects its checksum manifest pins, the
-// SBOM candidates beside them, and the two commit pins its identities
-// are bound at.
-//
-// Exported for `stele level`, which asks the same question the deep
-// leg asks — "what did this release actually ship, and under which
-// pins" — and must not answer it a second way. A second derivation of
-// a subject set is a second answer waiting to disagree.
-//
-//nolint:gocritic // unnamedResult: subjects, sboms, pins — named in the doc
-func ReleaseInputs(
-	pol *Policy, full *FullDepth, forge gh.Forge, owner, repo, tag string,
-) ([]verify.Subject, []verify.Subject, verify.Pins, error) {
-	if pol.Evidence == nil {
-		return nil, nil, verify.Pins{}, errors.New("assert: the policy declares no evidence section")
-	}
-
-	w := &evidenceWalk{pol: pol.Evidence, org: owner, forge: forge, full: full}
-
-	pinned, err := w.checksumPins(repo, tag)
-	if err != nil {
-		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
-	}
-
-	subjects, sboms, err := w.checksumSubjects(pinned)
-	if err != nil {
-		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
-	}
-
-	pins, err := w.resolvePins(repo, tag)
-	if err != nil {
-		return nil, nil, verify.Pins{}, fmt.Errorf("assert: %s/%s@%s: %w", owner, repo, tag, err)
-	}
-
-	return subjects, sboms, pins, nil
 }
 
 // SBOMSuffix reports the policy's SBOM asset suffix — the naming

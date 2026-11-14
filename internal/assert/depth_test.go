@@ -34,6 +34,7 @@ type fakeDeep struct {
 	vsaPins            []verify.Pins
 	demands            []*verify.EnrichmentDemand
 	subjects           int
+	names              []string
 	sboms              []verify.SBOMs
 }
 
@@ -42,6 +43,10 @@ func (d *fakeDeep) Release(
 ) error {
 	d.releasePins = append(d.releasePins, pins)
 	d.subjects = len(subjects)
+
+	for _, s := range subjects {
+		d.names = append(d.names, s.Name)
+	}
 	d.decisions = append(d.decisions, decision)
 	d.sboms = append(d.sboms, sboms)
 

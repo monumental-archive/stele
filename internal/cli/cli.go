@@ -268,7 +268,8 @@ declared population, and --org --out-dir <dir> with no track publishes
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
 [--out]; emit manifest takes --classes --store-vsa
---machinery-version --assets --assert-policy --leg-subjects [--out]
+--machinery-version --assets --assert-policy --leg-subjects
+[--registry-subjects --out]
 and none of the above.
 GITHUB_TOKEN/GH_TOKEN authenticates store reads and the notes push.
 `
