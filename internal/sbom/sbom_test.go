@@ -67,9 +67,10 @@ func TestDeriveUnionsLegs(t *testing.T) {
 		t.Fatalf("Derive: %v", err)
 	}
 
-	// Root plus the three distinct modules, root first, deps sorted.
-	if len(doc.Packages) != 4 {
-		t.Fatalf("packages = %d, want 4", len(doc.Packages))
+	// Root, the three distinct modules and the toolchain's standard
+	// library — root first, the rest sorted.
+	if len(doc.Packages) != 5 {
+		t.Fatalf("packages = %d, want 5", len(doc.Packages))
 	}
 
 	root := doc.Packages[0]
@@ -81,7 +82,7 @@ func TestDeriveUnionsLegs(t *testing.T) {
 		t.Fatalf("root purpose = %q", root.PrimaryPurpose)
 	}
 
-	wantOrder := []string{"github.com/darwin/only", "github.com/masterminds/shared", "golang.org/x/sys"}
+	wantOrder := []string{"github.com/darwin/only", "github.com/masterminds/shared", "golang.org/x/sys", "stdlib"}
 	for i, want := range wantOrder {
 		if got := doc.Packages[i+1].Name; got != want {
 			t.Fatalf("dep %d = %q, want %q", i, got, want)
@@ -101,8 +102,8 @@ func TestDeriveUnionsLegs(t *testing.T) {
 	}
 
 	// One DESCRIBES plus one DEPENDS_ON per dep.
-	if len(doc.Relationships) != 4 {
-		t.Fatalf("relationships = %d, want 4", len(doc.Relationships))
+	if len(doc.Relationships) != 5 {
+		t.Fatalf("relationships = %d, want 5", len(doc.Relationships))
 	}
 
 	if doc.Relationships[0].RelationshipType != "DESCRIBES" {
@@ -446,5 +447,99 @@ func TestDeriveIsOrderIndependent(t *testing.T) {
 			first.Packages[i].SPDXID != second.Packages[i].SPDXID {
 			t.Fatalf("package %d differs across orderings", i)
 		}
+	}
+}
+
+// TestDeriveNamesTheToolchain pins #327: the standard library is in
+// the inventory under the vulnerability database's own name, at the
+// toolchain's version, in the spelling a Go finding carries. Without
+// it no scan of the inventory can ever meet a standard-library
+// advisory.
+func TestDeriveNamesTheToolchain(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name      string
+		goVersion string
+		want      string
+	}{
+		{"a release toolchain", "go1.26.6", "v1.26.6"},
+		{"an experiment build names its release", "go1.27.4 X:synctest", "v1.27.4"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			linux := leg("linux", "amd64", dep("shared.example/mod", "v1.0.0"))
+			linux.GoVersion = tt.goVersion
+			darwin := leg("darwin", "arm64", dep("darwin.example/mod", "v2.0.0"))
+			darwin.GoVersion = tt.goVersion
+
+			doc, err := sbom.Derive([]sbom.Binary{{Name: "a", Info: linux}, {Name: "b", Info: darwin}}, "stele-test")
+			if err != nil {
+				t.Fatalf("Derive: %v", err)
+			}
+
+			var std *sbom.Package
+
+			for i := range doc.Packages {
+				if doc.Packages[i].Name == "stdlib" {
+					std = &doc.Packages[i]
+				}
+			}
+
+			if std == nil {
+				t.Fatalf("the inventory carries no stdlib package: %+v", doc.Packages)
+			}
+
+			if std.VersionInfo != tt.want {
+				t.Fatalf("stdlib version = %q, want %q", std.VersionInfo, tt.want)
+			}
+
+			if got, want := std.ExternalRefs[0].ReferenceLocator, "pkg:golang/stdlib@"+tt.want; got != want {
+				t.Fatalf("stdlib purl = %q, want %q", got, want)
+			}
+
+			// Linked into every leg, so it carries no subset attribution
+			// even where the modules around it do.
+			if std.SourceInfo != "" {
+				t.Fatalf("stdlib sourceInfo = %q, want none", std.SourceInfo)
+			}
+		})
+	}
+}
+
+// TestDeriveRefusesAnUnnameableToolchain: a toolchain that is not a
+// Go release has no version an advisory is written against, and two
+// legs on two toolchains are not one release. Both refuse by name —
+// an inventory that guessed would be a standard library nobody can
+// check.
+func TestDeriveRefusesAnUnnameableToolchain(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		first  string
+		second string
+		want   string
+	}{
+		{"a development toolchain", "devel +a1b2c3d Tue Aug 11", "devel +a1b2c3d Tue Aug 11", "is not a Go release"},
+		{"no toolchain stamp", "", "", "is not a Go release"},
+		{"a release candidate spelt the toolchain's way", "go1.27rc1", "go1.27rc1", "is not a Go release"},
+		{"a truncated version", "go1.27", "go1.27", "is not a Go release"},
+		{"two legs on two toolchains", "go1.26.6", "go1.27.4", "was built with go v1.26.6 but b with go v1.27.4"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			linux := leg("linux", "amd64")
+			linux.GoVersion = tt.first
+			darwin := leg("darwin", "arm64")
+			darwin.GoVersion = tt.second
+
+			_, err := sbom.Derive([]sbom.Binary{{Name: "a", Info: linux}, {Name: "b", Info: darwin}}, "stele-test")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want one naming %q", err, tt.want)
+			}
+		})
 	}
 }

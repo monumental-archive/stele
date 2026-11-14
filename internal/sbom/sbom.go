@@ -13,6 +13,14 @@
 // (main module, version, revision, commit time) asserted equal across
 // them: divergence there means the legs were not built from one
 // source, which is a refusal, not a merge.
+//
+// The toolchain is in the inventory too (#327). The standard library
+// is linked into every binary and the toolchain is the only thing that
+// versions it, so an inventory of modules alone can never meet a
+// standard-library advisory: a scan over it is green on a binary built
+// with a toolchain years stale. It is read from the same embedded
+// build info as everything else, named the way the Go vulnerability
+// database names it — the package `stdlib` at the toolchain's version.
 package sbom
 
 import (
@@ -50,7 +58,12 @@ const (
 // what the format calls the document element, the not-asserted value,
 // the version this writes and its data licence.
 const (
-	documentID     = "SPDXRef-DOCUMENT"
+	documentID = "SPDXRef-DOCUMENT"
+	// stdlibPath is the Go vulnerability database's name for the
+	// standard library — a vocabulary this package reads, never coins.
+	// No module can collide with it: a module path's first element
+	// carries a dot.
+	stdlibPath     = "stdlib"
 	rootPackageID  = "SPDXRef-Package-0"
 	purposeApp     = "APPLICATION"
 	purposeLibrary = "LIBRARY"
@@ -141,6 +154,10 @@ func Derive(bins []Binary, tool string) (*Document, error) {
 		return nil, err
 	}
 
+	// Linked into every leg by construction, so it carries no
+	// per-platform attribution.
+	inv.mods[stdlibPath] = &module{path: stdlibPath, version: facts.toolchain, platforms: inv.platforms}
+
 	return render(facts, tool, inv), nil
 }
 
@@ -150,6 +167,10 @@ type facts struct {
 	mainVersion string
 	revision    string
 	created     string
+	// toolchain is the Go release every leg was built with, in the
+	// module-version spelling (v1.27.4) the rest of the inventory and
+	// the vulnerability database's findings share.
+	toolchain string
 }
 
 // stamp is one binary's commit identity.
@@ -186,6 +207,11 @@ func sharedFacts(bins []Binary) (*facts, error) {
 		return nil, err
 	}
 
+	toolchain, err := toolchainOf(firstBin)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, b := range bins[1:] {
 		if b.Info.Main.Path != mainPath || b.Info.Main.Version != mainVersion {
 			return nil, fmt.Errorf("sbom: %s is %s@%s but %s is %s@%s — not one release",
@@ -201,9 +227,42 @@ func sharedFacts(bins []Binary) (*facts, error) {
 			return nil, fmt.Errorf("sbom: %s built at %s (%s) but %s at %s (%s) — not one commit",
 				firstBin.Name, first.revision, first.created, b.Name, st.revision, st.created)
 		}
+
+		tc, tcErr := toolchainOf(b)
+		if tcErr != nil {
+			return nil, tcErr
+		}
+
+		if tc != toolchain {
+			return nil, fmt.Errorf("sbom: %s was built with go %s but %s with go %s — "+
+				"one release has one toolchain, and an inventory naming either would be wrong about the other",
+				firstBin.Name, toolchain, b.Name, tc)
+		}
 	}
 
-	return &facts{mainPath: mainPath, mainVersion: mainVersion, revision: first.revision, created: first.created}, nil
+	return &facts{
+		mainPath: mainPath, mainVersion: mainVersion,
+		revision: first.revision, created: first.created, toolchain: toolchain,
+	}, nil
+}
+
+// toolchainOf reads the Go release one binary was built with, as a
+// module version. Only a released toolchain is named: a development
+// build ("devel +abc123") or one with no stamp at all is no version
+// any advisory is written against, so an inventory could only guess —
+// and a guessed toolchain is a standard library nobody can check.
+func toolchainOf(b Binary) (string, error) {
+	// "go1.27.4", and "go1.27.4 X:someexperiment" for an experiment
+	// build — the release is the first field either way.
+	release, _, _ := strings.Cut(b.Info.GoVersion, " ")
+
+	version := "v" + strings.TrimPrefix(release, "go")
+	if !strings.HasPrefix(release, "go") || !semver.IsValid(version) || semver.Canonical(version) != version {
+		return "", fmt.Errorf("sbom: %s was built with toolchain %q, which is not a Go release: "+
+			"its standard library has no version an advisory could be matched against", b.Name, b.Info.GoVersion)
+	}
+
+	return version, nil
 }
 
 // validReleaseVersion refuses a main-module version the toolchain did
