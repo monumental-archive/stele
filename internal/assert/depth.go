@@ -45,6 +45,12 @@ type DeepVerifier interface {
 // the full-commit uses: reference to the machinery repo's publish or release
 // workflow. The 40-hex capture is the certificate-grade binding; the
 // version comment beside it is presentation.
+// The two halves of the deep leg, as an unseen read names them.
+const (
+	deepRelease = "deep release check"
+	deepVerdict = "deep verdict check"
+)
+
 var uses40RE = regexp.MustCompile(`uses:\s*\S*/(?:publish|release)\.ya?ml@([0-9a-f]{40})`)
 
 // fullDepth re-verifies one release through the engine. Refusals land
@@ -63,7 +69,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 	pinned, err := w.checksumPins(repo, tag)
 	if err != nil {
 		if unseen(err) {
-			return fmt.Errorf("assert: deep release check of %s: %w", subject, err)
+			return blind(deepRelease, subject, "checksum manifest", err)
 		}
 
 		deep.Diverged(err.Error())
@@ -79,7 +85,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 	registry, unplaced, err := w.registrySubjects(repo, tag, contract, files, bundles)
 	if err != nil {
 		if unseen(err) {
-			return fmt.Errorf("assert: deep release check of %s: %w", subject, err)
+			return blind(deepRelease, subject, "class bundles", err)
 		}
 
 		deep.Diverged(err.Error())
@@ -106,7 +112,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 	pins, err := w.resolvePins(repo, tag)
 	if err != nil {
 		if unseen(err) {
-			return fmt.Errorf("assert: deep release check of %s: %w", subject, err)
+			return blind(deepRelease, subject, "signing pins", err)
 		}
 
 		deep.Diverged(err.Error())
@@ -130,7 +136,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 		c, subjects, verify.SBOMs{Assets: sboms, Planned: planned}, pins, contract.Decision,
 	); rerr != nil {
 		if unseen(rerr) {
-			return fmt.Errorf("assert: deep release check of %s: %w", subject, rerr)
+			return blind(deepRelease, subject, "release attestations", rerr)
 		}
 
 		deep.Diverged(rerr.Error())
@@ -171,7 +177,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 	vc := w.check(subject, "vsa:deep")
 	if verr := w.full.Verifier.VSA(c, subjects, pins, demand); verr != nil {
 		if unseen(verr) {
-			return fmt.Errorf("assert: deep verdict check of %s: %w", subject, verr)
+			return blind(deepVerdict, subject, "verification summaries", verr)
 		}
 
 		vc.Diverged(verr.Error())
@@ -367,6 +373,11 @@ func (w *evidenceWalk) registrySubjects(
 	subject := repo + "@" + tag
 
 	attested, err := w.provenanceSubjects(repo, tag, bundles)
+	if err != nil && unseen(err) {
+		// A bundle the run could not read is not a cross-check that
+		// failed: the release's claim was never held against anything.
+		return nil, nil, err
+	}
 
 	if contract.Registered {
 		claimed := subjectSet(slices.Concat(files, contract.RegistrySubjects))

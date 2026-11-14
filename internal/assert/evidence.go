@@ -250,6 +250,10 @@ func (w *evidenceWalk) storeVerdicts(repo, tag string, bundles []string) error {
 
 		raw, err := w.forge.Asset(w.org, repo, tag, asset)
 		if err != nil {
+			if unseen(err) {
+				return blind("store verdicts", subject, asset, err)
+			}
+
 			readable.Diverged(err.Error())
 
 			continue

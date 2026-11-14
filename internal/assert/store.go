@@ -17,6 +17,7 @@
 package assert
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -59,15 +60,31 @@ const (
 	assertBaseImage  = "base-image-approval"
 )
 
-// unseen reports a store read that could not be completed (stele#339):
-// the host throttled it, or its transient ladder ran out on 5xx or 429.
-// Neither says anything about whether the attestation is there, so
-// neither may be recorded as a divergence against the subject: it ends
-// the walk the way every other unreadable forge read does, and the run
-// seals CANNOT_JUDGE. Which refusals those are is internal/gh's
-// answer — this only asks it.
+// unseen reports a forge read the walk could not complete: the host
+// throttled it, its transient ladder ran out on 5xx or 429 (stele#339),
+// or the credential was refused (stele#343). None of the three says
+// anything about the subject — the run learned nothing about it — so
+// none may be recorded as a divergence against it: it ends the walk
+// the way every other unreadable forge read does, and the run seals
+// CANNOT_JUDGE. gh.ErrForbidden's own rule: an unreadable population
+// is unchecked, never clean, and unchecked is not a finding either.
+// Which refusals are which is internal/gh's answer — this only asks.
 func unseen(err error) bool {
-	return gh.Retryable(err)
+	return gh.Retryable(err) || errors.Is(err, gh.ErrForbidden)
+}
+
+// blind ends the walk on an unseen read, naming the assertion and the
+// subject it never got to look at. A refused credential says so in
+// its own words — the credential cannot read the subject's thing —
+// never in the vocabulary of missing evidence, which is a statement
+// about the release this run is in no position to make (stele#343).
+func blind(assertion, subject, thing string, err error) error {
+	if errors.Is(err, gh.ErrForbidden) {
+		return fmt.Errorf("assert: %s of %s: the credential cannot read %s's %s: %w",
+			assertion, subject, subject, thing, err)
+	}
+
+	return fmt.Errorf("assert: %s of %s: reading its %s: %w", assertion, subject, thing, err)
 }
 
 // continuous walks the repos that publish rolling digests and proves
@@ -132,7 +149,7 @@ func (w *evidenceWalk) continuous(repo string) error {
 
 	if verr := w.attestor.Verify(w.org, repo, digest, candidates, ""); verr != nil {
 		if unseen(verr) {
-			return fmt.Errorf("assert: %s of %s: %w", assertContinuous, subject, verr)
+			return blind(assertContinuous, subject, "attestations in the store", verr)
 		}
 
 		continuous.Diverged(
@@ -392,7 +409,7 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) error {
 			[]Candidate{{Identity: *s.AttestorIdentity}}, *s.PredicateType,
 		); err != nil {
 			if unseen(err) {
-				return fmt.Errorf("assert: %s of %s: %w", assertion, ref, err)
+				return blind(assertion, ref, "approval attestations", err)
 			}
 
 			pin.Diverged(
@@ -467,7 +484,7 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 			[]Candidate{{Identity: identity}}, *s.PredicateType,
 		); verr != nil {
 			if unseen(verr) {
-				return fmt.Errorf("assert: %s of %s: %w", assertion, ref, verr)
+				return blind(assertion, ref, "provenance attestations", verr)
 			}
 
 			pin.Diverged(fmt.Sprintf(

@@ -140,6 +140,11 @@ type fakeForge struct {
 	// contract manifest and a bundle asset are separate reads, and
 	// only one of them being unreadable is a different verdict.
 	assetErr map[string]error
+	// lateAssetErr fails the same key from its SECOND read on: the
+	// presence leg and the deep leg read one class bundle each, and
+	// only the deep read refusing reaches the deep site.
+	lateAssetErr map[string]error
+	assetReads   map[string]int
 }
 
 func (f *fakeForge) ListRepos(string) ([]gh.Repo, error) {
@@ -203,6 +208,16 @@ func (f *fakeForge) Asset(_, repo, tag, name string) ([]byte, error) {
 	}
 
 	if err := f.assetErr[repo+"@"+tag+"/"+name]; err != nil {
+		return nil, err
+	}
+
+	if f.assetReads == nil {
+		f.assetReads = map[string]int{}
+	}
+
+	f.assetReads[repo+"@"+tag+"/"+name]++
+
+	if err := f.lateAssetErr[repo+"@"+tag+"/"+name]; err != nil && f.assetReads[repo+"@"+tag+"/"+name] > 1 {
 		return nil, err
 	}
 
