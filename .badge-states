@@ -4,4 +4,4 @@
 # bestpractices: 'pending' until the form binds, then the BP_ID.
 # reuse: 'pending' until FSFE registration confirms, then 'registered'.
 bestpractices pending
-reuse pending
+reuse registered
