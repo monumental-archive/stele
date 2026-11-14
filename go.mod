@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/cyberphone/json-canonicalization v0.0.0-20261011152517-32a48195b9b2
-	github.com/digitorus/pkcs7 v0.0.0-20260821105541-05f79448fa77
+	github.com/digitorus/pkcs7 v0.0.0-20261104125046-a476de3098e4
 	github.com/github/go-spdx/v2 v2.8.0
 	github.com/google/certificate-transparency-go v1.4.0
 	github.com/google/go-containerregistry v0.22.1
