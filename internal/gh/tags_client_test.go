@@ -26,16 +26,10 @@ func tagServer(t *testing.T) *gh.Client {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/repos/acme/widget/git/matching-refs/tags/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "1" {
-			writeBody(w, []byte(`[
-			  {"ref": "refs/tags/v1.0.0", "object": {"type": "tag", "sha": "`+tagObjID+`"}},
-			  {"ref": "refs/tags/light", "object": {"type": "commit", "sha": "`+noteRev+`"}}]`))
-
-			return
-		}
-
-		writeBody(w, []byte(`[]`))
+	mux.HandleFunc("/repos/acme/widget/git/matching-refs/tags/", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`[
+		  {"ref": "refs/tags/v1.0.0", "object": {"type": "tag", "sha": "`+tagObjID+`"}},
+		  {"ref": "refs/tags/light", "object": {"type": "commit", "sha": "`+noteRev+`"}}]`))
 	})
 
 	mux.HandleFunc("/repos/acme/widget/git/tags/"+tagObjID, func(w http.ResponseWriter, _ *http.Request) {
@@ -244,14 +238,8 @@ func hostileTagServer(t *testing.T) *gh.Client {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/repos/acme/broken/git/matching-refs/tags/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "1" {
-			writeBody(w, []byte(`[{"ref": "refs/tags/v1.0.0", "object": null}]`))
-
-			return
-		}
-
-		writeBody(w, []byte(`[]`))
+	mux.HandleFunc("/repos/acme/broken/git/matching-refs/tags/", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`[{"ref": "refs/tags/v1.0.0", "object": null}]`))
 	})
 
 	mux.HandleFunc("/repos/acme/broken/git/tags/gone", func(w http.ResponseWriter, _ *http.Request) {

@@ -27,19 +27,19 @@ func rulesServer(t *testing.T) *gh.Client {
 
 	mux := http.NewServeMux()
 
-	// Two pages, so the merge is exercised rather than assumed. Page
-	// one is FULL — the walk ends on the first short page (#154), so a
-	// one-entry first page would never ask for the second.
+	// Two pages, so the merge is exercised rather than assumed. The
+	// first names the second in its Link header, the forge's own
+	// pagination statement (#322); the second names nothing, which
+	// ends the walk.
 	mux.HandleFunc("/repos/acme/widget/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Query().Get("page") {
-		case "1":
-			writeBody(w, []byte("["+strings.Repeat(`{"type": "filler", "ruleset_id": 0},`, 99)+
-				`{"type": "deletion", "ruleset_id": 1}]`))
-		case "2":
+		if r.URL.Query().Get("page") == "2" {
 			writeBody(w, []byte(`[{"type": "required_signatures", "ruleset_id": 2}]`))
-		default:
-			writeBody(w, []byte(`[]`))
+
+			return
 		}
+
+		w.Header().Set("Link", "<http://"+r.Host+r.URL.Path+`?per_page=100&page=2>; rel="next"`)
+		writeBody(w, []byte(`[{"type": "deletion", "ruleset_id": 1}]`))
 	})
 
 	mux.HandleFunc("/repos/acme/widget/rules/branches/quiet", func(w http.ResponseWriter, _ *http.Request) {
@@ -51,17 +51,11 @@ func rulesServer(t *testing.T) *gh.Client {
 	})
 
 	mux.HandleFunc("/repos/acme/widget/rulesets", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "1" {
-			if r.URL.Query().Get("includes_parents") != "true" {
-				t.Error("the ruleset listing did not ask for inherited rulesets, where the org controls live")
-			}
-
-			writeBody(w, []byte(`[{"id": 101, "target": "tag", "enforcement": "active"}]`))
-
-			return
+		if r.URL.Query().Get("includes_parents") != "true" {
+			t.Error("the ruleset listing did not ask for inherited rulesets, where the org controls live")
 		}
 
-		writeBody(w, []byte(`[]`))
+		writeBody(w, []byte(`[{"id": 101, "target": "tag", "enforcement": "active"}]`))
 	})
 
 	mux.HandleFunc("/repos/acme/widget/rulesets/101", func(w http.ResponseWriter, _ *http.Request) {

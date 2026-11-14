@@ -60,7 +60,7 @@ func (c *Client) Licence(owner, repo, ref string) (string, bool, error) {
 		path += "?ref=" + url.QueryEscape(ref)
 	}
 
-	body, ok, err := c.get(path, ghJSON)
+	body, _, ok, err := c.get(path, ghJSON)
 	if err != nil {
 		return "", false, err
 	}
@@ -94,7 +94,7 @@ type repoDoc struct {
 func (c *Client) Description(owner, repo string) (string, error) {
 	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
 
-	body, ok, err := c.get(path, ghJSON)
+	body, _, ok, err := c.get(path, ghJSON)
 	if err != nil {
 		return "", err
 	}

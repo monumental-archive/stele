@@ -58,7 +58,7 @@ type pullReview struct {
 func (c *Client) Approvals(owner, repo, rev string) (int, bool, error) {
 	base := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
 
-	body, ok, err := c.get(base+"/commits/"+url.PathEscape(rev)+"/pulls", ghJSON)
+	body, _, ok, err := c.get(base+"/commits/"+url.PathEscape(rev)+"/pulls", ghJSON)
 	if err != nil {
 		return 0, false, err
 	}

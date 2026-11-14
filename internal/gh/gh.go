@@ -535,7 +535,7 @@ type refObject struct {
 func (c *Client) TagCommit(owner, repo, tag string) (string, error) {
 	base := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
 
-	body, found, err := c.get(base+"/git/ref/tags/"+url.PathEscape(tag), "application/vnd.github+json")
+	body, _, found, err := c.get(base+"/git/ref/tags/"+url.PathEscape(tag), "application/vnd.github+json")
 	if err != nil {
 		return "", err
 	}
@@ -557,7 +557,7 @@ func (c *Client) TagCommit(owner, repo, tag string) (string, error) {
 		return ref.Object.SHA, nil
 	}
 
-	body, found, err = c.get(base+"/git/tags/"+url.PathEscape(ref.Object.SHA), "application/vnd.github+json")
+	body, _, found, err = c.get(base+"/git/tags/"+url.PathEscape(ref.Object.SHA), "application/vnd.github+json")
 	if err != nil || !found {
 		return "", fmt.Errorf("gh: tag object %s of %s/%s@%s: %w", ref.Object.SHA, owner, repo, tag, err)
 	}
@@ -579,7 +579,7 @@ type contentsResponse struct {
 //
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (c *Client) FileAt(owner, repo, path, ref string) ([]byte, bool, error) {
-	body, found, err := c.get(
+	body, _, found, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/"+path+"?ref="+url.QueryEscape(ref),
 		"application/vnd.github.raw+json",
 	)
@@ -610,7 +610,7 @@ type attestationsResponse struct {
 
 // Attestations implements Forge.
 func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
-	body, ok, err := c.get(
+	body, _, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/attestations/sha256:"+sha256Hex+"?per_page=100",
 		"application/vnd.github+json",
 	)
@@ -686,7 +686,7 @@ const WorkflowDir = ".github/workflows"
 
 // Workflows implements Forge.
 func (c *Client) Workflows(owner, repo string) ([]workflow.File, error) {
-	body, ok, err := c.get(
+	body, _, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/contents/"+WorkflowDir,
 		"application/vnd.github+json",
 	)
@@ -728,7 +728,7 @@ type runsResponse struct {
 
 // FailedRuns implements Forge.
 func (c *Client) FailedRuns(owner, repo, branch string) ([]string, error) {
-	body, ok, err := c.get(
+	body, _, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/actions/runs?branch="+url.QueryEscape(branch)+
 			"&per_page=100",
 		"application/vnd.github+json",
@@ -827,7 +827,23 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 // read the host's number for the ambiguous status and ignored it for
 // the unambiguous one would end a walk in eighteen seconds against a
 // host that asked for sixty.
-func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocritic // unnamedResult: body, found, error
+//
+// Beside the body it returns the forge's own pagination statement: the
+// URL the response's Link header names as rel="next", or "" when it
+// names none (stele#322). Only paged reads it; every other read is one
+// document and ignores it.
+//
+//nolint:gocritic // unnamedResult: body, next, found, error
+func (c *Client) get(path, accept string) ([]byte, string, bool, error) {
+	return c.fetch(c.Base+path, path, accept)
+}
+
+// fetch is get's ladder over a whole URL: what names the read in its
+// refusals. Split from get because a Link header's next URL is used as
+// given, never rebuilt from a path.
+//
+//nolint:gocritic // unnamedResult: body, next, found, error
+func (c *Client) fetch(target, what, accept string) ([]byte, string, bool, error) {
 	var lastErr error
 
 	for attempt := 1; attempt <= transientAttempts; attempt++ {
@@ -835,15 +851,15 @@ func (c *Client) get(path, accept string) ([]byte, bool, error) { //nolint:gocri
 			c.sleep(RetryWait(lastErr, time.Duration(attempt-1)*transientBackoff))
 		}
 
-		body, ok, err := c.once(path, accept)
+		body, next, ok, err := c.once(target, what, accept)
 		if !retryable(err) {
-			return body, ok, err
+			return body, next, ok, err
 		}
 
 		lastErr = err
 	}
 
-	return nil, false, fmt.Errorf("gh: %s: after %d attempts: %w", path, transientAttempts, lastErr)
+	return nil, "", false, fmt.Errorf("gh: %s: after %d attempts: %w", what, transientAttempts, lastErr)
 }
 
 // sleep is the injectable clock — retry tests need no wall time.
@@ -862,14 +878,15 @@ func (c *Client) sleep(d time.Duration) {
 // conflate; 5xx and 429 wrap errTransient for the retry above, and the
 // 403 the classifier reads as a throttle wraps ErrThrottled for the
 // same retry. A 429 stays transient and additionally carries the wait
-// it named, which RetryWait hands the ladder.
+// it named, which RetryWait hands the ladder. An answer also carries
+// the Link header's next URL, "" when there is none.
 //
-//nolint:gocritic // unnamedResult: body, found, error
-func (c *Client) once(path, accept string) ([]byte, bool, error) {
+//nolint:gocritic // unnamedResult: body, next, found, error
+func (c *Client) once(target, path, accept string) ([]byte, string, bool, error) {
 	//nolint:noctx // the CLI has no cancellation surface; the client carries the timeout
-	req, err := http.NewRequest(http.MethodGet, c.Base+path, http.NoBody)
+	req, err := http.NewRequest(http.MethodGet, target, http.NoBody)
 	if err != nil {
-		return nil, false, fmt.Errorf("gh: build request: %w", err)
+		return nil, "", false, fmt.Errorf("gh: build request: %w", err)
 	}
 
 	req.Header.Set("Accept", accept)
@@ -881,47 +898,48 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("gh: %s: %w", path, err)
+		return nil, "", false, fmt.Errorf("gh: %s: %w", path, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // a read-only body close has nothing to report
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return nil, false, fmt.Errorf("gh: %s: read: %w", path, err)
+		return nil, "", false, fmt.Errorf("gh: %s: read: %w", path, err)
 	}
 
 	// Asked before the status vocabulary below, because the throttle is
 	// the one refusal the status cannot name: the classifier owns which
 	// statuses can carry it, so no case here restates that rule.
 	if wait, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
-		return nil, false, ThrottleRefusal(fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), wait)
+		return nil, "", false, ThrottleRefusal(fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), wait)
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return body, true, nil
+		return body, nextLink(resp.Header), true, nil
 	case http.StatusNotFound:
-		return nil, false, nil
+		return nil, "", false, nil
 	case http.StatusForbidden, http.StatusUnauthorized:
-		return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
+		return nil, "", false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
 	case http.StatusTooManyRequests:
-		return nil, false, transientRefusal(
+		return nil, "", false, transientRefusal(
 			fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), retryAfter(resp.Header),
 		)
 	default:
 		// The status alone: the body is server-controlled prose.
 		if resp.StatusCode >= http.StatusInternalServerError {
-			return nil, false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)
+			return nil, "", false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, errTransient)
 		}
 
-		return nil, false, fmt.Errorf("gh: %s: HTTP %d", path, resp.StatusCode)
+		return nil, "", false, fmt.Errorf("gh: %s: HTTP %d", path, resp.StatusCode)
 	}
 }
 
-// paged reads every page of a listing endpoint (per_page=100), up to
-// a sane page bound. path carries no query of its own — the
-// pagination parameters ARE the query string — and a caller needing a
-// filter passes it here rather than pre-formatting it into the path.
+// paged reads every page of a listing endpoint, following the forge's
+// own pagination statement. path carries no query of its own — the
+// first request's query is per_page and the filters — and a caller
+// needing a filter passes it here rather than pre-formatting it into
+// the path.
 //
 // That is a parameter and not a separator branch on purpose (#106,
 // which deleted the branch and wrote this contract in its place). A
@@ -937,20 +955,24 @@ func (c *Client) once(path, accept string) ([]byte, bool, error) {
 // and silently-wrong is this codebase's worst failure mode: a path
 // carrying a query refuses by name.
 //
-// Termination is arithmetic and not a content guess (#154). The walk
-// ends on the SHORT-PAGE rule: a page carrying fewer entries than the
-// size asked for is the last one, and the empty page is that rule's
-// degenerate case rather than its only case. The empty literal alone
-// was not enough — `git/matching-refs/tags/` ignores `page` entirely
-// and answers every page with the same full array, so a repository
-// with tags walked to the bound and refused. maxPages stays as the
-// backstop, reachable now only when a forge genuinely misbehaves.
+// Termination is the forge's statement, never an inference (#322).
+// Each response's Link header either names the rel="next" page — which
+// is requested exactly as given, filters and all, because the forge
+// wrote it — or names none, and then the walk is complete. Two earlier
+// rules inferred the end from content: the empty array, then the short
+// page (#154). Both assumed an endpoint that honours page, and
+// `git/matching-refs/tags/` does not: it answers every request with
+// the same full array, so a repository with 100 or more tags never
+// served a short page and walked to the bound. The forge sends no
+// next link there, which is the whole answer.
+//
+// maxPages is the backstop against a forge that links in a circle. A
+// next URL off the API's own origin refuses: the request carries the
+// credential, and a link is not a reason to hand it to another host.
 func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 	const maxPages = 50
-	// perPage is both the page size asked for and the short-page
-	// rule's yardstick — one constant, because a walk whose request
-	// and whose termination test disagreed about the size would run
-	// forever or stop early.
+	// perPage is the page size asked for on the first request. The
+	// forge carries it into the next links it writes.
 	const perPage = 100
 
 	if strings.Contains(path, "?") {
@@ -958,15 +980,21 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 			" pagination owns the query string", path)
 	}
 
+	query := fmt.Sprintf("%s?per_page=%d", path, perPage)
+	if len(filters) > 0 {
+		query += "&" + strings.Join(filters, "&")
+	}
+
+	target, what := c.Base+query, query
+
 	var pages [][]byte
 
-	for page := 1; page <= maxPages; page++ {
-		query := fmt.Sprintf("%s?per_page=%d&page=%d", path, perPage, page)
-		if len(filters) > 0 {
-			query += "&" + strings.Join(filters, "&")
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return nil, fmt.Errorf("gh: %s: pagination did not converge in %d pages", path, maxPages)
 		}
 
-		body, ok, err := c.get(query, "application/vnd.github+json")
+		body, next, ok, err := c.fetch(target, what, "application/vnd.github+json")
 		if err != nil {
 			return nil, err
 		}
@@ -975,28 +1003,58 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 			return nil, fmt.Errorf("gh: %s: not found", path)
 		}
 
-		// Counting entries needs no schema: every paginated endpoint
-		// here answers with a JSON array, so the page decodes as
-		// deferred values and the caller still re-slices it under its
-		// own type. A body that is not an array is a refusal by name
-		// rather than a walk that cannot count.
-		entries, derr := jsonx.DecodeForeign[[]jsonx.Raw](body)
-		if derr != nil {
+		// Every paginated endpoint here answers with a JSON array; a body
+		// that is not one is a refusal by name, never a page handed to a
+		// caller that will misread it.
+		if _, derr := jsonx.DecodeForeign[[]jsonx.Raw](body); derr != nil {
 			return nil, fmt.Errorf("gh: %s: page %d is not a JSON array: %w", path, page, derr)
 		}
 
 		pages = append(pages, body)
 
-		if len(*entries) < perPage {
-			break
+		if next == "" {
+			return pages, nil
 		}
 
-		if page == maxPages {
-			return nil, fmt.Errorf("gh: %s: pagination did not converge in %d pages", path, maxPages)
+		if !sameOrigin(next, c.Base) {
+			return nil, fmt.Errorf("gh: %s: page %d links its next page off the API origin %s", path, page, c.Base)
+		}
+
+		target, what = next, next
+	}
+}
+
+// linkEntry is one <URL>; params entry of a Link header (RFC 8288).
+var linkEntry = regexp.MustCompile(`<([^>]*)>([^,<]*)`)
+
+// relParam is a rel parameter, quoted or bare.
+var relParam = regexp.MustCompile(`(?i);\s*rel\s*=\s*(?:"([^"]*)"|([^\s;,]+))`)
+
+// nextLink returns the URL a response's Link headers name as
+// rel="next", or "" when none does. A rel may carry several
+// space-separated relation types.
+func nextLink(header http.Header) string {
+	for _, value := range header.Values("Link") {
+		for _, entry := range linkEntry.FindAllStringSubmatch(value, -1) {
+			for _, rel := range relParam.FindAllStringSubmatch(entry[2], -1) {
+				for kind := range strings.FieldsSeq(rel[1] + " " + rel[2]) {
+					if strings.EqualFold(kind, "next") {
+						return entry[1]
+					}
+				}
+			}
 		}
 	}
 
-	return pages, nil
+	return ""
+}
+
+// sameOrigin reports whether link shares base's scheme and host.
+func sameOrigin(link, base string) bool {
+	l, lerr := url.Parse(link)
+	b, berr := url.Parse(base)
+
+	return lerr == nil && berr == nil && l.Scheme == b.Scheme && l.Host == b.Host
 }
 
 // releaseAt reads the release hanging on one tag. The bool is "the
@@ -1016,7 +1074,7 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 // caller wants — a draft's assets are not fetchable by a stranger, so
 // a caller asking where artifacts live must never be handed one.
 func (c *Client) releaseAt(owner, repo, tag string) (*releaseEntry, bool, error) {
-	body, ok, err := c.get(
+	body, _, ok, err := c.get(
 		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/releases/tags/"+url.PathEscape(tag),
 		"application/vnd.github+json",
 	)

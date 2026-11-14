@@ -198,7 +198,7 @@ type probe struct {
 }
 
 // newProbe answers the repos listing with `refuse` scripted refusals
-// before serving a real short page.
+// before serving a real page.
 func newProbe(t *testing.T, refuse int, respond func(http.ResponseWriter)) *probe {
 	t.Helper()
 
