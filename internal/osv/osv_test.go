@@ -8,29 +8,28 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/osv"
+	"github.com/monumental-archive/stele/internal/standin"
 )
 
-// scannerDir writes a stand-in scanner script with the given exit
-// code into a fresh directory, under the name the belt installs, and
-// returns the directory — so the same world serves both a Runner
-// pointed at an explicit path and a PATH lookup.
+// scannerDir plants a stand-in scanner with the given exit code into a
+// fresh directory, under the name the belt installs, and returns the
+// directory — so the same world serves both a Runner pointed at an
+// explicit path and a PATH lookup. The stand-in is the test binary
+// itself behind a symlink (internal/standin): a written script races
+// on "text file busy" under a concurrent fork (stele#320).
 func scannerDir(t *testing.T, exit int) string {
 	t.Helper()
 
-	dir := t.TempDir()
-	script := "#!/bin/sh\necho '{\"results\": []}'\nexit " + strconv.Itoa(exit)
+	return standin.Plant(t, "osv-scanner", &standin.Spec{Stdout: "{\"results\": []}\n", Exit: exit})
+}
 
-	//nolint:gosec // a test script must execute
-	if err := os.WriteFile(filepath.Join(dir, "osv-scanner"), []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	return dir
+// TestMain lets this test binary serve as its own stand-in scanner.
+func TestMain(m *testing.M) {
+	os.Exit(standin.Main(m))
 }
 
 // scriptScanner returns a Runner pointed at that stand-in by path.

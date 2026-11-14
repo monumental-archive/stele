@@ -23,6 +23,7 @@ import (
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
+	"github.com/monumental-archive/stele/internal/standin"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -398,19 +399,14 @@ func TestGitSeamsOpenRealRepositories(t *testing.T) {
 	}
 }
 
-// fakeCosign writes a stand-in cosign onto PATH. body is the shell
-// after the shebang, so each case scripts one signer behaviour.
-func fakeCosign(t *testing.T, body string) {
+// fakeCosign plants a stand-in cosign onto PATH (internal/standin: the
+// test binary behind a symlink, never a written script, stele#320).
+// Every case here scripts the same signer behaviour: exit zero and
+// leave nothing behind.
+func fakeCosign(t *testing.T) {
 	t.Helper()
 
-	dir := t.TempDir()
-
-	//nolint:gosec // a test script must execute
-	if err := os.WriteFile(filepath.Join(dir, "cosign"), []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("PATH", dir)
+	t.Setenv("PATH", standin.Plant(t, "cosign", &standin.Spec{}))
 }
 
 // TestCosignSignerGuards covers the signer's remaining guards beside
@@ -420,7 +416,7 @@ func fakeCosign(t *testing.T, body string) {
 // reported success there would append an unsigned link.
 func TestCosignSignerGuards(t *testing.T) {
 	t.Run("preflight accepts a cosign that runs", func(t *testing.T) {
-		fakeCosign(t, `exit 0`)
+		fakeCosign(t)
 
 		if err := newSigner(t.TempDir()).Check(); err != nil {
 			t.Fatalf("Check = %v", err)
@@ -437,7 +433,7 @@ func TestCosignSignerGuards(t *testing.T) {
 	})
 
 	t.Run("a cosign that writes no bundle refuses", func(t *testing.T) {
-		fakeCosign(t, `exit 0`)
+		fakeCosign(t)
 
 		if _, err := newSigner(t.TempDir()).Sign([]byte("{}")); err == nil ||
 			!strings.Contains(err.Error(), "reading the signed bundle") {
@@ -446,7 +442,7 @@ func TestCosignSignerGuards(t *testing.T) {
 	})
 
 	t.Run("a staging directory that does not exist refuses", func(t *testing.T) {
-		fakeCosign(t, `exit 0`)
+		fakeCosign(t)
 
 		signer := newSigner(filepath.Join(t.TempDir(), "absent"))
 

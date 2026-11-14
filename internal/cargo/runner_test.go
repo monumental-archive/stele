@@ -17,11 +17,11 @@ package cargo_test
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/cargo"
+	"github.com/monumental-archive/stele/internal/standin"
 )
 
 // metadataJSON is the smallest answer Closure accepts, so a stand-in
@@ -38,50 +38,29 @@ const metadataJSON = `{"packages": [{"id": "a 1.0.0 (path+file:///a)", "name": "
 // about where cargo resolved.
 const ranHere = "stele-cargo-ran-here"
 
-// stubCargo writes a stand-in cargo into a fresh directory, under the
-// name the toolchain installs, and returns that directory. The script
-// records its argv one entry per line into "argv" so a test can read
-// back what cargo was actually asked; stdout and stderr travel through
-// files rather than through the script's own text, which keeps quoting
-// out of the fixture. cat is spelled absolutely because one test
-// narrows PATH to the stand-in's own directory.
+// stubCargo plants a stand-in cargo into a fresh directory, under the
+// name the toolchain installs, and returns that directory. The
+// stand-in records its argv one entry per line so a test can read back
+// what cargo was actually asked, drops ranHere into whatever directory
+// it was run in, and replays the canned streams. It is the test binary
+// itself behind a symlink (internal/standin): a written script races on
+// "text file busy" under a concurrent fork (stele#320).
 func stubCargo(t *testing.T, stdout, stderr string, exit int) string {
 	t.Helper()
 
-	dir := t.TempDir()
-
-	for name, content := range map[string]string{"stdout": stdout, "stderr": stderr} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	script := "#!/bin/sh\n" +
-		"for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" + dir + "/argv'\n" +
-		": > '" + ranHere + "'\n" +
-		"/bin/cat '" + dir + "/stdout'\n" +
-		"/bin/cat '" + dir + "/stderr' >&2\n" +
-		"exit " + strconv.Itoa(exit) + "\n"
-
-	//nolint:gosec // a test script must execute
-	if err := os.WriteFile(filepath.Join(dir, "cargo"), []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	return dir
+	return standin.Plant(t, "cargo", &standin.Spec{Stdout: stdout, Stderr: stderr, Exit: exit, Marker: ranHere})
 }
 
 // recorded reads back the argv the stand-in was called with.
 func recorded(t *testing.T, dir string) []string {
 	t.Helper()
 
-	//nolint:gosec // G304: a path this test just built in its own temp dir
-	raw, err := os.ReadFile(filepath.Join(dir, "argv"))
-	if err != nil {
-		t.Fatalf("the stand-in cargo was never run: %v", err)
-	}
+	return standin.Argv(t, dir)
+}
 
-	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+// TestMain lets this test binary serve as its own stand-in cargo.
+func TestMain(m *testing.M) {
+	os.Exit(standin.Main(m))
 }
 
 // TestMetadataAsksForALockedResolution is the package doc's central
