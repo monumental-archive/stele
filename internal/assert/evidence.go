@@ -153,7 +153,7 @@ func (w *evidenceWalk) release(repo, tag string) error {
 	}
 
 	if w.full != nil {
-		return w.fullDepth(repo, tag, contract)
+		return w.fullDepth(repo, tag, contract, bundles)
 	}
 
 	return nil
@@ -231,6 +231,7 @@ type bundleLine struct {
 // needs.
 type stmtSubjects struct {
 	Subject []struct {
+		Name   *string           `json:"name"`
 		Digest map[string]string `json:"digest"`
 	} `json:"subject"`
 	PredicateType *string `json:"predicateType"`
@@ -368,6 +369,29 @@ func (w *evidenceWalk) storeHasVSA(repo, digest string) (bool, error) {
 func subjectDigests(raw []byte) ([]string, error) {
 	var out []string
 
+	err := eachStatement(raw, func(_ int, stmt *stmtSubjects) error {
+		for _, s := range stmt.Subject {
+			if d, ok := s.Digest["sha256"]; ok && hex64OnlyRE.MatchString(d) {
+				out = append(out, d)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// eachStatement is the ONE reading of a bundle asset: every line a
+// Sigstore bundle, every bundle a statement, handed to visit with its
+// 1-based line. Two walks read these assets — the presence leg for the
+// digests a verdict must cover, the deep leg for the subjects a
+// registry holds — and two parsers of one format would let them
+// disagree about what a bundle says.
+func eachStatement(raw []byte, visit func(line int, stmt *stmtSubjects) error) error {
 	lines := 0
 
 	for line := range strings.SplitSeq(string(raw), "\n") {
@@ -379,30 +403,28 @@ func subjectDigests(raw []byte) ([]string, error) {
 
 		decoded, err := jsonx.DecodeForeign[bundleLine]([]byte(line))
 		if err != nil {
-			return nil, fmt.Errorf("bundle line %d: %w", lines, err)
+			return fmt.Errorf("bundle line %d: %w", lines, err)
 		}
 
 		if decoded.DSSEEnvelope == nil || decoded.DSSEEnvelope.Payload == nil {
-			return nil, fmt.Errorf("bundle line %d carries no DSSE payload", lines)
+			return fmt.Errorf("bundle line %d carries no DSSE payload", lines)
 		}
 
 		stmt, err := decodeStatement(*decoded.DSSEEnvelope.Payload)
 		if err != nil {
-			return nil, fmt.Errorf("bundle line %d: %w", lines, err)
+			return fmt.Errorf("bundle line %d: %w", lines, err)
 		}
 
-		for _, s := range stmt.Subject {
-			if d, ok := s.Digest["sha256"]; ok && hex64OnlyRE.MatchString(d) {
-				out = append(out, d)
-			}
+		if err := visit(lines, stmt); err != nil {
+			return err
 		}
 	}
 
 	if lines == 0 {
-		return nil, errors.New("the bundle asset is empty")
+		return errors.New("the bundle asset is empty")
 	}
 
-	return out, nil
+	return nil
 }
 
 func decodeStatement(payloadB64 string) (*stmtSubjects, error) {

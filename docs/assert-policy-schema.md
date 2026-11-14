@@ -626,12 +626,14 @@ publisher's CI. Writer and reader share one definition
 this reader admits cannot drift apart:
 
 ```json
-{ "schema": 7, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
+{ "schema": 5, "classes": ["oci-image", "rust-crate"], "storeVsa": true,
   "machineryVersion": "1.40.0",
   "entries": [
     { "name": "widget-x86_64.tar.gz", "sha256": "1111…", "type": "build-subject",
       "class": "rust-crate", "target": "x86_64-unknown-linux-musl" },
-    { "name": "attestations-image.intoto.jsonl", "sha256": "2222…", "type": "evidence" }
+    { "name": "attestations-image.intoto.jsonl", "sha256": "2222…", "type": "evidence" },
+    { "name": "ghcr.io/acme/widget", "sha256": "3333…", "type": "registry-subject",
+      "class": "oci-image", "target": "image" }
   ] }
 ```
 
@@ -650,22 +652,82 @@ silently.
 
 ### Typed entries
 
-`entries` pins every asset the release published and says what each
-one **is**. The two types carry opposite obligations, which is the
+`entries` pins everything the release published and says what each
+one **is**. The types carry different obligations, which is the
 whole reason the distinction is worth a field:
 
-- `build-subject` — an artifact *of* the build. It must rebuild
-  bit-for-bit.
+- `build-subject` — an artifact *of* the build, published as an asset
+  of the release. It must rebuild bit-for-bit.
 - `evidence` — a document *about* the release: an attestation bundle,
   an inventory, a triage decision, a digest manifest. It **cannot**
   rebuild bit-for-bit, because a Sigstore signature embeds a fresh
   timestamp and certificate on every signing, and that
   non-reproducibility is a security property, not a defect.
+- `registry-subject` — an artifact *of* the build, published
+  somewhere other than the release's assets: a container image, a
+  registry package. See [below](#what-a-registry-holds).
 
-The vocabulary is closed: an entry that is neither refuses the
-manifest, because unknown defaulting into either population is the
+The vocabulary is closed: an entry that is none of them refuses the
+manifest, because unknown defaulting into any population is the
 failure this typing exists to prevent. So does an entry with no
 digest, or the same asset twice.
+
+### What a registry holds
+
+A container image has no file beside the manifest, so no checksum
+manifest can pin it — and a walk that read "what this release
+shipped" from the assets alone never saw it. A release shipping only
+an image then named no subject at all, and one shipping files *and* an
+image had the image dropped from re-verification in silence. A
+`registry-subject` entry is where the release says it: the `name` is
+the one its provenance attests (`ghcr.io/acme/widget`, a package
+tarball's name), the `sha256` is the digest attested, and `class` and
+`target` are owed exactly as a build subject owes them, because the
+same leg built it.
+
+It is its own type rather than a build subject with a flag because
+every walk over build subjects compares them against the release's
+**assets**, and an entry with no asset landing there is the failure
+the typing exists to prevent. So a registry subject is in no rebuild
+population and in no checksum cross-check, and it *is* attributed: its
+class is read back by name like any other artifact's.
+
+"Twice" means something different here. An asset is its name; a
+registry subject is its name **and** its digest, because one
+repository published at several digests — an image per runtime major
+— is several artifacts under one attested name. What one name may not
+have is two answers: two classes, or an asset and a registry subject
+at once.
+
+`stele emit manifest` takes them as
+`--registry-subjects <class>:<target>=<path>`, repeatable, each a
+sha256sum manifest of `<digest>  <attested name>`. There is no second
+list to join these against — that absence is why the flag exists — so
+the one cross-statement check left at emission is that a registry
+subject is not also an asset.
+
+At full depth the evidence walk verifies the release's subjects as
+**the checksum manifest's artifacts plus the manifest's registry
+subjects**, and refuses only a release that names no subject of
+either kind. Where the manifest names registry subjects, the
+release's own provenance is held against the claim: a subject a class
+bundle attests provenance over that neither pinning document names
+reds `manifest:subjects`. The claim comes first on purpose — a list
+read back out of the proofs can only say the proofs that exist are
+sound, and an artifact published with no proof at all is invisible to
+it.
+
+A manifest whose schema predates registry subjects — or a release no
+manifest speaks for — cannot be re-emitted, so its registry subjects
+are read from the one document that does name them: the provenance in
+its class bundles. The walk says so per release, records no
+`manifest:subjects` check it could not have met, and narrows the
+enrichment demand for those subjects instead of accusing the manifest
+of omitting an entry its schema could not carry. The bundles read are
+the ones a class declares under `bundles`; a bundle published only
+under an `assetPrefixes` name is not among them, so history's
+registry subjects attested there stay outside the deep walk, and a
+current manifest is the way they enter it.
 
 ### The checksum cross-check
 
@@ -776,7 +838,8 @@ epoch ([versioning.md](versioning.md)): manifests are published
 release assets, immutable once shipped, so the number moves only
 when this format's own key set changes against documents that exist.
 It moved to `2` when entries gained their type, to `3` when they
-gained their class, and to `4` when they gained their target.
+gained their class, to `4` when they gained their target, and to `5`
+when a release could name what it published to a registry.
 
 A published manifest cannot be re-emitted. It is an immutable release
 asset, pinned by digest in `checksums.txt` and attested under the

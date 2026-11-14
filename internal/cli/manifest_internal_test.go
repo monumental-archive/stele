@@ -103,7 +103,7 @@ func TestEmitManifestWritesTheDeclaredContract(t *testing.T) {
 
 	out := stdout.String()
 	for _, want := range []string{
-		`"schema":4`,
+		`"schema":5`,
 		`"classes":["go-binary","oci-image"]`,
 		`"storeVsa":true`,
 		`"machineryVersion":"1.40.0"`,
@@ -390,5 +390,139 @@ func TestEmitManifestTypesEachTargetOfOneClass(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("manifest lacks %s:\n%s", want, out)
 		}
+	}
+}
+
+// The image-only release (stele#329): every artifact lives in a
+// registry, so --assets names only documents and the manifest used to
+// list no artifact at all. --registry-subjects is where the publisher
+// says what it shipped there — one repository at two digests is two
+// subjects — and each leaves typed, attributed, and outside the build
+// subjects a rebuild compares against the release's assets.
+func TestEmitManifestNamesWhatARegistryHolds(t *testing.T) {
+	t.Parallel()
+
+	const image = "ghcr.io/acme/widget"
+
+	const other = "4444444444444444444444444444444444444444444444444444444444444444"
+
+	assets, policy := manifestInputs(t,
+		manifestDigest+"  attestations-go-binaries.intoto.jsonl\n"+
+			manifestDigest+"  widget-1.0.0.spdx.json\n")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"manifest", "--classes", "oci-image", "--store-vsa", "true", "--machinery-version", "1.0.0",
+		"--assets", assets, "--assert-policy", policy,
+		"--registry-subjects", subjectsOf(t, "oci-image", "pg16", manifestDigest+"  "+image+"\n"),
+		"--registry-subjects", subjectsOf(t, "oci-image", "pg17", other+"  "+image+"\n"),
+	}
+	if got := emitCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("emitCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		`{"name":"` + image + `","sha256":"` + manifestDigest +
+			`","type":"registry-subject","class":"oci-image","target":"pg16"}`,
+		`{"name":"` + image + `","sha256":"` + other +
+			`","type":"registry-subject","class":"oci-image","target":"pg17"}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("manifest lacks %s:\n%s", want, out)
+		}
+	}
+
+	if !strings.Contains(stderr.String(), "0 build subject(s) and 2 registry subject(s)") {
+		t.Errorf("the progress line does not count the registry subjects: %s", stderr.String())
+	}
+}
+
+// Every way --registry-subjects can be wrong refuses by name. The
+// join it cannot make — against a list of what the registry holds —
+// is exactly why the flag exists, so the guards are the ones that
+// remain: the grammar, one subject set per leg, a readable manifest,
+// and the rule that keeps the two populations apart.
+func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
+	t.Parallel()
+
+	const artifact = "widget-linux-amd64.tar.gz"
+
+	tests := []struct {
+		name     string
+		registry func(t *testing.T) []string
+		want     string
+	}{
+		{
+			"a value that is not a leg",
+			func(*testing.T) []string { return []string{"oci-image=/nowhere"} },
+			`--registry-subjects "oci-image=/nowhere" is not <class>:<target>=<path>`,
+		},
+		{
+			"a value with no path",
+			func(*testing.T) []string { return []string{"oci-image:image"} },
+			"is not <class>:<target>=<path>",
+		},
+		{
+			"one leg named twice",
+			func(t *testing.T) []string {
+				t.Helper()
+
+				leg := subjectsOf(t, "go-binary", "image", manifestDigest+"  ghcr.io/acme/widget\n")
+
+				return []string{leg, leg}
+			},
+			"--registry-subjects names go-binary:image twice",
+		},
+		{
+			"a manifest that is not there",
+			func(*testing.T) []string { return []string{"go-binary:image=/nowhere/at/all.sha256"} },
+			"no such file",
+		},
+		{
+			"a registry subject the release also publishes as an asset",
+			func(t *testing.T) []string {
+				t.Helper()
+
+				return []string{subjectsOf(t, "go-binary", "image", manifestDigest+"  "+artifact+"\n")}
+			},
+			"one artifact lives in one place",
+		},
+		{
+			"a class the release did not declare",
+			func(t *testing.T) []string {
+				t.Helper()
+
+				return []string{subjectsOf(t, "oci-image", "image", manifestDigest+"  ghcr.io/acme/widget\n")}
+			},
+			"is not one this release declared",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assets, policy := manifestInputs(t, theReleaseShape)
+
+			args := []string{
+				"manifest", "--classes", "go-binary", "--store-vsa", "true", "--machinery-version", "1.0.0",
+				"--assets", assets, "--assert-policy", policy, "--leg-subjects", goBinaryLeg(t),
+			}
+			for _, v := range tt.registry(t) {
+				args = append(args, "--registry-subjects", v)
+			}
+
+			var stdout, stderr bytes.Buffer
+
+			if got := emitCmd(args, &stdout, &stderr); got == exitOK {
+				t.Fatalf("emitCmd = %d, want a refusal (stdout: %s)", got, stdout.String())
+			}
+
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Fatalf("stderr = %q, want it to mention %q", stderr.String(), tt.want)
+			}
+		})
 	}
 }

@@ -310,7 +310,7 @@ func TestEnrichmentDemandAttributed(t *testing.T) {
 		Classes:    []string{"oci-image", "pgrx-extension"},
 		Enrichment: true, Attributed: true, ManifestSchema: 3,
 		ArtifactClasses: map[string]string{"app.tar.gz": "oci-image", "ext.tar.gz": "pgrx-extension"},
-	}, demandSubjects)
+	}, demandSubjects, nil)
 
 	if ad.Demand == nil {
 		t.Fatal("demand = nil, want a per-artifact demand")
@@ -431,7 +431,7 @@ func TestEnrichmentDemandBranches(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ad := p.Evidence.EnrichmentDemand(tt.c, demandSubjects)
+			ad := p.Evidence.EnrichmentDemand(tt.c, demandSubjects, nil)
 
 			if tt.nilDemand {
 				if ad.Demand != nil {
