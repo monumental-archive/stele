@@ -589,7 +589,8 @@ Optional; required to run `stele assert blast-radius`:
 {
   "blastRadius": {
     "osEcosystems": ["debian", "alpine", "ubuntu", "rocky", "redhat", "rpm"],
-    "canary": { "repo": "release-lab", "tag": "v0.17.0", "advisory": "RUSTSEC-2021-0127" }
+    "canary": { "repo": "release-lab", "tag": "v0.17.0", "advisory": "RUSTSEC-2021-0127" },
+    "supported": "latest-release"
   }
 }
 ```
@@ -602,6 +603,44 @@ Optional; required to run `stele assert blast-radius`:
   gate.
 - `canary` — the pinned release that must yield its known advisory,
   or the scanner cannot see and the walk refuses to judge.
+- `supported` — which releases the org still answers for. Optional;
+  absent, every published release does and every finding gates. The
+  one value is `latest-release`: only each repository's newest stable
+  release receives fixes (the roll-forward policy a `SECURITY.md`
+  states as "only the latest release is supported"). Any other value
+  refuses at load.
+
+### Superseded releases
+
+Under `latest-release`, a finding on an older release is answered by
+the upgrade — a **derived** exception naming the release that answers
+it — but only where the upgrade is shown to be a remedy:
+
+- The newest release is the greatest stable semantic version among
+  the repository's release tags, by version order and never by
+  listing order. A prerelease is not it, and a tag that is no version
+  orders nowhere.
+- It must have been **read whole**: every SBOM it ships fetched,
+  vouched for by the store and scanned to at least one package. A
+  release the walk could not see into supersedes nothing.
+- It must not itself carry that advisory against that package
+  **unexcused**. The comparison is `(advisory, package)` — the
+  version is deliberately left out, so an old release shipping the
+  advisory at another version of the package is superseded exactly
+  when the newest release is not red on that advisory in that
+  package: because it no longer ships it, or because the version it
+  ships was judged not affected.
+
+Where any of the three fails, the old finding gates as it would with
+no window declared, and a repository whose newest release could not
+answer is named in the report's `supersessionWithheld` fact. The
+newest release's own findings always gate: this is an exit for
+history, never for what an org currently ships.
+
+Nobody writes a supersession down, so nobody can widen one, and it
+stops holding the moment the newest release carries the advisory
+itself. It is a statement about which findings need a judgment, not a
+VEX statement: nothing here claims an old release is unaffected.
 
 The VEX join is the exact `(advisory, package, version)` triple —
 never the advisory alone, so a release that bumps a decided package's
