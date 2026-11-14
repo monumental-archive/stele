@@ -30,7 +30,8 @@ imports pull platform-conditional modules. The release SBOM is the
 **union** of the legs' inventories:
 
 - Facts the legs must share — main module path and version,
-  `vcs.revision`, `vcs.time` — are asserted equal across every leg.
+  `vcs.revision`, `vcs.time`, the toolchain — are asserted equal
+  across every leg.
   Divergence means the legs were not built from one source: refused,
   never merged.
 - One module at two versions across legs is refused for the same
@@ -44,6 +45,20 @@ imports pull platform-conditional modules. The release SBOM is the
   is the same command twice on one platform: the same file handed in
   twice, or two builds of one thing.
 
+## The toolchain is in the inventory
+
+The standard library is linked into every binary and nothing versions
+it but the toolchain, so an inventory of modules alone can never meet
+a standard-library advisory — a scan over it is green on a binary
+built with a toolchain years stale (#327: sixteen such advisories
+against a shipped binary, none of them visible). The toolchain the
+binary records (`go1.27.4`) is therefore a package in the inventory,
+under the name the Go vulnerability database gives the standard
+library and in the version spelling a Go finding carries:
+`stdlib` at `v1.27.4`, purl `pkg:golang/stdlib@v1.27.4`. It is read
+from the same embedded build info as the modules, and it carries no
+per-platform attribution: every leg links it.
+
 ## Refusals (all fail-closed)
 
 - Main version absent, `(devel)`, or not a semantic version — the
@@ -54,6 +69,10 @@ imports pull platform-conditional modules. The release SBOM is the
   not attestable.
 - A dependency without a published module version (a directory
   `replace`).
+- A toolchain that is not a Go release (a development build, a
+  release candidate, no stamp), or legs built with different
+  toolchains — a standard library with no version an advisory is
+  written against cannot be inventoried, only guessed at.
 - `--expect-version` given and disagreeing with the binaries — the
   build checked out something other than the tag being published.
 
@@ -61,7 +80,8 @@ imports pull platform-conditional modules. The release SBOM is the
 
 SPDX 2.3. The root package is the main module
 (`primaryPackagePurpose: APPLICATION`); each linked module is a
-`LIBRARY` the root `DEPENDS_ON`. Every package carries exactly one
+`LIBRARY` the root `DEPENDS_ON`, and so is the standard library. Every
+package carries exactly one
 purl, `pkg:golang/<module path, lowercased>@<version>` — lowercasing
 is the purl golang type's rule; the SPDX package `name` keeps the
 module path's true case. Replaced modules are recorded as their

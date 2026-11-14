@@ -93,11 +93,11 @@ func TestDeriveSBOMPrintsTheUnion(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(text, "2 packages, 2 platform(s)") {
+	if strings.Contains(text, "3 packages, 2 platform(s)") {
 		t.Errorf("progress polluted the document stream:\n%s", text)
 	}
 
-	if !strings.Contains(stderr.String(), "github.com/monumental-archive/stele@v0.3.0: 2 packages, 2 platform(s)") {
+	if !strings.Contains(stderr.String(), "github.com/monumental-archive/stele@v0.3.0: 3 packages, 2 platform(s)") {
 		t.Errorf("stderr lacks the progress line:\n%s", stderr.String())
 	}
 
