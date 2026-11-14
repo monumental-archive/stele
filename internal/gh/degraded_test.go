@@ -118,19 +118,12 @@ func everyRead() []read {
 }
 
 // everyPath answers every request with one scripted status and body.
-// When the script is a 200, pages after the first answer with the
-// API's empty array so pagination converges — the fault under test is
-// the first page's, never the page bound.
+// It sends no Link header, so a listing is one page — the fault under
+// test is that page's, never the page bound.
 func everyPath(t *testing.T, status int, body string) *gh.Client {
 	t.Helper()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if page := r.URL.Query().Get("page"); status == http.StatusOK && page != "" && page != "1" {
-			writeBody(w, []byte(`[]`))
-
-			return
-		}
-
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		writeBody(w, []byte(body))
 	}))
@@ -379,19 +372,17 @@ func truncatingServer(t *testing.T) *gh.Client {
 	return c
 }
 
-// TestPaginationBound pins the walk's other end: a listing that never
-// serves a short page is a broken host, and the read must end with a
-// named refusal rather than paging forever. Every page here is FULL
-// — under the short-page rule (#154) that is what a host must do to
-// reach the bound at all, and a host repeating a SHORT page is a
-// healthy answer this walk now terminates on.
+// TestPaginationBound pins the walk's other end: a listing whose Link
+// header names a next page forever is a broken host, and the read must
+// end with a named refusal rather than paging forever. Here every
+// answer links back to itself — the circle the bound exists for.
 func TestPaginationBound(t *testing.T) {
 	t.Parallel()
 
-	page := []byte("[" + strings.Repeat(`{"name": "widget", "archived": false, "fork": false},`, 99) +
-		`{"name": "gadget", "archived": false, "fork": false}]`)
+	page := []byte(`[{"name": "widget", "archived": false, "fork": false}]`)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", "<http://"+r.Host+r.URL.RequestURI()+`>; rel="next"`)
 		writeBody(w, page)
 	}))
 	t.Cleanup(srv.Close)

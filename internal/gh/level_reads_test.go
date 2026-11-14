@@ -26,13 +26,7 @@ func levelReadsServer(t *testing.T, branchRules string) *gh.Client {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/repos/acme/widget/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") != "1" {
-			writeBody(w, []byte(`[]`))
-
-			return
-		}
-
+	mux.HandleFunc("/repos/acme/widget/rules/branches/main", func(w http.ResponseWriter, _ *http.Request) {
 		writeBody(w, []byte(branchRules))
 	})
 
@@ -44,13 +38,7 @@ func levelReadsServer(t *testing.T, branchRules string) *gh.Client {
 		   "user": {"login": "author"}},
 		  {"number": 7, "merge_commit_sha": "`+revMerged+`", "user": {"login": "author"}}]`))
 	})
-	mux.HandleFunc("/repos/acme/widget/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") != "1" {
-			writeBody(w, []byte(`[]`))
-
-			return
-		}
-
+	mux.HandleFunc("/repos/acme/widget/pulls/7/reviews", func(w http.ResponseWriter, _ *http.Request) {
 		writeBody(w, []byte(`[
 		  {"state": "APPROVED", "user": {"login": "reviewer"}},
 		  {"state": "APPROVED", "user": {"login": "reviewer"}},

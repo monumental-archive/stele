@@ -137,7 +137,7 @@ type tagObjectEntry struct {
 
 // TagObject implements TagReader.
 func (c *Client) TagObject(owner, repo, sha string) (*TagObject, error) {
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/tags/%s", owner, repo, sha), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/tags/%s", owner, repo, sha), ghJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (c *Client) TagObject(owner, repo, sha string) (*TagObject, error) {
 func (c *Client) ChainNotes(owner, repo, notesRef string) ([]ChainNote, error) {
 	refPath := strings.TrimPrefix(notesRef, "refs/")
 
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/ref/%s", owner, repo, refPath), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/ref/%s", owner, repo, refPath), ghJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +223,7 @@ type blobEntry struct {
 
 // notesTree walks the notes commit's tree and fetches each blob.
 func (c *Client) notesTree(owner, repo, commitSHA string) ([]ChainNote, error) {
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, commitSHA), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, commitSHA), ghJSON)
 	if err != nil || !ok {
 		return nil, fmt.Errorf("gh: notes commit of %s/%s: %w", owner, repo, err)
 	}
@@ -233,7 +233,7 @@ func (c *Client) notesTree(owner, repo, commitSHA string) ([]ChainNote, error) {
 		return nil, fmt.Errorf("gh: notes commit of %s/%s: %w", owner, repo, err)
 	}
 
-	body, ok, err = c.get(
+	body, _, ok, err = c.get(
 		fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, *commit.Tree.SHA), ghJSON,
 	)
 	if err != nil || !ok {
@@ -273,7 +273,7 @@ func (c *Client) notesTree(owner, repo, commitSHA string) ([]ChainNote, error) {
 }
 
 func (c *Client) blob(owner, repo, sha string) ([]byte, error) {
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/blobs/%s", owner, repo, sha), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/blobs/%s", owner, repo, sha), ghJSON)
 	if err != nil || !ok {
 		return nil, fmt.Errorf("gh: blob %s of %s/%s: %w", sha, owner, repo, err)
 	}
@@ -288,7 +288,7 @@ func (c *Client) blob(owner, repo, sha string) ([]byte, error) {
 
 // CommitMeta implements TagReader.
 func (c *Client) CommitMeta(owner, repo, rev string) (*CommitMeta, error) {
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, rev), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, rev), ghJSON)
 	if err != nil || !ok {
 		return nil, fmt.Errorf("gh: commit %s of %s/%s: %w", rev, owner, repo, err)
 	}
@@ -330,7 +330,7 @@ type compareEntry struct {
 // ancestor of head exactly when head is ahead of (or identical to)
 // base.
 func (c *Client) IsAncestor(owner, repo, base, head string) (bool, error) {
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repo, base, head), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/compare/%s...%s", owner, repo, base, head), ghJSON)
 	if err != nil {
 		return false, err
 	}

@@ -81,7 +81,7 @@ func (c *Client) Rulesets(owner, repo string) ([]byte, error) {
 func (c *Client) Ruleset(owner, repo string, id int64) ([]byte, error) {
 	path := rulesBase(owner, repo) + "/rulesets/" + strconv.FormatInt(id, 10)
 
-	body, ok, err := c.get(path, ghJSON)
+	body, _, ok, err := c.get(path, ghJSON)
 	if err != nil {
 		return nil, err
 	}

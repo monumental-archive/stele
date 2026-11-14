@@ -47,7 +47,7 @@ type RefResolver interface {
 func (c *Client) Ref(owner, repo, ref string) (string, error) {
 	refPath := strings.TrimPrefix(ref, "refs/")
 
-	body, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/ref/%s", owner, repo, refPath), ghJSON)
+	body, _, ok, err := c.get(fmt.Sprintf("/repos/%s/%s/git/ref/%s", owner, repo, refPath), ghJSON)
 	if err != nil {
 		return "", err
 	}

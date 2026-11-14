@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -143,71 +144,150 @@ func TestPagedJoinsEveryFilter(t *testing.T) {
 	}
 }
 
-// The termination contract (#154). A walk that ends only on the
-// empty array literal is guessing at content: `matching-refs/tags/`
-// ignores `page` and answers every page with the same full array, so
-// a repository with tags walked to the bound and refused —
-// CANNOT_JUDGE on a healthy forge. Termination is arithmetic here: a
-// page shorter than the size asked for is the last one.
-func TestPagedTerminatesOnTheShortPage(t *testing.T) {
+// answer is one scripted response: a body and the Link header's next
+// target, where "{self}" and "{page N}" are filled in against the
+// request.
+type answer struct {
+	body string
+	link string
+}
+
+// linkServer serves answer for every request, writing the Link header
+// GitHub's way, and counts the requests.
+func linkServer(t *testing.T, script func(*http.Request) answer) *linkFake {
+	t.Helper()
+
+	f := &linkFake{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.reqs++
+		f.mu.Unlock()
+
+		a := script(r)
+
+		if a.link != "" {
+			target := a.link
+
+			switch {
+			case target == "{self}":
+				target = "http://" + r.Host + r.URL.RequestURI()
+			case strings.HasPrefix(target, "{page "):
+				target = "http://" + r.Host + r.URL.Path + "?per_page=100&page=" +
+					strings.TrimSuffix(strings.TrimPrefix(target, "{page "), "}")
+			}
+
+			w.Header().Set("Link", "<"+target+`>; rel="next", <http://`+r.Host+`/last>; rel="last"`)
+		}
+
+		if _, werr := w.Write([]byte(a.body)); werr != nil {
+			t.Error(werr)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	f.srv = srv
+
+	return f
+}
+
+// linkFake is a running linkServer and its request count.
+type linkFake struct {
+	srv  *httptest.Server
+	mu   sync.Mutex
+	reqs int
+}
+
+func (f *linkFake) requests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.reqs
+}
+
+// joinPages renders a walk's pages for one comparison.
+func joinPages(pages [][]byte) string {
+	got := make([]string, len(pages))
+	for i, p := range pages {
+		got[i] = string(p)
+	}
+
+	return strings.Join(got, "|")
+}
+
+// The termination contract (#322): the walk follows the forge's own
+// pagination statement, the Link header, and never infers the end from
+// content. The rows are the issue's measurements: an endpoint that
+// ignores page and answers the same full array with no Link (the canon
+// with 124 tags, `git/matching-refs/tags/`), a three-page walk by Link,
+// and a Link that names itself forever.
+func TestPagedFollowsTheLinkHeader(t *testing.T) {
 	t.Parallel()
 
-	// entries renders an array of n indistinguishable objects: the
-	// count is the only thing the rule reads, which is the point —
-	// the rule is schema-agnostic.
-	entries := func(n int) string {
+	// entries renders an array of n objects, each carrying its index so
+	// the order of the returned pages is visible.
+	entries := func(from, n int) string {
 		items := make([]string, n)
 		for i := range items {
-			items[i] = `{"id":1}`
+			items[i] = `{"id":` + strconv.Itoa(from+i) + `}`
 		}
 
 		return "[" + strings.Join(items, ",") + "]"
 	}
 
-	const full = 100
-
 	tests := []struct {
 		name      string
-		body      func(page int) string
+		answer    func(r *http.Request) answer
 		wantReqs  int
-		wantPages int
-		wantErr   string
+		wantPages []string
+		wantErr   []string
 	}{
 		{
-			name:      "a full page then a short one: the short page ends the walk",
-			body:      func(page int) string { return entries(map[bool]int{true: full, false: 3}[page == 1]) },
-			wantReqs:  2,
-			wantPages: 2,
-		},
-		{
-			name:      "a short first page ends the walk at once",
-			body:      func(int) string { return entries(7) },
+			name: "an endpoint that ignores page and sends no Link is one page (the matching-refs shape)",
+			answer: func(*http.Request) answer {
+				return answer{body: entries(0, 124)}
+			},
 			wantReqs:  1,
-			wantPages: 1,
+			wantPages: []string{entries(0, 124)},
 		},
 		{
-			name:      "an empty first page is the degenerate short page, not a separate rule",
-			body:      func(int) string { return entries(0) },
-			wantReqs:  1,
-			wantPages: 1,
+			name: "three pages by Link come back all three, in order",
+			answer: func(r *http.Request) answer {
+				switch r.URL.Query().Get("page") {
+				case "":
+					return answer{body: entries(0, 2), link: "{page 2}"}
+				case "2":
+					return answer{body: entries(2, 2), link: "{page 3}"}
+				default:
+					return answer{body: entries(4, 1)}
+				}
+			},
+			wantReqs:  3,
+			wantPages: []string{entries(0, 2), entries(2, 2), entries(4, 1)},
 		},
 		{
-			name:      "an endpoint that ignores page terminates by arithmetic (the release-lab shape)",
-			body:      func(int) string { return entries(59) },
-			wantReqs:  1,
-			wantPages: 1,
-		},
-		{
-			name:     "a forge answering full pages forever still meets the bound",
-			body:     func(int) string { return entries(full) },
+			name: "a Link that always names itself meets the bound, which names the path",
+			answer: func(*http.Request) answer {
+				return answer{body: entries(0, 1), link: "{self}"}
+			},
 			wantReqs: 50,
-			wantErr:  "did not converge in 50 pages",
+			wantErr:  []string{"/x", "did not converge in 50 pages"},
 		},
 		{
-			name:     "a body that is not a JSON array refuses by name rather than miscounting",
-			body:     func(int) string { return `{"message":"moved"}` },
+			name: "a next link off the API origin refuses rather than carrying the credential there",
+			answer: func(*http.Request) answer {
+				return answer{body: entries(0, 1), link: "https://elsewhere.example/x?page=2"}
+			},
 			wantReqs: 1,
-			wantErr:  "is not a JSON array",
+			wantErr:  []string{"/x", "off the API origin"},
+		},
+		{
+			name: "a body that is not a JSON array refuses by name",
+			answer: func(*http.Request) answer {
+				return answer{body: `{"message":"moved"}`}
+			},
+			wantReqs: 1,
+			wantErr:  []string{"is not a JSON array"},
 		},
 	}
 
@@ -215,45 +295,110 @@ func TestPagedTerminatesOnTheShortPage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var reqs int
+			fake := linkServer(t, tt.answer)
 
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				reqs++
-
-				page, err := strconv.Atoi(r.URL.Query().Get("page"))
-				if err != nil {
-					t.Errorf("page parameter: %v", err)
-				}
-
-				if _, werr := w.Write([]byte(tt.body(page))); werr != nil {
-					t.Error(werr)
-				}
-			}))
-			t.Cleanup(srv.Close)
-
-			c := &Client{Base: srv.URL, HTTP: srv.Client()}
+			c := &Client{Base: fake.srv.URL, HTTP: fake.srv.Client()}
 
 			pages, err := c.paged("/x")
 
-			switch {
-			case tt.wantErr == "" && err != nil:
+			if len(tt.wantErr) == 0 && err != nil {
 				t.Fatalf("paged = %v, want a completed walk", err)
-			case tt.wantErr != "" && err == nil:
-				t.Fatalf("paged = nil error, want it to mention %q", tt.wantErr)
-			case tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr):
-				t.Fatalf("paged = %v, want it to mention %q", err, tt.wantErr)
 			}
 
-			if reqs != tt.wantReqs {
-				t.Errorf("requested %d times, want %d", reqs, tt.wantReqs)
+			for _, want := range tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("paged = %v, want it to mention %q", err, want)
+				}
 			}
 
-			if tt.wantErr == "" && len(pages) != tt.wantPages {
-				t.Errorf("returned %d pages, want %d", len(pages), tt.wantPages)
+			if n := fake.requests(); n != tt.wantReqs {
+				t.Errorf("requested %d times, want %d", n, tt.wantReqs)
 			}
 
-			if tt.wantErr != "" && pages != nil {
+			if len(tt.wantErr) > 0 && pages != nil {
 				t.Errorf("returned %d pages beside a refusal, want none", len(pages))
+			}
+
+			if got := joinPages(pages); len(tt.wantErr) == 0 && got != strings.Join(tt.wantPages, "|") {
+				t.Errorf("pages = %s, want %v", got, tt.wantPages)
+			}
+		})
+	}
+}
+
+// A next URL is requested exactly as the forge wrote it: the filters
+// and per_page ride the first request only, and the second carries
+// what the Link said and nothing this walk added.
+func TestPagedUsesTheNextURLVerbatim(t *testing.T) {
+	t.Parallel()
+
+	var seen []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.RequestURI())
+
+		if len(seen) == 1 {
+			w.Header().Set("Link", "<http://"+r.Host+`/repositories/9/x?cursor=abc>; rel="next"`)
+		}
+
+		if _, err := w.Write([]byte(`[]`)); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+
+	if _, err := c.paged("/x", "includes_parents=true"); err != nil {
+		t.Fatalf("paged = %v", err)
+	}
+
+	want := []string{"/x?per_page=100&includes_parents=true", "/repositories/9/x?cursor=abc"}
+	if strings.Join(seen, " ") != strings.Join(want, " ") {
+		t.Fatalf("requested %v, want %v", seen, want)
+	}
+}
+
+// nextLink reads RFC 8288's shapes, not one spelling of them.
+func TestNextLink(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{"no header", nil, ""},
+		{
+			"GitHub's shape",
+			[]string{`<https://a/x?page=2>; rel="next", <https://a/x?page=5>; rel="last"`},
+			"https://a/x?page=2",
+		},
+		{
+			"next listed last",
+			[]string{`<https://a/x?page=1>; rel="prev", <https://a/x?page=3>; rel="next"`},
+			"https://a/x?page=3",
+		},
+		{"a bare rel", []string{`<https://a/n>; rel=next`}, "https://a/n"},
+		{"rel among several types", []string{`<https://a/n>; rel="prefetch next"`}, "https://a/n"},
+		{"rel case does not matter", []string{`<https://a/n>; REL="Next"`}, "https://a/n"},
+		{"a comma inside the URL", []string{`<https://a/x?ids=1,2>; rel="next"`}, "https://a/x?ids=1,2"},
+		{"split across header lines", []string{`<https://a/l>; rel="last"`, `<https://a/n>; rel="next"`}, "https://a/n"},
+		{"only last and first", []string{`<https://a/l>; rel="last", <https://a/f>; rel="first"`}, ""},
+		{"a next with no rel parameter", []string{`<https://a/n>; title="next"`}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := http.Header{}
+			for _, v := range tt.values {
+				h.Add("Link", v)
+			}
+
+			if got := nextLink(h); got != tt.want {
+				t.Errorf("nextLink = %q, want %q", got, tt.want)
 			}
 		})
 	}

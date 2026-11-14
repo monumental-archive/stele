@@ -54,31 +54,19 @@ func testServer(t *testing.T) *gh.Client {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/orgs/acme/repos", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "1" {
-			// All three travel: the listing reports facts, and the
-			// membership rule that reads them is the population's.
-			writeBody(w, []byte(`[
-			  {"name": "widget", "archived": false, "fork": false},
-			  {"name": "old", "archived": true, "fork": false},
-			  {"name": "copy", "archived": false, "fork": true}]`))
-
-			return
-		}
-
-		writeBody(w, []byte(`[]`))
+	mux.HandleFunc("/orgs/acme/repos", func(w http.ResponseWriter, _ *http.Request) {
+		// All three travel: the listing reports facts, and the
+		// membership rule that reads them is the population's.
+		writeBody(w, []byte(`[
+		  {"name": "widget", "archived": false, "fork": false},
+		  {"name": "old", "archived": true, "fork": false},
+		  {"name": "copy", "archived": false, "fork": true}]`))
 	})
 
-	mux.HandleFunc("/repos/acme/widget/releases", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "1" {
-			writeBody(w, []byte(`[
-			  {"tag_name": "v1.0.0", "draft": false, "assets": []},
-			  {"tag_name": "v1.1.0-draft", "draft": true, "assets": []}]`))
-
-			return
-		}
-
-		writeBody(w, []byte(`[]`))
+	mux.HandleFunc("/repos/acme/widget/releases", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`[
+		  {"tag_name": "v1.0.0", "draft": false, "assets": []},
+		  {"tag_name": "v1.1.0-draft", "draft": true, "assets": []}]`))
 	})
 
 	mux.HandleFunc("/repos/acme/widget/releases/tags/v1.0.0", func(w http.ResponseWriter, _ *http.Request) {
@@ -116,13 +104,7 @@ func testServer(t *testing.T) *gh.Client {
 		w.WriteHeader(http.StatusForbidden)
 	})
 
-	mux.HandleFunc("/orgs/acme/packages/container/widget/versions", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") != "1" {
-			writeBody(w, []byte(`[]`))
-
-			return
-		}
-
+	mux.HandleFunc("/orgs/acme/packages/container/widget/versions", func(w http.ResponseWriter, _ *http.Request) {
 		// A tag-named version and a stale digest come first: only the
 		// digest carrying the rolling tag counts.
 		writeBody(w, []byte(`[
@@ -269,16 +251,10 @@ func flakyServer(t *testing.T, status, fails int) (*gh.Client, *int) {
 	seen := 0
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/orgs/acme/repos", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/orgs/acme/repos", func(w http.ResponseWriter, _ *http.Request) {
 		seen++
 		if seen <= fails {
 			w.WriteHeader(status)
-
-			return
-		}
-
-		if r.URL.Query().Get("page") != "1" {
-			writeBody(w, []byte(`[]`))
 
 			return
 		}
@@ -330,10 +306,9 @@ func TestTransientRetry(t *testing.T) {
 			}
 
 			// Two transient attempts and the answering page: that page
-			// is short, which ends the walk (#154) — nothing asks for
-			// the empty page after it.
+			// links no next one, which ends the walk (#322).
 			if *seen != 3 {
-				t.Fatalf("attempts = %d, want 3 (two transient, one short answering page)", *seen)
+				t.Fatalf("attempts = %d, want 3 (two transient, one answering page)", *seen)
 			}
 		})
 	}
