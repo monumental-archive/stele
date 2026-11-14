@@ -10,6 +10,72 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.21.0](https://github.com/monumental-archive/stele/compare/v0.20.0...v0.21.0) - 2026-11-14
+
+### Breaking
+
+- name what a release published to a registry ([#331](https://github.com/monumental-archive/stele/pull/331))
+
+### Added
+
+- let the newest release answer for superseded ones ([#333](https://github.com/monumental-archive/stele/pull/333))
+- name the toolchain in the go-binary inventory ([#334](https://github.com/monumental-archive/stele/pull/334))
+
+### Fixed
+
+- update go-securesystemslib to v0.11.1 ([#272](https://github.com/monumental-archive/stele/pull/272))
+- update github.com/sigstore/rekor to v1.5.4 ([#275](https://github.com/monumental-archive/stele/pull/275))
+- update protobuf-specs to v0.5.2 ([#278](https://github.com/monumental-archive/stele/pull/278))
+- update go-containerregistry to v0.22.0 ([#279](https://github.com/monumental-archive/stele/pull/279))
+- update google.golang.org/grpc to v1.83.1 [security] ([#281](https://github.com/monumental-archive/stele/pull/281))
+- update golang.org/x/crypto to v0.56.0 [security] ([#282](https://github.com/monumental-archive/stele/pull/282))
+- update golang.org/x/mod to v0.41.0 ([#284](https://github.com/monumental-archive/stele/pull/284))
+- update go-containerregistry to v0.22.1 ([#287](https://github.com/monumental-archive/stele/pull/287))
+- update google.golang.org/grpc to v1.83.2 [security] ([#286](https://github.com/monumental-archive/stele/pull/286))
+- update golang.org/x/net to v0.60.0 [security] ([#292](https://github.com/monumental-archive/stele/pull/292))
+- update golang.org/x/mod to v0.42.0 ([#295](https://github.com/monumental-archive/stele/pull/295))
+- update github.com/github/go-spdx/v2 to v2.7.1 ([#294](https://github.com/monumental-archive/stele/pull/294))
+- update jcs to 32a4819 ([#296](https://github.com/monumental-archive/stele/pull/296))
+- update certificate-transparency-go to v1.4.0 ([#300](https://github.com/monumental-archive/stele/pull/300))
+- update golang.org/x/net to v0.62.0 [security] ([#301](https://github.com/monumental-archive/stele/pull/301))
+- update github.com/github/go-spdx/v2 to v2.8.0 ([#304](https://github.com/monumental-archive/stele/pull/304))
+- update github.com/klauspost/compress to v1.20.2 [security] ([#305](https://github.com/monumental-archive/stele/pull/305))
+- update go.yaml.in/yaml/v3 to v3.0.6 ([#307](https://github.com/monumental-archive/stele/pull/307))
+- update golang.org/x/crypto to v0.59.0 [security] ([#309](https://github.com/monumental-archive/stele/pull/309))
+- update go.opentelemetry.io/otel/trace to v1.47.0 [security] ([#314](https://github.com/monumental-archive/stele/pull/314))
+- update sigstore-go to v1.4.0 ([#306](https://github.com/monumental-archive/stele/pull/306))
+- update pkcs7 to a476de3 ([#276](https://github.com/monumental-archive/stele/pull/276))
+- update github.com/sigstore/sigstore to v1.11.3 ([#289](https://github.com/monumental-archive/stele/pull/289))
+- build on go 1.27.4, clearing a reachable stdlib advisory ([#332](https://github.com/monumental-archive/stele/pull/332))
+
+### Documentation
+
+- show the reuse badge now the repo is registered ([#321](https://github.com/monumental-archive/stele/pull/321))
+
+### Build
+
+- move the Go language version to 1.27 ([#319](https://github.com/monumental-archive/stele/pull/319))
+
+### CI
+
+- run the gate for the merge queue ([#312](https://github.com/monumental-archive/stele/pull/312))
+
+### Dependencies
+
+- update github/codeql-action to v4.37.8 ([#277](https://github.com/monumental-archive/stele/pull/277))
+- update github/codeql-action to v4.37.9 ([#283](https://github.com/monumental-archive/stele/pull/283))
+- update github/codeql-action to v4.38.0 ([#288](https://github.com/monumental-archive/stele/pull/288))
+- update github/codeql-action to v4.38.1 ([#290](https://github.com/monumental-archive/stele/pull/290))
+- update github/codeql-action to v4.38.2 ([#291](https://github.com/monumental-archive/stele/pull/291))
+- update github/codeql-action to v4.38.3 ([#293](https://github.com/monumental-archive/stele/pull/293))
+- update ossf/scorecard-action to v2.5.0 ([#297](https://github.com/monumental-archive/stele/pull/297))
+- update github/codeql-action to v4.39.0 ([#299](https://github.com/monumental-archive/stele/pull/299))
+- update github/codeql-action to v4.39.1 ([#303](https://github.com/monumental-archive/stele/pull/303))
+- update github/codeql-action to v4.39.2 ([#308](https://github.com/monumental-archive/stele/pull/308))
+- update github/codeql-action to v4.39.3 ([#310](https://github.com/monumental-archive/stele/pull/310))
+- update go to 1.27.3 ([#273](https://github.com/monumental-archive/stele/pull/273))
+- update ubuntu to 26.04 ([#298](https://github.com/monumental-archive/stele/pull/298))
+
 ## [0.20.0](https://github.com/monumental-archive/stele/compare/v0.19.1...v0.20.0) - 2026-08-24
 
 ### Breaking
