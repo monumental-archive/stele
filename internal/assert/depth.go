@@ -62,6 +62,10 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 
 	pinned, err := w.checksumPins(repo, tag)
 	if err != nil {
+		if unseen(err) {
+			return fmt.Errorf("assert: deep release check of %s: %w", subject, err)
+		}
+
 		deep.Diverged(err.Error())
 
 		return nil
@@ -74,6 +78,10 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 	// from the document that can.
 	registry, unplaced, err := w.registrySubjects(repo, tag, contract, files, bundles)
 	if err != nil {
+		if unseen(err) {
+			return fmt.Errorf("assert: deep release check of %s: %w", subject, err)
+		}
+
 		deep.Diverged(err.Error())
 
 		return nil
@@ -97,6 +105,10 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 
 	pins, err := w.resolvePins(repo, tag)
 	if err != nil {
+		if unseen(err) {
+			return fmt.Errorf("assert: deep release check of %s: %w", subject, err)
+		}
+
 		deep.Diverged(err.Error())
 
 		return nil

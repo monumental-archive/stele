@@ -670,25 +670,32 @@ func secondaryLimit(w http.ResponseWriter) {
 
 // TestAttestationStoreThrottleIsTyped is stele#339's store-client row
 // on the reader the evidence walk uses: both rate-limit refusals type
-// as the host's pace, and a 403 carrying neither mark stays the
-// credential's. A throttle that read as ErrForbidden would be judged as
-// a fact about the subject — the FAIL the issue measured.
+// as the host's pace, an exhausted transient ladder (503, or a 429)
+// types as neither the pace nor the credential, and a 403 carrying no
+// mark stays the credential's. Retryable — the one predicate the walk
+// asks — holds for the first three kinds and not the last.
 func TestAttestationStoreThrottleIsTyped(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name      string
-		respond   func(http.ResponseWriter)
-		throttled bool
+		name                           string
+		respond                        func(http.ResponseWriter)
+		throttled, forbidden, unseeing bool
 	}{
-		{name: "the primary limit, as documented", respond: primaryLimit, throttled: true},
-		{name: "the secondary limit, as measured", respond: secondaryLimit, throttled: true},
+		{name: "the primary limit, as documented", respond: primaryLimit, throttled: true, unseeing: true},
+		{name: "the secondary limit, as measured", respond: secondaryLimit, throttled: true, unseeing: true},
+		{name: "a 503 past the ladder", respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}, unseeing: true},
+		{name: "a 429 past the ladder", respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}, unseeing: true},
 		{name: "a 403 with neither mark", respond: func(w http.ResponseWriter) {
 			w.Header().Set("X-Ratelimit-Remaining", "4799")
 			w.WriteHeader(http.StatusForbidden)
 			//nolint:errcheck,gosec // test server write
 			w.Write([]byte(forbiddenBody))
-		}},
+		}, forbidden: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -704,13 +711,20 @@ func TestAttestationStoreThrottleIsTyped(t *testing.T) {
 			c.Sleep = func(time.Duration) {}
 
 			_, err := c.Attestations("acme", "widget", strings.Repeat("8", 64))
+			if err == nil {
+				t.Fatal("Attestations answered where the store refused")
+			}
 
 			if got := errors.Is(err, gh.ErrThrottled); got != tc.throttled {
 				t.Fatalf("errors.Is(%v, ErrThrottled) = %v, want %v", err, got, tc.throttled)
 			}
 
-			if got := errors.Is(err, gh.ErrForbidden); got == tc.throttled {
-				t.Fatalf("errors.Is(%v, ErrForbidden) = %v, want %v", err, got, !tc.throttled)
+			if got := errors.Is(err, gh.ErrForbidden); got != tc.forbidden {
+				t.Fatalf("errors.Is(%v, ErrForbidden) = %v, want %v", err, got, tc.forbidden)
+			}
+
+			if got := gh.Retryable(err); got != tc.unseeing {
+				t.Fatalf("Retryable(%v) = %v, want %v", err, got, tc.unseeing)
 			}
 		})
 	}

@@ -17,7 +17,6 @@
 package assert
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -60,14 +59,15 @@ const (
 	assertBaseImage  = "base-image-approval"
 )
 
-// unseen reports a store read that failed on the host's pace rather
-// than on the subject's evidence (stele#339). A throttle says nothing
-// about whether the attestation is there, so it may not be recorded
-// as a divergence against the subject: it ends the walk the way every
-// other unreadable forge read does, and the run seals CANNOT_JUDGE.
-// The classification is internal/gh's — this only asks it.
+// unseen reports a store read that could not be completed (stele#339):
+// the host throttled it, or its transient ladder ran out on 5xx or 429.
+// Neither says anything about whether the attestation is there, so
+// neither may be recorded as a divergence against the subject: it ends
+// the walk the way every other unreadable forge read does, and the run
+// seals CANNOT_JUDGE. Which refusals those are is internal/gh's
+// answer — this only asks it.
 func unseen(err error) bool {
-	return errors.Is(err, gh.ErrThrottled)
+	return gh.Retryable(err)
 }
 
 // continuous walks the repos that publish rolling digests and proves

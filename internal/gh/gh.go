@@ -66,10 +66,16 @@ var errTransient = errors.New("gh: transient")
 // each reader names its own context in front of it.
 var ErrThrottled = errors.New("the host throttled this walk, which says nothing about the subject")
 
-// retryable reports whether an error is one the ladder may run again.
+// Retryable reports whether an error is one the ladder may run again.
 // Both members say nothing about the subject: the transport or host
 // failed, or the host throttled this caller.
-func retryable(err error) bool {
+//
+// Exported because a walk outside this package asks the same question
+// of a read the ladder gave up on (stele#339): an exhausted transient
+// read and a throttle are both "the run could not see", never a fact
+// about the subject. One predicate, so the two cannot disagree about
+// which refusals those are.
+func Retryable(err error) bool {
 	return errors.Is(err, errTransient) || errors.Is(err, ErrThrottled)
 }
 
@@ -514,7 +520,7 @@ func (c *Client) Asset(owner, repo, tag, name string) ([]byte, error) {
 		}
 
 		body, err := c.asset(owner, repo, tag, name)
-		if !retryable(err) {
+		if !Retryable(err) {
 			return body, err
 		}
 
@@ -852,7 +858,7 @@ func (c *Client) fetch(target, what, accept string) ([]byte, string, bool, error
 		}
 
 		body, next, ok, err := c.once(target, what, accept)
-		if !retryable(err) {
+		if !Retryable(err) {
 			return body, next, ok, err
 		}
 

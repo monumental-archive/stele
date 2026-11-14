@@ -323,12 +323,35 @@ func primaryLimitResponse(w http.ResponseWriter, _ *http.Request) {
 
 // TestAssertEvidenceThrottledBaseApproval is stele#339's measurement
 // at the command surface: `assert evidence --depth full` over a world
-// whose store throttles on the base-approval read seals CANNOT_JUDGE,
+// whose store throttles on the base-approval read — or whose transient
+// ladder runs out on it — seals CANNOT_JUDGE,
 // and no finding is recorded against the pinned base — the walk did
 // not see it. The one line the refusal carries is the run's own
 // sentence about itself, against the population scope, the shape
 // every walk-incomplete run of this verb already has.
 func TestAssertEvidenceThrottledBaseApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		respond http.HandlerFunc
+		says    string
+	}{
+		{name: "the primary rate limit", respond: primaryLimitResponse, says: "throttled this walk"},
+		{name: "a 503 past the ladder", respond: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}, says: "HTTP 503"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blindBaseApproval(t, tc.respond, tc.says)
+		})
+	}
+}
+
+// blindBaseApproval runs the deep world with the base-approval store
+// read answered by respond, and holds the run to CANNOT_JUDGE with no
+// finding against the base and a refusal that says what happened.
+func blindBaseApproval(t *testing.T, respond http.HandlerFunc, says string) {
+	t.Helper()
+
 	baseHex := strings.Repeat("8", 64)
 	ref := "docker.io/library/debian:trixie@sha256:" + baseHex
 
@@ -378,7 +401,7 @@ func TestAssertEvidenceThrottledBaseApproval(t *testing.T) {
 		}
 
 		reads.Add(1)
-		primaryLimitResponse(w, r)
+		respond(w, r)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -417,7 +440,7 @@ func TestAssertEvidenceThrottledBaseApproval(t *testing.T) {
 		t.Fatalf("the report records a finding against %s, which the run never saw:\n%s", ref, doc)
 	}
 
-	if !strings.Contains(stderr.String()+doc, "throttled this walk") {
-		t.Fatalf("the refusal does not name the throttle:\nstdout: %s\nstderr: %s", doc, stderr.String())
+	if !strings.Contains(stderr.String()+doc, says) {
+		t.Fatalf("the refusal does not say %q:\nstdout: %s\nstderr: %s", says, doc, stderr.String())
 	}
 }
