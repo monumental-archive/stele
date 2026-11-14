@@ -17,9 +17,12 @@
 package assert
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/monumental-archive/stele/internal/gh"
 )
 
 // Candidate is one identity the artifact may have been signed under.
@@ -56,6 +59,16 @@ const (
 	assertContinuous = "continuous-digest"
 	assertBaseImage  = "base-image-approval"
 )
+
+// unseen reports a store read that failed on the host's pace rather
+// than on the subject's evidence (stele#339). A throttle says nothing
+// about whether the attestation is there, so it may not be recorded
+// as a divergence against the subject: it ends the walk the way every
+// other unreadable forge read does, and the run seals CANNOT_JUDGE.
+// The classification is internal/gh's — this only asks it.
+func unseen(err error) bool {
+	return errors.Is(err, gh.ErrThrottled)
+}
 
 // continuous walks the repos that publish rolling digests and proves
 // each one's latest digest verifies.
@@ -118,6 +131,10 @@ func (w *evidenceWalk) continuous(repo string) error {
 	}
 
 	if verr := w.attestor.Verify(w.org, repo, digest, candidates, ""); verr != nil {
+		if unseen(verr) {
+			return fmt.Errorf("assert: %s of %s: %w", assertContinuous, subject, verr)
+		}
+
 		continuous.Diverged(
 			fmt.Sprintf("%s@%s carries no attestation verifying under %s at any of the %d declared pin(s): %v",
 				*c.Registry, shortDigest(digest), *c.SignerWorkflow, len(pins), verr),
@@ -301,13 +318,17 @@ func scopeAssertion(s *BaseImageScope) string {
 // file lives in the policy-owning checkout and arrives read, keyed by
 // scope name: a Renovate roll that outran the approval run surfaces
 // here, not at the next release.
-func (w *evidenceWalk) baseImagesInCheckout(pinFiles map[string][]byte) {
+func (w *evidenceWalk) baseImagesInCheckout(pinFiles map[string][]byte) error {
 	scopes := w.baseScopes()
 	for i := range scopes {
 		if s := &scopes[i]; *s.Mechanism == MechanismPinFile {
-			w.pinFileScope(s, pinFiles[*s.Name])
+			if err := w.pinFileScope(s, pinFiles[*s.Name]); err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }
 
 // baseImagesInRepo runs the provenance-verified scopes against one
@@ -330,7 +351,7 @@ func (w *evidenceWalk) baseImagesInRepo(repo string) error {
 
 // pinFileScope proves every digest-pinned base the scope's file
 // carries holds an approval attestation from the declared attestor.
-func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
+func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) error {
 	assertion := scopeAssertion(s)
 
 	// The pin file itself is one check: declared and unreadable, or
@@ -343,7 +364,7 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
 		// checking nothing, and that may never look like PASS.
 		file.Diverged("the declared pin file was not provided to the walk")
 
-		return
+		return nil
 	}
 
 	matches := baseRefRE.FindAllSubmatch(content, -1)
@@ -352,7 +373,7 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
 		// clean answer: the walk was told to check something.
 		file.Diverged("the pin file carries no digest-pinned base references")
 
-		return
+		return nil
 	}
 
 	for _, m := range matches {
@@ -370,6 +391,10 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
 			w.org, *s.AttestorRepo, refDigest(ref),
 			[]Candidate{{Identity: *s.AttestorIdentity}}, *s.PredicateType,
 		); err != nil {
+			if unseen(err) {
+				return fmt.Errorf("assert: %s of %s: %w", assertion, ref, err)
+			}
+
 			pin.Diverged(
 				fmt.Sprintf("no %s attestation verifies for this pinned base: %v", *s.PredicateType, err),
 			)
@@ -377,6 +402,8 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) {
 
 		w.log("assert: evidence: base pin %s checked", ref)
 	}
+
+	return nil
 }
 
 // provenanceScope proves every base under the scope's registry prefix
@@ -439,6 +466,10 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 			owner, publisherRepo(ref, *s.RegistryPrefix), refDigest(ref),
 			[]Candidate{{Identity: identity}}, *s.PredicateType,
 		); verr != nil {
+			if unseen(verr) {
+				return fmt.Errorf("assert: %s of %s: %w", assertion, ref, verr)
+			}
+
 			pin.Diverged(fmt.Sprintf(
 				"no %s attestation verifies for this base under %s: %v", *s.PredicateType, identity, verr,
 			))

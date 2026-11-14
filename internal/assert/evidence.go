@@ -70,7 +70,9 @@ func Evidence(
 		}
 	}
 
-	w.baseImagesInCheckout(pinFiles)
+	if err := w.baseImagesInCheckout(pinFiles); err != nil {
+		return nil, err
+	}
 
 	facts := append(append([]report.Fact{}, runFacts...),
 		report.Fact{Name: "releasesChecked", Value: strconv.Itoa(w.checked)})

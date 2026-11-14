@@ -117,6 +117,10 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 	if rerr := w.full.Verifier.Release(
 		c, subjects, verify.SBOMs{Assets: sboms, Planned: planned}, pins, contract.Decision,
 	); rerr != nil {
+		if unseen(rerr) {
+			return fmt.Errorf("assert: deep release check of %s: %w", subject, rerr)
+		}
+
 		deep.Diverged(rerr.Error())
 	}
 
@@ -154,6 +158,10 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 
 	vc := w.check(subject, "vsa:deep")
 	if verr := w.full.Verifier.VSA(c, subjects, pins, demand); verr != nil {
+		if unseen(verr) {
+			return fmt.Errorf("assert: deep verdict check of %s: %w", subject, verr)
+		}
+
 		vc.Diverged(verr.Error())
 	}
 
