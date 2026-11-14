@@ -16,7 +16,8 @@ require (
 	github.com/sigstore/sigstore v1.11.1
 	github.com/sigstore/sigstore-go v1.4.0
 	github.com/transparency-dev/merkle v0.0.2
-	go.yaml.in/yaml/v3 v3.0.6
+	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v4 v4.0.0
 	golang.org/x/mod v0.42.0
 	google.golang.org/protobuf v1.36.12
 )
