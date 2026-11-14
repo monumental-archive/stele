@@ -637,6 +637,13 @@ answer is named in the report's `supersessionWithheld` fact. The
 newest release's own findings always gate: this is an exit for
 history, never for what an org currently ships.
 
+The report states what the window came to, so no reader re-derives
+it from finding subjects: `supportedReleases` names the release that
+answers for each repository (`repo@tag`), and
+`supportedReleasesAffected` names those of them still carrying an
+advisory nothing excuses — the releases only a new release, or a
+decision, can answer. Both are absent where no window is declared.
+
 Nobody writes a supersession down, so nobody can widen one, and it
 stops holding the moment the newest release carries the advisory
 itself. It is a statement about which findings need a judgment, not a

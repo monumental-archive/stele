@@ -323,3 +323,75 @@ func TestBlastRadiusSupportedRefusal(t *testing.T) {
 		t.Fatalf("error = %v, want the unknown-window refusal", err)
 	}
 }
+
+// TestBlastRadiusStatesTheSupportWindow pins the two facts a release
+// decision reads: which release answers for the repository, and
+// whether that release is itself carrying an advisory nothing excuses.
+// A consumer that derived either from finding subjects would be
+// choosing the newest release a second way.
+func TestBlastRadiusStatesTheSupportWindow(t *testing.T) {
+	t.Parallel()
+
+	oldScan := scanResult(canaryScan, "serde_cbor", "0.11.2", "crates.io", true)
+
+	for _, tt := range []struct {
+		name      string
+		pol       func(*testing.T) *assert.Policy
+		newScan   string
+		decisions *vexjoin.Decisions
+		supported string
+		affected  string
+	}{
+		{
+			"a clean newest release is supported and not affected",
+			supersedingPolicy, `{"results": []}`, &vexjoin.Decisions{},
+			`"supportedReleases","value":"widget@` + newTag + `"`, "",
+		},
+		{
+			"a newest release carrying an undecided advisory is affected",
+			supersedingPolicy, oldScan, &vexjoin.Decisions{},
+			`"supportedReleases","value":"widget@` + newTag + `"`,
+			`"supportedReleasesAffected","value":"widget@` + newTag + `"`,
+		},
+		{
+			"a newest release whose only finding is decided is not affected",
+			supersedingPolicy, oldScan, decided(t, canaryScan, "serde_cbor", "0.11.2"),
+			`"supportedReleases","value":"widget@` + newTag + `"`, "",
+		},
+		{
+			"no support window declared states neither",
+			loadBlastPolicy, oldScan, &vexjoin.Decisions{},
+			"", "",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rep := runSuperseding(t, tt.pol(t), twoReleases(newTag, oldTag),
+				scriptedScanner{oldSBOM: oldScan, newSBOM: tt.newScan}, tt.decisions)
+
+			var buf bytes.Buffer
+			if err := rep.Encode(&buf); err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+
+			compact := strings.NewReplacer(" ", "", "\n", "").Replace(buf.String())
+
+			for name, want := range map[string]string{
+				"supportedReleases": tt.supported, "supportedReleasesAffected": tt.affected,
+			} {
+				if want == "" {
+					if strings.Contains(compact, `"`+name+`"`) {
+						t.Fatalf("the report states %s and should not:\n%s", name, buf.String())
+					}
+
+					continue
+				}
+
+				if !strings.Contains(compact, want) {
+					t.Fatalf("the report lacks %s:\n%s", want, buf.String())
+				}
+			}
+		})
+	}
+}
