@@ -8,8 +8,10 @@
 [![SLSA dependency](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmonumental-archive%2Fstele%2Flevels%2Fstele%2Fdependency.shield.json)](https://raw.githubusercontent.com/monumental-archive/stele/levels/stele/dependency.report.json)
 <!-- pending (human step): OpenSSF Best Practices — answer the form from docs/best-practices.md, then set 'bestpractices <BP_ID>' in .badge-states and re-run fix:badges -->
 [![REUSE status](https://api.reuse.software/badge/github.com/monumental-archive/stele)](https://api.reuse.software/info/github.com/monumental-archive/stele)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSES/)
 [![coverage](https://codecov.io/gh/monumental-archive/stele/branch/main/graph/badge.svg)](https://codecov.io/gh/monumental-archive/stele)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21977176.svg)](https://doi.org/10.5281/zenodo.21977176)
+[![release](https://img.shields.io/github/v/release/monumental-archive/stele)](https://github.com/monumental-archive/stele/releases/latest)
 [![fair-software](https://img.shields.io/badge/fair--software.eu-%E2%97%8F%20%E2%97%8F%20%E2%97%8B%20%E2%97%8F%20%E2%97%8B-orange)](https://fair-software.eu)
 <!-- badges:end -->
 
