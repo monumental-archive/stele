@@ -171,7 +171,7 @@ func BlastRadius(
 		return nil, err
 	}
 
-	withheld := w.settle()
+	window := w.settle()
 
 	covered := report.PopulationFromListing(w.scanned, "SBOMs scanned")
 
@@ -186,8 +186,23 @@ func BlastRadius(
 		facts = append(facts, report.Fact{Name: "releasesWithoutSBOM", Value: strings.Join(w.missing, " ")})
 	}
 
-	if len(withheld) > 0 {
-		facts = append(facts, report.Fact{Name: "supersessionWithheld", Value: strings.Join(withheld, " ")})
+	if len(window.withheld) > 0 {
+		facts = append(facts, report.Fact{Name: "supersessionWithheld", Value: strings.Join(window.withheld, " ")})
+	}
+
+	// What the support window came to, stated rather than left for a
+	// reader to re-derive from the findings: which release answers for
+	// each repository, and which of those is itself carrying an advisory
+	// nothing excuses. The second is the one fact a release decision
+	// needs — "would a new release remedy anything?" — and a consumer
+	// that worked it out from finding subjects would be choosing the
+	// newest release a second way.
+	if supported := window.supported(); len(supported) > 0 {
+		facts = append(facts, report.Fact{Name: "supportedReleases", Value: strings.Join(supported, " ")})
+	}
+
+	if affected := window.affected(); len(affected) > 0 {
+		facts = append(facts, report.Fact{Name: "supportedReleasesAffected", Value: strings.Join(affected, " ")})
 	}
 
 	return report.Seal("assert blast-radius", pop.Subject(), covered, j,
@@ -300,14 +315,14 @@ func (w *blastWalk) reached(repo, tag string) {
 // settle judges everything the walk read, now that all of it is in,
 // and returns the repositories whose newest release could not answer
 // for the older ones.
-func (w *blastWalk) settle() []string {
+func (w *blastWalk) settle() supportWindow {
 	window := w.supportWindow()
 
 	for i := range w.read {
 		w.judge(&w.read[i], window.answers[w.read[i].repo])
 	}
 
-	return window.withheld
+	return window
 }
 
 // supportWindow is what the declared support policy comes to over the
@@ -323,6 +338,36 @@ type supportWindow struct {
 type supportedRelease struct {
 	tag  string
 	live map[string]bool
+}
+
+// supported renders every release that answers for its repository, as
+// repo@tag, sorted.
+func (s supportWindow) supported() []string {
+	out := make([]string, 0, len(s.answers))
+	for repo, a := range s.answers {
+		out = append(out, repo+"@"+a.tag)
+	}
+
+	sort.Strings(out)
+
+	return out
+}
+
+// affected renders the supported releases that carry an advisory
+// nothing excuses — the ones only a new release, or a decision, can
+// answer.
+func (s supportWindow) affected() []string {
+	var out []string
+
+	for repo, a := range s.answers {
+		if len(a.live) > 0 {
+			out = append(out, repo+"@"+a.tag)
+		}
+	}
+
+	sort.Strings(out)
+
+	return out
 }
 
 // supportWindow derives, per repository, the release that answers for
