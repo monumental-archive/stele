@@ -324,6 +324,49 @@ func secondaryLimit403(w http.ResponseWriter) {
 	w.Write([]byte(secondaryLimitBody))
 }
 
+// primaryLimit403 is the whole primary-limit refusal (stele#339): a
+// 403 carrying the five x-ratelimit-* headers GitHub's REST rate-limit
+// page documents, remaining at 0
+// (https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api,
+// read 2026-11-15). That page shows no example body; this message is
+// the one GitHub's earlier REST overview printed, and it carries no
+// marker. internal/gh's TestAttestationStoreThrottleIsTyped holds the
+// same response against the walk's reader.
+func primaryLimit403(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("X-Ratelimit-Limit", "60")
+	h.Set("X-Ratelimit-Remaining", "0")
+	h.Set("X-Ratelimit-Used", "60")
+	h.Set("X-Ratelimit-Reset", "1377013266")
+	h.Set("X-Ratelimit-Resource", "core")
+	w.WriteHeader(http.StatusForbidden)
+	//nolint:errcheck,gosec // test server write
+	w.Write([]byte(`{"message":"API rate limit exceeded for xxx.xxx.xxx.xxx. (But here's the good news:` +
+		` Authenticated requests get a higher rate limit. Check out the documentation for more details.)",` +
+		`"documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}`))
+}
+
+// secondaryLimitWhole403 is the secondary-limit refusal as measured
+// 2026-08-20 and quoted in internal/gh's Throttled comment: the
+// primary budget NOT spent (4799 of 5000 left), the body naming the
+// secondary limit.
+func secondaryLimitWhole403(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("X-Ratelimit-Limit", "5000")
+	h.Set("X-Ratelimit-Remaining", "4799")
+	h.Set("X-Ratelimit-Resource", "core")
+	secondaryLimit403(w)
+}
+
+// healthyBudget403 is a credential refusal on a healthy budget: a
+// remaining counter that is not exhausted is no marker.
+func healthyBudget403(w http.ResponseWriter) {
+	w.Header().Set("X-Ratelimit-Remaining", "4799")
+	bare403(w)
+}
+
 func bare403(w http.ResponseWriter) {
 	http.Error(w, "Resource not accessible by personal access token", http.StatusForbidden)
 }
@@ -426,6 +469,35 @@ func TestThrottleIsNotAFactAboutTheDigest(t *testing.T) {
 			throttled: true,
 			says:      "throttled this walk",
 			never:     "no attestations",
+		},
+		{
+			name:      "the whole primary-limit refusal names the throttle (stele#339)",
+			respond:   primaryLimit403,
+			refuse:    99,
+			calls:     5,
+			waits:     ladder,
+			throttled: true,
+			says:      "throttled this walk",
+			never:     "no attestations",
+		},
+		{
+			name:      "the whole secondary-limit refusal names the throttle (stele#339)",
+			respond:   secondaryLimitWhole403,
+			refuse:    99,
+			calls:     5,
+			waits:     ladder,
+			throttled: true,
+			says:      "throttled this walk",
+			never:     "no attestations",
+		},
+		{
+			name:      "a 403 on a healthy budget is the credential's (stele#339)",
+			respond:   healthyBudget403,
+			refuse:    99,
+			calls:     1,
+			forbidden: true,
+			says:      "HTTP 403",
+			never:     "throttled this walk",
 		},
 		{
 			// stele#216: a bare 403 is the credential's, typed as neither

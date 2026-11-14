@@ -7,11 +7,15 @@ package cli
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
@@ -270,5 +274,173 @@ func TestEngineVerifierFailsClosed(t *testing.T) {
 
 	if perr := ev.Release(c, nil, verify.SBOMs{}, pins, false); perr == nil {
 		t.Fatal("provenance-only Release verified an empty subject list")
+	}
+}
+
+// storeThrottle is the deep world's forge with ONE store read routed to
+// a live client: the read for digest goes over HTTP to a server that
+// refuses it the way GitHub does, and every other read replays the
+// snapshot. The live client is internal/gh's own, so the throttle is
+// classified exactly as it is in a real run (stele#339).
+//
+// The snapshot is embedded by its concrete type, so the population
+// still enumerates through the snapshot's own lister.
+type storeThrottle struct {
+	gh.Snapshot
+
+	store  *gh.Client
+	digest string
+}
+
+func (f storeThrottle) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
+	if sha256Hex == f.digest {
+		return f.store.Attestations(owner, repo, sha256Hex)
+	}
+
+	return f.Snapshot.Attestations(owner, repo, sha256Hex)
+}
+
+// primaryLimitResponse is the primary-limit refusal in the shape
+// GitHub's REST rate-limit page documents
+// (https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api,
+// read 2026-11-15): a 403 with the five x-ratelimit-* headers, remaining
+// at 0. The page shows no body; this one is the message GitHub's
+// earlier REST overview printed, and it carries no marker.
+func primaryLimitResponse(w http.ResponseWriter, _ *http.Request) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("X-Ratelimit-Limit", "60")
+	h.Set("X-Ratelimit-Remaining", "0")
+	h.Set("X-Ratelimit-Used", "60")
+	h.Set("X-Ratelimit-Reset", "1377013266")
+	h.Set("X-Ratelimit-Resource", "core")
+	w.WriteHeader(http.StatusForbidden)
+	//nolint:errcheck,gosec // test server write
+	w.Write([]byte(`{"message":"API rate limit exceeded for xxx.xxx.xxx.xxx. (But here's the good news:` +
+		` Authenticated requests get a higher rate limit. Check out the documentation for more details.)",` +
+		`"documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}`))
+}
+
+// TestAssertEvidenceThrottledBaseApproval is stele#339's measurement
+// at the command surface: `assert evidence --depth full` over a world
+// whose store throttles on the base-approval read — or whose transient
+// ladder runs out on it — seals CANNOT_JUDGE,
+// and no finding is recorded against the pinned base — the walk did
+// not see it. The one line the refusal carries is the run's own
+// sentence about itself, against the population scope, the shape
+// every walk-incomplete run of this verb already has.
+func TestAssertEvidenceThrottledBaseApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		respond http.HandlerFunc
+		says    string
+	}{
+		{name: "the primary rate limit", respond: primaryLimitResponse, says: "throttled this walk"},
+		{name: "a 503 past the ladder", respond: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}, says: "HTTP 503"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blindBaseApproval(t, tc.respond, tc.says)
+		})
+	}
+}
+
+// blindBaseApproval runs the deep world with the base-approval store
+// read answered by respond, and holds the run to CANNOT_JUDGE with no
+// finding against the base and a refusal that says what happened.
+func blindBaseApproval(t *testing.T, respond http.HandlerFunc, says string) {
+	t.Helper()
+
+	baseHex := strings.Repeat("8", 64)
+	ref := "docker.io/library/debian:trixie@sha256:" + baseHex
+
+	args := deepSnapshot(t, func(files map[string]string) {
+		scoped := strings.Replace(files["policy.json"],
+			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
+			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}, `+
+				`"baseImages": {"scopes": [{"name": "pgrx-bases", "mechanism": "pin-file", `+
+				`"pinFile": "docker/base-images.toml", "attestorRepo": ".github", `+
+				`"attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main", `+
+				`"predicateType": "https://acme.example/attestations/base-image-approval/v1"}]}}}`, 1)
+		scoped = strings.Replace(scoped, `{"schema": 7, `,
+			`{"schema": 7, "issuer": "https://token.actions.githubusercontent.com", `, 1)
+
+		if scoped == files["policy.json"] {
+			t.Fatal("the fixture policy changed shape — the base-scope rewrite matched nothing")
+		}
+
+		files["policy.json"] = scoped
+	})
+
+	// Replay through the seam rather than --snapshot, so the one store
+	// read can be routed live.
+	snap := ""
+
+	for i := range args {
+		if args[i] == "--snapshot" {
+			snap = args[i+1]
+			args = append(args[:i:i], args[i+2:]...)
+
+			break
+		}
+	}
+
+	pins := filepath.Join(t.TempDir(), "base-images.toml")
+	if err := os.WriteFile(pins, []byte("images = [\n  \""+ref+"\",\n]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	args = append(args, "--base-pins", "pgrx-bases="+pins, "--json")
+
+	var reads atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/repos/acme/.github/attestations/sha256:"+baseHex) {
+			t.Errorf("the live store was asked for %s, want only the base-approval read", r.URL.Path)
+		}
+
+		reads.Add(1)
+		respond(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	live := gh.New("")
+	live.HTTP = srv.Client()
+	live.Base = srv.URL
+	live.Sleep = func(time.Duration) {}
+
+	orig := newForge
+	newForge = func() gh.Forge {
+		return storeThrottle{Dir: snap, store: live, digest: baseHex}
+	}
+
+	t.Cleanup(func() { newForge = orig })
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run(args, &stdout, &stderr)
+	if code != exitBlind {
+		t.Fatalf("Run = %d, want %d (CANNOT_JUDGE)\nstdout: %s\nstderr: %s",
+			code, exitBlind, stdout.String(), stderr.String())
+	}
+
+	if reads.Load() == 0 {
+		t.Fatalf("the base-approval read never reached the store — the row proves nothing\nstdout: %s\nstderr: %s",
+			stdout.String(), stderr.String())
+	}
+
+	doc := stdout.String()
+	if !strings.Contains(doc, `"CANNOT_JUDGE"`) {
+		t.Fatalf("report is not CANNOT_JUDGE:\n%s", doc)
+	}
+
+	// No finding names the base the run never saw.
+	if strings.Contains(doc, `"subject": "`+ref) || strings.Contains(doc, `"subject":"`+ref) {
+		t.Fatalf("the report records a finding against %s, which the run never saw:\n%s", ref, doc)
+	}
+
+	if !strings.Contains(stderr.String()+doc, says) {
+		t.Fatalf("the refusal does not say %q:\nstdout: %s\nstderr: %s", says, doc, stderr.String())
 	}
 }

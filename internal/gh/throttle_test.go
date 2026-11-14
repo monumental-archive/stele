@@ -624,3 +624,108 @@ func TestAssetThrottleIsRetried(t *testing.T) {
 		t.Fatalf("waits = %v, want %v — the download ladder honours the host's number too", waits, want)
 	}
 }
+
+// The two rate-limit refusals as GitHub sends them, for the store read
+// (stele#339): whole responses rather than one marker each, so the row
+// proves the classifier against what the forge actually sends.
+//
+// primaryLimit is the primary-limit refusal in the shape GitHub's
+// REST rate-limit page documents
+// (https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api,
+// read 2026-11-15): a 403 carrying the five x-ratelimit-* headers that
+// page names, with x-ratelimit-remaining at 0 — the marker Throttled's
+// own comment quotes. The page shows no example body; the message here
+// is the one GitHub's earlier REST overview printed for this case, and
+// it carries no marker, so its wording cannot make the row pass.
+//
+// secondaryLimit is the secondary-limit refusal measured 2026-08-20 on
+// an org-wide walk and quoted in Throttled's comment: a 403 whose
+// primary budget is NOT spent (4799 of 5000 left) and whose body names
+// the secondary limit.
+func primaryLimit(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("X-Ratelimit-Limit", "60")
+	h.Set("X-Ratelimit-Remaining", "0")
+	h.Set("X-Ratelimit-Used", "60")
+	h.Set("X-Ratelimit-Reset", "1377013266")
+	h.Set("X-Ratelimit-Resource", "core")
+	w.WriteHeader(http.StatusForbidden)
+	//nolint:errcheck,gosec // test server write
+	w.Write([]byte(`{"message":"API rate limit exceeded for xxx.xxx.xxx.xxx. (But here's the good news:` +
+		` Authenticated requests get a higher rate limit. Check out the documentation for more details.)",` +
+		`"documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}`))
+}
+
+func secondaryLimit(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("X-Ratelimit-Limit", "5000")
+	h.Set("X-Ratelimit-Remaining", "4799")
+	h.Set("X-Ratelimit-Resource", "core")
+	w.WriteHeader(http.StatusForbidden)
+	//nolint:errcheck,gosec // test server write
+	w.Write([]byte(secondaryBody))
+}
+
+// TestAttestationStoreThrottleIsTyped is stele#339's store-client row
+// on the reader the evidence walk uses: both rate-limit refusals type
+// as the host's pace, an exhausted transient ladder (503, or a 429)
+// types as neither the pace nor the credential, and a 403 carrying no
+// mark stays the credential's. Retryable — the one predicate the walk
+// asks — holds for the first three kinds and not the last.
+func TestAttestationStoreThrottleIsTyped(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name                           string
+		respond                        func(http.ResponseWriter)
+		throttled, forbidden, unseeing bool
+	}{
+		{name: "the primary limit, as documented", respond: primaryLimit, throttled: true, unseeing: true},
+		{name: "the secondary limit, as measured", respond: secondaryLimit, throttled: true, unseeing: true},
+		{name: "a 503 past the ladder", respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}, unseeing: true},
+		{name: "a 429 past the ladder", respond: func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}, unseeing: true},
+		{name: "a 403 with neither mark", respond: func(w http.ResponseWriter) {
+			w.Header().Set("X-Ratelimit-Remaining", "4799")
+			w.WriteHeader(http.StatusForbidden)
+			//nolint:errcheck,gosec // test server write
+			w.Write([]byte(forbiddenBody))
+		}, forbidden: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				tc.respond(w)
+			}))
+			t.Cleanup(srv.Close)
+
+			c := gh.New("")
+			c.HTTP = srv.Client()
+			c.Base = srv.URL
+			c.Sleep = func(time.Duration) {}
+
+			_, err := c.Attestations("acme", "widget", strings.Repeat("8", 64))
+			if err == nil {
+				t.Fatal("Attestations answered where the store refused")
+			}
+
+			if got := errors.Is(err, gh.ErrThrottled); got != tc.throttled {
+				t.Fatalf("errors.Is(%v, ErrThrottled) = %v, want %v", err, got, tc.throttled)
+			}
+
+			if got := errors.Is(err, gh.ErrForbidden); got != tc.forbidden {
+				t.Fatalf("errors.Is(%v, ErrForbidden) = %v, want %v", err, got, tc.forbidden)
+			}
+
+			if got := gh.Retryable(err); got != tc.unseeing {
+				t.Fatalf("Retryable(%v) = %v, want %v", err, got, tc.unseeing)
+			}
+		})
+	}
+}
