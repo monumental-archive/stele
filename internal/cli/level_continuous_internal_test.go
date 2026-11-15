@@ -218,7 +218,6 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 			bundles: map[string][]jsonx.Raw{},
 			want: []string{
 				"carries a dependency inventory (an SPDX or CycloneDX document)",
-				"carries a triage decision (an OpenVEX document)",
 				"2 of the 2 artifact digest(s) the publish names carry no attestation at all",
 			},
 		},
@@ -229,7 +228,6 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 			bundles: map[string][]jsonx.Raw{},
 			want: []string{
 				"carries a dependency inventory (an SPDX or CycloneDX document)",
-				"carries a triage decision (an OpenVEX document)",
 			},
 		},
 		{
@@ -273,7 +271,6 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 			},
 			want: []string{
 				"carries a dependency inventory (an SPDX or CycloneDX document)",
-				"carries a triage decision (an OpenVEX document)",
 			},
 		},
 		{
@@ -290,7 +287,7 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 			want: []string{"carries a dependency inventory (an SPDX or CycloneDX document)"},
 		},
 		{
-			name:   "an inventory but no decision",
+			name:   "an inventory but no decision document is a whole publish",
 			reader: scriptedOCI{resolved: indexDigest, index: twoArchIndex},
 			bundles: map[string][]jsonx.Raw{
 				bare(indexDigest): {invBundle},
@@ -298,7 +295,6 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 				bare(armDigest):   {invBundle},
 			},
 			proven:      map[string]*trust.Verified{"inventory": invVerified},
-			want:        []string{"carries a triage decision (an OpenVEX document)"},
 			inventoried: 2,
 		},
 		{
@@ -313,7 +309,6 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 				"inventory": invVerified,
 				"broken":    {SAN: streamSAN, Payload: []byte(brokenVEXStatement)},
 			},
-			want:        []string{"carries a triage decision (an OpenVEX document)"},
 			inventoried: 2,
 		},
 		{
@@ -347,6 +342,12 @@ func TestContinuousSurfaceAbsences(t *testing.T) {
 				if !strings.Contains(account, want) {
 					t.Errorf("the account does not carry %q:\n%s", want, account)
 				}
+			}
+
+			// A decision document is never an absence of the publish
+			// (stele#362): no row, however empty its store, may name one.
+			if strings.Contains(account, "triage decision") {
+				t.Errorf("the account names a missing decision document as an absence:\n%s", account)
 			}
 
 			if len(tc.want) == 0 && len(surface.Missing) > 0 {
@@ -698,4 +699,136 @@ func TestStrangerDeclaresItsOwnSurface(t *testing.T) {
 			t.Errorf("the stranger's dependency cell does not carry %q:\n%s", want, doc)
 		}
 	}
+}
+
+// cleanStreamScanner is what osv-scanner prints for an inventory it
+// finds nothing in: an empty result set, beside the config block the
+// real binary always emits. The JSON shape is the scanner's own, so
+// the decode the gather runs is the one a clean live publish meets.
+type cleanStreamScanner struct{}
+
+func (cleanStreamScanner) Scan([]byte) ([]byte, error) {
+	return []byte(`{"results":[],"experimental_config":{"licenses":{"summary":false,"allowlist":null}}}`), nil
+}
+
+// oneFindingScanner reports the stream's advisory in the first
+// inventory it is handed and nothing in the rest: one finding across
+// the publish, the smallest set a decision could be owed for.
+type oneFindingScanner struct{ calls *int }
+
+func (s oneFindingScanner) Scan(sbom []byte) ([]byte, error) {
+	*s.calls++
+	if *s.calls > 1 {
+		return cleanStreamScanner{}.Scan(sbom)
+	}
+
+	return streamScanner{}.Scan(sbom)
+}
+
+// TestContinuousPublishWithoutDecisionDocument is stele#362: a stream
+// whose inventories are attested and scanned, and whose store holds no
+// OpenVEX document, is a publish that was SEEN. The missing document
+// is dependency/triaged's question — Established when the scan found
+// nothing, Contradicted when it found something nobody decided — and
+// never a reason to call the inventory rung unevaluated.
+func TestContinuousPublishWithoutDecisionDocument(t *testing.T) {
+	invBundle, invVerified := signedBy("inventory", spdxStatement)
+
+	for _, tc := range []struct {
+		name    string
+		scanner osv.Scanner
+		// want maps each requirement to the exact account it must give.
+		want map[string]string
+		// rung is the level the stream's own evidence then reaches.
+		rung string
+	}{
+		{
+			name:    "a clean scan with no document reads as triaged",
+			scanner: cleanStreamScanner{},
+			want: map[string]string{
+				"dependency/inventory": "HELD: a published inventory covers all 2 published artifact(s)",
+				"dependency/triaged":   "HELD: the scan identified no known vulnerability in the publish's inventories",
+			},
+			rung: "SLSA_DEPENDENCY_LEVEL_2",
+		},
+		{
+			name:    "a finding with no document reads as undecided",
+			scanner: oneFindingScanner{calls: new(int)},
+			want: map[string]string{
+				"dependency/inventory": "HELD: a published inventory covers all 2 published artifact(s)",
+				"dependency/triaged":   "REFUTED: 1 of 1 advisory finding(s) carry no published triage decision",
+			},
+			rung: "SLSA_DEPENDENCY_LEVEL_1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The measured live shape: each architecture's inventory is
+			// attested over that architecture's own digest, and the
+			// store holds no OpenVEX document anywhere.
+			forge := &storeForgeStream{bundles: map[string][]jsonx.Raw{
+				bare(amdDigest): {invBundle},
+				bare(armDigest): {invBundle},
+			}}
+
+			swapStreamSeams(t, forge,
+				scriptedOCI{resolved: indexDigest, index: twoArchIndex},
+				map[string]*trust.Verified{"inventory": invVerified})
+
+			newScanner = func() osv.Scanner { return tc.scanner }
+
+			ev := &level.Evidence{Owner: "atelier", Repo: "loom"}
+			la := &levelArgs{
+				track: trackDependency, owner: "atelier", name: "loom", repo: "atelier/loom",
+				surfaces: []population.Surface{streamSurface()},
+			}
+
+			la.gatherDependency(ev, forge, &latch{w: &bytes.Buffer{}})
+
+			if len(ev.PublishSurfaces) != 1 || !ev.PublishSurfaces[0].Reached() {
+				t.Errorf("the stream was not reached: %v", ev.PublishSurfaces)
+			}
+
+			assessed := level.Assess(level.TrackDependency, ev)
+			facts := sealedFacts(t, assessed)
+
+			for req, want := range tc.want {
+				if got := facts[req]; !strings.HasPrefix(got, want) {
+					t.Errorf("%s = %q, want it to begin %q", req, got, want)
+				}
+			}
+
+			if got := assessed.Level(); got != tc.rung {
+				t.Errorf("level = %s, want %s", got, tc.rung)
+			}
+		})
+	}
+}
+
+// sealedFacts reads each requirement's determination and account out
+// of the report a board publishes, so the assertion is on the document
+// a reader gets rather than on an intermediate value.
+func sealedFacts(t *testing.T, a *level.Assessment) map[string]string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := a.Report().Encode(&buf); err != nil {
+		t.Fatalf("encoding the report: %v", err)
+	}
+
+	doc, err := jsonx.DecodeForeign[struct {
+		Facts []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"facts"`
+	}](buf.Bytes())
+	if err != nil {
+		t.Fatalf("reading the report back: %v", err)
+	}
+
+	out := map[string]string{}
+	for _, f := range doc.Facts {
+		out[f.Name] = f.Value
+	}
+
+	return out
 }

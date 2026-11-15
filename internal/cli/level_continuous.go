@@ -320,6 +320,16 @@ func (h *stored) keep(
 // A single sentence covering all of them would go on saying the same
 // thing until the last was fixed, and the point of the account is
 // that it narrows.
+//
+// A triage decision is deliberately NOT among them (stele#362). A
+// publish whose scan finds nothing has no decision to record, and
+// `derive vex` writes no document for it on purpose, so treating the
+// missing document as a missing publish would leave the cleanest
+// publish there is unevaluated — where the release surface, which has
+// no such clause, judges the same publish. Reached means one thing on
+// every surface: the publish and its inventory were found. Whether
+// its findings carry decisions is dependency/triaged's question, and
+// that detector already tells none from some from all.
 func (h *stored) absences(identity string, pub publish) []string {
 	var out []string
 
@@ -328,10 +338,6 @@ func (h *stored) absences(identity string, pub publish) []string {
 			"no attestation over the published digest %s or its %d artifact digest(s) carries a dependency"+
 				" inventory (an SPDX or CycloneDX document)", shortDigest(pub.index), len(pub.artifacts),
 		))
-	}
-
-	if h.decided == 0 {
-		out = append(out, "no attestation over those digests carries a triage decision (an OpenVEX document)")
 	}
 
 	if len(h.bare) > 0 {
