@@ -223,7 +223,7 @@ func TestInventoriesFoundByContent(t *testing.T) {
 			files:  map[string][]byte{"deps.json": []byte(`{"spdxVersion":"SPDX-2.3","packages":[]}`)},
 		}
 
-		got, _ := la.inventories(f, "v1.0.0", f.assets, out)
+		got, _, _ := la.inventories(f, "v1.0.0", f.assets, out)
 		if _, ok := got["deps.json"]; !ok {
 			t.Errorf("inventories = %v, want deps.json found by content", got)
 		}
@@ -245,7 +245,7 @@ func TestInventoriesFoundByContent(t *testing.T) {
 
 		f := &levelForge{assets: assets, files: files}
 
-		if got, _ := la.inventories(f, "v1.0.0", assets, out); len(got) != 0 {
+		if got, _, _ := la.inventories(f, "v1.0.0", assets, out); len(got) != 0 {
 			t.Errorf("inventories = %v, want none", got)
 		}
 

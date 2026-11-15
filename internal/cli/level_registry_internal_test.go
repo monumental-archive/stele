@@ -226,11 +226,12 @@ func TestRegistrySubjectGuards(t *testing.T) {
 	manyFiles["zz-release.json"] = published
 
 	for _, tt := range []struct {
-		name   string
-		assets []string
-		files  map[string][]byte
-		logs   []string
-		report string
+		name     string
+		assets   []string
+		files    map[string][]byte
+		logs     []string
+		unlogged string
+		report   string
 	}{
 		{
 			name:   "no evidence manifest",
@@ -263,9 +264,15 @@ func TestRegistrySubjectGuards(t *testing.T) {
 			files:  manyFiles,
 			logs: []string{
 				"level: release v1.0.0: stopped looking for an evidence manifest after 12 asset(s)",
-				noRegistry,
 			},
-			report: "carry no provenance identifying them",
+			// Unfinished, not absent (stele#373): the release surface is
+			// unreached, and nothing is said about registry subjects
+			// because nothing is known.
+			unlogged: noRegistry,
+			report: `"build/provenance-exists","value":"UNDETERMINED: 1 of the 1 surface(s)` +
+				` this repository publishes on yielded no publish this run could see, so whatever they publish` +
+				` has not been asked for provenance — release: release v1.0.0: stopped looking for an evidence` +
+				` manifest after 12 of 15 asset(s), so whether the release carries one is unknown"`,
 		},
 		{
 			name:   "a mixed release counts its image beside its file",
@@ -305,6 +312,10 @@ func TestRegistrySubjectGuards(t *testing.T) {
 			if !strings.Contains(stderr.String(), want) {
 				t.Errorf("%s: the walk did not log %q:\n%s", tt.name, want, stderr.String())
 			}
+		}
+
+		if tt.unlogged != "" && strings.Contains(stderr.String(), tt.unlogged) {
+			t.Errorf("%s: the walk logged %q:\n%s", tt.name, tt.unlogged, stderr.String())
 		}
 
 		if !strings.Contains(stdout.String(), tt.report) {

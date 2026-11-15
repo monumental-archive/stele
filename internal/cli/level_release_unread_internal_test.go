@@ -12,6 +12,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,13 +84,14 @@ func TestBuildReleaseStoreUnreadable(t *testing.T) {
 	prov := jsonx.Raw("release provenance")
 
 	for _, tt := range []struct {
-		name     string
-		image    bool
-		attErrs  map[string]error
-		bundles  map[string][]jsonx.Raw
-		want     []string
-		subjects int
-		blind    bool
+		name      string
+		image     bool
+		attErrs   map[string]error
+		assetErrs map[string]error
+		bundles   map[string][]jsonx.Raw
+		want      []string
+		subjects  int
+		blind     bool
 	}{
 		{
 			name:    "the store errors for one of two files",
@@ -119,6 +121,16 @@ func TestBuildReleaseStoreUnreadable(t *testing.T) {
 			blind: true,
 		},
 		{
+			// stele#373: a file with no provenance that could not be
+			// read to ask whether it is evidence about the release.
+			name:      "an unreadable file subject with no provenance",
+			assetErrs: map[string]error{"widget_darwin": throttled},
+			bundles:   map[string][]jsonx.Raw{linuxDigest: {prov}},
+			want: []string{"release: release v1.0.0: asset widget_darwin could not be read, so whether it is an" +
+				" artifact or evidence about the release is unknown: HTTP 403: API rate limit exceeded"},
+			blind: true,
+		},
+		{
 			// Unchanged: a store that answered with nothing is a
 			// measurement, and it refutes.
 			name:     "every store read answered and none verified",
@@ -129,7 +141,7 @@ func TestBuildReleaseStoreUnreadable(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := unreadRelease(t, tt.image)
-			f.attErrs, f.bundles = tt.attErrs, tt.bundles
+			f.attErrs, f.assetErrs, f.bundles = tt.attErrs, tt.assetErrs, tt.bundles
 
 			swapStreamSeams(t, f, scriptedOCI{}, map[string]*trust.Verified{
 				"release provenance": {SAN: dbSAN, Payload: []byte(provenanceFor(t, "sha256:"+linuxDigest))},
@@ -240,6 +252,87 @@ func TestDependencyReleaseAssetUnreadable(t *testing.T) {
 
 			if tt.unwanted != "" && strings.Contains(doc.String(), tt.unwanted) {
 				t.Errorf("the report carries %q:\n%s", tt.unwanted, doc.String())
+			}
+		})
+	}
+}
+
+// TestDependencyInventorySearchBound (stele#373): the search for an
+// inventory is bounded so it cannot download a release of binaries,
+// and a search the bound stopped is a look not finished. The release
+// here carries the real iiif-server evidence manifest (found first, by
+// its name hint) and a dozen-odd unhinted binaries.
+func TestDependencyInventorySearchBound(t *testing.T) {
+	inventory := []byte(`{"spdxVersion":"SPDX-2.3","packages":[{"externalRefs":[` +
+		`{"referenceLocator":"pkg:golang/example.com/dep@v1.0.0"}]}]}`)
+
+	// release lists the digest manifest, the evidence manifest, the
+	// artifact, fillers unhinted binaries and, where given, the
+	// inventory under a name that carries no hint, at position at.
+	release := func(fillers, at int) *unreadForge {
+		f := &unreadForge{}
+		f.tags = []string{"v1.0.0"}
+		f.assets = []string{"checksums.txt", "evidence-manifest.json", "widget_linux"}
+		f.files = map[string][]byte{
+			"checksums.txt":          []byte(linuxDigest + "  widget_linux\n"),
+			"evidence-manifest.json": iiifFixture(t, "evidence-manifest.json.published"),
+			"widget_linux":           []byte("\x7fELF linux bytes"),
+		}
+
+		for i := range fillers {
+			name := "part-" + string(rune('a'+i)) + ".bin"
+			f.assets = append(f.assets, name)
+			f.files[name] = []byte("\x7fELF part bytes")
+		}
+
+		if at >= 0 {
+			f.assets = slices.Insert(f.assets, at, "deps.json")
+			f.files["deps.json"] = inventory
+		}
+
+		return f
+	}
+
+	for _, tt := range []struct {
+		name  string
+		forge *unreadForge
+		want  string
+	}{
+		{
+			name:  "the inventory lies past the bound",
+			forge: release(10, 13),
+			want: `"dependency/inventory","value":"UNDETERMINED: 1 of the 1 surface(s) this repository` +
+				` publishes on yielded no publish this run could see, so whatever they publish has not been` +
+				` asked for an inventory — release: release v1.0.0: stopped looking for an inventory after` +
+				` 12 of 14 asset(s), so whether the release carries one is unknown"`,
+		},
+		{
+			name:  "the inventory lies within the bound",
+			forge: release(10, 5),
+			want:  `"dependency/inventory","value":"HELD: a published inventory covers all 2 published artifact(s)"`,
+		},
+		{
+			// Every asset was read: absence is then a measurement.
+			name:  "twelve assets and no inventory",
+			forge: release(9, -1),
+			want: `"dependency/inventory","value":"REFUTED: 2 of 2 published artifact(s) have no published` +
+				` inventory: [widget_linux ` + iiifImage + `]`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			swapStreamSeams(t, tt.forge, scriptedOCI{}, nil)
+
+			ev := &level.Evidence{Owner: "acme", Repo: "widget"}
+			la := &levelArgs{track: trackDependency, owner: "acme", name: "widget", repo: "acme/widget"}
+			la.gatherDependency(ev, tt.forge, &latch{w: &bytes.Buffer{}})
+
+			var doc bytes.Buffer
+			if err := level.Assess(level.TrackDependency, ev).Report().Encode(&doc); err != nil {
+				t.Fatalf("Encode = %v", err)
+			}
+
+			if !strings.Contains(doc.String(), tt.want) {
+				t.Errorf("the report does not carry %q:\n%s", tt.want, doc.String())
 			}
 		})
 	}
