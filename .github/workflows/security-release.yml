@@ -1,0 +1,52 @@
+# A fixed main becomes a release. This stub is the whole of a
+# repository's opt-in: once a day it asks whether this repository's
+# supported release ships an advisory that `main` already remedies, and
+# when it does — and the pending release is not a breaking one, not
+# held, and would pass the publish path's own advisory checks — it
+# merges the Release PR. The ordinary release path does the rest.
+#
+# Adopting this takes the merge of a security release out of a
+# maintainer's hands. What stays in them: put the `hold` label on the
+# Release PR to stop it; a release carrying a breaking change always
+# waits; and a supported release that `main` does NOT remedy opens an
+# issue instead of releasing. See docs/release.md in
+# monumental-archive/.github, "A fixed main becomes a release".
+#
+# Needs the release stub (release.yml) beside it: this merges the
+# Release PR that one maintains, and that one tags on the merge.
+---
+name: security-release
+
+"on":
+  schedule:
+    # Daily, 04:17 UTC — off the hour, and before the canon's Monday
+    # sweep so a release it would have named is already out. Daily
+    # because the cost of waiting is a known-affected release staying
+    # current; the run is a handful of reads when there is nothing to
+    # do.
+    - cron: 17 4 * * *
+  workflow_dispatch: {}
+
+permissions: {}
+
+# The same group as the release stub's concurrency would be wrong —
+# this workflow must be able to run while a release is in flight and
+# decline. Its own group, never cancelled: a merge half-made is the one
+# thing worse than a merge not made.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  security-release:
+    uses: monumental-archive/.github/.github/workflows/security-release.yml@ebce3d46ea3130824b827cbbe383e16dfc64b17c # v1.67.0
+    permissions:
+      # Stated, not inherited: a `uses:` job takes the workflow-level
+      # default above, never an ambient grant.
+      contents: read # this repository's contents and releases, read-only
+      attestations: read # this repository's attestations, read-only
+      pull-requests: read # this repository's pull requests, read-only
+      issues: write # the "main does not remedy it" issue, the one outcome needing a maintainer
+    secrets:
+      app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
+...
