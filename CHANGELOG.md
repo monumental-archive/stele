@@ -10,6 +10,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.22.1](https://github.com/monumental-archive/stele/compare/v0.22.0...v0.22.1) - 2026-11-15
+
+### Fixed
+
+- follow the link header to the next page ([#341](https://github.com/monumental-archive/stele/pull/341))
+- end the walk unseen when a store read cannot complete ([#342](https://github.com/monumental-archive/stele/pull/342))
+- end the walk unseen when the credential is refused ([#345](https://github.com/monumental-archive/stele/pull/345))
+
+### Testing
+
+- plant stand-in tools as symlinks, never scripts ([#340](https://github.com/monumental-archive/stele/pull/340))
+
 ## [0.22.0](https://github.com/monumental-archive/stele/compare/v0.21.0...v0.22.0) - 2026-11-14
 
 ### Added
