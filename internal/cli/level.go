@@ -594,17 +594,29 @@ func (la *levelArgs) buildOnRelease(
 	}
 
 	files, registry := 0, 0
+	measured := make([]level.Subject, 0, len(subjects))
 
 	for _, sub := range subjects {
 		s := level.Subject{Name: sub.name}
 
 		bundles, err := forge.Attestations(la.owner, la.name, sub.digest)
-		if err == nil {
-			// The release surface declares no signer: whose provenance
-			// a release carries is the certificate's to say, and the
-			// detectors read it from there.
-			la.measureProvenance(measurer, &s, bundles, sub.digest, nil)
+		if err != nil {
+			// A read error is never evidence about the artifact: the
+			// store was not seen, so the surface is unreached. The
+			// remaining subjects are still read, so the account names
+			// every digest that failed.
+			out.logf("level: attestations of %s unreadable: %v", shortDigest(sub.digest), err)
+			surface.Missing = append(surface.Missing, fmt.Sprintf(
+				"the attestation store could not be read for %s (%s): %v", sub.name, sub.digest, err,
+			))
+
+			continue
 		}
+
+		// The release surface declares no signer: whose provenance a
+		// release carries is the certificate's to say, and the
+		// detectors read it from there.
+		la.measureProvenance(measurer, &s, bundles, sub.digest, nil)
 
 		if !s.Verified && !sub.registry {
 			// No BUILD PROVENANCE for this digest. Before calling that a
@@ -628,8 +640,20 @@ func (la *levelArgs) buildOnRelease(
 			files++
 		}
 
-		ev.Subjects = append(ev.Subjects, s)
+		measured = append(measured, s)
 	}
+
+	if len(surface.Missing) > 0 {
+		// A partial population is not judged: the coverage guard
+		// exists so a rung is never sealed across artifacts this run
+		// knowingly did not see (stele#252).
+		out.logf("level: release %s: %d attestation store read(s) failed, so no artifact is judged",
+			tag, len(surface.Missing))
+
+		return
+	}
+
+	ev.Subjects = append(ev.Subjects, measured...)
 
 	out.logf("level: release %s: %d artifact(s) measured (%d file, %d registry)",
 		tag, files+registry, files, registry)
@@ -682,13 +706,22 @@ func (la *levelArgs) measureProvenance(
 // bundle, an inventory, a triage decision, a digest manifest. Judged
 // from the bytes: every one of these formats names itself.
 func (la *levelArgs) isEvidenceDocument(forge gh.Forge, tag, name string) bool {
+	evidenceDoc, err := la.evidenceDocument(forge, tag, name)
+
+	return err == nil && evidenceDoc // unreadable is not the same as evidence
+}
+
+// evidenceDocument is isEvidenceDocument with the read error kept, for
+// a caller to which "could not read it" and "it is an artifact" are
+// different answers.
+func (la *levelArgs) evidenceDocument(forge gh.Forge, tag, name string) (bool, error) {
 	raw, err := forge.Asset(la.owner, la.name, tag, name)
 	if err != nil {
-		return false // unreadable is not the same as evidence
+		return false, err
 	}
 
 	if len(parseDigestManifest(string(raw))) > 0 {
-		return true
+		return true, nil
 	}
 
 	// Each format names itself. A release's evidence is JSON that
@@ -703,11 +736,11 @@ func (la *levelArgs) isEvidenceDocument(forge gh.Forge, tag, name string) bool {
 		[]byte(`"classes"`), []byte(`"storeVsa"`), // an evidence manifest
 	} {
 		if bytes.Contains(raw, marker) {
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // provenanceShape reads what the build declared about itself: the
@@ -959,7 +992,7 @@ func (la *levelArgs) dependencyOnRelease(
 		return
 	}
 
-	invs := la.inventories(forge, tag, assets, out)
+	invs, unread := la.inventories(forge, tag, assets, out)
 
 	// The draft asks that a producer inventory the dependencies of
 	// every version they RELEASE. A union document covering the whole
@@ -968,21 +1001,68 @@ func (la *levelArgs) dependencyOnRelease(
 	// refused a release that ships exactly one complete inventory.
 	covered := inventoryCovers(invs)
 
+	if !covered {
+		// With no covering inventory found, an asset this run could not
+		// read might have been it. A read error is never evidence that
+		// the release is uninventoried, so the surface is unreached.
+		for _, name := range slices.Sorted(maps.Keys(unread)) {
+			surface.Missing = append(surface.Missing, fmt.Sprintf(
+				"release %s: asset %s could not be read, so whether it is an inventory is unknown: %v",
+				tag, name, unread[name],
+			))
+		}
+	}
+
+	var inventoried, uninventoried []string
+
+	// Only an asset the listing holds can be evidence beside the
+	// release, so only a listed asset is read to ask; a file the digest
+	// manifest names and the release does not carry is an artifact
+	// published nowhere this run can read, which is not a blind read.
+	listed := map[string]bool{}
+	for _, a := range assets {
+		listed[a] = true
+	}
+
 	for _, sub := range subjects {
 		// A registry subject is an artifact by the release's own
 		// typing; only a file can be evidence ABOUT the release.
-		if !sub.registry && la.isEvidenceDocument(forge, tag, sub.name) {
-			continue // evidence about the release, not an artifact of it
+		if !sub.registry && listed[sub.name] {
+			evidenceDoc, err := la.evidenceDocument(forge, tag, sub.name)
+			if err != nil && !covered {
+				// Uninventoried or evidence about the release: this run
+				// cannot say which, and only the first would refute.
+				surface.Missing = append(surface.Missing, fmt.Sprintf(
+					"release %s: asset %s could not be read, so whether it is an artifact or evidence"+
+						" about the release is unknown: %v", tag, sub.name, err,
+				))
+
+				continue
+			}
+
+			if evidenceDoc {
+				continue // evidence about the release, not an artifact of it
+			}
 		}
 
 		if covered {
-			ev.Inventoried = append(ev.Inventoried, sub.name)
+			inventoried = append(inventoried, sub.name)
 
 			continue
 		}
 
-		ev.Uninventoried = append(ev.Uninventoried, sub.name)
+		uninventoried = append(uninventoried, sub.name)
 	}
+
+	if len(surface.Missing) > 0 {
+		// A partial population is not judged (stele#252).
+		out.logf("level: release %s: %d asset read(s) failed, so no artifact is judged", tag, len(surface.Missing))
+
+		return
+	}
+
+	ev.Inventoried = append(ev.Inventoried, inventoried...)
+	ev.Uninventoried = append(ev.Uninventoried, uninventoried...)
 
 	out.logf("level: release %s: %d inventoried, %d not", tag, len(ev.Inventoried), len(ev.Uninventoried))
 
@@ -1437,9 +1517,18 @@ const (
 // answer and always small); the rest are probed under a bound so this
 // search cannot download a whole release of binaries, and hitting the
 // bound is logged rather than silently read as absence.
-func (la *levelArgs) inventories(forge gh.Forge, tag string, assets []string, out *latch) map[string][]byte {
+//
+// The second result is every probed asset that could not be read, with
+// the error the forge gave: such an asset might have been the
+// inventory, and only the caller knows whether that matters.
+//
+//nolint:gocritic // unnamedResult: inventories found, then assets unread
+func (la *levelArgs) inventories(
+	forge gh.Forge, tag string, assets []string, out *latch,
+) (map[string][]byte, map[string]error) {
 	hinted, rest := splitByInventoryHint(assets)
 	found := map[string][]byte{}
+	unread := map[string]error{}
 	probes := 0
 
 	for _, name := range append(hinted, rest...) {
@@ -1453,6 +1542,8 @@ func (la *levelArgs) inventories(forge gh.Forge, tag string, assets []string, ou
 
 		raw, err := forge.Asset(la.owner, la.name, tag, name)
 		if err != nil {
+			unread[name] = err
+
 			continue
 		}
 
@@ -1461,7 +1552,7 @@ func (la *levelArgs) inventories(forge gh.Forge, tag string, assets []string, ou
 		}
 	}
 
-	return found
+	return found, unread
 }
 
 // splitByInventoryHint orders the probe: assets whose names suggest an

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/level"
 	"github.com/monumental-archive/stele/internal/population"
@@ -76,7 +77,7 @@ type buildRun struct {
 
 // buildReport gathers the build track over the given surfaces and
 // renders the judged report.
-func buildReport(t *testing.T, la *levelArgs, forge *storeForgeStream) buildRun {
+func buildReport(t *testing.T, la *levelArgs, forge gh.Forge) buildRun {
 	t.Helper()
 
 	var log bytes.Buffer
