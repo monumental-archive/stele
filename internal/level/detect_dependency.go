@@ -45,7 +45,8 @@ func (inventoryExists) For() string { return "dependency/inventory" }
 // whose stream publishes nothing verifiable still reads as compliant
 // on the strength of its releases.
 func (inventoryExists) Detect(ev *Evidence) Outcome {
-	if unseen := unreached(ev.PublishSurfaces, len(ev.Inventoried)+len(ev.Uninventoried)); unseen != "" {
+	reached := len(ev.Inventoried) + len(ev.Uninventoried)
+	if unseen := unreached(ev.PublishSurfaces, reached, "inventory", "an inventory"); unseen != "" {
 		return Unevaluated("%s", unseen)
 	}
 
@@ -80,7 +81,12 @@ func (inventoryExists) Detect(ev *Evidence) Outcome {
 // One clause per surface, and inside a surface one per absence,
 // because a producer clears them one at a time and the account should
 // narrow as they do.
-func unreached(surfaces []PublishSurface, reached int) string {
+//
+// Every track that judges a publish asks it first, so the account
+// says what that track was looking for: the noun ("no inventory could
+// be looked for") and what the unseen publish was not asked for ("an
+// inventory").
+func unreached(surfaces []PublishSurface, reached int, noun, asked string) string {
 	if len(surfaces) == 0 {
 		if reached > 0 {
 			// Artifacts with no account of where they came from. The
@@ -92,7 +98,7 @@ func unreached(surfaces []PublishSurface, reached int) string {
 			return ""
 		}
 
-		return "this run looked at no publish surface, so no inventory could be looked for"
+		return "this run looked at no publish surface, so no " + noun + " could be looked for"
 	}
 
 	var parts []string
@@ -111,7 +117,7 @@ func unreached(surfaces []PublishSurface, reached int) string {
 
 	msg := strconv.Itoa(len(parts)) + " of the " + strconv.Itoa(len(surfaces)) +
 		" surface(s) this repository publishes on yielded no publish this run could see, so whatever they" +
-		" publish has not been asked for an inventory — " + strings.Join(parts, " | ")
+		" publish has not been asked for " + asked + " — " + strings.Join(parts, " | ")
 
 	if reached > 0 {
 		// The dangerous case, said out loud: some surface DID answer,
