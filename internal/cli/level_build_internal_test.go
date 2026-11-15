@@ -38,6 +38,13 @@ const (
 	dbARM   = "sha256:74c49f65b7181d7d488ae6a13d29e78d0d2d96818f2ea189f7bea527cee61e04"
 )
 
+// distributedRefuted is the fact a publish whose two platform
+// artifacts carry no provenance under the declared signer owes
+// (stele#369): nothing was retrieved, so nothing is "retrievable".
+const distributedRefuted = `"build/provenance-distributed","value":"REFUTED: provenance for 2 of 2 published` +
+	` artifact(s) could not be retrieved from the store a consumer queries: [` +
+	dbImage + "@" + dbAMD + " " + dbImage + "@" + dbARM + `]`
+
 // dbFixture reads one committed document of the real publish.
 func dbFixture(t *testing.T, name string) string {
 	t.Helper()
@@ -205,15 +212,18 @@ func TestBuildOverAStream(t *testing.T) {
 			reader:   scriptedOCI{resolved: dbIndex, index: index},
 			bundles:  children,
 			subjects: []string{dbImage + "@" + dbAMD, dbImage + "@" + dbARM},
-			want: []string{`"build/provenance-exists","value":"REFUTED: 2 of 2 published artifact(s)` +
-				` carry no provenance identifying them: [` + dbImage + "@" + dbAMD + " " + dbImage + "@" + dbARM + `]`},
+			want: []string{
+				`"build/provenance-exists","value":"REFUTED: 2 of 2 published artifact(s)` +
+					` carry no provenance identifying them: [` + dbImage + "@" + dbAMD + " " + dbImage + "@" + dbARM + `]`,
+				distributedRefuted,
+			},
 		},
 		{
 			name:     "provenance only under an identity the surface does not declare",
 			reader:   scriptedOCI{resolved: dbIndex, index: index},
 			bundles:  with(map[string][]jsonx.Raw{bare(dbIndex): {strangerProv}}),
 			subjects: []string{dbImage + "@" + dbAMD, dbImage + "@" + dbARM},
-			want:     []string{`"build/provenance-exists","value":"REFUTED: 2 of 2 published artifact(s)`},
+			want:     []string{`"build/provenance-exists","value":"REFUTED: 2 of 2 published artifact(s)`, distributedRefuted},
 		},
 		{
 			name:     "a tag naming one manifest is its own artifact",

@@ -112,7 +112,23 @@ func (provenanceDistributed) Detect(ev *Evidence) Outcome {
 
 	// Retrieval IS the requirement: this run fetched the provenance
 	// from the public store, keyed by digest, exactly as a consumer
-	// would. Reaching it is the proof that a consumer can.
+	// would. Reaching it is the proof that a consumer can — and so
+	// "retrievable" is said only of provenance this run holds. An
+	// artifact the store answered for with none is a measurement, not
+	// a blind spot: unreached stores are the coverage guard's.
+	var missing []string
+
+	for i := range ev.Subjects {
+		if !ev.Subjects[i].Verified {
+			missing = append(missing, ev.Subjects[i].Name)
+		}
+	}
+
+	if len(missing) > 0 {
+		return Contradicted("provenance for %d of %d published artifact(s) could not be retrieved from the"+
+			" store a consumer queries: %v", len(missing), len(ev.Subjects), missing)
+	}
+
 	return Established("provenance for all %d artifact(s) was retrievable from the store a consumer queries",
 		len(ev.Subjects))
 }
