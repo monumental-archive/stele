@@ -10,6 +10,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.22.2](https://github.com/monumental-archive/stele/compare/v0.22.1...v0.22.2) - 2026-11-15
+
+### Fixed
+
+- read the licence a manifest-less tree declares ([#357](https://github.com/monumental-archive/stele/pull/357))
+- read a continuous publish with no vex document as seen ([#364](https://github.com/monumental-archive/stele/pull/364))
+- measure the registry subjects a release names ([#366](https://github.com/monumental-archive/stele/pull/366))
+- read the component each published statement decides ([#367](https://github.com/monumental-archive/stele/pull/367))
+- gather the build track over every publish surface ([#368](https://github.com/monumental-archive/stele/pull/368))
+
+### Documentation
+
+- answer the best practices questions from this repo ([#359](https://github.com/monumental-archive/stele/pull/359))
+- wear the best practices badge ([#360](https://github.com/monumental-archive/stele/pull/360))
+
+### Testing
+
+- prove each tear is what failed, not the fixture ([#349](https://github.com/monumental-archive/stele/pull/349))
+
+### CI
+
+- adopt the scheduled security release ([#351](https://github.com/monumental-archive/stele/pull/351))
+
 ## [0.22.1](https://github.com/monumental-archive/stele/compare/v0.22.0...v0.22.1) - 2026-11-15
 
 ### Fixed
