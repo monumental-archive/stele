@@ -152,16 +152,23 @@ func TestParseRefusals(t *testing.T) {
 	}
 }
 
+// TestUnversionedProductCannotJoin: a source decision whose product
+// names no triple is refused by index, never skipped — the silent skip
+// Parse's own comment promised against (stele#356).
 func TestUnversionedProductCannotJoin(t *testing.T) {
 	t.Parallel()
 
 	d := &vexjoin.Decisions{}
 	doc := `{"timestamp": "2026-01-01T00:00:00Z",
 	  "statements": [{"vulnerability": {"name": "X"}, "status": "not_affected",
-	   "products": [{"@id": "pkg:cargo/noversion"}], "status": "not_affected"}]}`
+	   "products": [{"@id": "pkg:cargo/noversion"}]}]}`
 
-	if err := vexjoin.Parse(d, []byte(doc), "x"); err != nil {
-		t.Fatalf("Parse: %v", err)
+	err := vexjoin.Parse(d, []byte(doc), "x")
+
+	want := "vexjoin: x: statement 0: product pkg:cargo/noversion is not a versioned package URL" +
+		" — a decision that joins nothing decides nothing"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Parse = %v, want %s", err, want)
 	}
 
 	if d.Len() != 0 {
@@ -297,8 +304,15 @@ func TestProductNamesKeepTheirNamespace(t *testing.T) {
 			`"products":[{"@id":"` + tt.purl + `"}],"status":"not_affected",` +
 			`"justification":"vulnerable_code_not_present"}]}`
 
-		if err := vexjoin.Parse(d, []byte(doc), "decisions.openvex.json"); err != nil {
-			t.Fatalf("%s: Parse = %v", tt.purl, err)
+		// The published reading, which returns an unjoinable product
+		// rather than refusing it, so the non-joining rows are read too.
+		unjoinable, err := vexjoin.ParsePublished(d, []byte(doc), "decisions.openvex.json")
+		if err != nil {
+			t.Fatalf("%s: ParsePublished = %v", tt.purl, err)
+		}
+
+		if (len(unjoinable) == 0) != tt.joins {
+			t.Errorf("%s: unjoinable = %v, want joins=%v", tt.purl, unjoinable, tt.joins)
 		}
 
 		got := d.Has(vexjoin.KeyFromFinding("GHSA-xxxx", tt.ecosystem, tt.pkg, tt.version))

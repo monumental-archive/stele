@@ -1101,6 +1101,15 @@ func joinFindings(report []byte, decisions *vexjoin.Decisions) (int, int) {
 // publishedDecisions reads the triage decisions a release publishes.
 // Found by CONTENT — an OpenVEX document names its own context — so no
 // asset naming convention is required of a producer.
+//
+// Read as PUBLISHED documents (vexjoin.ParsePublished), never as source
+// decisions: a release's statement names the shipped artifact and
+// decides the dependency inside it, and repeats one decision once per
+// artifact it ships. The join is at the grain of the release — a
+// finding is triaged when any of these documents decides its triple,
+// whichever product the statement names. A statement that cannot join
+// is logged by name and the read carries on: a stranger's document may
+// speak about things this join does not scan.
 func publishedDecisions(la *levelArgs, forge gh.Forge, tag string, assets []string, out *latch) *vexjoin.Decisions {
 	decisions := &vexjoin.Decisions{}
 
@@ -1110,12 +1119,26 @@ func publishedDecisions(la *levelArgs, forge gh.Forge, tag string, assets []stri
 			continue
 		}
 
-		if perr := vexjoin.Parse(decisions, raw, name); perr != nil {
+		unjoinable, perr := vexjoin.ParsePublished(decisions, raw, name)
+		if perr != nil {
 			out.logf("level: triage document %s unreadable: %v", name, perr)
+
+			continue
 		}
+
+		logUnjoinable(unjoinable, out)
 	}
 
 	return decisions
+}
+
+// logUnjoinable names each published statement the join could not
+// read, one line apiece — shared by both surfaces so a stream and a
+// release report an unusable statement in the same words.
+func logUnjoinable(unjoinable []vexjoin.Unjoinable, out *latch) {
+	for _, u := range unjoinable {
+		out.logf("level: triage document %s", u)
+	}
 }
 
 // gatherSources reads where the release's dependencies were fetched

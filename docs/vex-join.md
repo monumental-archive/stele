@@ -52,6 +52,54 @@ vulnerability in some OTHER package, silently. A type joins the first
 column when its purl type definition declares its names
 case-insensitive — never because a graph happened to need it.
 
+## Which component a statement decides
+
+Before the triple can be compared, the decision side has to know
+WHICH component a statement decides. OpenVEX lets a statement name a
+product and, inside it, the subcomponents it is about. The rule is
+one sentence:
+
+**A statement decides the triple `(advisory, package, version)` of
+its SUBCOMPONENT when its product carries subcomponents, and of its
+PRODUCT when it carries none.** A product carrying several
+subcomponents decides each of them.
+
+The two shapes this covers are the two places decisions are written:
+
+- A **published** document — the one a release or a stream carries
+  beside its inventories — names the shipped artifact as the product
+  and the decided dependency as its subcomponent. That is OpenVEX's
+  shape for a statement about a release, and the product is what an
+  outside consumer matches on. Under the rule the product decides
+  nothing: it says which artifact the statement is about, and is free
+  text as far as this join is concerned.
+- A hand-written **source** decision is about the dependency alone,
+  so the dependency is the product and there are no subcomponents.
+
+Nothing in the rule depends on how a publisher names its products,
+and a document written by another tool in the same OpenVEX shape
+reads exactly as one stele wrote. A component with no `@id` names
+nothing and decides nothing.
+
+The two kinds of document are then read with two differences, and
+only two:
+
+| | source decision | published document |
+| --- | --- | --- |
+| one triple decided more than once | a contradiction: refused, "retire one" | one decided triple: a document states it once per product it ships |
+| deciding component is not a versioned package URL | refused, naming the statement index | returned to the caller by origin and statement index; the read carries on |
+
+A source decision was written by a human to decide something, so a
+statement that decides nothing is that document's defect. A published
+document may speak about things this join does not scan, so a
+statement it cannot read is named and reported, never silently
+dropped and never allowed to stop the read. In both, a statement
+missing its vulnerability, its status or its moment is an error.
+
+The level join (`stele level`, dependency track) is at the grain of
+the release: a finding is triaged when the release's published
+decisions decide its triple, whichever product the statement names.
+
 ## The two vocabularies
 
 The two sides of the join do not describe an ecosystem the same way,
@@ -131,25 +179,30 @@ Anything reading these decisions alongside another scanner must reach
 the same answers, or an org acquires two dialects and a decision
 excuses a finding in one place and not the other. To agree:
 
-1. Compare `advisory` and `version` verbatim.
-2. Lowercase the package name on BOTH sides when the ecosystem is
+1. Decide the subcomponent when the product carries any, the product
+   when it carries none (above).
+2. Compare `advisory` and `version` verbatim.
+3. Lowercase the package name on BOTH sides when the ecosystem is
    golang (purl type `golang`, OSV ecosystem `Go`), by the table
    above. Folding one side only is the original defect wearing a
    patch: the sides still disagree, just about different inputs.
-3. Fold nothing else, and treat an unrecognised ecosystem as
+4. Fold nothing else, and treat an unrecognised ecosystem as
    case-sensitive.
-4. Excuse only on a denying status, by the table above, and report a
+5. Excuse only on a denying status, by the table above, and report a
    matching decision that does not excuse.
-5. Treat two decisions that fold to one identity as what they are —
-   two judgments on one finding, which is a contradiction to surface,
-   not a race for file order to settle.
-6. Scan one ecosystem, judge one ecosystem: a decision whose purl type
+6. Treat two SOURCE decisions that fold to one identity as what they
+   are — two judgments on one finding, which is a contradiction to
+   surface, not a race for file order to settle. A published document
+   repeating one decision per shipped product is not that.
+7. Scan one ecosystem, judge one ecosystem: a decision whose purl type
    your scanner cannot report on is not stale and not covered, it is
    out of scope, and it should produce nothing at all.
 
 In this repository the rules are implemented once, in
-`internal/vexjoin` (`canonicalName` and `foldsNames` for identity,
-`Decision.Excuses` for the status question), and every key on either
+`internal/vexjoin` (`decidingComponents` for which component a
+statement decides, `Parse` and `ParsePublished` for the two readings,
+`canonicalName` and `foldsNames` for identity, `Decision.Excuses` for
+the status question), and every key on either
 side is built through `KeyFromPurl` or `KeyFromFinding` so no caller
 can spell the identity rule a second way.
 
