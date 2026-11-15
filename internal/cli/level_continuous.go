@@ -304,11 +304,17 @@ func (h *stored) keep(
 	case bytes.Contains(predicate, []byte(`"spdxVersion"`)), bytes.Contains(predicate, []byte(`"bomFormat"`)):
 		h.inventories[digest] = predicate
 	case bytes.Contains(predicate, []byte("openvex.dev/ns")):
-		if perr := vexjoin.Parse(h.decisions, predicate, shortDigest(digest)); perr != nil {
+		// A published document, read as one: every digest of a publish
+		// may carry the same decisions, and that is one decided triple,
+		// not a contradiction (vexjoin.ParsePublished).
+		unjoinable, perr := vexjoin.ParsePublished(h.decisions, predicate, shortDigest(digest))
+		if perr != nil {
 			out.logf("level: triage document attested for %s unreadable: %v", shortDigest(digest), perr)
 
 			return
 		}
+
+		logUnjoinable(unjoinable, out)
 
 		h.decided++
 	}

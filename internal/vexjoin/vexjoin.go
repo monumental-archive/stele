@@ -13,6 +13,12 @@
 // decisions a second time has to reach the same answers, and two
 // dialects decide different things about one finding.
 //
+// Which component a statement decides is one rule, also written in
+// docs/vex-join.md and read by both doors: Parse for hand-written
+// SOURCE decisions, strict, and ParsePublished for the documents a
+// release or a stream publishes, which repeat one decision per shipped
+// artifact and may speak about things this join does not scan.
+//
 // Whether a decision EXCUSES is a second question, asked of its
 // status and answered here for the same reason (Excuses): a caller
 // that asked only "is there a decision?" would clear a finding on the
@@ -157,10 +163,11 @@ func foldsNames(ecosystem string) bool {
 type Decision struct {
 	Key    Key
 	Origin string
-	// Purl is the product identifier the decision was recorded
-	// against, carried verbatim so a derived statement names the
-	// subcomponent the human named rather than one reassembled from
-	// the parsed name and version.
+	// Purl is the identifier of the component the statement decides
+	// (docs/vex-join.md: the subcomponent when the product carries
+	// any, the product when it carries none), carried verbatim so a
+	// derived statement names the subcomponent the human named rather
+	// than one reassembled from the parsed name and version.
 	Purl string
 	// purlType is the product's purl type, parsed once here rather
 	// than re-derived by a caller: a second purl parser outside this
@@ -341,42 +348,155 @@ func parsePurl(purl string) (string, string, string, bool) {
 // with a spec, decoded leniently, but statements missing what the
 // join needs are an error, never a silent skip: a decision that
 // parses as nothing decides nothing silently.
+//
+// A product carries its subcomponents because the component a
+// statement DECIDES is not always its product (docs/vex-join.md,
+// "Which component a statement decides"): a statement about a release
+// names the shipped artifact and decides the dependency inside it.
 type openVEX struct {
-	Timestamp  *string `json:"timestamp"`
-	Statements []struct {
-		Vulnerability *struct {
-			Name *string `json:"name"`
-		} `json:"vulnerability"`
-		Products []struct {
-			ID *string `json:"@id"`
-		} `json:"products"`
-		Status          *string `json:"status"`
-		Justification   *string `json:"justification"`
-		ImpactStatement *string `json:"impact_statement"`
-		ActionStatement *string `json:"action_statement"`
-		Timestamp       *string `json:"timestamp"`
-	} `json:"statements"`
+	Timestamp  *string     `json:"timestamp"`
+	Statements []statement `json:"statements"`
 }
 
-// Parse reads one OpenVEX document's decisions into the set. origin
-// names the file for the report.
+// statement is one OpenVEX statement as decoded.
+type statement struct {
+	Vulnerability *struct {
+		Name *string `json:"name"`
+	} `json:"vulnerability"`
+	Products []struct {
+		ID            *string `json:"@id"`
+		Subcomponents []struct {
+			ID *string `json:"@id"`
+		} `json:"subcomponents"`
+	} `json:"products"`
+	Status          *string `json:"status"`
+	Justification   *string `json:"justification"`
+	ImpactStatement *string `json:"impact_statement"`
+	ActionStatement *string `json:"action_statement"`
+	Timestamp       *string `json:"timestamp"`
+}
+
+// Unjoinable is one statement whose deciding component is not a
+// versioned package URL, so it names no triple this join can match.
+// It is returned by origin and statement index, never dropped: a
+// stranger's document may speak about things this join does not scan,
+// and the reader is told which statement that was.
+type Unjoinable struct {
+	// Origin names the document, as the caller named it.
+	Origin string
+	// Statement is the statement's index in the document, from 0.
+	Statement int
+	// Role says which component decided: "product" when the product
+	// carries no subcomponents, "subcomponent" when it does.
+	Role string
+	// ID is the deciding component's @id, verbatim.
+	ID string
+}
+
+// Reason renders why the statement cannot join, without its origin —
+// the one wording both readings use, so the published reading's log
+// line and the source reading's refusal say the same thing.
+func (u Unjoinable) Reason() string {
+	return fmt.Sprintf("statement %d: %s %s is not a versioned package URL", u.Statement, u.Role, u.ID)
+}
+
+// String names the statement by origin and index, for a log line.
+func (u Unjoinable) String() string {
+	return u.Origin + " " + u.Reason()
+}
+
+// deciding is one component a statement decides, by rule 1 of
+// docs/vex-join.md.
+type deciding struct {
+	role string
+	id   string
+}
+
+// decidingComponents applies the one rule: a product that carries
+// subcomponents decides each subcomponent; a product that carries
+// none decides itself. A component with no @id names nothing and
+// contributes nothing — an id-less product is not a fault of the
+// document's other products.
+func decidingComponents(stmt *statement) []deciding {
+	var out []deciding
+
+	for _, p := range stmt.Products {
+		if len(p.Subcomponents) == 0 {
+			if p.ID != nil {
+				out = append(out, deciding{role: "product", id: *p.ID})
+			}
+
+			continue
+		}
+
+		for _, sub := range p.Subcomponents {
+			if sub.ID != nil {
+				out = append(out, deciding{role: "subcomponent", id: *sub.ID})
+			}
+		}
+	}
+
+	return out
+}
+
+// Parse reads one hand-written SOURCE decision document into the set.
+// origin names the file for the report.
+//
+// A source document is strict on both counts a published one is not:
+// two decisions for one triple are a contradiction, and a statement
+// whose deciding component is not a versioned package URL is refused
+// by index — a human wrote it to decide something, and it decides
+// nothing.
 func Parse(d *Decisions, doc []byte, origin string) error {
+	_, err := read(d, doc, origin, true)
+
+	return err
+}
+
+// ParsePublished reads one PUBLISHED decision document — the one a
+// release or a stream carries beside its inventories, whichever tool
+// wrote it — into the set.
+//
+// It applies the same rule as Parse to decide which component each
+// statement decides, and differs on two counts, both because a
+// published document is about artifacts rather than authored per
+// dependency:
+//
+//   - one triple stated more than once — once per shipped product, by
+//     design — is one decided triple, not a contradiction;
+//   - a statement whose deciding component is not a versioned package
+//     URL is returned to the caller, by origin and index, and the read
+//     carries on.
+//
+// A document that is not OpenVEX, or a statement missing its
+// vulnerability, status or moment, is still an error.
+func ParsePublished(d *Decisions, doc []byte, origin string) ([]Unjoinable, error) {
+	return read(d, doc, origin, false)
+}
+
+// read is the one reading both doors share; strict selects the source
+// document's two refusals.
+func read(d *Decisions, doc []byte, origin string, strict bool) ([]Unjoinable, error) {
 	decoded, err := jsonx.DecodeForeign[openVEX](doc)
 	if err != nil {
-		return fmt.Errorf("vexjoin: %s: %w", origin, err)
+		return nil, fmt.Errorf("vexjoin: %s: %w", origin, err)
 	}
 
 	if d.byKey == nil {
 		d.byKey = map[Key]Decision{}
 	}
 
-	for i, stmt := range decoded.Statements {
+	var unjoinable []Unjoinable
+
+	for i := range decoded.Statements {
+		stmt := &decoded.Statements[i]
+
 		if stmt.Vulnerability == nil || stmt.Vulnerability.Name == nil || *stmt.Vulnerability.Name == "" {
-			return fmt.Errorf("vexjoin: %s: statement %d names no vulnerability", origin, i)
+			return nil, fmt.Errorf("vexjoin: %s: statement %d names no vulnerability", origin, i)
 		}
 
 		if stmt.Status == nil || *stmt.Status == "" {
-			return fmt.Errorf("vexjoin: %s: statement %d carries no status — a decision that decides"+
+			return nil, fmt.Errorf("vexjoin: %s: statement %d carries no status — a decision that decides"+
 				" nothing is not a decision", origin, i)
 		}
 
@@ -386,33 +506,44 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 		// document honestly, and substituting a clock would invent one.
 		decided, derr := statementTime(stmt.Timestamp, decoded.Timestamp)
 		if derr != nil {
-			return fmt.Errorf("vexjoin: %s: statement %d: %w", origin, i, derr)
+			return nil, fmt.Errorf("vexjoin: %s: statement %d: %w", origin, i, derr)
 		}
 
-		for _, p := range stmt.Products {
-			if p.ID == nil {
-				continue
-			}
-
-			typ, name, version, ok := parsePurl(*p.ID)
+		for _, c := range decidingComponents(stmt) {
+			typ, name, version, ok := parsePurl(c.id)
 			if !ok {
-				continue // a product that is not a versioned purl cannot join
+				u := Unjoinable{Origin: origin, Statement: i, Role: c.role, ID: c.id}
+				if strict {
+					return nil, fmt.Errorf("vexjoin: %s: %s — a decision that joins nothing decides nothing",
+						origin, u.Reason())
+				}
+
+				unjoinable = append(unjoinable, u)
+
+				continue
 			}
 
 			k := newKey(typ, *stmt.Vulnerability.Name, name, version)
 
-			// Two decisions for one triple is a contradiction to
-			// surface, never a race the parse order settles: the files
-			// arrive in directory order, so "last one wins" would let
-			// a filename decide which judgment enters signed evidence.
-			// The human retires one; this code picks neither.
 			if prior, dup := d.byKey[k]; dup {
-				return fmt.Errorf("vexjoin: %s and %s both decide %s on %s@%s — one finding, one decision;"+
+				// A published document repeats one decision once per
+				// product it ships: the triple is decided, once.
+				if !strict {
+					continue
+				}
+
+				// Two SOURCE decisions for one triple is a
+				// contradiction to surface, never a race the parse
+				// order settles: the files arrive in directory order,
+				// so "last one wins" would let a filename decide which
+				// judgment enters signed evidence. The human retires
+				// one; this code picks neither.
+				return nil, fmt.Errorf("vexjoin: %s and %s both decide %s on %s@%s — one finding, one decision;"+
 					" retire one", prior.Origin, origin, k.Advisory(), k.Package(), k.Version())
 			}
 
 			d.byKey[k] = Decision{
-				Key: k, Origin: origin, Purl: *p.ID, purlType: strings.ToLower(typ),
+				Key: k, Origin: origin, Purl: c.id, purlType: strings.ToLower(typ),
 				Status:          *stmt.Status,
 				Justification:   deref(stmt.Justification),
 				ImpactStatement: deref(stmt.ImpactStatement),
@@ -422,7 +553,7 @@ func Parse(d *Decisions, doc []byte, origin string) error {
 		}
 	}
 
-	return nil
+	return unjoinable, nil
 }
 
 // statementTime reads a judgment's moment, preferring the statement's
