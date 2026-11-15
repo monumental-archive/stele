@@ -32,6 +32,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -41,6 +42,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	yaml "go.yaml.in/yaml/v3"
 
+	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/level"
@@ -560,27 +562,36 @@ func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latc
 	}
 
 	boundary := la.capabilityBoundary(forge)
+	files, registry := 0, 0
 
-	for name, digest := range subjects {
-		s := level.Subject{Name: name}
+	for _, sub := range subjects {
+		s := level.Subject{Name: sub.name}
 
-		bundles, err := forge.Attestations(la.owner, la.name, digest)
+		bundles, err := forge.Attestations(la.owner, la.name, sub.digest)
 		if err == nil {
-			la.measureProvenance(measurer, &s, bundles, digest)
+			la.measureProvenance(measurer, &s, bundles, sub.digest)
 		}
 
-		if !s.Verified {
+		if !s.Verified && !sub.registry {
 			// No BUILD PROVENANCE for this digest. Before calling that a
 			// breach, ask what the asset IS: a release ships evidence
 			// documents beside its artifacts, and a bundle cannot carry
 			// provenance about itself. The fetch is paid only for these
 			// anomalies, and the answer comes from the bytes rather than
-			// from a naming convention.
-			if la.isEvidenceDocument(forge, tag, name) {
-				out.logf("level: %s is an evidence document, not a build subject", name)
+			// from a naming convention. A registry subject skips it:
+			// the release's own manifest typed it an artifact, and
+			// there is no asset to fetch.
+			if la.isEvidenceDocument(forge, tag, sub.name) {
+				out.logf("level: %s is an evidence document, not a build subject", sub.name)
 
 				continue
 			}
+		}
+
+		if sub.registry {
+			registry++
+		} else {
+			files++
 		}
 
 		ev.Subjects = append(ev.Subjects, s)
@@ -588,7 +599,8 @@ func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latc
 
 	ev.SignerRunsTenantCode = boundary
 
-	out.logf("level: release %s: %d artifact(s) measured", tag, len(ev.Subjects))
+	out.logf("level: release %s: %d artifact(s) measured (%d file, %d registry)",
+		tag, len(ev.Subjects), files, registry)
 }
 
 // measureProvenance finds the artifact's BUILD PROVENANCE among the
@@ -912,18 +924,20 @@ func (la *levelArgs) dependencyOnRelease(
 	// refused a release that ships exactly one complete inventory.
 	covered := inventoryCovers(invs)
 
-	for name := range subjects {
-		if la.isEvidenceDocument(forge, tag, name) {
+	for _, sub := range subjects {
+		// A registry subject is an artifact by the release's own
+		// typing; only a file can be evidence ABOUT the release.
+		if !sub.registry && la.isEvidenceDocument(forge, tag, sub.name) {
 			continue // evidence about the release, not an artifact of it
 		}
 
 		if covered {
-			ev.Inventoried = append(ev.Inventoried, name)
+			ev.Inventoried = append(ev.Inventoried, sub.name)
 
 			continue
 		}
 
-		ev.Uninventoried = append(ev.Uninventoried, name)
+		ev.Uninventoried = append(ev.Uninventoried, sub.name)
 	}
 
 	out.logf("level: release %s: %d inventoried, %d not", tag, len(ev.Inventoried), len(ev.Uninventoried))
@@ -1443,8 +1457,28 @@ func inventoryCovers(invs map[string][]byte) bool {
 	return false
 }
 
+// releaseSubject is one artifact a release says it published: a file
+// its digest manifest pins, or a registry subject its evidence
+// manifest names. The two are measured alike; only a file can turn out
+// to be an evidence document, because only a file has bytes beside the
+// release to read.
+type releaseSubject struct {
+	// name is the asset's name, or for a registry subject the name its
+	// provenance attests joined to its digest — one image name may
+	// carry several digests, and each is its own artifact.
+	name string
+	// digest is bare sha256 hex, the shape the store's door takes.
+	digest   string
+	registry bool
+}
+
 // releaseSubjects finds the release to measure and the artifacts it
-// published, keyed name to digest.
+// published: the ONE place the level walk learns what a release
+// shipped, so the Build and Dependency legs cannot disagree about it.
+// The answer is the union of the files the digest manifest pins and
+// the registry subjects the release's own evidence manifest names —
+// the release's claim, read, never reconstructed from whatever
+// provenance happens to exist.
 //
 // The third result is the absence to report when there is no release
 // to measure. It is returned rather than only logged because a
@@ -1454,7 +1488,7 @@ func inventoryCovers(invs map[string][]byte) bool {
 // published with nothing naming its artifacts.
 //
 //nolint:gocritic // unnamedResult: tag, subjects, then the absence to report
-func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[string]string, string) {
+func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, []releaseSubject, string) {
 	tag := la.tag
 
 	if tag == "" {
@@ -1481,7 +1515,15 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[st
 		return "", nil, fmt.Sprintf("release %s was found and its assets could not be listed: %v", tag, err)
 	}
 
-	subjects := la.findManifest(forge, tag, assets, out)
+	files := la.findManifest(forge, tag, assets, out)
+	subjects := make([]releaseSubject, 0, len(files))
+
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		subjects = append(subjects, releaseSubject{name: name, digest: files[name]})
+	}
+
+	subjects = append(subjects, la.registrySubjects(forge, tag, assets, out)...)
+
 	if len(subjects) == 0 {
 		out.logf("level: release %s: no asset lists artifact digests, so its artifacts cannot be located", tag)
 
@@ -1491,6 +1533,88 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, map[st
 	}
 
 	return tag, subjects, ""
+}
+
+// registrySubjects reads what the release published somewhere other
+// than its assets, from the release's own evidence manifest — found BY
+// CONTENT, as the digest manifest is, and read through
+// evidence.Manifest.RegistrySubjects, the reader the assert walk uses.
+//
+// A release with no evidence manifest, or one whose schema predates
+// registry entries, contributes none, and the walk says so by name.
+// It does not read them back out of the bundles: the level judges the
+// newest release only, and an old format there is a release to
+// re-cut, not a history to excuse.
+func (la *levelArgs) registrySubjects(
+	forge gh.Forge, tag string, assets []string, out *latch,
+) []releaseSubject {
+	doc := la.findEvidenceManifest(forge, tag, assets, out)
+
+	var listed []evidence.Asset
+
+	ok := false
+	if doc != nil {
+		listed, ok = doc.RegistrySubjects()
+	}
+
+	if !ok {
+		out.logf("level: release %s names no registry subjects (no manifest, or one that predates them)", tag)
+
+		return nil
+	}
+
+	subjects := make([]releaseSubject, 0, len(listed))
+	for _, a := range listed {
+		subjects = append(subjects, releaseSubject{
+			name: a.Name + "@sha256:" + a.SHA256, digest: a.SHA256, registry: true,
+		})
+	}
+
+	return subjects
+}
+
+// findEvidenceManifest locates the release's evidence manifest BY
+// CONTENT: an asset that parses as one. Assets whose names suggest a
+// manifest are probed first — the hint decides ORDER, never
+// membership — and the probe is bounded so this search cannot
+// download a whole release of binaries.
+func (la *levelArgs) findEvidenceManifest(
+	forge gh.Forge, tag string, assets []string, out *latch,
+) *evidence.Manifest {
+	var hinted, rest []string
+
+	for _, a := range assets {
+		if strings.Contains(strings.ToLower(a), "manifest") {
+			hinted = append(hinted, a)
+
+			continue
+		}
+
+		rest = append(rest, a)
+	}
+
+	probes := 0
+
+	for _, a := range append(hinted, rest...) {
+		if probes >= maxManifestProbes {
+			out.logf("level: release %s: stopped looking for an evidence manifest after %d asset(s)", tag, probes)
+
+			break
+		}
+
+		probes++
+
+		raw, err := forge.Asset(la.owner, la.name, tag, a)
+		if err != nil {
+			continue
+		}
+
+		if doc, err := evidence.Parse(raw); err == nil {
+			return doc
+		}
+	}
+
+	return nil
 }
 
 // findManifest locates the release's digest manifest BY CONTENT: an

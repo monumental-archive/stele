@@ -253,6 +253,26 @@ inventory's download locations say where the build fetched from, and
 the registry says when each version appeared. No configuration is
 read anywhere in that chain.
 
+### What a release published
+
+Both the build and dependency legs ask one question of a release —
+what did it publish — and get one answer: the files its digest
+manifest pins, together with the registry subjects its own evidence
+manifest names (`type: registry-subject`, schema 5 onward). Both
+documents are found by content, never by name. A registry subject is
+measured like a file: its digest's attestations are fetched and the
+build provenance among them is measured, and on the dependency leg it
+is an artifact the inventory question is asked about. Only a file can
+turn out to be an evidence document; a registry subject is an
+artifact by the release's own typing.
+
+The release's claim is read, never reconstructed. A release with no
+evidence manifest, or one whose schema predates registry entries,
+contributes no registry subject and the walk says so by name; it is
+not answered out of whatever provenance bundles exist, which could
+only say that the proofs that exist are sound. The walk logs the
+count of each kind: `N artifact(s) measured (F file, R registry)`.
+
 ### Where a publish is
 
 A release is not the only shape a publish has, and for two releases
