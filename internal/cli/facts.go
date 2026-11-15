@@ -236,15 +236,8 @@ func releaseInstant(history factsHistory, revision string) (time.Time, error) {
 // readDeclarations reads what the tree itself says: the licence and,
 // where declared, the repository URL the facts are held against.
 func readDeclarations(fa *factsArgs, prov *imagefacts.Provenance, out *latch) error {
-	licence, ok, err := manifest.CargoPackageField(fa.tree, "license")
-	if err != nil {
+	if err := declaredLicence(fa, prov, out); err != nil {
 		return err
-	}
-
-	if ok {
-		prov.Licence = licence
-
-		out.logf("licence declared by the manifest: %s", licence)
 	}
 
 	repository, ok, err := manifest.CargoPackageField(fa.tree, "repository")
@@ -259,7 +252,44 @@ func readDeclarations(fa *factsArgs, prov *imagefacts.Provenance, out *latch) er
 	return nil
 }
 
-// licenceFromForge is the fallback for a tree with no manifest: the
+// declaredLicence reads the licence the tree states for itself: the
+// package manifest's field, and for a tree with no such field the one
+// expression its REUSE.toml declares.
+//
+// The manifest comes first because it is the narrower statement — the
+// licence of the package the image ships — where REUSE.toml speaks for
+// the repository. A tree carrying both is not cross-checked, for the
+// reason the forge tier is not: a workspace may license its package
+// and its repository differently on purpose.
+func declaredLicence(fa *factsArgs, prov *imagefacts.Provenance, out *latch) error {
+	licence, ok, err := manifest.CargoPackageField(fa.tree, "license")
+	if err != nil {
+		return err
+	}
+
+	if ok {
+		prov.Licence = licence
+
+		out.logf("licence declared by the manifest: %s", licence)
+
+		return nil
+	}
+
+	licence, ok, err = manifest.ReuseLicence(fa.tree)
+	if err != nil {
+		return err
+	}
+
+	if ok {
+		prov.Licence = licence
+
+		out.logf("licence declared by REUSE.toml: %s", licence)
+	}
+
+	return nil
+}
+
+// licenceFromForge is the fallback for a tree that declares none: the
 // forge's own detection over the licence file at the released
 // revision.
 //
