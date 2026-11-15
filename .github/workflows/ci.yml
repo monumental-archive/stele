@@ -29,8 +29,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
@@ -43,5 +43,5 @@ jobs:
       # the coverage-upload job skips clean on an absent token, so this
       # line is safe to carry ahead of the enrolment web steps.
       codecov-token: ${{ secrets.CODECOV_TOKEN }}
-    uses: monumental-archive/.github/.github/workflows/ci.yml@ab78e166fb2fada397b99d38ea9a1afdc3561c4b # v1.65.0
+    uses: monumental-archive/.github/.github/workflows/ci.yml@80343686f9142180ff405f5c3476184c28d44504 # v1.66.0
 ...
