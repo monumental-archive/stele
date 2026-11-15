@@ -364,7 +364,7 @@ func (la *levelArgs) gather(forge gh.Forge, out *latch) *level.Evidence {
 	case trackSource:
 		la.gatherSource(ev, forge, out)
 	case trackBuild:
-		la.gatherRelease(ev, forge, out)
+		la.gatherBuild(ev, forge, out)
 	case trackDependency:
 		la.gatherDependency(ev, forge, out)
 	}
@@ -548,20 +548,51 @@ func (la *levelArgs) liveRules(forge gh.Forge, out *latch) *level.LiveRules {
 	return live
 }
 
-// gatherRelease reads the newest release's artifacts and the platform
-// claims behind each one's provenance.
-func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latch) {
-	tag, subjects, _ := la.releaseSubjects(forge, out)
+// gatherBuild gathers the build track over every surface this
+// repository publishes on, as gatherDependency does: one
+// level.PublishSurface per declared surface, each saying what was
+// missing on it, and NO fallback from one surface to another. A
+// release that answered never stands in for a stream that could not
+// be read; the detectors ask the coverage question before they count
+// a single artifact.
+func (la *levelArgs) gatherBuild(ev *level.Evidence, forge gh.Forge, out *latch) {
+	for _, s := range la.surfaceSet() {
+		surface := level.PublishSurface{Name: s.Name()}
+
+		switch *s.Kind {
+		case population.SurfaceRelease:
+			la.buildOnRelease(ev, &surface, forge, out)
+		case population.SurfaceContinuousDigest:
+			la.buildOnContinuous(ev, &surface, s, forge, out)
+		}
+
+		ev.PublishSurfaces = append(ev.PublishSurfaces, surface)
+	}
+
+	// The capability boundary is a question about the certificate's
+	// signing workflow, whichever surface the artifact came from.
+	ev.SignerRunsTenantCode = la.capabilityBoundary(forge)
+}
+
+// buildOnRelease gathers the release surface: the newest release's
+// artifacts and the platform claims behind each one's provenance.
+func (la *levelArgs) buildOnRelease(
+	ev *level.Evidence, surface *level.PublishSurface, forge gh.Forge, out *latch,
+) {
+	tag, subjects, missing := la.releaseSubjects(forge, out)
 	if tag == "" {
+		surface.Missing = append(surface.Missing, missing)
+
 		return
 	}
 
 	measurer, code := la.measurer(out)
 	if code != exitOK {
+		surface.Missing = append(surface.Missing, noTrustMaterial)
+
 		return
 	}
 
-	boundary := la.capabilityBoundary(forge)
 	files, registry := 0, 0
 
 	for _, sub := range subjects {
@@ -569,7 +600,10 @@ func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latc
 
 		bundles, err := forge.Attestations(la.owner, la.name, sub.digest)
 		if err == nil {
-			la.measureProvenance(measurer, &s, bundles, sub.digest)
+			// The release surface declares no signer: whose provenance
+			// a release carries is the certificate's to say, and the
+			// detectors read it from there.
+			la.measureProvenance(measurer, &s, bundles, sub.digest, nil)
 		}
 
 		if !s.Verified && !sub.registry {
@@ -597,14 +631,20 @@ func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latc
 		ev.Subjects = append(ev.Subjects, s)
 	}
 
-	ev.SignerRunsTenantCode = boundary
-
 	out.logf("level: release %s: %d artifact(s) measured (%d file, %d registry)",
-		tag, len(ev.Subjects), files, registry)
+		tag, files+registry, files, registry)
 }
 
+// noTrustMaterial is the absence a surface reports when no trust root
+// could be resolved: nothing the store holds could be proven, which is
+// a statement about this run's sight and never about the publish.
+const noTrustMaterial = "no trust material could be resolved, so nothing the store holds could be proven"
+
 // measureProvenance finds the artifact's BUILD PROVENANCE among the
-// bundles the store holds for its digest.
+// bundles the store holds for its digest. A non-nil signer keeps only
+// bundles whose certificate identity it matches — the declared
+// identity of a surface that names one; it decides WHOSE bundles are
+// read, never what they prove.
 //
 // Selecting by predicate type matters: a digest carries several
 // attestations — provenance, the verdict summarising it, the build
@@ -612,12 +652,16 @@ func (la *levelArgs) gatherRelease(ev *level.Evidence, forge gh.Forge, out *latc
 // track's facts off whatever the store happened to return, which is
 // how a verifier's identity ended up standing in for a builder's.
 func (la *levelArgs) measureProvenance(
-	m verify.Measurer, s *level.Subject, bundles []jsonx.Raw, digest string,
+	m verify.Measurer, s *level.Subject, bundles []jsonx.Raw, digest string, signer *regexp.Regexp,
 ) {
 	for _, raw := range bundles {
 		verified, err := m.MeasureAttestation(raw, digest)
 		if err != nil {
 			continue
+		}
+
+		if signer != nil && !signer.MatchString(verified.SAN) {
+			continue // somebody else's signature over these bytes: not this surface's evidence
 		}
 
 		buildType, unrecognised, isProvenance := provenanceShape(verified.Payload)

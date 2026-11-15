@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:5cb11af565ce5d55a7e225b22210d92436161de7de64e63dfa4f5fc90168b481",
+      "size": 3868,
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:74c49f65b7181d7d488ae6a13d29e78d0d2d96818f2ea189f7bea527cee61e04",
+      "size": 3868,
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      }
+    }
+  ],
+  "annotations": {
+    "org.opencontainers.image.created": "2026-11-15T21:08:32Z",
+    "org.opencontainers.image.description": "The Monumental Archive's PostgreSQL image: official postgres + PostGIS, pgaudit, edtf_postgres — native multi-arch, tested before published, cosign-signed",
+    "org.opencontainers.image.licenses": "AGPL-3.0",
+    "org.opencontainers.image.revision": "c13b2e916f7fd2a364b88aa69017dc347b7364dc",
+    "org.opencontainers.image.source": "https://github.com/monumental-archive/monumental-archive-db",
+    "org.opencontainers.image.title": "monumental-archive-db"
+  }
+}

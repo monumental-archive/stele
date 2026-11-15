@@ -54,13 +54,34 @@ var (
 	}
 )
 
+// unpublished is the question every Build detector asks before it
+// counts a single artifact: did this run see every surface the
+// repository publishes on, and did any of them name an artifact.
+//
+// Coverage comes first for the reason it does on the dependency track
+// (stele#252): a surface this run could not see leaves artifacts
+// nobody asked for provenance, and answering over the surfaces that
+// did respond would seal a rung across a population this run
+// knowingly did not cover. One guard, so no detector can skip it.
+func unpublished(ev *Evidence) (Outcome, bool) {
+	if unseen := unreached(ev.PublishSurfaces, len(ev.Subjects), "provenance", "provenance"); unseen != "" {
+		return Unevaluated("%s", unseen), true
+	}
+
+	if len(ev.Subjects) == 0 {
+		return Unevaluated("no published artifact was reached, so no provenance could be looked for"), true
+	}
+
+	return Outcome{}, false
+}
+
 type provenanceExists struct{}
 
 func (provenanceExists) For() string { return "build/provenance-exists" }
 
 func (provenanceExists) Detect(ev *Evidence) Outcome {
-	if len(ev.Subjects) == 0 {
-		return Unevaluated("no released artifact was reached, so no provenance could be looked for")
+	if out, blind := unpublished(ev); blind {
+		return out
 	}
 
 	var missing []string
@@ -73,11 +94,11 @@ func (provenanceExists) Detect(ev *Evidence) Outcome {
 	}
 
 	if len(missing) > 0 {
-		return Contradicted("%d of %d released artifact(s) carry no provenance identifying them: %v",
+		return Contradicted("%d of %d published artifact(s) carry no provenance identifying them: %v",
 			len(missing), len(ev.Subjects), missing)
 	}
 
-	return Established("all %d released artifact(s) carry provenance identifying them by digest", len(ev.Subjects))
+	return Established("all %d published artifact(s) carry provenance identifying them by digest", len(ev.Subjects))
 }
 
 type provenanceDistributed struct{}
@@ -85,8 +106,8 @@ type provenanceDistributed struct{}
 func (provenanceDistributed) For() string { return "build/provenance-distributed" }
 
 func (provenanceDistributed) Detect(ev *Evidence) Outcome {
-	if len(ev.Subjects) == 0 {
-		return Unevaluated("no released artifact was reached")
+	if out, blind := unpublished(ev); blind {
+		return out
 	}
 
 	// Retrieval IS the requirement: this run fetched the provenance
@@ -101,8 +122,8 @@ type provenanceAuthentic struct{}
 func (provenanceAuthentic) For() string { return "build/provenance-authentic" }
 
 func (provenanceAuthentic) Detect(ev *Evidence) Outcome {
-	if len(ev.Subjects) == 0 {
-		return Unevaluated("no released artifact was reached")
+	if out, blind := unpublished(ev); blind {
+		return out
 	}
 
 	for i := range ev.Subjects {
@@ -139,8 +160,8 @@ func (isolatedBuild) Detect(ev *Evidence) Outcome {
 
 // runnerEnvironment folds the platform's runner claim across subjects.
 func runnerEnvironment(ev *Evidence, established string) Outcome {
-	if len(ev.Subjects) == 0 {
-		return Unevaluated("no released artifact was reached")
+	if out, blind := unpublished(ev); blind {
+		return out
 	}
 
 	for i := range ev.Subjects {
@@ -166,8 +187,8 @@ type externalParametersComplete struct{}
 func (externalParametersComplete) For() string { return "build/external-parameters-complete" }
 
 func (externalParametersComplete) Detect(ev *Evidence) Outcome {
-	if len(ev.Subjects) == 0 {
-		return Unevaluated("no released artifact was reached")
+	if out, blind := unpublished(ev); blind {
+		return out
 	}
 
 	for i := range ev.Subjects {
@@ -193,8 +214,8 @@ type unforgeableProvenance struct{}
 func (unforgeableProvenance) For() string { return "build/unforgeable" }
 
 func (unforgeableProvenance) Detect(ev *Evidence) Outcome {
-	if len(ev.Subjects) == 0 {
-		return Unevaluated("no released artifact was reached")
+	if out, blind := unpublished(ev); blind {
+		return out
 	}
 
 	if ev.SignerRunsTenantCode == nil {

@@ -128,7 +128,7 @@ func TestImageOnlyReleaseIsMeasured(t *testing.T) {
 		{
 			track: "build",
 			log:   "level: release v0.2.4: 1 artifact(s) measured (0 file, 1 registry)",
-			want: `"build/provenance-exists","value":"HELD: all 1 released artifact(s)` +
+			want: `"build/provenance-exists","value":"HELD: all 1 published artifact(s)` +
 				` carry provenance identifying them by digest"`,
 		},
 		{
@@ -172,7 +172,7 @@ func TestRealManifestNamesTheImage(t *testing.T) {
 
 	Run([]string{"level", "build", "--repo", "monumental-archive/iiif-server", "--json"}, &stdout, &stderr)
 
-	want := "1 of 1 released artifact(s) carry no provenance identifying them: [" + iiifImage + "]"
+	want := "1 of 1 published artifact(s) carry no provenance identifying them: [" + iiifImage + "]"
 	if !strings.Contains(stdout.String(), want) {
 		t.Errorf("the report does not carry %q:\n%s", want, stdout.String())
 	}
@@ -274,14 +274,14 @@ func TestRegistrySubjectGuards(t *testing.T) {
 				"checksums.txt": checksums, "evidence-manifest.json": mixed, "widget": artifact,
 			},
 			logs:   []string{"2 artifact(s) measured (1 file, 1 registry)"},
-			report: "2 of 2 released artifact(s) carry no provenance identifying them: [widget " + iiifImage + "]",
+			report: "2 of 2 published artifact(s) carry no provenance identifying them: [widget " + iiifImage + "]",
 		},
 		{
 			name:   "registry subjects alone, with no digest manifest",
 			assets: []string{"evidence-manifest.json"},
 			files:  map[string][]byte{"evidence-manifest.json": published},
 			logs:   []string{"1 artifact(s) measured (0 file, 1 registry)"},
-			report: "1 of 1 released artifact(s) carry no provenance identifying them: [" + iiifImage + "]",
+			report: "1 of 1 published artifact(s) carry no provenance identifying them: [" + iiifImage + "]",
 		},
 		{
 			name:   "neither a digest manifest nor a registry subject",
@@ -291,7 +291,8 @@ func TestRegistrySubjectGuards(t *testing.T) {
 				noRegistry,
 				"level: release v1.0.0: no asset lists artifact digests, so its artifacts cannot be located",
 			},
-			report: "no released artifact was reached, so no provenance could be looked for",
+			report: "has not been asked for provenance — release: release v1.0.0 publishes no asset listing" +
+				" artifact digests, so its artifacts cannot be located",
 		},
 	} {
 		swapLevelSeams(t, &levelForge{tags: []string{"v1.0.0"}, assets: tt.assets, files: tt.files}, nil)

@@ -1,0 +1,48 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "ghcr.io/monumental-archive/monumental-archive-db",
+      "digest": {
+        "sha256": "8fd73f31851b7f982946c5df603c799d75fa96ab88e7fe4018c26ff596664378"
+      }
+    }
+  ],
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "predicate": {
+    "buildDefinition": {
+      "buildType": "https://actions.github.io/buildtypes/workflow/v1",
+      "externalParameters": {
+        "workflow": {
+          "ref": "refs/heads/main",
+          "repository": "https://github.com/monumental-archive/monumental-archive-db",
+          "path": ".github/workflows/continuous.yml"
+        }
+      },
+      "internalParameters": {
+        "github": {
+          "event_name": "push",
+          "repository_id": "1322535078",
+          "repository_owner_id": "314831567",
+          "runner_environment": "github-hosted"
+        }
+      },
+      "resolvedDependencies": [
+        {
+          "uri": "git+https://github.com/monumental-archive/monumental-archive-db@refs/heads/main",
+          "digest": {
+            "gitCommit": "c13b2e916f7fd2a364b88aa69017dc347b7364dc"
+          }
+        }
+      ]
+    },
+    "runDetails": {
+      "builder": {
+        "id": "https://github.com/monumental-archive/signer/.github/workflows/sign.yml@dd3d0824d5d450a646de64df0d17e5714efca5c4"
+      },
+      "metadata": {
+        "invocationId": "https://github.com/monumental-archive/monumental-archive-db/actions/runs/43762134355/attempts/1"
+      }
+    }
+  }
+}

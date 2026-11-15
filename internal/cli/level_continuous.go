@@ -35,6 +35,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/gh"
@@ -392,4 +393,97 @@ func shortDigest(d string) string {
 	}
 
 	return trimmed[:shown]
+}
+
+// buildOnContinuous gathers the build track over one continuous-digest
+// surface: what the rolling tag names now, and the BUILD PROVENANCE the
+// attestation store holds for those bytes under the surface's declared
+// signer.
+//
+// Where a publisher attaches provenance is the publisher's choice, so
+// both places a publish is addressed by are read (publish.digests).
+// The artifact is the index when the index carries provenance: an
+// index digest commits to its children, so provenance identifying the
+// index identifies them. Otherwise the artifacts are the children, each
+// measured on its own — a publisher attesting per platform is judged
+// on what it attested, and a publish with no provenance anywhere is
+// refuted per artifact. A tag naming a single manifest is its own
+// artifact.
+//
+// Three outcomes are kept apart. A tag holding nothing, or a registry
+// that could not be asked, leaves the surface unreached with
+// publishedDigests' own sentence; a store that could not be read for a
+// digest leaves it unreached naming that digest; a publish read whole
+// with no provenance verifying under the declared identity yields
+// subjects that did not verify, which the provenance detector refutes.
+func (la *levelArgs) buildOnContinuous(
+	ev *level.Evidence, surface *level.PublishSurface, s population.Surface, forge gh.Forge, out *latch,
+) {
+	image, tag := *s.Registry, *s.Tag
+
+	identity, err := regexp.Compile(*s.Identity)
+	if err != nil {
+		surface.Missing = append(surface.Missing,
+			fmt.Sprintf("the declared signer pattern does not compile: %v", err))
+
+		return
+	}
+
+	pub, missing := la.publishedDigests(newOCIReader(), image, tag, out)
+	if missing != "" {
+		surface.Missing = append(surface.Missing, missing)
+
+		return
+	}
+
+	measurer, code := la.measurer(out)
+	if code != exitOK {
+		surface.Missing = append(surface.Missing, noTrustMaterial)
+
+		return
+	}
+
+	held := map[string][]jsonx.Raw{}
+
+	for _, d := range pub.digests() {
+		if _, read := held[d]; read {
+			continue // a single-manifest tag is its own index and its own artifact
+		}
+
+		bundles, err := forge.Attestations(la.owner, la.name, strings.TrimPrefix(d, "sha256:"))
+		if err != nil {
+			out.logf("level: attestations of %s unreadable: %v", shortDigest(d), err)
+			surface.Missing = append(surface.Missing,
+				fmt.Sprintf("the attestation store could not be read for %s@%s: %v", image, d, err))
+
+			continue
+		}
+
+		held[d] = bundles
+	}
+
+	if len(surface.Missing) > 0 {
+		// Part of the publish was not seen. Judging the part that was
+		// would read a partial population as the whole one.
+		return
+	}
+
+	index := level.Subject{Name: image + "@" + pub.index}
+	la.measureProvenance(measurer, &index, held[pub.index], strings.TrimPrefix(pub.index, "sha256:"), identity)
+
+	if index.Verified || slices.Equal(pub.artifacts, []string{pub.index}) {
+		ev.Subjects = append(ev.Subjects, index)
+		out.logf("level: %s:%s: 1 artifact measured, the index %s", image, tag, shortDigest(pub.index))
+
+		return
+	}
+
+	for _, d := range pub.artifacts {
+		child := level.Subject{Name: image + "@" + d}
+		la.measureProvenance(measurer, &child, held[d], strings.TrimPrefix(d, "sha256:"), identity)
+		ev.Subjects = append(ev.Subjects, child)
+	}
+
+	out.logf("level: %s:%s: the index %s carries no provenance under the declared signer;"+
+		" %d platform artifact(s) measured", image, tag, shortDigest(pub.index), len(pub.artifacts))
 }

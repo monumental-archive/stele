@@ -301,6 +301,22 @@ so a surface pointed at the wrong place yields "looked there, found
 nothing", which is unevaluated: a statement about this run's sight,
 never a level.
 
+The build track gathers the same surfaces the same way, and asks the
+same coverage question first: a surface this run could not see leaves
+every build requirement `UNDETERMINED` with that surface named, even
+when another surface answered with provenance that would otherwise
+establish the rung. On a continuous surface the build gather reads the
+attestation store for the publish's digests, keeps only bundles that
+verify under the surface's declared identity, and finds build
+provenance among them by predicate type. The artifact is the index
+when the index carries provenance, since an index digest commits to
+its children. Otherwise each platform manifest is its own artifact,
+so a publisher attesting per platform is judged on what it attested
+and a publish with no provenance anywhere is refuted per artifact. A
+tag naming one manifest is its own artifact. A tag holding nothing, a
+registry that could not be asked and a store that could not be read
+are unreached, never refuted.
+
 **A continuous surface's absences are inconclusive, and the two legs
 differ there deliberately.** A release's asset list enumerates
 everything that publish emitted, so an inventory missing from it is an
