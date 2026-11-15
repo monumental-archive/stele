@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   publish:
-    uses: monumental-archive/.github/.github/workflows/publish.yml@205a3b040292cd2cf3eac2473fab8cbf4f843e7a # v1.67.4
+    uses: monumental-archive/.github/.github/workflows/publish.yml@17df32fbe01c60b7d883c040c3b6994ae41221c3 # v1.68.1
     with:
       # The whole point of this repository's release: a verifier a
       # stranger can run without a Go toolchain, and the artifact the
