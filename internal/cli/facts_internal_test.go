@@ -398,6 +398,113 @@ func TestDeriveFactsFallsBackToTheForge(t *testing.T) {
 	}
 }
 
+// reuseTree writes a REUSE.toml annotating the whole tree with the
+// given licences, one annotation each.
+func reuseTree(t *testing.T, licences ...string) string {
+	t.Helper()
+
+	var body strings.Builder
+
+	body.WriteString("version = 1\n")
+
+	for _, l := range licences {
+		body.WriteString("\n[[annotations]]\npath = \"**\"\nSPDX-License-Identifier = \"" + l + "\"\n")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "REUSE.toml"), []byte(body.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
+}
+
+// A manifest-less tree that declares its licence in REUSE.toml is
+// published under that declaration, not under the forge's reading of
+// the licence file — which for the GNU family is an identifier that
+// cannot say whether later versions apply.
+func TestDeriveFactsLicenceFromReuse(t *testing.T) {
+	cases := []struct {
+		name string
+		tree func(t *testing.T) string
+		want string
+	}{
+		{
+			name: "REUSE.toml outranks the forge",
+			tree: func(t *testing.T) string { t.Helper(); return reuseTree(t, "AGPL-3.0-only") },
+			want: "AGPL-3.0-only",
+		},
+		{
+			name: "the manifest outranks REUSE.toml",
+			tree: func(t *testing.T) string {
+				t.Helper()
+
+				dir := reuseTree(t, "AGPL-3.0-only")
+				if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"),
+					[]byte("[package]\nlicense = \"MIT\"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+
+				return dir
+			},
+			want: "MIT",
+		},
+		{
+			name: "a REUSE.toml declaring two licences leaves it to the forge",
+			tree: func(t *testing.T) string { t.Helper(); return reuseTree(t, "MIT", "0BSD") },
+			want: "Apache-2.0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFactsHistory(t, goodFactsStub(), nil)
+			withMeta(t, "Apache-2.0", "from the forge")
+
+			var stdout, stderr bytes.Buffer
+
+			args := []string{
+				"facts", "--archetype", "continuous", "--repo", "acme/widget",
+				"--server-url", forge, "--git-dir", tc.tree(t),
+			}
+			if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+				t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+			}
+
+			want := `"org.opencontainers.image.licenses":"` + tc.want + `"`
+			if !strings.Contains(stdout.String(), want) {
+				t.Fatalf("stdout lacks %s:\n%s", want, stdout.String())
+			}
+		})
+	}
+}
+
+// An unreadable REUSE.toml refuses the run rather than falling through
+// to the forge the file exists to overrule.
+func TestDeriveFactsRefusesAnUnreadableReuse(t *testing.T) {
+	withFactsHistory(t, goodFactsStub(), nil)
+	withMeta(t, "Apache-2.0", "")
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "REUSE.toml"), []byte("[[annotations\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"facts", "--archetype", "continuous", "--repo", "acme/widget",
+		"--server-url", forge, "--git-dir", dir,
+	}
+	if got := deriveCmd(args, &stdout, &stderr); got == exitOK {
+		t.Fatalf("deriveCmd accepted an unreadable REUSE.toml:\n%s", stdout.String())
+	}
+
+	if !strings.Contains(stderr.String(), "not readable as TOML") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 // A tree declaring nothing, with a forge that detects nothing, has no
 // derivable licence — refused rather than published empty.
 func TestDeriveFactsNoDerivableLicence(t *testing.T) {
