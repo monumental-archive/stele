@@ -4,6 +4,13 @@
 // across every walking target, rather than one representative read.
 // A tear swallowed anywhere here reports clean over releases nobody
 // looked at.
+//
+// Every tear row is held to two things (stele#346). The error the walk
+// returns IS the planted tear — errors.Is, never err != nil, because a
+// fixture that fails on its own scores every tear row green without
+// the tear ever being reached. And the same fixture with nothing
+// planted walks to the verdict it was built for: the untorn control
+// is what proves the tear, and only the tear, is what failed.
 
 package assert_test
 
@@ -20,40 +27,127 @@ import (
 
 var errTorn = errors.New("the forge tore")
 
+// mustTear scores a tear row: the walk refused, and what it refused
+// with is the planted tear.
+func mustTear(t *testing.T, err error) {
+	t.Helper()
+
+	if !errors.Is(err, errTorn) {
+		t.Fatalf("walk = %v, want the planted tear carried out", err)
+	}
+}
+
+// mustJudge scores a tear row's control: the same fixture, nothing
+// planted, walks to the verdict it was built for.
+func mustJudge(t *testing.T, rep *report.Report, err error, want report.Verdict) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("untorn walk = %v, want the fixture to judge", err)
+	}
+
+	if rep.Verdict() != want {
+		t.Fatalf("untorn verdict = %s, want %s: %+v", rep.Verdict(), want, rep.Findings())
+	}
+}
+
+// mustName scores a row whose fault the walk reports as a finding
+// against the release rather than refusing (the stele#342/#345
+// split: only an unseen read ends the walk). The finding must be the
+// one the fault produces: its subject and assertion exactly, and a
+// detail naming the fault.
+func mustName(t *testing.T, rep *report.Report, subject, assertion, detail string) {
+	t.Helper()
+
+	for _, fd := range rep.Findings() {
+		if fd.Subject == subject && fd.Assertion == assertion && strings.Contains(fd.Detail, detail) {
+			return
+		}
+	}
+
+	t.Fatalf("findings = %+v, want %s %s naming %q", rep.Findings(), subject, assertion, detail)
+}
+
+// walkEvidence runs the evidence walk over one fixture at presence
+// depth.
+func walkEvidence(t *testing.T, pol *assert.Policy, f *fakeForge, src assert.Sources) (*report.Report, error) {
+	t.Helper()
+
+	return assert.Evidence(pol, orgPop(t, f, nil), f, src,
+		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
+}
+
+// manifestOnly is the contract read through the release's manifest
+// alone.
+func manifestOnly(f *fakeForge, pol *assert.Policy) assert.Sources {
+	return assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
+}
+
 // TestEvidenceForgeTears walks every read the evidence walk makes.
 // Each row is the same conformant release with one read failing.
 func TestEvidenceForgeTears(t *testing.T) {
 	t.Parallel()
 
-	for _, read := range []string{
-		"ReleaseTags", "ReleaseAssets", "Asset", "Attestations", "FailedRuns",
-	} {
-		t.Run(read, func(t *testing.T) {
+	tests := []struct {
+		read    string
+		fixture func() *fakeForge
+		want    report.Verdict
+	}{
+		{"ReleaseTags", completeRelease, report.VerdictPass},
+		{"ReleaseAssets", completeRelease, report.VerdictPass},
+		{"Asset", completeRelease, report.VerdictPass},
+		{"Attestations", completeRelease, report.VerdictPass},
+		// The run history is consulted only to narrow a verdict
+		// finding into a burned release, so the row needs one: its
+		// fixture is built to FAIL on the missing verdict.
+		{"FailedRuns", func() *fakeForge {
+			f := completeRelease()
+			f.store = map[string][]string{}
+
+			return f
+		}, report.VerdictFail},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.read, func(t *testing.T) {
 			t.Parallel()
 
-			f := completeRelease()
-			f.torn = map[string]error{read: errTorn}
-
-			if read == "FailedRuns" {
-				// The run history is consulted only to narrow a verdict
-				// finding into a burned release, so the row needs one.
-				f.store = map[string][]string{}
-			}
-
 			pol := loadTestPolicy(t)
-			src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
-			_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
-				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
-			if err == nil {
-				t.Fatalf("Evidence passed with %s torn — a walk that cannot read is not a clean walk", read)
-			}
+			t.Run("torn", func(t *testing.T) {
+				t.Parallel()
 
-			if !errors.Is(err, errTorn) {
-				t.Fatalf("Evidence = %v, want the tear carried out", err)
-			}
+				f := tc.fixture()
+				f.torn = map[string]error{tc.read: errTorn}
+
+				_, err := walkEvidence(t, pol, f, manifestOnly(f, pol))
+				mustTear(t, err)
+			})
+
+			t.Run("untorn", func(t *testing.T) {
+				t.Parallel()
+
+				f := tc.fixture()
+				rep, err := walkEvidence(t, pol, f, manifestOnly(f, pol))
+				mustJudge(t, rep, err, tc.want)
+			})
 		})
 	}
+}
+
+// fallsThrough is a release the manifest source cannot speak for —
+// no manifest asset is listed — so the workflow source behind it is
+// asked, and its publish workflow declares the class the release
+// shipped (the shape stele#343's legacy-contract rows use).
+func fallsThrough() *fakeForge {
+	f := completeRelease()
+	noManifest(f)
+	f.files = map[string]string{
+		"widget:v1.0.0:.github/workflows/publish.yml": "jobs:\n  publish:\n" +
+			"    with:\n      classes: oci-image\n",
+	}
+
+	return f
 }
 
 // TestEvidenceContractSourceTears: the contract is read through two
@@ -62,33 +156,64 @@ func TestEvidenceForgeTears(t *testing.T) {
 func TestEvidenceContractSourceTears(t *testing.T) {
 	t.Parallel()
 
-	for _, read := range []string{"ReleaseAssets", "Asset", "Workflows", "FileAt"} {
-		t.Run(read, func(t *testing.T) {
+	tests := []struct {
+		read    string
+		fixture func() *fakeForge
+	}{
+		// The manifest leg's two reads: its listing, then the manifest
+		// asset itself, which decodes when it is not torn.
+		{"ReleaseAssets", completeRelease},
+		{"Asset", completeRelease},
+		// The workflow leg is reached only when the manifest leg finds
+		// nothing, where it reads the publish workflow at the tag.
+		{"FileAt", fallsThrough},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.read, func(t *testing.T) {
 			t.Parallel()
 
-			f := completeRelease()
 			pol := loadTestPolicy(t)
-
-			// Both sources, so the workflow leg is reached when the
-			// manifest leg finds nothing.
-			src := assert.Sources{
-				assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
-				assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
+			sources := func(f *fakeForge) assert.Sources {
+				return assert.Sources{
+					assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"},
+					assert.WorkflowSource{Forge: f, Policy: pol.Evidence},
+				}
 			}
 
-			// Nothing in the manifest asset: the walk falls through to
-			// the workflow source, where the torn read waits.
-			f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = `{"schema": 1, "classes": []}`
-			f.torn = map[string]error{read: errTorn}
+			t.Run("torn", func(t *testing.T) {
+				t.Parallel()
 
-			_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
-				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
-			if err == nil {
-				t.Fatalf("Evidence passed with %s torn", read)
-			}
+				f := tc.fixture()
+				f.torn = map[string]error{tc.read: errTorn}
+
+				_, err := walkEvidence(t, pol, f, sources(f))
+				mustTear(t, err)
+			})
+
+			t.Run("untorn", func(t *testing.T) {
+				t.Parallel()
+
+				f := tc.fixture()
+				rep, err := walkEvidence(t, pol, f, sources(f))
+				mustJudge(t, rep, err, report.VerdictPass)
+			})
 		})
 	}
 }
+
+// blastRadius runs the scan walk over one fixture with the canary's
+// finding decided, so a walk that reads everything passes.
+func blastRadius(t *testing.T, f *fakeForge, sc fakeScanner) (*report.Report, error) {
+	t.Helper()
+
+	return assert.BlastRadius(loadBlastPolicy(t), orgPop(t, f, nil), f, sc,
+		decided(t, canaryScan, "serde", "1.0.0"), report.NewJournal(), func(string, ...any) {})
+}
+
+// canaryOnly is a scan that finds the declared canary and nothing
+// else.
+var canaryOnly = fakeScanner{out: scanResult(canaryScan, "serde", "1.0.0", "crates.io", false)}
 
 // TestBlastRadiusForgeTears walks the scan walk's reads. Its own
 // population rule makes an unreadable SBOM a refusal, never an
@@ -103,18 +228,17 @@ func TestBlastRadiusForgeTears(t *testing.T) {
 			f := blastForge()
 			f.torn = map[string]error{read: errTorn}
 
-			_, err := assert.BlastRadius(loadBlastPolicy(t), orgPop(t, f, nil), f,
-				fakeScanner{out: scanResult(canaryScan, "serde", "1.0.0", "crates.io", false)},
-				&vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
-			if err == nil {
-				t.Fatalf("BlastRadius passed with %s torn", read)
-			}
-
-			if !errors.Is(err, errTorn) {
-				t.Fatalf("BlastRadius = %v, want the tear carried out", err)
-			}
+			_, err := blastRadius(t, f, canaryOnly)
+			mustTear(t, err)
 		})
 	}
+
+	t.Run("untorn", func(t *testing.T) {
+		t.Parallel()
+
+		rep, err := blastRadius(t, blastForge(), canaryOnly)
+		mustJudge(t, rep, err, report.VerdictPass)
+	})
 }
 
 // TestBlastRadiusScannerTears: the scanner is a subprocess somebody
@@ -122,11 +246,19 @@ func TestBlastRadiusForgeTears(t *testing.T) {
 func TestBlastRadiusScannerTears(t *testing.T) {
 	t.Parallel()
 
-	_, err := assert.BlastRadius(loadBlastPolicy(t), orgPop(t, blastForge(), nil), blastForge(),
-		fakeScanner{err: errTorn}, &vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
-	if err == nil || !errors.Is(err, errTorn) {
-		t.Fatalf("BlastRadius = %v, want the scanner failure carried out", err)
-	}
+	t.Run("torn", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := blastRadius(t, blastForge(), fakeScanner{err: errTorn})
+		mustTear(t, err)
+	})
+
+	t.Run("untorn", func(t *testing.T) {
+		t.Parallel()
+
+		rep, err := blastRadius(t, blastForge(), canaryOnly)
+		mustJudge(t, rep, err, report.VerdictPass)
+	})
 }
 
 // TestTagsForgeTears walks the tag audit's reads across both halves of
@@ -137,34 +269,46 @@ func TestTagsForgeTears(t *testing.T) {
 	tears := []struct {
 		read   string
 		mutate func(*fakeTags)
+		want   report.Verdict
 	}{
-		{"ChainNotes", func(*fakeTags) {}},
+		{"ChainNotes", func(*fakeTags) {}, report.VerdictPass},
 		// The ancestry read happens only where a link is MISSING: the
 		// horizon is consulted to decide whether the ledger could have
 		// witnessed one at all, so a conformant tag never reaches it and
 		// a tear scripted over a conformant fixture would prove nothing.
-		{"IsAncestor", func(f *fakeTags) { f.objects[tagObjSHA].Target = unlinkedRev }},
+		// Its fixture is built to FAIL on the missing link.
+		{"IsAncestor", func(f *fakeTags) { f.objects[tagObjSHA].Target = unlinkedRev }, report.VerdictFail},
 	}
 
 	for _, tear := range tears {
-		read := tear.read
-
-		t.Run(read, func(t *testing.T) {
+		t.Run(tear.read, func(t *testing.T) {
 			t.Parallel()
 
-			tags := conformantTags()
-			tear.mutate(tags)
-			tags.torn = map[string]error{read: errTorn}
-
-			_, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
-				tags, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
-			if err == nil {
-				t.Fatalf("Tags passed with %s torn", read)
+			walk := func(tags *fakeTags) (*report.Report, error) {
+				return assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
+					tags, &fakeTagVerifier{}, report.NewJournal(), func(string, ...any) {})
 			}
 
-			if !errors.Is(err, errTorn) {
-				t.Fatalf("Tags = %v, want the tear carried out", err)
-			}
+			t.Run("torn", func(t *testing.T) {
+				t.Parallel()
+
+				tags := conformantTags()
+				tear.mutate(tags)
+				tags.torn = map[string]error{tear.read: errTorn}
+
+				_, err := walk(tags)
+				mustTear(t, err)
+			})
+
+			t.Run("untorn", func(t *testing.T) {
+				t.Parallel()
+
+				tags := conformantTags()
+				tear.mutate(tags)
+
+				rep, err := walk(tags)
+				mustJudge(t, rep, err, tear.want)
+			})
 		})
 	}
 }
@@ -225,12 +369,33 @@ func TestContinuousHalfTears(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		torn string
-		want string
+		name  string
+		plant func(*fakeForge)
+		want  string
 	}{
-		{"the stub cannot be read", "FileAt", "continuous stub"},
-		{"the registry cannot be read", "PackageVersionDigest", "package versions"},
+		{
+			"the stub cannot be read",
+			func(f *fakeForge) { f.torn = map[string]error{"FileAt": errTorn} },
+			"continuous stub",
+		},
+		{
+			"the registry cannot be read",
+			func(f *fakeForge) { f.torn = map[string]error{"PackageVersionDigest": errTorn} },
+			"package versions",
+		},
+		// The second hop is its own read of another repository at a
+		// pinned commit, and a transport failure there must refuse
+		// rather than derive a pin from a tree nobody read.
+		{
+			"the released tree cannot be read",
+			func(f *fakeForge) { f.fileAtErr = map[string]error{contSharedPath: errTorn} },
+			sharedPin,
+		},
+	}
+
+	pol, err := assert.LoadPolicy(strings.NewReader(continuousOnlyPolicyJSON))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	for _, tc := range tests {
@@ -238,53 +403,24 @@ func TestContinuousHalfTears(t *testing.T) {
 			t.Parallel()
 
 			f := continuousForge()
-			f.torn = map[string]error{tc.torn: errTorn}
+			tc.plant(f)
 
-			pol, err := assert.LoadPolicy(strings.NewReader(continuousOnlyPolicyJSON))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
-
-			_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src,
-				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
-			if err == nil {
-				t.Fatalf("Evidence passed with %s torn", tc.torn)
-			}
+			_, err := walkEvidence(t, pol, f, manifestOnly(f, pol))
+			mustTear(t, err)
 
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Evidence = %v, want it to name %q", err, tc.want)
 			}
 		})
 	}
-}
 
-// TestContinuousReleasedTreeTears: the second hop is its own read of
-// another repository at a pinned commit, and a transport failure there
-// must refuse rather than derive a pin from a tree nobody read.
-func TestContinuousReleasedTreeTears(t *testing.T) {
-	t.Parallel()
+	t.Run("untorn", func(t *testing.T) {
+		t.Parallel()
 
-	f := continuousForge()
-	f.fileAtErr = map[string]error{contSharedPath: errTorn}
-
-	pol, err := assert.LoadPolicy(strings.NewReader(continuousOnlyPolicyJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
-
-	_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src,
-		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
-	if err == nil {
-		t.Fatal("Evidence passed with the released tree's read torn")
-	}
-
-	if !strings.Contains(err.Error(), sharedPin) {
-		t.Fatalf("Evidence = %v, want it to name the pin it could not read at", err)
-	}
+		f := continuousForge()
+		rep, err := walkEvidence(t, pol, f, manifestOnly(f, pol))
+		mustJudge(t, rep, err, report.VerdictPass)
+	})
 }
 
 // TestSignerPinPatternWithoutACaptureGroup: the pattern's first group IS
@@ -345,14 +481,14 @@ func TestResolvePinsTears(t *testing.T) {
 					"widget:v1.0.0:.github/workflows/publish.yml": errTorn,
 				}
 			},
-			want: "publish workflow at the tag is unreadable",
+			want: "publish workflow at the tag is unreadable: " + errTorn.Error(),
 		},
 		{
 			name: "the machinery publish workflow is unreadable",
 			spoil: func(f *fakeForge) {
 				f.fileAtErr = map[string]error{machineryFile: errTorn}
 			},
-			want: "machinery publish workflow at",
+			want: "machinery publish workflow at " + machineryPin40[:12] + " is unreadable: " + errTorn.Error(),
 		},
 		{
 			name: "the machinery repository carries no publish workflow",
@@ -370,21 +506,16 @@ func TestResolvePinsTears(t *testing.T) {
 			f := deepForge()
 			tc.spoil(f)
 
-			rep := runDeepWalk(t, f, &fakeDeep{})
-
-			var named bool
-
-			for _, fd := range rep.Findings() {
-				if strings.Contains(fd.Detail, tc.want) {
-					named = true
-				}
-			}
-
-			if !named {
-				t.Fatalf("findings = %+v, want one naming %q", rep.Findings(), tc.want)
-			}
+			mustName(t, runDeepWalk(t, f, &fakeDeep{}), "widget@v1.0.0", "deep", tc.want)
 		})
 	}
+
+	t.Run("unspoiled", func(t *testing.T) {
+		t.Parallel()
+
+		rep := runDeepWalk(t, deepForge(), &fakeDeep{})
+		mustJudge(t, rep, nil, report.VerdictPass)
+	})
 }
 
 // TestBundleAssetContentRefusals: the bundle asset is JSONL somebody
@@ -406,7 +537,7 @@ func TestBundleAssetContentRefusals(t *testing.T) {
 			set: func(f *fakeForge) {
 				f.assetErr = map[string]error{"widget@v1.0.0/" + asset: errTorn}
 			},
-			want: "the forge tore",
+			want: errTorn.Error(),
 		},
 		{
 			name: "a bundle line carries no DSSE payload",
@@ -439,21 +570,15 @@ func TestBundleAssetContentRefusals(t *testing.T) {
 			f := completeRelease()
 			tc.set(f)
 
-			rep := runEvidence(t, f, nil)
-
-			var named bool
-
-			for _, fd := range rep.Findings() {
-				if strings.Contains(fd.Detail, tc.want) {
-					named = true
-				}
-			}
-
-			if !named {
-				t.Fatalf("findings = %+v, want one naming %q", rep.Findings(), tc.want)
-			}
+			mustName(t, runEvidence(t, f, nil), "widget@v1.0.0", asset+":unreadable", tc.want)
 		})
 	}
+
+	t.Run("unspoiled", func(t *testing.T) {
+		t.Parallel()
+
+		mustJudge(t, runEvidence(t, completeRelease(), nil), nil, report.VerdictPass)
+	})
 }
 
 // TestStoreBundlesThatSayNothing: the store's own lines are foreign
@@ -549,67 +674,82 @@ func TestWorkflowContractSource(t *testing.T) {
 	const (
 		publish     = "widget:v1.0.0:.github/workflows/publish.yml"
 		selfPublish = "widget:v1.0.0:.github/workflows/self-publish.yml"
+		declares    = "jobs:\n  publish:\n    with:\n      classes: oci-image\n"
+		reusable    = "on:\n  workflow_call:\n"
 	)
 
-	tests := []struct {
+	walk := func(t *testing.T, files map[string]string, errs map[string]error) (*report.Report, error) {
+		t.Helper()
+
+		pol := loadTestPolicy(t)
+		f := completeRelease()
+		// No manifest asset: the workflow source is the only one.
+		noManifest(f)
+		f.files = files
+		f.fileAtErr = errs
+
+		return walkEvidence(t, pol, f, assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}})
+	}
+
+	// Each tear sits on the one file that declares the contract, so
+	// the same tree untorn is a release the walk judges and passes.
+	tears := []struct {
 		name  string
 		files map[string]string
-		errs  map[string]error
-		want  string // "" means the walk passes with nothing owed
+		torn  string
 	}{
 		{
-			name: "the publish workflow is unreadable",
-			errs: map[string]error{publish: errTorn},
-			want: "workflow contract",
+			name:  "the publish workflow is unreadable",
+			files: map[string]string{publish: declares},
+			torn:  publish,
 		},
 		{
-			name: "a reusable workflow's caller stub is unreadable",
-			files: map[string]string{
-				publish: "on:\n  workflow_call:\n",
-			},
-			errs: map[string]error{selfPublish: errTorn},
-			want: "workflow contract",
-		},
-		{
-			name: "a reusable workflow with no caller stub declares nothing",
-			files: map[string]string{
-				publish: "on:\n  workflow_call:\n",
-			},
-		},
-		{
-			name: "a classes line that names no class declares nothing",
-			files: map[string]string{
-				publish: "jobs:\n  publish:\n    with:\n      classes: \"\"\n",
-			},
+			name:  "a reusable workflow's caller stub is unreadable",
+			files: map[string]string{publish: reusable, selfPublish: declares},
+			torn:  selfPublish,
 		},
 	}
 
-	for _, tc := range tests {
+	for _, tc := range tears {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := completeRelease()
-			// No manifest asset: the workflow source is the only one.
-			f.assets["widget@v1.0.0"] = drop(f.assets["widget@v1.0.0"], "evidence-manifest.json")
-			f.files = tc.files
-			f.fileAtErr = tc.errs
+			t.Run("torn", func(t *testing.T) {
+				t.Parallel()
 
-			pol := loadTestPolicy(t)
-			src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
+				_, err := walk(t, tc.files, map[string]error{tc.torn: errTorn})
+				mustTear(t, err)
+			})
 
-			_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
-				&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
+			t.Run("untorn", func(t *testing.T) {
+				t.Parallel()
 
-			if tc.want == "" {
-				if err != nil {
-					t.Fatalf("Evidence = %v, want a release owing nothing", err)
-				}
+				rep, err := walk(t, tc.files, nil)
+				mustJudge(t, rep, err, report.VerdictPass)
+			})
+		})
+	}
 
-				return
-			}
+	nothing := []struct {
+		name  string
+		files map[string]string
+	}{
+		{
+			name:  "a reusable workflow with no caller stub declares nothing",
+			files: map[string]string{publish: reusable},
+		},
+		{
+			name:  "a classes line that names no class declares nothing",
+			files: map[string]string{publish: "jobs:\n  publish:\n    with:\n      classes: \"\"\n"},
+		},
+	}
 
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Evidence = %v, want it to name %q", err, tc.want)
+	for _, tc := range nothing {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := walk(t, tc.files, nil); err != nil {
+				t.Fatalf("Evidence = %v, want a release owing nothing", err)
 			}
 		})
 	}
@@ -621,20 +761,40 @@ func TestWorkflowContractSource(t *testing.T) {
 func TestReleaseAssetsTearAfterTheContract(t *testing.T) {
 	t.Parallel()
 
-	f := completeRelease()
-	f.files = map[string]string{
-		"widget:v1.0.0:.github/workflows/publish.yml": "jobs:\n  publish:\n    with:\n      classes: oci-image\n",
-	}
-	f.torn = map[string]error{"ReleaseAssets": errTorn}
-
 	pol := loadTestPolicy(t)
-	src := assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 
-	_, err := assert.Evidence(pol, orgPop(t, f, nil), f, src,
-		&fakeAttestor{}, report.NewJournal(), nil, nil, func(string, ...any) {})
-	if err == nil || !strings.Contains(err.Error(), "assets of") {
-		t.Fatalf("Evidence = %v, want the asset-listing refusal", err)
+	// The workflow source alone, so the first listing the walk makes
+	// is its own, after the contract.
+	fixture := func() (*fakeForge, assert.Sources) {
+		f := completeRelease()
+		f.files = map[string]string{
+			"widget:v1.0.0:.github/workflows/publish.yml": "jobs:\n  publish:\n    with:\n      classes: oci-image\n",
+		}
+
+		return f, assert.Sources{assert.WorkflowSource{Forge: f, Policy: pol.Evidence}}
 	}
+
+	t.Run("torn", func(t *testing.T) {
+		t.Parallel()
+
+		f, src := fixture()
+		f.torn = map[string]error{"ReleaseAssets": errTorn}
+
+		_, err := walkEvidence(t, pol, f, src)
+		mustTear(t, err)
+
+		if !strings.Contains(err.Error(), "assets of") {
+			t.Fatalf("Evidence = %v, want the asset-listing refusal", err)
+		}
+	})
+
+	t.Run("untorn", func(t *testing.T) {
+		t.Parallel()
+
+		f, src := fixture()
+		rep, err := walkEvidence(t, pol, f, src)
+		mustJudge(t, rep, err, report.VerdictPass)
+	})
 }
 
 // TestScannerReportThatIsNotOne: the scanner's JSON is foreign bytes,
@@ -655,35 +815,50 @@ func TestScannerReportThatIsNotOne(t *testing.T) {
 func TestSelfSignedPinsTear(t *testing.T) {
 	t.Parallel()
 
-	f := deepForge()
-	f.torn = map[string]error{"TagCommit": errTorn}
+	walk := func(t *testing.T, f *fakeForge) *report.Report {
+		t.Helper()
 
-	full, err := assert.NewFullDepth(&fakeDeep{}, "", "acme/{repo}/.github/workflows/sign.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pol := loadTestPolicy(t)
-	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
-
-	rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
-		report.NewJournal(), nil, full,
-		func(string, ...any) {})
-	if err != nil {
-		t.Fatalf("Evidence = %v", err)
-	}
-
-	var named bool
-
-	for _, fd := range rep.Findings() {
-		if strings.Contains(fd.Detail, "tag's commit is unreadable") {
-			named = true
+		full, err := assert.NewFullDepth(&fakeDeep{}, "", "acme/{repo}/.github/workflows/sign.yml")
+		if err != nil {
+			t.Fatal(err)
 		}
+
+		pol := loadTestPolicy(t)
+
+		rep, err := assert.Evidence(pol, orgPop(t, f, nil), f, manifestOnly(f, pol), &fakeAttestor{},
+			report.NewJournal(), nil, full,
+			func(string, ...any) {})
+		if err != nil {
+			t.Fatalf("Evidence = %v", err)
+		}
+
+		return rep
 	}
 
-	if !named {
-		t.Fatalf("findings = %+v, want the tag-commit refusal", rep.Findings())
+	// The tag's commit is scripted, so the only thing that can leave
+	// it unreadable is the tear; no machinery hop exists to read.
+	fixture := func() *fakeForge {
+		f := deepForge()
+		f.tagCommits = map[string]string{"v1.0.0": tagSHA40}
+		f.files = map[string]string{}
+
+		return f
 	}
+
+	t.Run("torn", func(t *testing.T) {
+		t.Parallel()
+
+		f := fixture()
+		f.torn = map[string]error{"TagCommit": errTorn}
+
+		mustName(t, walk(t, f), "widget@v1.0.0", "deep", "tag's commit is unreadable: "+errTorn.Error())
+	})
+
+	t.Run("untorn", func(t *testing.T) {
+		t.Parallel()
+
+		mustJudge(t, walk(t, fixture()), nil, report.VerdictPass)
+	})
 }
 
 // TestSignerPinPatternThatDoesNotCompile: the loader refuses a pattern
