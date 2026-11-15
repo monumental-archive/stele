@@ -1,12 +1,14 @@
-// A store read that could not be completed is not a fact about the
-// subject (stele#339). Every assertion that reads the attestation
-// store — the two base-image mechanisms, the continuous digest, and
-// both halves of the full-depth leg, with the release-asset reads that
-// leg makes first — must end the walk unseen when the
-// host throttled the read or its transient ladder ran out (5xx, or a
-// 429): the run seals CANNOT_JUDGE, and the journal holds no finding
-// against the subject it never got to look at. A read that completed
-// and refused — a bundle that does not verify — is still a finding.
+// A forge read that could not be completed is not a fact about the
+// subject. Every assertion that reads the attestation store or a
+// release asset — the presence leg's bundle reads, the two base-image
+// mechanisms, the continuous digest, and both halves of the full-depth
+// leg, with the release-asset and pin reads that leg makes first —
+// must end the walk unseen when the host throttled the read, its
+// transient ladder ran out (5xx, or a 429; stele#339), or the
+// credential was refused (stele#343): the run seals CANNOT_JUDGE, and
+// the journal holds no finding against the subject it never got to
+// look at. A read that completed and refused — a bundle that does not
+// verify — is still a finding.
 
 package assert_test
 
@@ -15,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +78,15 @@ type storeWalk struct {
 	attestor *fakeAttestor
 	pins     map[string][]byte
 	deep     *fakeDeep
+	// source, when set, is the forge the contract is read from — so a
+	// row can refuse the walk's own read of a listing the contract
+	// source also makes, and reach the second of the two.
+	source *fakeForge
+	// workflowSource stacks the legacy adapter behind the manifest.
+	workflowSource bool
+	// selfSigned runs the deep leg under a templated signer identity:
+	// pins come from the tag's own commit, the one deep read of it.
+	selfSigned bool
 }
 
 func (s storeWalk) run(t *testing.T, j *report.Journal) (*report.Report, error) {
@@ -83,8 +95,12 @@ func (s storeWalk) run(t *testing.T, j *report.Journal) (*report.Report, error) 
 	var full *assert.FullDepth
 
 	if s.deep != nil {
-		fd, err := assert.NewFullDepth(s.deep,
-			"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
+		verifier, signer := "acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml"
+		if s.selfSigned {
+			verifier, signer = "", "{owner}/{repo}/.github/workflows/release.yml"
+		}
+
+		fd, err := assert.NewFullDepth(s.deep, verifier, signer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,8 +108,17 @@ func (s storeWalk) run(t *testing.T, j *report.Journal) (*report.Report, error) 
 		full = fd
 	}
 
+	source := s.forge
+	if s.source != nil {
+		source = s.source
+	}
+
 	src := assert.Sources{
-		assert.ManifestSource{Forge: s.forge, Policy: s.policy.Evidence, Asset: "evidence-manifest.json"},
+		assert.ManifestSource{Forge: source, Policy: s.policy.Evidence, Asset: "evidence-manifest.json"},
+	}
+
+	if s.workflowSource {
+		src = append(src, assert.WorkflowSource{Forge: source, Policy: s.policy.Evidence})
 	}
 
 	return assert.Evidence(s.policy, orgPop(t, s.forge, nil), s.forge, src, s.attestor,
@@ -111,12 +136,21 @@ func mustPolicy(t *testing.T, raw string) *assert.Policy {
 	return pol
 }
 
-// storeSite is one assertion that reads the store: a walk whose read
+// storeSite is one forge read in the evidence walk: a walk whose read
 // refuses with the given error, and the words its refusal must carry.
 type storeSite struct {
 	name string
 	walk func(t *testing.T, refusal error) storeWalk
 	says []string
+	// reads is "<subject>'s <thing>": what a refused credential's
+	// message must say it could not read. Set at the sites that once
+	// recorded a refusal as missing evidence.
+	reads string
+	// owes names the findings a row must record to reach its site —
+	// the run history is read only to excuse a vsa finding, so that
+	// row's walk carries one before the refused read. Any other
+	// finding is a finding against a subject the run never saw.
+	owes []string
 }
 
 func storeSites() []storeSite {
@@ -133,7 +167,8 @@ func storeSites() []storeSite {
 					attestor: &fakeAttestor{refuse: map[string]error{baseDigest: refusal}},
 				}
 			},
-			says: []string{"base-image-approval:pgrx-bases", baseDigest},
+			says:  []string{"base-image-approval:pgrx-bases", baseDigest},
+			reads: "docker.io/library/debian:trixie@" + baseDigest + "'s approval attestations",
 		},
 		{
 			name: "a provenance-verified base read",
@@ -145,7 +180,8 @@ func storeSites() []storeSite {
 					attestor: &fakeAttestor{refuse: map[string]error{baseDigest: refusal}},
 				}
 			},
-			says: []string{"base-image-approval:org-bases", orgBaseRef},
+			says:  []string{"base-image-approval:org-bases", orgBaseRef},
+			reads: orgBaseRef + "'s provenance attestations",
 		},
 		{
 			name: "a continuous-digest read",
@@ -157,7 +193,8 @@ func storeSites() []storeSite {
 					attestor: &fakeAttestor{refuse: map[string]error{contDigest: refusal}},
 				}
 			},
-			says: []string{"continuous-digest", "widget@"},
+			says:  []string{"continuous-digest", "widget@"},
+			reads: "widget@latest's attestations in the store",
 		},
 		{
 			name: "the full-depth release read",
@@ -169,7 +206,8 @@ func storeSites() []storeSite {
 					deep: &fakeDeep{releaseErr: refusal},
 				}
 			},
-			says: []string{"deep release check", "widget@v1.0.0"},
+			says:  []string{"deep release check", "widget@v1.0.0"},
+			reads: "widget@v1.0.0's release attestations",
 		},
 		{
 			name: "the full-depth checksum-manifest read",
@@ -181,7 +219,8 @@ func storeSites() []storeSite {
 
 				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, deep: &fakeDeep{}}
 			},
-			says: []string{"deep release check", "widget@v1.0.0", "checksum manifest"},
+			says:  []string{"deep release check", "widget@v1.0.0", "checksum manifest"},
+			reads: "widget@v1.0.0's checksum manifest",
 		},
 		{
 			name: "the full-depth publish-workflow read",
@@ -193,7 +232,8 @@ func storeSites() []storeSite {
 
 				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, deep: &fakeDeep{}}
 			},
-			says: []string{"deep release check", "widget@v1.0.0", "publish workflow"},
+			says:  []string{"deep release check", "widget@v1.0.0", "publish workflow"},
+			reads: "widget@v1.0.0's signing pins",
 		},
 		{
 			name: "the full-depth verdict read",
@@ -205,7 +245,76 @@ func storeSites() []storeSite {
 					deep: &fakeDeep{vsaErr: refusal},
 				}
 			},
-			says: []string{"deep verdict check", "widget@v1.0.0"},
+			says:  []string{"deep verdict check", "widget@v1.0.0"},
+			reads: "widget@v1.0.0's verification summaries",
+		},
+		{
+			name: "the presence leg's class-bundle read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := completeRelease()
+				f.assetErr = map[string]error{"widget@v1.0.0/" + imageBundle: refusal}
+
+				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}}
+			},
+			says:  []string{"store verdicts", "widget@v1.0.0", imageBundle},
+			reads: "widget@v1.0.0's " + imageBundle,
+		},
+		{
+			name: "the full-depth class-bundle read, against a manifest that names registry subjects",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := deepForge()
+				f.lateAssetErr = map[string]error{"widget@v1.0.0/" + imageBundle: refusal}
+
+				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, deep: &fakeDeep{}}
+			},
+			says:  []string{"deep release check", "widget@v1.0.0", imageBundle},
+			reads: "widget@v1.0.0's class bundles",
+		},
+		{
+			name: "the full-depth class-bundle read, against a manifest that predates registry subjects",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := deepForge()
+				f.assetBytes["widget@v1.0.0"]["evidence-manifest.json"] = classlessManifest()
+				f.lateAssetErr = map[string]error{"widget@v1.0.0/" + imageBundle: refusal}
+
+				return storeWalk{policy: enrichedDeepPolicy(t), forge: f, attestor: &fakeAttestor{}, deep: &fakeDeep{}}
+			},
+			says:  []string{"deep release check", "widget@v1.0.0", imageBundle},
+			reads: "widget@v1.0.0's class bundles",
+		},
+		{
+			name: "the full-depth machinery publish-workflow read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := deepForge()
+				f.fileAtErr = map[string]error{"canon:" + machineryPin40 + ":.github/workflows/publish.yml": refusal}
+
+				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, deep: &fakeDeep{}}
+			},
+			says:  []string{"deep release check", "widget@v1.0.0", "machinery publish workflow"},
+			reads: "widget@v1.0.0's signing pins",
+		},
+		{
+			name: "the full-depth tag-commit read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := deepForge()
+				f.torn = map[string]error{"TagCommit": refusal}
+
+				return storeWalk{
+					policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, deep: &fakeDeep{}, selfSigned: true,
+				}
+			},
+			says:  []string{"deep release check", "widget@v1.0.0", "tag's commit"},
+			reads: "widget@v1.0.0's signing pins",
 		},
 	}
 }
@@ -288,24 +397,241 @@ func TestCompletedStoreRefusalStillDiverges(t *testing.T) {
 	}
 }
 
-// TestForbiddenStoreReadIsUnchanged pins what a credential refusal does
-// at the store sites TODAY — it diverges — so this change is seen not to
-// move it. Whether it should is a separate question, not this one's.
-func TestForbiddenStoreReadIsUnchanged(t *testing.T) {
-	t.Parallel()
+// imageBundle is the fixture release's one class bundle asset.
+const imageBundle = "attestations-image.intoto.jsonl"
 
-	forbidden := liveRefusal(t, func(w http.ResponseWriter) {
-		http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
-	})
+// noManifest takes the contract manifest off the release, so the
+// manifest source does not speak for it and the legacy workflow
+// adapter behind it is asked.
+func noManifest(f *fakeForge) {
+	f.assets["widget@v1.0.0"] = slices.DeleteFunc(f.assets["widget@v1.0.0"],
+		func(a string) bool { return a == "evidence-manifest.json" })
+}
 
-	if !errors.Is(forbidden, gh.ErrForbidden) || gh.Retryable(forbidden) {
-		t.Fatalf("the scripted refusal is %v — not a credential refusal", forbidden)
+// returningSites are the walk's forge reads that never had a FAIL
+// path: any error they meet ends the walk. They sit in the forbidden
+// table beside storeSites so that table covers every forge read the
+// evidence walk makes, and a credential refusal at any of them is held
+// to the same answer.
+func returningSites() []storeSite {
+	torn := func(read string) func(f *fakeForge, refusal error) {
+		return func(f *fakeForge, refusal error) { f.torn = map[string]error{read: refusal} }
 	}
 
-	site := storeSites()[0]
+	file := func(key string) func(f *fakeForge, refusal error) {
+		return func(f *fakeForge, refusal error) { f.fileAtErr = map[string]error{key: refusal} }
+	}
 
-	rep, err := site.walk(t, forbidden).run(t, report.NewJournal())
-	if err != nil || rep.Verdict() != report.VerdictFail {
-		t.Fatalf("Evidence = %v, %v — a credential refusal at a store site still diverges today", rep, err)
+	release := func(refuse func(*fakeForge, error)) func(t *testing.T, refusal error) storeWalk {
+		return func(t *testing.T, refusal error) storeWalk {
+			t.Helper()
+
+			f := completeRelease()
+			refuse(f, refusal)
+
+			return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}}
+		}
+	}
+
+	return []storeSite{
+		{
+			name: "the release listing",
+			walk: release(torn("ReleaseTags")),
+			says: []string{"releases of acme/widget"},
+		},
+		{
+			name: "the contract manifest's asset listing",
+			walk: release(torn("ReleaseAssets")),
+			says: []string{"contract of acme/widget@v1.0.0"},
+		},
+		{
+			name: "the contract manifest's asset read",
+			walk: release(func(f *fakeForge, refusal error) {
+				f.assetErr = map[string]error{"widget@v1.0.0/evidence-manifest.json": refusal}
+			}),
+			says: []string{"manifest of acme/widget@v1.0.0"},
+		},
+		{
+			name: "the walk's own asset listing",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := completeRelease()
+				f.torn = map[string]error{"ReleaseAssets": refusal}
+
+				// The contract is read from an untorn copy, so the
+				// walk's second listing is the one that refuses.
+				return storeWalk{policy: loadTestPolicy(t), forge: f, source: completeRelease(), attestor: &fakeAttestor{}}
+			},
+			says: []string{"assets of acme/widget@v1.0.0"},
+		},
+		{
+			name: "the legacy workflow contract's publish-workflow read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := completeRelease()
+				noManifest(f)
+				file("widget:v1.0.0:.github/workflows/publish.yml")(f, refusal)
+
+				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, workflowSource: true}
+			},
+			says: []string{"workflow contract of acme/widget@v1.0.0"},
+		},
+		{
+			name: "the legacy workflow contract's self-publish read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := completeRelease()
+				noManifest(f)
+				f.files = map[string]string{
+					"widget:v1.0.0:.github/workflows/publish.yml": "on:\n  workflow_call:\njobs: {}\n",
+				}
+				file("widget:v1.0.0:.github/workflows/self-publish.yml")(f, refusal)
+
+				return storeWalk{policy: loadTestPolicy(t), forge: f, attestor: &fakeAttestor{}, workflowSource: true}
+			},
+			says: []string{"workflow contract of acme/widget@v1.0.0"},
+		},
+		{
+			name: "the presence leg's store read",
+			walk: release(torn("Attestations")),
+			says: []string{"store for sha256:" + subjectDigest},
+		},
+		{
+			name: "the run-history read",
+			walk: release(func(f *fakeForge, refusal error) {
+				f.store = map[string][]string{}
+				f.torn = map[string]error{"FailedRuns": refusal}
+			}),
+			says: []string{"run history of acme/widget@v1.0.0"},
+			owes: []string{"vsa:" + subjectDigest[:12]},
+		},
+		{
+			name: "the continuous stub read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := continuousForge()
+				file(contStubPath)(f, refusal)
+
+				return storeWalk{policy: mustPolicy(t, continuousOnlyPolicyJSON), forge: f, attestor: &fakeAttestor{}}
+			},
+			says: []string{"continuous stub of widget"},
+		},
+		{
+			name: "the rolling-tag package read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := continuousForge()
+				torn("PackageVersionDigest")(f, refusal)
+
+				return storeWalk{policy: mustPolicy(t, continuousOnlyPolicyJSON), forge: f, attestor: &fakeAttestor{}}
+			},
+			says: []string{"package versions of widget"},
+		},
+		{
+			name: "the shared reusable workflow read the signer pin comes from",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := continuousForge()
+				file(contSharedPath)(f, refusal)
+
+				return storeWalk{policy: mustPolicy(t, continuousOnlyPolicyJSON), forge: f, attestor: &fakeAttestor{}}
+			},
+			says: []string{".github/workflows/continuous.yml at " + sharedPin},
+		},
+		{
+			name: "the provenance-verified scope's build-file read",
+			walk: func(t *testing.T, refusal error) storeWalk {
+				t.Helper()
+
+				f := provenanceForge()
+				file("widget:HEAD:Dockerfile")(f, refusal)
+
+				return storeWalk{policy: mustPolicy(t, provenanceOnlyPolicyJSON), forge: f, attestor: &fakeAttestor{}}
+			},
+			says: []string{"build file of widget"},
+		},
+	}
+}
+
+// TestForbiddenReadIsUnseen: every forge read the evidence walk makes,
+// each refused by a real credential refusal from a real gh.Client.
+// None of them learned anything about the subject, so each ends the
+// walk CANNOT_JUDGE — the reader's own ErrForbidden carried out, no
+// report sealed, no finding recorded. Where a refusal used to be
+// recorded as missing evidence, its message now says what it was.
+func TestForbiddenReadIsUnseen(t *testing.T) {
+	t.Parallel()
+
+	refusals := []struct {
+		name    string
+		respond func(http.ResponseWriter)
+	}{
+		{name: "403", respond: func(w http.ResponseWriter) {
+			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
+		}},
+		{name: "401", respond: func(w http.ResponseWriter) {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+		}},
+	}
+
+	for _, site := range slices.Concat(storeSites(), returningSites()) {
+		for _, r := range refusals {
+			t.Run(site.name+": "+r.name, func(t *testing.T) {
+				t.Parallel()
+
+				forbidden := liveRefusal(t, r.respond)
+
+				if !errors.Is(forbidden, gh.ErrForbidden) || gh.Retryable(forbidden) {
+					t.Fatalf("the scripted refusal is %v — not a credential refusal", forbidden)
+				}
+
+				j := report.NewJournal()
+
+				rep, err := site.walk(t, forbidden).run(t, j)
+				holdsForbiddenUnseen(t, &site, rep, err, j)
+			})
+		}
+	}
+}
+
+// holdsForbiddenUnseen is one forbidden row's whole judgment: the
+// reader's refusal carried out, nothing sealed, the message saying
+// what it was, and no finding the row did not owe.
+func holdsForbiddenUnseen(t *testing.T, site *storeSite, rep *report.Report, err error, j *report.Journal) {
+	t.Helper()
+
+	if !errors.Is(err, gh.ErrForbidden) {
+		t.Fatalf("Evidence = %v, %v — a read the credential could not make must end the walk unseen", rep, err)
+	}
+
+	if rep != nil {
+		t.Fatalf("Evidence sealed %s beside the refusal — an unseen walk seals nothing", rep.Verdict())
+	}
+
+	for _, want := range site.says {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %q", err, want)
+		}
+	}
+
+	if site.reads != "" && !strings.Contains(err.Error(), "the credential cannot read "+site.reads) {
+		t.Errorf("refusal %q does not say the credential cannot read %s", err, site.reads)
+	}
+
+	if strings.Contains(err.Error(), "no attestation verifies") ||
+		strings.Contains(err.Error(), "carries no attestation") {
+		t.Errorf("refusal %q speaks the vocabulary of missing evidence", err)
+	}
+
+	for _, f := range j.Findings() {
+		if !slices.Contains(site.owes, f.Assertion) {
+			t.Errorf("journal holds a finding against a subject the run never saw: %+v", f)
+		}
 	}
 }
