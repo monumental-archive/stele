@@ -1025,9 +1025,15 @@ func (la *levelArgs) dependencyOnRelease(
 		}
 
 		// A search the bound stopped is a look not finished: the
-		// inventory may be among the assets nobody read.
+		// inventory may be among the assets nobody read. The bound
+		// stays — it keeps the search from downloading a release of
+		// binaries — and the account tells a producer exactly why the
+		// release was not measured.
 		if stoppedAfter > 0 {
-			surface.Missing = append(surface.Missing, unfinishedSearch(tag, "an inventory", stoppedAfter, len(assets)))
+			surface.Missing = append(surface.Missing, fmt.Sprintf(
+				"release %s: stopped looking for an inventory after %d of %d asset(s), so whether the"+
+					" release carries one is unknown", tag, stoppedAfter, len(assets),
+			))
 		}
 	}
 
@@ -1657,10 +1663,9 @@ type releaseSubject struct {
 // The third result is the absence to report when there is no release
 // to measure. It is returned rather than only logged because a
 // dependency judgment now says which surfaces it looked at and what
-// was missing on each, and "no release" is one of five different
-// facts here — never published, unreadable, assets unreadable,
-// published with nothing naming its artifacts, or an evidence-manifest
-// search this run stopped before finishing.
+// was missing on each, and "no release" is one of four different
+// facts here — never published, unreadable, assets unreadable, or
+// published with nothing naming its artifacts.
 //
 //nolint:gocritic // unnamedResult: tag, subjects, then the absence to report
 func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, []releaseSubject, string) {
@@ -1699,14 +1704,7 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, []rele
 		})
 	}
 
-	registry, unfinished := la.registrySubjects(forge, tag, assets, out)
-	if unfinished != "" {
-		// Whether the release published anything to a registry is not
-		// known, so the population it published is not either.
-		return "", nil, unfinished
-	}
-
-	subjects = append(subjects, registry...)
+	subjects = append(subjects, la.registrySubjects(forge, tag, assets, out)...)
 
 	if len(subjects) == 0 {
 		out.logf("level: release %s: no asset lists artifact digests, so its artifacts cannot be located", tag)
@@ -1731,17 +1729,21 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, []rele
 // re-cut, not a history to excuse.
 //
 // A search that stopped at its bound without finding a manifest is not
-// "no manifest": the second result is then the account of what was not
-// looked at, and nothing is said about registry subjects, because
-// nothing is known.
-//
-//nolint:gocritic // unnamedResult: subjects, then the unfinished look to report
+// "no manifest", and it is not a blind surface either: the evidence
+// manifest is one publisher family's format, a stranger's release
+// never carries one, and so on any release longer than the bound the
+// search always ends there. Its files are judged as before; the walk
+// says plainly that registry subjects, if any, are not counted
+// (stele#373).
 func (la *levelArgs) registrySubjects(
 	forge gh.Forge, tag string, assets []string, out *latch,
-) ([]releaseSubject, string) {
-	doc, stoppedAfter := la.findEvidenceManifest(forge, tag, assets, out)
+) []releaseSubject {
+	doc, stoppedAfter := la.findEvidenceManifest(forge, tag, assets)
 	if stoppedAfter > 0 {
-		return nil, unfinishedSearch(tag, "an evidence manifest", stoppedAfter, len(assets))
+		out.logf("level: release %s: stopped looking for an evidence manifest after %d of %d asset(s);"+
+			" registry subjects, if the release names any, are not counted", tag, stoppedAfter, len(assets))
+
+		return nil
 	}
 
 	var listed []evidence.Asset
@@ -1754,7 +1756,7 @@ func (la *levelArgs) registrySubjects(
 	if !ok {
 		out.logf("level: release %s names no registry subjects (no manifest, or one that predates them)", tag)
 
-		return nil, ""
+		return nil
 	}
 
 	subjects := make([]releaseSubject, 0, len(listed))
@@ -1764,18 +1766,7 @@ func (la *levelArgs) registrySubjects(
 		})
 	}
 
-	return subjects, ""
-}
-
-// unfinishedSearch is the account a bounded search owes when it stopped
-// at its bound without finding what it sought: what it was looking
-// for, how far it got, and that absence is therefore not known. The
-// bound stays — it keeps the search from downloading a release of
-// binaries — and the account tells a producer exactly why it was not
-// measured.
-func unfinishedSearch(tag, sought string, probed, listed int) string {
-	return fmt.Sprintf("release %s: stopped looking for %s after %d of %d asset(s), so whether the release"+
-		" carries one is unknown", tag, sought, probed, listed)
+	return subjects
 }
 
 // findEvidenceManifest locates the release's evidence manifest BY
@@ -1788,7 +1779,7 @@ func unfinishedSearch(tag, sought string, probed, listed int) string {
 //
 //nolint:gocritic // unnamedResult: the manifest, then where the bound stopped the search
 func (la *levelArgs) findEvidenceManifest(
-	forge gh.Forge, tag string, assets []string, out *latch,
+	forge gh.Forge, tag string, assets []string,
 ) (*evidence.Manifest, int) {
 	var hinted, rest []string
 
@@ -1806,9 +1797,7 @@ func (la *levelArgs) findEvidenceManifest(
 
 	for _, a := range append(hinted, rest...) {
 		if probes >= maxManifestProbes {
-			out.logf("level: release %s: stopped looking for an evidence manifest after %d asset(s)", tag, probes)
-
-			return nil, probes
+			return nil, probes // the caller says what that means
 		}
 
 		probes++
