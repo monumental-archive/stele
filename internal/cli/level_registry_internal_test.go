@@ -226,11 +226,12 @@ func TestRegistrySubjectGuards(t *testing.T) {
 	manyFiles["zz-release.json"] = published
 
 	for _, tt := range []struct {
-		name   string
-		assets []string
-		files  map[string][]byte
-		logs   []string
-		report string
+		name     string
+		assets   []string
+		files    map[string][]byte
+		logs     []string
+		unlogged string
+		report   string
 	}{
 		{
 			name:   "no evidence manifest",
@@ -261,11 +262,19 @@ func TestRegistrySubjectGuards(t *testing.T) {
 			name:   "the probe bound reached before the manifest",
 			assets: manyAssets,
 			files:  manyFiles,
+			// The evidence manifest is one publisher family's format, so
+			// a search the bound stopped is not a blind surface
+			// (stele#373, as corrected): the files are judged as
+			// before, the walk says registry subjects are not counted,
+			// and nothing is said about whether the release names any.
 			logs: []string{
-				"level: release v1.0.0: stopped looking for an evidence manifest after 12 asset(s)",
-				noRegistry,
+				"level: release v1.0.0: stopped looking for an evidence manifest after 12 of 15 asset(s);" +
+					" registry subjects, if the release names any, are not counted",
+				"1 artifact(s) measured (1 file, 0 registry)",
 			},
-			report: "carry no provenance identifying them",
+			unlogged: noRegistry,
+			report: `"build/provenance-exists","value":"REFUTED: 1 of 1 published artifact(s)` +
+				` carry no provenance identifying them: [widget]`,
 		},
 		{
 			name:   "a mixed release counts its image beside its file",
@@ -305,6 +314,10 @@ func TestRegistrySubjectGuards(t *testing.T) {
 			if !strings.Contains(stderr.String(), want) {
 				t.Errorf("%s: the walk did not log %q:\n%s", tt.name, want, stderr.String())
 			}
+		}
+
+		if tt.unlogged != "" && strings.Contains(stderr.String(), tt.unlogged) {
+			t.Errorf("%s: the walk logged %q:\n%s", tt.name, tt.unlogged, stderr.String())
 		}
 
 		if !strings.Contains(stdout.String(), tt.report) {

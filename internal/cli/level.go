@@ -618,7 +618,7 @@ func (la *levelArgs) buildOnRelease(
 		// detectors read it from there.
 		la.measureProvenance(measurer, &s, bundles, sub.digest, nil)
 
-		if !s.Verified && !sub.registry {
+		if !s.Verified && sub.listed {
 			// No BUILD PROVENANCE for this digest. Before calling that a
 			// breach, ask what the asset IS: a release ships evidence
 			// documents beside its artifacts, and a bundle cannot carry
@@ -626,8 +626,19 @@ func (la *levelArgs) buildOnRelease(
 			// anomalies, and the answer comes from the bytes rather than
 			// from a naming convention. A registry subject skips it:
 			// the release's own manifest typed it an artifact, and
-			// there is no asset to fetch.
-			if la.isEvidenceDocument(forge, tag, sub.name) {
+			// there is no asset to fetch; so does a file the release
+			// does not list, for the same reason.
+			evidenceDoc, err := la.evidenceDocument(forge, tag, sub.name)
+			if err != nil {
+				// Unverified artifact or evidence about the release:
+				// this run cannot say which, and only the first would
+				// refute.
+				surface.Missing = append(surface.Missing, unreadAsset(tag, sub.name, err))
+
+				continue
+			}
+
+			if evidenceDoc {
 				out.logf("level: %s is an evidence document, not a build subject", sub.name)
 
 				continue
@@ -647,7 +658,7 @@ func (la *levelArgs) buildOnRelease(
 		// A partial population is not judged: the coverage guard
 		// exists so a rung is never sealed across artifacts this run
 		// knowingly did not see (stele#252).
-		out.logf("level: release %s: %d attestation store read(s) failed, so no artifact is judged",
+		out.logf("level: release %s: %d read(s) did not finish, so no artifact is judged",
 			tag, len(surface.Missing))
 
 		return
@@ -701,19 +712,12 @@ func (la *levelArgs) measureProvenance(
 	}
 }
 
-// isEvidenceDocument reports whether a release asset is evidence
-// ABOUT the release rather than an artifact OF it — an attestation
-// bundle, an inventory, a triage decision, a digest manifest. Judged
-// from the bytes: every one of these formats names itself.
-func (la *levelArgs) isEvidenceDocument(forge gh.Forge, tag, name string) bool {
-	evidenceDoc, err := la.evidenceDocument(forge, tag, name)
-
-	return err == nil && evidenceDoc // unreadable is not the same as evidence
-}
-
-// evidenceDocument is isEvidenceDocument with the read error kept, for
-// a caller to which "could not read it" and "it is an artifact" are
-// different answers.
+// evidenceDocument reports whether a release asset is evidence ABOUT
+// the release rather than an artifact OF it — an attestation bundle,
+// an inventory, a triage decision, a digest manifest. Judged from the
+// bytes: every one of these formats names itself. A read error is
+// returned, never answered: "could not read it" and "it is an
+// artifact" are different facts, and only the second can refute.
 func (la *levelArgs) evidenceDocument(forge gh.Forge, tag, name string) (bool, error) {
 	raw, err := forge.Asset(la.owner, la.name, tag, name)
 	if err != nil {
@@ -741,6 +745,14 @@ func (la *levelArgs) evidenceDocument(forge gh.Forge, tag, name string) (bool, e
 	}
 
 	return false, nil
+}
+
+// unreadAsset is the account a release surface owes for an asset it
+// had to read to tell an artifact from evidence about the release, and
+// could not.
+func unreadAsset(tag, name string, err error) string {
+	return fmt.Sprintf("release %s: asset %s could not be read, so whether it is an artifact or evidence"+
+		" about the release is unknown: %v", tag, name, err)
 }
 
 // provenanceShape reads what the build declared about itself: the
@@ -992,7 +1004,7 @@ func (la *levelArgs) dependencyOnRelease(
 		return
 	}
 
-	invs, unread := la.inventories(forge, tag, assets, out)
+	invs, unread, stoppedAfter := la.inventories(forge, tag, assets, out)
 
 	// The draft asks that a producer inventory the dependencies of
 	// every version they RELEASE. A union document covering the whole
@@ -1011,31 +1023,32 @@ func (la *levelArgs) dependencyOnRelease(
 				tag, name, unread[name],
 			))
 		}
+
+		// A search the bound stopped is a look not finished: the
+		// inventory may be among the assets nobody read. The bound
+		// stays — it keeps the search from downloading a release of
+		// binaries — and the account tells a producer exactly why the
+		// release was not measured.
+		if stoppedAfter > 0 {
+			surface.Missing = append(surface.Missing, fmt.Sprintf(
+				"release %s: stopped looking for an inventory after %d of %d asset(s), so whether the"+
+					" release carries one is unknown", tag, stoppedAfter, len(assets),
+			))
+		}
 	}
 
 	var inventoried, uninventoried []string
 
-	// Only an asset the listing holds can be evidence beside the
-	// release, so only a listed asset is read to ask; a file the digest
-	// manifest names and the release does not carry is an artifact
-	// published nowhere this run can read, which is not a blind read.
-	listed := map[string]bool{}
-	for _, a := range assets {
-		listed[a] = true
-	}
-
 	for _, sub := range subjects {
 		// A registry subject is an artifact by the release's own
-		// typing; only a file can be evidence ABOUT the release.
-		if !sub.registry && listed[sub.name] {
+		// typing; only a file can be evidence ABOUT the release, and
+		// only one the release lists can be read to ask.
+		if sub.listed {
 			evidenceDoc, err := la.evidenceDocument(forge, tag, sub.name)
 			if err != nil && !covered {
 				// Uninventoried or evidence about the release: this run
 				// cannot say which, and only the first would refute.
-				surface.Missing = append(surface.Missing, fmt.Sprintf(
-					"release %s: asset %s could not be read, so whether it is an artifact or evidence"+
-						" about the release is unknown: %v", tag, sub.name, err,
-				))
+				surface.Missing = append(surface.Missing, unreadAsset(tag, sub.name, err))
 
 				continue
 			}
@@ -1520,12 +1533,15 @@ const (
 //
 // The second result is every probed asset that could not be read, with
 // the error the forge gave: such an asset might have been the
-// inventory, and only the caller knows whether that matters.
+// inventory, and only the caller knows whether that matters. The
+// third is how many assets were probed when the bound stopped the
+// search having found none, zero when it finished: the assets past the
+// bound were not looked at, which is not the same as holding nothing.
 //
-//nolint:gocritic // unnamedResult: inventories found, then assets unread
+//nolint:gocritic // unnamedResult: inventories found, assets unread, then where the bound stopped the search
 func (la *levelArgs) inventories(
 	forge gh.Forge, tag string, assets []string, out *latch,
-) (map[string][]byte, map[string]error) {
+) (map[string][]byte, map[string]error, int) {
 	hinted, rest := splitByInventoryHint(assets)
 	found := map[string][]byte{}
 	unread := map[string]error{}
@@ -1535,7 +1551,7 @@ func (la *levelArgs) inventories(
 		if probes >= maxManifestProbes && len(found) == 0 {
 			out.logf("level: release %s: stopped looking for an inventory after %d asset(s)", tag, probes)
 
-			break
+			return found, unread, probes
 		}
 
 		probes++
@@ -1552,7 +1568,7 @@ func (la *levelArgs) inventories(
 		}
 	}
 
-	return found, unread
+	return found, unread, 0
 }
 
 // splitByInventoryHint orders the probe: assets whose names suggest an
@@ -1628,6 +1644,12 @@ type releaseSubject struct {
 	// digest is bare sha256 hex, the shape the store's door takes.
 	digest   string
 	registry bool
+	// listed is whether the release's asset listing holds this file.
+	// Only a listed asset can be read to ask whether it is evidence
+	// about the release; a file the digest manifest names and the
+	// release does not carry has nothing to read, so no read of it can
+	// fail.
+	listed bool
 }
 
 // releaseSubjects finds the release to measure and the artifacts it
@@ -1677,7 +1699,9 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, []rele
 	subjects := make([]releaseSubject, 0, len(files))
 
 	for _, name := range slices.Sorted(maps.Keys(files)) {
-		subjects = append(subjects, releaseSubject{name: name, digest: files[name]})
+		subjects = append(subjects, releaseSubject{
+			name: name, digest: files[name], listed: slices.Contains(assets, name),
+		})
 	}
 
 	subjects = append(subjects, la.registrySubjects(forge, tag, assets, out)...)
@@ -1703,10 +1727,24 @@ func (la *levelArgs) releaseSubjects(forge gh.Forge, out *latch) (string, []rele
 // It does not read them back out of the bundles: the level judges the
 // newest release only, and an old format there is a release to
 // re-cut, not a history to excuse.
+//
+// A search that stopped at its bound without finding a manifest is not
+// "no manifest", and it is not a blind surface either: the evidence
+// manifest is one publisher family's format, a stranger's release
+// never carries one, and so on any release longer than the bound the
+// search always ends there. Its files are judged as before; the walk
+// says plainly that registry subjects, if any, are not counted
+// (stele#373).
 func (la *levelArgs) registrySubjects(
 	forge gh.Forge, tag string, assets []string, out *latch,
 ) []releaseSubject {
-	doc := la.findEvidenceManifest(forge, tag, assets, out)
+	doc, stoppedAfter := la.findEvidenceManifest(forge, tag, assets)
+	if stoppedAfter > 0 {
+		out.logf("level: release %s: stopped looking for an evidence manifest after %d of %d asset(s);"+
+			" registry subjects, if the release names any, are not counted", tag, stoppedAfter, len(assets))
+
+		return nil
+	}
 
 	var listed []evidence.Asset
 
@@ -1735,10 +1773,14 @@ func (la *levelArgs) registrySubjects(
 // CONTENT: an asset that parses as one. Assets whose names suggest a
 // manifest are probed first — the hint decides ORDER, never
 // membership — and the probe is bounded so this search cannot
-// download a whole release of binaries.
+// download a whole release of binaries. The second result is how many
+// assets were probed when the bound stopped the search, zero when it
+// finished.
+//
+//nolint:gocritic // unnamedResult: the manifest, then where the bound stopped the search
 func (la *levelArgs) findEvidenceManifest(
-	forge gh.Forge, tag string, assets []string, out *latch,
-) *evidence.Manifest {
+	forge gh.Forge, tag string, assets []string,
+) (*evidence.Manifest, int) {
 	var hinted, rest []string
 
 	for _, a := range assets {
@@ -1755,9 +1797,7 @@ func (la *levelArgs) findEvidenceManifest(
 
 	for _, a := range append(hinted, rest...) {
 		if probes >= maxManifestProbes {
-			out.logf("level: release %s: stopped looking for an evidence manifest after %d asset(s)", tag, probes)
-
-			break
+			return nil, probes // the caller says what that means
 		}
 
 		probes++
@@ -1768,11 +1808,11 @@ func (la *levelArgs) findEvidenceManifest(
 		}
 
 		if doc, err := evidence.Parse(raw); err == nil {
-			return doc
+			return doc, 0
 		}
 	}
 
-	return nil
+	return nil, 0
 }
 
 // findManifest locates the release's digest manifest BY CONTENT: an
