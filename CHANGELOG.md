@@ -10,6 +10,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.22.3](https://github.com/monumental-archive/stele/compare/v0.22.2...v0.22.3) - 2026-11-15
+
+### Fixed
+
+- say provenance was retrievable only when it was ([#371](https://github.com/monumental-archive/stele/pull/371))
+- read an unreadable release store as unreached ([#372](https://github.com/monumental-archive/stele/pull/372))
+- read an unfinished look as unreached, not absent ([#375](https://github.com/monumental-archive/stele/pull/375))
+
 ## [0.22.2](https://github.com/monumental-archive/stele/compare/v0.22.1...v0.22.2) - 2026-11-15
 
 ### Fixed
