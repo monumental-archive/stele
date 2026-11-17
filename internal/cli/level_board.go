@@ -26,9 +26,11 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/board"
@@ -47,6 +49,7 @@ type boardArgs struct {
 	repo        string
 	owner, name string
 	outDir      string
+	published   string
 	policyPath  string
 	ref         string
 	notesRef    string
@@ -119,6 +122,24 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 	b := board.Board{Dir: opts.outDir}
 	kept := 0
 
+	// Seeded from the published board, so the replace rule judges
+	// against what was published: a cell that cannot be judged today
+	// keeps the published level rather than publishing grey into a
+	// directory that never held it and calling that drift.
+	if opts.published != "" {
+		if err := b.Seed(board.Board{Dir: opts.published}); err != nil {
+			if _, werr := fmt.Fprintf(stderr, "stele level: %v\n", err); werr != nil {
+				return exitIO
+			}
+
+			if errors.Is(err, board.ErrNotEmpty) {
+				return exitUsage
+			}
+
+			return exitIO
+		}
+	}
+
 	for _, c := range p.cells {
 		outcome, err := b.Publish(c, opts.measure(c, p, forge, git, out))
 		if err != nil {
@@ -140,30 +161,74 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
+	drifted, ccode := opts.compare(b, out)
+	if ccode != exitOK {
+		return ccode
+	}
+
 	if out.err != nil {
 		return exitIO
 	}
 
-	return boardExit(kept, stderr)
+	return boardExit(kept, drifted, stderr)
 }
 
-// boardExit reports the one state worth waking anyone for. A grey
-// cell is NOT it: a repository that publishes nothing has no build
-// level, that is a fact about it rather than a fault, and a run that
-// went red over it would fire every week forever until the board was
-// something nobody read.
-func boardExit(kept int, stderr io.Writer) int {
-	if kept == 0 {
-		return exitOK
+// compare holds the measured board against the published one, when
+// the run was given one, naming every cell that drifts. It returns how
+// many did.
+//
+//nolint:gocritic // unnamedResult: the count and cli.Run's exit code
+func (opts *boardArgs) compare(b board.Board, out *latch) (int, int) {
+	if opts.published == "" {
+		return 0, exitOK
 	}
 
-	if _, err := fmt.Fprintf(stderr,
-		"stele level: %d cell(s) were judged before and cannot be judged now;"+
-			" the published judgments stand — investigate\n", kept); err != nil {
-		return exitIO
+	drift, err := b.Compare(board.Board{Dir: opts.published})
+	if err != nil {
+		out.logf("level: %v", err)
+
+		return 0, exitIO
 	}
 
-	return exitBlind
+	for _, d := range drift {
+		out.logf("level: drift: %s", d)
+	}
+
+	return len(drift), exitOK
+}
+
+// boardExit reports the states worth waking anyone for. A grey cell
+// is NOT one: a repository that publishes nothing has no build level,
+// that is a fact about it rather than a fault, and a run that went red
+// over it would fire every week forever until the board was something
+// nobody read.
+//
+// A kept cell outranks drift, as CANNOT_JUDGE outranks FAIL
+// everywhere: a run that could not see part of what it judged has not
+// judged it, whatever else it found. Both are still named.
+func boardExit(kept, drifted int, stderr io.Writer) int {
+	if drifted > 0 {
+		if _, err := fmt.Fprintf(stderr,
+			"stele level: %d cell(s) on the published board disagree with the measurement\n", drifted); err != nil {
+			return exitIO
+		}
+	}
+
+	if kept > 0 {
+		if _, err := fmt.Fprintf(stderr,
+			"stele level: %d cell(s) were judged before and cannot be judged now;"+
+				" the published judgments stand — investigate\n", kept); err != nil {
+			return exitIO
+		}
+
+		return exitBlind
+	}
+
+	if drifted > 0 {
+		return exitRefused
+	}
+
+	return exitOK
 }
 
 // plan enumerates what this run answers for, through the population
@@ -302,6 +367,9 @@ func parseBoardArgs(args []string, stderr io.Writer) (*boardArgs, int) {
 		"owner/repo whose own cells to publish, enumerating nothing (this or --org)")
 	fs.StringVar(&opts.outDir, "out-dir", "",
 		"publish every cell here as <repo>/<track>.report.json and <repo>/<track>.shield.json")
+	fs.StringVar(&opts.published, "published", "",
+		"the board as published: --out-dir (which must be empty) is seeded from it, measured over, and "+
+			"compared with it, every differing cell a finding")
 	fs.StringVar(&opts.policyPath, "policy", "",
 		"assert policy whose declared population scopes the board (membership only: no declaration reaches a verdict)")
 	fs.StringVar(&opts.ref, "ref", defaultBranch, "fully qualified branch ref to measure")
@@ -334,6 +402,8 @@ func parseBoardArgs(args []string, stderr io.Writer) (*boardArgs, int) {
 		// cell is the format, and there is no combined one.
 		return fail("a track is required: build, source or dependency\n" +
 			"stele level: or --out-dir <dir> to publish every track as its own document")
+	case opts.published != "" && samePath(opts.published, opts.outDir):
+		return fail("--published and --out-dir are one directory — a board compared with itself never drifts")
 	case opts.repo == "":
 		opts.owner = opts.org
 
@@ -348,4 +418,13 @@ func parseBoardArgs(args []string, stderr io.Writer) (*boardArgs, int) {
 	opts.owner, opts.name = owner, name
 
 	return opts, exitOK
+}
+
+// samePath reports whether two paths name one directory, by their
+// cleaned absolute spelling.
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+
+	return errA == nil && errB == nil && absA == absB
 }

@@ -58,7 +58,7 @@ the same statement as this one and tested against it.
 | `stele assert advisories` | one module's govulncheck scan against the committed VEX decisions: only a reachable advisory gates, and only a denying decision excuses it |
 | `stele assert signer-certificates` | every certificate a transparency log holds for a declared signing workflow, read in chunks from a checkpoint and reconciled against a signing the population performed |
 | `stele assert published` | a release's declared subjects against the stores that serve them: file bytes against the built digests, image tags against the attested indexes |
-| `stele level` | what a repository's live evidence supports, per track, taking no declaration for a verdict; `--org --out-dir <dir>` with no track publishes the whole board and never over a level already proven |
+| `stele level` | what a repository's live evidence supports, per track, taking no declaration for a verdict; `--org --out-dir <dir>` with no track publishes the whole board and never over a level already proven; `--published <dir>` measures over the board as published and names every cell that drifts from it |
 | `stele level build` | provenance, its authenticity, and the platform's own certificate claims |
 | `stele level source` | the source chain measured with no expected identity |
 | `stele level dependency` | the DRAFT dependency track, marked draft in every output |
