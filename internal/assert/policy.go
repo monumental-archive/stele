@@ -366,6 +366,16 @@ type TagsPolicy struct {
 	Epochs map[string]string `json:"epochs"`
 }
 
+// SignsTag reports whether one tag of one repository owes a
+// signature under this section: the repository declares a signing
+// epoch (not pending) and the tag sits at or after it — the same one
+// reading of the epoch the tag audit's population is drawn from.
+func (tp *TagsPolicy) SignsTag(repo, tag string) bool {
+	epoch, declared := tp.Epochs[repo]
+
+	return declared && epoch != EpochPending && tagAtOrAfter(tag, epoch)
+}
+
 func (tp *TagsPolicy) validate() error {
 	for name, f := range map[string]*string{
 		"tagPattern": tp.TagPattern, "taggerName": tp.TaggerName,
@@ -468,8 +478,11 @@ type TagProofFloor struct {
 // needs to know to say which regimes one run covered.
 func (f *TagProofFloor) Raised() bool { return len(f.From) > 0 }
 
-// floorFor is the floor one tag of one repository owes.
-func (f *TagProofFloor) floorFor(repo, tag string) string {
+// FloorFor is the floor one tag of one repository owes — the one
+// reading of the declaration, shared by the tag audit and the source
+// verdict's tag check (stele#391), so the two cannot owe different
+// floors for the same tag.
+func (f *TagProofFloor) FloorFor(repo, tag string) string {
 	if len(f.From) == 0 {
 		return *f.Floor
 	}
@@ -636,6 +649,21 @@ type EvidencePolicy struct {
 	// published older manifests must declare the version its own
 	// machinery moved at (stele#185).
 	ManifestSchemaFromVersion *string `json:"manifestSchemaFromVersion,omitempty"`
+	// SourceVerdictFromVersion is the machinery version (inclusive)
+	// from which a tagged release owes a source verdict for its tag
+	// (stele#391): the tag bound to its commit and the commit's chain
+	// level, signed by the verdict identity. The same epoch semantics
+	// as every sibling, defined once in owedFrom. Absent means the
+	// release machinery emits no source verdict and none is owed —
+	// unlike its siblings, because emitting one needs the `tags`
+	// section beside it, and an adopter who signs no tags has nothing
+	// for the verdict to bind.
+	SourceVerdictFromVersion *string `json:"sourceVerdictFromVersion,omitempty"`
+	// SourceVerdictBundle names the release asset the source verdict
+	// is published as — a release asset because its subject is a
+	// commit, which the attestation store's sha256-keyed lookup cannot
+	// address. Declared with SourceVerdictFromVersion or not at all.
+	SourceVerdictBundle *string `json:"sourceVerdictBundle,omitempty"`
 	// EvidenceSuffixes are additional asset-name suffixes that mark a
 	// checksum entry as an evidence document rather than an artifact
 	// (the org's per-release VEX documents, for one) — excluded from
@@ -1101,6 +1129,14 @@ func (p *Policy) validate() error {
 		return err
 	}
 
+	// A source verdict binds a SIGNED tag to its commit: owing one
+	// from a version while declaring no tag obligation is an
+	// obligation nothing can ever meet, and the corpus walk would red
+	// every release past it for a reason the policy wrote itself.
+	if err := p.validateSourceVerdict(); err != nil {
+		return err
+	}
+
 	if (e.Continuous != nil || e.BaseImages != nil) && (p.Issuer == nil || *p.Issuer == "") {
 		return errors.New("issuer is required when evidence.continuous or evidence.baseImages is declared")
 	}
@@ -1175,6 +1211,29 @@ func (p *Policy) validateTags() error {
 	return p.Tags.validate()
 }
 
+// validateSourceVerdict refuses half a source-verdict declaration:
+// the epoch and the asset name are one obligation (when it is owed,
+// and where it is read), and the tag obligation it binds must exist.
+func (p *Policy) validateSourceVerdict() error {
+	e := p.Evidence
+
+	switch {
+	case e.SourceVerdictFromVersion != nil && e.SourceVerdictBundle == nil:
+		return errors.New("evidence.sourceVerdictFromVersion is declared without evidence.sourceVerdictBundle — " +
+			"an owed verdict needs the asset it is read from")
+	case e.SourceVerdictBundle != nil && e.SourceVerdictFromVersion == nil:
+		return errors.New("evidence.sourceVerdictBundle is declared without evidence.sourceVerdictFromVersion — " +
+			"an asset name owes nothing until an epoch says from when")
+	case e.SourceVerdictBundle != nil && *e.SourceVerdictBundle == "":
+		return errors.New("evidence.sourceVerdictBundle is empty")
+	case e.SourceVerdictFromVersion != nil && p.Tags == nil:
+		return errors.New("evidence.sourceVerdictFromVersion is declared but the policy declares no tags section — " +
+			"a source verdict binds a signed tag, and this policy owes none")
+	}
+
+	return nil
+}
+
 // validateEpochs refuses unparsable epochs — both epoch fields feed
 // MustParse downstream, so an epoch validate admits but the walk
 // panics on would turn a reviewed policy into a crash mid-walk.
@@ -1200,6 +1259,12 @@ func (e *EvidencePolicy) validateEpochs() error {
 	if e.ManifestSchemaFromVersion != nil {
 		if _, err := semver.NewVersion(*e.ManifestSchemaFromVersion); err != nil {
 			return fmt.Errorf("evidence.manifestSchemaFromVersion: %w", err)
+		}
+	}
+
+	if e.SourceVerdictFromVersion != nil {
+		if _, err := semver.NewVersion(*e.SourceVerdictFromVersion); err != nil {
+			return fmt.Errorf("evidence.sourceVerdictFromVersion: %w", err)
 		}
 	}
 
@@ -1244,6 +1309,15 @@ func (e *EvidencePolicy) decision(machineryVersion string) bool {
 // consumes the answer lands with #86.
 func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
 	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
+}
+
+// sourceVerdict reports whether a release under the given machinery
+// version owes a source verdict for its tag (stele#391). Through the
+// one owedFrom definition — with the one difference its declaration
+// carries: absent means never, because the verdict binds a signed tag
+// and an adopter who declares no epoch has said it emits none.
+func (e *EvidencePolicy) sourceVerdict(machineryVersion string) bool {
+	return e.SourceVerdictFromVersion != nil && owedFrom(e.SourceVerdictFromVersion, machineryVersion)
 }
 
 // manifestSchema reports whether a release under the given machinery

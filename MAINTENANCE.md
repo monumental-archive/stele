@@ -30,6 +30,7 @@ the same statement as this one and tested against it.
 | `stele verify` | published evidence, judged as a stranger would, fail-closed |
 | `stele verify release` | every attestation of one release against the pinned signer identity, the verifying-artifacts comparisons, subject coverage, the release decision |
 | `stele verify vsa` | the published verdict, as the spec's consumer procedure |
+| `stele verify source-vsa` | a release tag's source verdict, from the release asset the assert policy names, against the tag's commit and its chain link now |
 | `stele verify chain` | the source chain: coverage tip→genesis, and the ledger |
 | `stele verify repro` | the reproducibility rebuild's typed verdict, one finding per artifact that failed to reproduce |
 | `stele verify policy` | one committed policy document run through this engine's own loader, offline: exit 0 if it loads, else the loader's refusal verbatim |
@@ -61,7 +62,7 @@ the same statement as this one and tested against it.
 | `stele level dependency` | the DRAFT dependency track, marked draft in every output |
 | `stele emit` | the JSON that gets signed |
 | `stele emit chain` | source-chain links for the pushed revision and any holes earlier lapses left |
-| `stele emit vsa` | the build-track VSA predicate, from a full release verification |
+| `stele emit vsa` | the build-track VSA predicate, from a full release verification; beside it, when the assert policy owes one, the release tag's signed source verdict |
 | `stele emit manifest` | the release evidence manifest: the declared contract a stranger reads at the tag |
 
 ## Exit codes

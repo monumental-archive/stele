@@ -517,7 +517,7 @@ func (w *tagsWalk) tag(repo string, ref gitrepo.TagRef, epoch string, h chainHor
 	// "owes a signature" cannot drift apart (they did, and the drift is
 	// stele#208).
 	if epoch != EpochPending {
-		w.signature(subject, obj, w.pol.ProofFloor.floorFor(repo, ref.Name))
+		w.signature(subject, obj, w.pol.ProofFloor.FloorFor(repo, ref.Name))
 	}
 
 	judged, err := w.link(repo, subject, target, h)

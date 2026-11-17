@@ -96,6 +96,9 @@ usage:
               signer identity, the four verifying-artifacts
               comparisons, subject coverage, the release decision
     vsa       the published verdict, as the spec's consumer procedure
+    source-vsa  a release tag's source verdict, read from the release
+              asset the assert policy names and held against the
+              tag's commit and that commit's chain link as they stand
     chain     the source chain: coverage tip→genesis and the ledger
     repro     the reproducibility rebuild: the release's checksum
               manifest against the rebuild's, over the class and
@@ -234,7 +237,9 @@ usage:
               holes earlier lapses left, signed via cosign, appended
               to the notes ledger with a compare-and-swap push
     vsa       run release verification in full and render the
-              build-track VSA predicate the workflow signs
+              build-track VSA predicate the workflow signs; when the
+              assert policy owes one, also sign the tag's source
+              verdict — both written, or neither
     manifest  the release evidence manifest — the declared contract a
               stranger reads at the tag; every value a stated fact and
               every published asset pinned and typed, read back
@@ -273,7 +278,8 @@ in this binary.
 
 verify flags: --policy --repo; release/vsa add
 --tag --subjects --signer-digest --machinery-digest; chain adds
---git-dir [--ref]; repro takes --repo --tag --released --rebuilt
+--git-dir [--ref]; source-vsa adds --tag --git-dir --assert-policy
+--machinery-digest; repro takes --repo --tag --released --rebuilt
 [--class --targets --assert-policy --json] and no trust material — a
 digest comparison signs nothing; --assert-policy types an UNTYPED
 released manifest, --class and --targets scope the judged population
@@ -287,7 +293,7 @@ declared population, and --org --out-dir <dir> with no track publishes
 <repo>/<track>.report.json and .shield.json per cell. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
-[--out]; emit manifest takes --classes --store-vsa
+[--out --assert-policy --git-dir --source-out]; emit manifest takes --classes --store-vsa
 --machinery-version --assets --assert-policy --leg-subjects
 [--registry-subjects --out]
 and none of the above.

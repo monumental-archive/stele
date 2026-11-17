@@ -87,6 +87,37 @@ func TestLoadPolicyRefusals(t *testing.T) {
 			"decisionFromVersion",
 		},
 		{
+			"unparsable source verdict epoch",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "sourceVerdictFromVersion": "not-a-version"`, 1),
+			"evidence.sourceVerdictFromVersion:",
+		},
+		{
+			"a source verdict owed with no tag obligation",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "sourceVerdictFromVersion": "1.70.0", `+
+					`"sourceVerdictBundle": "source-verdict.json"`, 1),
+			"evidence.sourceVerdictFromVersion is declared but the policy declares no tags section",
+		},
+		{
+			"a source verdict epoch with no asset",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "sourceVerdictFromVersion": "1.70.0"`, 1),
+			"evidence.sourceVerdictFromVersion is declared without evidence.sourceVerdictBundle",
+		},
+		{
+			"a source verdict asset with no epoch",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "sourceVerdictBundle": "source-verdict.json"`, 1),
+			"evidence.sourceVerdictBundle is declared without evidence.sourceVerdictFromVersion",
+		},
+		{
+			"an empty source verdict asset",
+			strings.Replace(testPolicyJSON, `"storeVsaFromVersion": "1.13.0"`,
+				`"storeVsaFromVersion": "1.13.0", "sourceVerdictFromVersion": "1.70.0", "sourceVerdictBundle": ""`, 1),
+			"evidence.sourceVerdictBundle is empty",
+		},
+		{
 			"an empty enrichment name",
 			strings.Replace(testPolicyJSON, `"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}`,
 				`"oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "enrichment": [""]}`, 1),
@@ -162,6 +193,14 @@ func TestTagsPolicyRefusals(t *testing.T) {
 
 	if _, err := assert.LoadPolicy(strings.NewReader(base)); err != nil {
 		t.Fatalf("the base tags policy must load: %v", err)
+	}
+
+	// The source-verdict epoch beside the tag obligation it binds is a
+	// complete declaration (stele#391).
+	owed := strings.Replace(base, `"manifestAsset": "m.json",`,
+		`"manifestAsset": "m.json", "sourceVerdictFromVersion": "1.70.0", "sourceVerdictBundle": "source-verdict.json",`, 1)
+	if _, err := assert.LoadPolicy(strings.NewReader(owed)); err != nil {
+		t.Fatalf("a source verdict owed beside the tags section must load: %v", err)
 	}
 
 	tests := []struct {

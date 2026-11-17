@@ -28,6 +28,7 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
+	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vsa"
 )
 
@@ -52,7 +53,7 @@ func Evidence(
 	}
 
 	w := &evidenceWalk{
-		pol: e, org: pop.Owner(), subject: pop.Subject(),
+		pol: e, tags: pol.Tags, org: pop.Owner(), subject: pop.Subject(),
 		forge: forge, src: src, attestor: att, full: full, j: j, log: log,
 	}
 
@@ -88,6 +89,7 @@ func Evidence(
 
 type evidenceWalk struct {
 	pol      *EvidencePolicy
+	tags     *TagsPolicy
 	org      string
 	subject  string
 	forge    gh.Forge
@@ -147,6 +149,7 @@ func (w *evidenceWalk) release(repo, tag string) error {
 	}
 
 	bundles := w.requiredAssets(subject, contract, assets, have)
+	sourceVerdict := w.sourceVerdictPresent(repo, tag, contract, have)
 
 	if contract.StoreVSA {
 		if err := w.storeVerdicts(repo, tag, bundles); err != nil {
@@ -155,7 +158,89 @@ func (w *evidenceWalk) release(repo, tag string) error {
 	}
 
 	if w.full != nil {
-		return w.fullDepth(repo, tag, contract, bundles)
+		if err := w.fullDepth(repo, tag, contract, bundles); err != nil {
+			return err
+		}
+
+		return w.sourceVerdictDeep(repo, tag, sourceVerdict)
+	}
+
+	return nil
+}
+
+// sourceVerdictPresent judges the source-verdict obligation at
+// presence depth (stele#391) and reports whether the asset is there
+// to be verified. Owed only where both answers say so: the machinery
+// version is at or past the epoch, and the tags section says this
+// repository signs this tag — a tag nobody signed cannot be bound by
+// a verdict, so a repository declared unsigned, or a tag before its
+// repository's signing epoch, owes none.
+func (w *evidenceWalk) sourceVerdictPresent(repo, tag string, contract *Contract, have map[string]bool) bool {
+	if !contract.SourceVerdict {
+		return false
+	}
+
+	subject := repo + "@" + tag
+
+	if w.tags == nil || !w.tags.SignsTag(repo, tag) {
+		w.log("assert: evidence: %s owes no source verdict — the tags section owes no signature on it", subject)
+
+		return false
+	}
+
+	asset := *w.pol.SourceVerdictBundle
+	if c := w.check(subject, asset); !have[asset] {
+		c.Diverged("the source verdict for the tag is absent — owed from machinery " +
+			*w.pol.SourceVerdictFromVersion)
+
+		return false
+	}
+
+	return true
+}
+
+// sourceVerdictDeep re-verifies a present source verdict through the
+// verify engine — the single-release read a stranger runs, the same
+// depth split the release decision has: presence asks that it exists,
+// full depth that it verifies.
+func (w *evidenceWalk) sourceVerdictDeep(repo, tag string, present bool) error {
+	if !present {
+		return nil
+	}
+
+	subject := repo + "@" + tag
+	asset := *w.pol.SourceVerdictBundle
+	c := w.check(subject, asset+":deep")
+
+	envelope, err := w.forge.Asset(w.org, repo, tag, asset)
+	if err != nil {
+		if unseen(err) {
+			return blind(deepSourceVerdict, subject, asset, err)
+		}
+
+		c.Diverged(err.Error())
+
+		return nil
+	}
+
+	pins, err := w.resolvePins(repo, tag)
+	if err != nil {
+		if unseen(err) {
+			return blind(deepSourceVerdict, subject, "signing pins", err)
+		}
+
+		c.Diverged(err.Error())
+
+		return nil
+	}
+
+	coords := verify.Coords{Owner: w.org, Repo: repo, Tag: tag}
+	if verr := w.full.Verifier.SourceVSA(coords, envelope, pins); verr != nil {
+		if unseen(verr) {
+			return blind(deepSourceVerdict, subject, "source verdict", verr)
+		}
+
+		c.Diverged(verr.Error())
 	}
 
 	return nil

@@ -39,6 +39,9 @@ type DeepVerifier interface {
 	// non-nil one carries the class-keyed names this release owes on
 	// top of the universal set.
 	VSA(c verify.Coords, subjects []verify.Subject, pins verify.Pins, demand *verify.EnrichmentDemand) error
+	// SourceVSA proves one release tag's source verdict (stele#391)
+	// from the asset's bytes: the read `verify source-vsa` runs.
+	SourceVSA(c verify.Coords, envelope []byte, pins verify.Pins) error
 }
 
 // uses40RE finds the machinery pin on a caller's publish workflow:
@@ -49,6 +52,8 @@ type DeepVerifier interface {
 const (
 	deepRelease = "deep release check"
 	deepVerdict = "deep verdict check"
+	// deepSourceVerdict is the source-verdict half (stele#391).
+	deepSourceVerdict = "deep source verdict check"
 )
 
 var uses40RE = regexp.MustCompile(`uses:\s*\S*/(?:publish|release)\.ya?ml@([0-9a-f]{40})`)

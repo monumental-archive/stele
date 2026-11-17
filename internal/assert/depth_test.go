@@ -29,6 +29,9 @@ const (
 // call received — the pin derivation is the logic under test.
 type fakeDeep struct {
 	releaseErr, vsaErr error
+	sourceErr          error
+	sourceEnvelopes    []string
+	sourcePins         []verify.Pins
 	releasePins        []verify.Pins
 	decisions          []bool
 	vsaPins            []verify.Pins
@@ -51,6 +54,13 @@ func (d *fakeDeep) Release(
 	d.sboms = append(d.sboms, sboms)
 
 	return d.releaseErr
+}
+
+func (d *fakeDeep) SourceVSA(_ verify.Coords, envelope []byte, pins verify.Pins) error {
+	d.sourceEnvelopes = append(d.sourceEnvelopes, string(envelope))
+	d.sourcePins = append(d.sourcePins, pins)
+
+	return d.sourceErr
 }
 
 func (d *fakeDeep) VSA(_ verify.Coords, _ []verify.Subject, pins verify.Pins, demand *verify.EnrichmentDemand) error {

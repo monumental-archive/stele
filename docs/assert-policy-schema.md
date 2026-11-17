@@ -13,7 +13,7 @@ Four formats are defined here: the policy file, the release
 evidence manifest, the debt file, and the inventory plan. A change to any is a reviewed
 edit to this document first.
 
-`schema` is the refusal boundary: current **8**, the one epoch shared
+`schema` is the refusal boundary: current **9**, the one epoch shared
 by this policy, the verify policy and the report, so a bump cannot
 land on one document and miss another ([docs/versioning.md](versioning.md)).
 The gate fires before strict decoding, so another schema refuses as a
@@ -178,6 +178,35 @@ version mismatch, never as an unknown-field error.
   asset attested by digest at its tag, so it cannot be re-emitted the
   way a mutable note can; the epoch is how history stays readable
   without a dual-version reader.
+- `sourceVerdictFromVersion` — the machinery version (inclusive)
+  from which a tagged release owes a **source verdict** for its tag
+  (stele#391; the verdict is specified under
+  [the tags section](#the-source-verdict-for-a-release-tag)). Same
+  semantics as its siblings, from the same one definition, with one
+  difference that follows from what the verdict binds: **absent means
+  none is owed and none is emitted**, because the verdict binds a
+  signed tag, and an adopter who declares no `tags` section signs
+  none. Declaring this field without a `tags` section is refused at
+  load — an obligation nothing could ever meet. Like
+  `enrichmentFromVersion`, the epoch lives here and not in the verify
+  policy: the single-release read stays epoch-free, and whether a
+  release owes the verdict is the corpus walk's question. A release
+  owes it when its machinery version is at or past the epoch AND the
+  `tags` section says its repository signs that tag (a signing epoch,
+  not `pending`, at or before the tag): a tag nobody signs cannot be
+  bound, so a repository declared unsigned owes none.
+- `sourceVerdictBundle` — the release asset the source verdict is
+  published as, a plain name like `checksums`. Declared with
+  `sourceVerdictFromVersion` or not at all; either one alone, or an
+  empty name, is refused at load. A release asset rather than an
+  attestation-store entry: the verdict's subject is a commit, and the
+  store is addressed by sha256 subject only. The walk requires it
+  like any named asset — a release owing it without it is a finding
+  under the asset's name — and `--depth full` also runs it through
+  the single-release read, the same depth split as the release
+  decision: presence asks that it exists, full depth that it
+  verifies (finding `<asset>:deep`). Attaching it is the publishing
+  workflow's step, not this tool's.
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
   entry as an evidence DOCUMENT rather than an artifact (an org's
   per-release VEX documents, for one). Documents are excluded from
@@ -1243,6 +1272,65 @@ nothing left behind. A remote that ignores the commits-only filter is
 said in the run's output and counted in the report
 (`gitFilterIgnored`); a fetch that does not complete, throttled or
 otherwise, seals CANNOT_JUDGE and never a finding about the subject.
+
+### The source verdict for a release tag
+
+A release verdict speaks for the artifacts; the source verdict is
+the second verdict beside it, speaking for the tag (stele#391). It
+is emitted by the same command, `stele emit vsa`, when that command
+is given this policy (`--assert-policy`) and the policy declares
+both this section and `evidence.sourceVerdictFromVersion`; otherwise
+`emit vsa` is unchanged. It is emitted only when every check passes,
+and all-or-nothing with the release verdict — a refusal writes
+neither:
+
+- the release verifies (the release verdict's own checks), folding
+  its provenance to one source revision;
+- the release tag, read from the clone (`--git-dir`, with the
+  protected branches, the notes ref and the tag fetched), is
+  annotated, made by `taggerName`, in a repository whose `epochs`
+  line is a signing epoch (a repository declared `pending` signs no
+  tags, so no tag of it can vouch for a verdict), signed, and its
+  signature verifies under `identityPattern` and the issuer at the
+  floor `proofFloor` owes that tag;
+- the tag points at the release's source revision;
+- that commit carries a chain link verified in the walk of a branch
+  the verify policy declares in `source.protectedBranches` (a link is
+  one note per commit, so any declared branch whose walk holds it
+  gives the same facts).
+
+The verdict is a whole in-toto statement: one subject, the commit by
+`gitCommit` digest, annotated `{"sourceRefs": ["refs/tags/<tag>"]}`;
+a VSA predicate whose `verifier.id` is the verify policy's
+`trust.verdict.verifierWorkflow`, `resourceUri` the verify policy's
+`source.resourceUri`, `verifiedLevels` copied from the link's own
+summary half — never computed afresh, so the verdict adds no claim
+the chain does not support — and `inputAttestations` the link's two
+halves, each with the sha256 of the bundle that signed it and
+addressed in the ledger as
+`<source.resourceUri>@<notesRef>#<commit>/provenance` (and `/vsa`).
+That address is stele's own convention — no spec names a URI for one
+half of a chain note — built from the verify policy's declared
+resource, never a host written in code. It is
+signed by the verdict identity (the ambient signer, over DSSE's PAE of
+the statement), proved with a stranger's inputs by the same read a
+consumer runs, and written (`--source-out`) in the chain format's
+half envelope: `payloadType`, the base64 statement, and the bundle.
+The publishing workflow attaches that file to the release as
+`evidence.sourceVerdictBundle`.
+
+`stele verify source-vsa` is the read: it fetches that asset from the
+release `--repo`/`--tag` names, resolves the tag to its commit in a
+clone (`--git-dir`), finds the commit's link on a protected branch,
+and holds the verdict against them; `assert evidence --depth full`
+runs the same read over the history it fetches. The read holds it
+against the commit's link as it is **now**: the
+signature under the verdict identity at the machinery pin; exactly
+one subject, the tag's commit; `sourceRefs` naming exactly that tag;
+the predicate's verifier, resource and result; and every claimed
+level no higher than the link shows today (a track level not above
+the link's on the same track, any other value one the link still
+carries).
 
 ### What the tag walk covered, and how it says so
 

@@ -9,6 +9,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/gitfetch"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -27,12 +29,13 @@ import (
 //
 //nolint:gochecknoglobals // test seam, written only by test setup
 var newDeepVerifier = func(
-	vp *policy.Policy, forge gh.Forge, tags assert.TagResolver, bv verify.BundleVerifier,
+	vp *policy.Policy, forge gh.Forge, tags assert.TagResolver, bv verify.BundleVerifier, history sourceHistories,
 ) (*assert.FullDepth, error) {
 	ev := &engineVerifier{
-		vp:    vp,
-		store: forgeStore{forge: forge},
-		bv:    bv,
+		vp:      vp,
+		store:   forgeStore{forge: forge},
+		bv:      bv,
+		history: history,
 	}
 
 	// The verdict obligation is declared, not assumed (#82): an empty
@@ -50,50 +53,92 @@ var newDeepVerifier = func(
 // pins resolve through: a release tag becomes its commit through git,
 // by the same resolution the tag audit reads (stele#384) — each
 // repository's tags at depth one, a tag and the commit it names and
-// nothing behind them. The caller closes the session when the walk
-// ends.
+// nothing behind them. The caller closes every session it opened,
+// through the returned func, when the walk ends.
+//
+// A walk that owes source verdicts (stele#391) gets a second session,
+// for the history a verdict is read against: the protected branches
+// whole (commits-only), the ledger and the tags. Fetched only on a
+// repository's first source-verdict read, and only for that walk.
 func openFullDepth(
-	verifyPolicyPath string, rootJSON []byte, forge gh.Forge, log func(string, ...any),
-) (*assert.FullDepth, *gitfetch.Session, error) {
+	verifyPolicyPath string, rootJSON []byte, forge gh.Forge, owesSource bool, log func(string, ...any),
+) (*assert.FullDepth, func(io.Writer), error) {
 	pins := newGitSession(gitfetch.Want{Tags: true, Shallow: true}, log)
 	if err := pins.Check(); err != nil {
 		return nil, nil, err
 	}
 
-	fd, err := loadFullDepth(verifyPolicyPath, rootJSON, forge, pins)
+	fd, history, err := loadFullDepth(verifyPolicyPath, rootJSON, forge, pins, owesSource, log)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return fd, pins, nil
+	closeAll := func(stderr io.Writer) {
+		closeSession(pins, stderr)
+
+		if history != nil {
+			closeSession(history, stderr)
+		}
+	}
+
+	return fd, closeAll, nil
 }
 
 // loadFullDepth reads the trust authority and builds the full-depth
 // options — every failure here is a usage refusal at the call site.
 // The trusted-root document arrives already resolved: the caller
 // resolves once for the whole run, so the deep half and the store
-// halves cannot end up holding different trust material.
+// halves cannot end up holding different trust material. When the
+// walk owes source verdicts it also returns the history session they
+// are read against, built from the protected branches the verify
+// policy declares; nil otherwise.
 func loadFullDepth(
 	verifyPolicyPath string, rootJSON []byte, forge gh.Forge, tags assert.TagResolver,
-) (*assert.FullDepth, error) {
+	owesSource bool, log func(string, ...any),
+) (*assert.FullDepth, *gitfetch.Session, error) {
 	vf, err := os.Open(verifyPolicyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
-		return nil, err //nolint:wrapcheck // the refusal names the path already
+		return nil, nil, err //nolint:wrapcheck // the refusal names the path already
 	}
 
 	vp, perr := policy.Load(vf)
 	vf.Close() //nolint:errcheck,gosec // read-only close
 
 	if perr != nil {
-		return nil, perr
+		return nil, nil, perr
+	}
+
+	var (
+		history *gitfetch.Session
+		served  sourceHistories
+	)
+
+	if owesSource {
+		if vp.Source == nil {
+			return nil, nil, errors.New("the assert policy owes source verdicts but the verify policy " +
+				"declares no source section — the history they are read against is undeclared")
+		}
+
+		refs := make([]string, 0, len(vp.Source.ProtectedBranches))
+		for _, b := range vp.Source.ProtectedBranches {
+			refs = append(refs, "refs/heads/"+*b.Name)
+		}
+
+		history = newGitSession(gitfetch.Want{Branches: refs, NotesRef: *vp.Source.NotesRef, Tags: true}, log)
+		served = history
 	}
 
 	bv, berr := newBundleVerifier(rootJSON)
 	if berr != nil {
-		return nil, berr
+		return nil, nil, berr
 	}
 
-	return newDeepVerifier(vp, forge, tags, bv)
+	fd, ferr := newDeepVerifier(vp, forge, tags, bv, served)
+	if ferr != nil {
+		return nil, nil, ferr
+	}
+
+	return fd, history, nil
 }
 
 // storeHalvesDeclared reports whether this policy gives the walk a
@@ -234,6 +279,32 @@ type engineVerifier struct {
 	vp    *policy.Policy
 	store verify.Store
 	bv    verify.BundleVerifier
+	// history serves the clone a source verdict is read against; nil
+	// when the walk owes none.
+	history sourceHistories
+}
+
+// sourceHistories is one fetched clone per repository —
+// gitfetch.Session's own read.
+type sourceHistories interface {
+	Repo(owner, repo string) (*gitrepo.Repo, error)
+}
+
+// SourceVSA implements assert.DeepVerifier: the one read of a source
+// verdict, over the repository's fetched history.
+func (e *engineVerifier) SourceVSA(c verify.Coords, envelope []byte, pins verify.Pins) error {
+	if e.history == nil {
+		return errors.New("no history was fetched for source verdicts — the walk owes none")
+	}
+
+	g, err := e.history.Repo(c.Owner, c.Repo)
+	if err != nil {
+		return err
+	}
+
+	_, err = readSourceVerdict(e.vp, c, pins, g, envelope, e.bv, func(string, ...any) {})
+
+	return err
 }
 
 func (e *engineVerifier) Release(

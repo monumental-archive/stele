@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/emit"
 	"github.com/monumental-archive/stele/internal/gitrepo"
@@ -159,6 +160,14 @@ type emitArgs struct {
 	signerPin   string
 	out         string
 
+	// vsa: the source verdict (stele#391), owed when the assert
+	// policy declares it
+	assertPolicy string
+	sourceOut    string
+	tags         *assert.TagsPolicy
+	issuer       string
+	rootJSON     []byte
+
 	p             *policy.Policy
 	coords        verify.Coords
 	subjectList   []verify.Subject
@@ -258,6 +267,7 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.inventories, "inventories", "", inventoriesUsage)
 		fs.StringVar(&ea.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&ea.out, "out", "", "write the predicate here instead of stdout")
+		registerSourceVerdictFlags(fs, ea)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -312,6 +322,8 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
+
+	ea.rootJSON = rootJSON
 
 	if ea.mode == emitChain {
 		return ea.loadChain(fail)
@@ -389,7 +401,7 @@ func (ea *emitArgs) loadVSA(fail func(error) int) int {
 		}
 	}
 
-	return exitOK
+	return ea.loadSourceVerdict(fail)
 }
 
 // runEmit runs the selected mode against real dependencies.
@@ -461,6 +473,15 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 		return err
 	}
 
+	source, err := ea.emitSourceVerdict(verdict.SourceRevision(), when, out)
+	if err != nil {
+		return err
+	}
+
+	if err := writeSourceVerdict(ea.sourceOut, source); err != nil {
+		return err
+	}
+
 	if ea.out == "" {
 		out.logf("%s", pred)
 
@@ -468,6 +489,10 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 	}
 
 	if err := os.WriteFile(ea.out, append(pred, '\n'), ownerRW); err != nil {
+		if source != nil {
+			_ = os.Remove(ea.sourceOut) //nolint:errcheck // best effort: the refusal below is the report
+		}
+
 		return fmt.Errorf("emit: writing the predicate: %w", err)
 	}
 

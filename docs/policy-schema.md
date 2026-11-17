@@ -230,6 +230,16 @@ verifier's behalf, and the claim never moved. The verifier therefore
 switches only the signing identity and its pin on a legacy match;
 the claimed verifier URI is constant across both epochs.
 
+The same identity signs the source verdict for a release tag
+(stele#391), the second verdict beside the release verdict: it binds
+the tag to its commit and to the level that commit's chain link
+holds, under this section's `verifierWorkflow` and
+`source.resourceUri`. Whether one is owed is the assert policy's
+`evidence.sourceVerdictFromVersion`; what it carries and how it is
+read is specified in
+[assert-policy-schema.md](assert-policy-schema.md#the-source-verdict-for-a-release-tag).
+Never a legacy root: grandfathered verdicts predate the mechanism.
+
 ### `trust.decision` (optional)
 
 The release-decision gate: a release's SBOM documents must carry a

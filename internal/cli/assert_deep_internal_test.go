@@ -66,7 +66,7 @@ func TestLoadFullDepth(t *testing.T) {
 	t.Run("an unreadable verify policy refuses", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}, noPins{}); err == nil {
+		if _, _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}, noPins{}, false, nil); err == nil {
 			t.Fatal("loadFullDepth accepted a missing verify policy")
 		}
 	})
@@ -79,7 +79,7 @@ func TestLoadFullDepth(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if _, err := loadFullDepth(p, nil, &storeForge{}, noPins{}); err == nil {
+		if _, _, err := loadFullDepth(p, nil, &storeForge{}, noPins{}, false, nil); err == nil {
 			t.Fatal("loadFullDepth accepted a policy with no trust section")
 		}
 	})
@@ -101,7 +101,7 @@ func TestLoadFullDepthHappyPath(t *testing.T) {
 
 	t.Cleanup(func() { newBundleVerifier = orig })
 
-	full, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{}, noPins{})
+	full, _, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{}, noPins{}, false, nil)
 	if err != nil {
 		t.Fatalf("loadFullDepth = %v", err)
 	}
@@ -125,6 +125,8 @@ func (passDeep) Release(verify.Coords, []verify.Subject, verify.SBOMs, verify.Pi
 func (passDeep) VSA(verify.Coords, []verify.Subject, verify.Pins, *verify.EnrichmentDemand) error {
 	return nil
 }
+
+func (passDeep) SourceVSA(verify.Coords, []byte, verify.Pins) error { return nil }
 
 // deepSnapshot stages the whole --depth full world and returns the
 // argument list one Run needs.
@@ -185,7 +187,7 @@ func deepWorld(t *testing.T, rewrite func(files map[string]string)) ([]string, s
 	origBV, origDeep := newBundleVerifier, newDeepVerifier
 	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{}, nil }
 	newDeepVerifier = func(
-		vp *policy.Policy, _ gh.Forge, tags assert.TagResolver, _ verify.BundleVerifier,
+		vp *policy.Policy, _ gh.Forge, tags assert.TagResolver, _ verify.BundleVerifier, _ sourceHistories,
 	) (*assert.FullDepth, error) {
 		return assert.NewFullDepth(passDeep{}, tags, *vp.Trust.Verdict.VerifierWorkflow,
 			*vp.Trust.Provenance.SignerWorkflow)
