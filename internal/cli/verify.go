@@ -208,9 +208,11 @@ type verifyArgs struct {
 	inventoryList []verify.Subject
 	bv            verify.BundleVerifier
 	// source-vsa: the assert policy names the asset the verdict is
-	// published as.
+	// published as. release and vsa: its evidence section says where a
+	// release states what it shipped, read when that is derived.
 	assertPolicy string
 	sourceAsset  string
+	evidence     *assert.EvidencePolicy
 }
 
 // verifyCmd dispatches `stele verify <mode>`.
@@ -886,13 +888,21 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 	switch mode {
 	case modeRelease, modeVSA:
 		fs.StringVar(&va.tag, "tag", "", "release tag (required)")
-		fs.StringVar(&va.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
+		fs.StringVar(&va.subjects, "subjects", "",
+			"sha256sum manifest of release subjects; absent, derived from the release's own evidence"+
+				" (needs --assert-policy)")
 		fs.StringVar(&va.sboms, "sboms", "",
-			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode, required)")
-		fs.StringVar(&va.inventories, "inventories", "", inventoriesUsage+" (release mode)")
-		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
+			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode);"+
+				" absent, derived from the release's own evidence (needs --assert-policy)")
+		fs.StringVar(&va.inventories, "inventories", "", inventoriesUsage+
+			" (release mode; absent with --sboms absent, derived with them)")
+		fs.StringVar(&va.assertPolicy, "assert-policy", "",
+			"the publisher's assert policy: its evidence section names where a release states what it"+
+				" shipped (read only when --subjects or --sboms is derived)")
+		fs.StringVar(&va.signerPin, "signer-digest", "",
+			"commit digest the signer identity is pinned at; absent, derived from the trees at the tag")
 		fs.StringVar(&va.machineryPin, "machinery-digest", "",
-			"commit digest the verifier/decision identities are pinned at (required)")
+			"commit digest the verifier/decision identities are pinned at; absent, derived from the trees at the tag")
 	case modeSourceVSA:
 		registerSourceVSAFlags(fs, va)
 	case modeChain:
@@ -953,6 +963,12 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 		return fail(err)
 	}
 
+	if (va.mode == modeRelease || va.mode == modeVSA) && va.assertPolicy != "" {
+		if aerr := va.loadEvidencePolicy(); aerr != nil {
+			return fail(aerr)
+		}
+	}
+
 	if va.mode == modeRelease || va.mode == modeVSA {
 		if serr := va.loadSubjects(); serr != nil {
 			return fail(serr)
@@ -982,7 +998,12 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 // release claims, which every provenance check is held against.
 func (va *verifyArgs) loadSubjects() error {
 	if va.subjects == "" {
-		return errors.New("--subjects is required")
+		if va.evidence == nil {
+			return errors.New("--subjects is required unless --assert-policy names the publisher's assert" +
+				" policy, which says where the release states its subjects")
+		}
+
+		return nil
 	}
 
 	manifest, err := os.ReadFile(va.subjects)
@@ -999,23 +1020,26 @@ func (va *verifyArgs) loadSubjects() error {
 // declares one, its inventory plan — the decision's denominator.
 func (va *verifyArgs) loadSBOMs() error {
 	if va.sboms == "" {
-		return errors.New("--sboms is required")
-	}
+		if va.evidence == nil {
+			return errors.New("--sboms is required unless --assert-policy names the publisher's assert" +
+				" policy, which says where the release states its SBOM assets")
+		}
+	} else {
+		manifest, err := os.ReadFile(va.sboms)
+		if err != nil {
+			return fmt.Errorf("reading the SBOM manifest: %w", err)
+		}
 
-	manifest, err := os.ReadFile(va.sboms)
-	if err != nil {
-		return fmt.Errorf("reading the SBOM manifest: %w", err)
-	}
-
-	if va.sbomList, err = parseManifest(string(manifest)); err != nil {
-		return err
+		if va.sbomList, err = parseManifest(string(manifest)); err != nil {
+			return err
+		}
 	}
 
 	if va.inventories == "" {
 		return nil
 	}
 
-	manifest, err = os.ReadFile(va.inventories)
+	manifest, err := os.ReadFile(va.inventories)
 	if err != nil {
 		return fmt.Errorf("reading the inventory plan: %w", err)
 	}
@@ -1075,6 +1099,12 @@ func parseManifest(text string) ([]verify.Subject, error) {
 // runVerify runs the selected mode against real dependencies and
 // reports what it proved.
 func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
+	if va.mode == modeRelease || va.mode == modeVSA {
+		if err := va.derive(out); err != nil {
+			return nil, err
+		}
+	}
+
 	pins := verify.Pins{Signer: va.signerPin, Machinery: va.machineryPin}
 
 	switch va.mode {

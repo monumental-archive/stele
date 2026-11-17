@@ -10,12 +10,20 @@
 // machinery repo's releases run their verifier at the tag itself. The
 // signer pin is read from the machinery publish workflow at that pin —
 // the two-hop resolution a stranger performs.
+//
+// That derivation has two callers (stele#447): this walk, and `stele
+// verify` run for a published release with no pins or subjects given.
+// So the reading lives in receiver-free helpers both reach —
+// PinRoots.Resolve for the pins, DeriveRelease for the subjects — and
+// the walk keeps only what is its own: the findings it records and the
+// order it records them in. One derivation, never a copy.
 
 package assert
 
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -100,10 +108,7 @@ func (w *evidenceWalk) fullDepth(repo, tag string, contract *Contract, bundles [
 
 	subjects := slices.Concat(files, registry)
 	if len(subjects) == 0 {
-		deep.Diverged(fmt.Sprintf(
-			"the release names no artifact subjects — %s pins no artifact and %s names none: a release that"+
-				" claims nothing verifies nothing", *w.pol.Checksums, registrySource(contract),
-		))
+		deep.Diverged(w.pol.namesNoSubjects(contract))
 
 		return nil
 	}
@@ -247,7 +252,12 @@ func (w *evidenceWalk) enrichmentDemand(
 // that is not one) are not part of the document's claim and are
 // skipped once, here.
 func (w *evidenceWalk) checksumPins(repo, tag string) ([]verify.Subject, error) {
-	raw, err := w.forge.Asset(w.org, repo, tag, *w.pol.Checksums)
+	return w.pol.readChecksumPins(w.forge, w.org, repo, tag)
+}
+
+// readChecksumPins is checksumPins' reading, reachable without a walk.
+func (e *EvidencePolicy) readChecksumPins(f AssetReader, owner, repo, tag string) ([]verify.Subject, error) {
+	raw, err := f.Asset(owner, repo, tag, *e.Checksums)
 	if err != nil {
 		return nil, fmt.Errorf("the checksum manifest is unreadable: %w", err)
 	}
@@ -293,17 +303,7 @@ func (w *evidenceWalk) checksumAgreement(subject string, contract *Contract, pin
 		return
 	}
 
-	var details []string
-
-	for _, p := range pinned {
-		declared, both := contract.Pins[p.Name]
-		if !both || declared == p.SHA256 {
-			continue
-		}
-
-		details = append(details, fmt.Sprintf("%s: %s pins %s, the evidence manifest pins %s",
-			p.Name, *w.pol.Checksums, p.SHA256, declared))
-	}
+	details := w.pol.checksumDisagreement(contract, pinned)
 
 	// One check for one obligation — the two documents agree or they
 	// do not — taken whether it holds or not, so an excuse for a
@@ -311,6 +311,26 @@ func (w *evidenceWalk) checksumAgreement(subject string, contract *Contract, pin
 	if c := w.check(subject, "manifest:checksums"); len(details) > 0 {
 		c.Diverged(strings.Join(details, "; "))
 	}
+}
+
+// checksumDisagreement names every name the two pinning documents pin
+// to different bytes — the comparison itself, which the walk records
+// as a finding and the verb refuses on. A contract that pins nothing
+// disagrees with nothing.
+func (e *EvidencePolicy) checksumDisagreement(contract *Contract, pinned []verify.Subject) []string {
+	var details []string
+
+	for _, s := range pinned {
+		declared, both := contract.Pins[s.Name]
+		if !both || declared == s.SHA256 {
+			continue
+		}
+
+		details = append(details, fmt.Sprintf("%s: %s pins %s, the evidence manifest pins %s",
+			s.Name, *e.Checksums, s.SHA256, declared))
+	}
+
+	return details
 }
 
 // checksumSubjects classifies the checksum manifest's pins into the
@@ -326,6 +346,14 @@ func (w *evidenceWalk) checksumAgreement(subject string, contract *Contract, pin
 //
 //nolint:gocritic // unnamedResult: subjects then sboms, documented above
 func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subject, []verify.Subject) {
+	return w.pol.splitChecksumPins(pinned)
+}
+
+// splitChecksumPins is checksumSubjects' classification, reachable
+// without a walk.
+//
+//nolint:gocritic // unnamedResult: subjects then sboms, as checksumSubjects documents
+func (e *EvidencePolicy) splitChecksumPins(pinned []verify.Subject) ([]verify.Subject, []verify.Subject) {
 	var subjects, sboms []verify.Subject
 
 	for _, s := range pinned {
@@ -338,9 +366,9 @@ func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subje
 		// taken FIRST: the shared classifier calls an SBOM a document,
 		// and this walk needs the subset by name.
 		switch {
-		case strings.HasSuffix(s.Name, *w.pol.SBOMSuffix):
+		case strings.HasSuffix(s.Name, *e.SBOMSuffix):
 			sboms = append(sboms, s)
-		case w.pol.Classify(s.Name) == evidence.TypeEvidence:
+		case e.Classify(s.Name) == evidence.TypeEvidence:
 		default:
 			subjects = append(subjects, s)
 		}
@@ -395,8 +423,7 @@ func (w *evidenceWalk) registrySubjects(
 			c.Diverged(err.Error())
 		default:
 			if stray := unclaimed(attested, claimed); len(stray) > 0 {
-				c.Diverged("provenance attests subject(s) neither " + *w.pol.Checksums +
-					" nor the evidence manifest names: " + strings.Join(stray, "; "))
+				c.Diverged(w.pol.strayMessage(stray))
 			}
 		}
 
@@ -407,6 +434,21 @@ func (w *evidenceWalk) registrySubjects(
 		return nil, nil, err
 	}
 
+	derived := derivedRegistry(files, attested)
+
+	if len(derived) > 0 {
+		w.log("assert: evidence: %s: %s names no registry subject — %d read from the release's own provenance",
+			subject, registrySource(contract), len(derived))
+	}
+
+	return derived, derived, nil
+}
+
+// derivedRegistry is what the release's provenance attests beyond the
+// assets its checksum manifest pins — the registry subjects of a
+// release whose contract cannot name them, in attestation order, each
+// once.
+func derivedRegistry(files, attested []verify.Subject) []verify.Subject {
 	var derived []verify.Subject
 
 	claimed := subjectSet(files)
@@ -419,12 +461,23 @@ func (w *evidenceWalk) registrySubjects(
 		}
 	}
 
-	if len(derived) > 0 {
-		w.log("assert: evidence: %s: %s names no registry subject — %d read from the release's own provenance",
-			subject, registrySource(contract), len(derived))
-	}
+	return derived
+}
 
-	return derived, derived, nil
+// strayMessage is the one spelling of a release whose provenance
+// attests subjects its claim does not name.
+func (e *EvidencePolicy) strayMessage(stray []string) string {
+	return "provenance attests subject(s) neither " + *e.Checksums +
+		" nor the evidence manifest names: " + strings.Join(stray, "; ")
+}
+
+// namesNoSubjects is the one spelling of a release that claims no
+// artifact at all.
+func (e *EvidencePolicy) namesNoSubjects(contract *Contract) string {
+	return fmt.Sprintf(
+		"the release names no artifact subjects — %s pins no artifact and %s names none: a release that"+
+			" claims nothing verifies nothing", *e.Checksums, registrySource(contract),
+	)
 }
 
 // registrySource names the document that did, or could not, say what
@@ -484,10 +537,16 @@ func placed(registry, unplaced []verify.Subject) []verify.Subject {
 // list, so the two legs cannot disagree about which assets carry the
 // release's evidence.
 func (w *evidenceWalk) provenanceSubjects(repo, tag string, bundles []string) ([]verify.Subject, error) {
+	return readProvenanceSubjects(w.forge, w.org, repo, tag, bundles)
+}
+
+// readProvenanceSubjects is provenanceSubjects' reading, reachable
+// without a walk.
+func readProvenanceSubjects(f AssetReader, owner, repo, tag string, bundles []string) ([]verify.Subject, error) {
 	var out []verify.Subject
 
 	for _, asset := range bundles {
-		raw, err := w.forge.Asset(w.org, repo, tag, asset)
+		raw, err := f.Asset(owner, repo, tag, asset)
 		if err != nil {
 			return nil, fmt.Errorf("%s is unreadable: %w", asset, err)
 		}
@@ -530,22 +589,87 @@ func bundleSubjects(raw []byte) ([]verify.Subject, error) {
 	return out, err
 }
 
-// resolvePins derives the machinery and signer pins for one release from
+// resolvePins derives the machinery and signer pins for one release —
+// the walk's call into the one derivation.
+func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
+	return w.full.Resolve(w.forge, w.org, repo, tag)
+}
+
+// FileReader is the one forge read pin resolution makes: a workflow
+// file at a ref. found=false is the forge's 404 — an answer.
+type FileReader interface {
+	FileAt(owner, repo, path, ref string) (content []byte, found bool, err error)
+}
+
+// AssetReader is the one forge read subject derivation makes per
+// document: a release asset's bytes.
+type AssetReader interface {
+	Asset(owner, repo, tag, name string) ([]byte, error)
+}
+
+// PinRoots is what resolving a release's signing pins needs: the tag
+// resolver and the roots the verify policy's trust identities name.
+// Built by NewPinRoots, so the walk and the verb derive the roots from
+// the identities one way (stele#447).
+type PinRoots struct {
+	// Tags resolves a release tag to its commit — read through git, by
+	// the same resolution the tag audit uses (stele#384).
+	Tags                          TagResolver
+	MachineryOwner, MachineryRepo string
+	SignerWorkflow                string
+	// SelfSigned marks the self-attesting topology: the signer
+	// identity is templated to the repository under verification, so
+	// pins derive from each release's own tag, no machinery hop.
+	SelfSigned bool
+}
+
+// NewPinRoots derives the pin-resolution roots from the verify policy's
+// trust identities. verifierWorkflow is empty when the policy declares
+// no verdict obligation; the machinery repository is then unknown, and
+// only the self-attesting topology resolves.
+func NewPinRoots(tags TagResolver, verifierWorkflow, signerWorkflow string) (PinRoots, error) {
+	const ownerRepoPath = 3
+
+	if tags == nil {
+		return PinRoots{}, errors.New("pin resolution needs a tag resolver: the pins are read through git")
+	}
+
+	roots := PinRoots{
+		Tags:           tags,
+		SignerWorkflow: signerWorkflow,
+		SelfSigned:     strings.Contains(signerWorkflow, "{"),
+	}
+
+	if verifierWorkflow == "" {
+		return roots, nil
+	}
+
+	parts := strings.SplitN(verifierWorkflow, "/", ownerRepoPath)
+	if len(parts) < ownerRepoPath {
+		return PinRoots{}, fmt.Errorf("verifier workflow %q does not name owner/repo/path", verifierWorkflow)
+	}
+
+	roots.MachineryOwner, roots.MachineryRepo = parts[0], parts[1]
+
+	return roots, nil
+}
+
+// Resolve derives the machinery and signer pins for one release from
 // the trees a stranger can read: the caller's publish workflow at the
 // tag carries the machinery pin; the machinery publish workflow at that
 // pin carries the signer pin. The machinery repo's own releases run at
 // the tag.
-func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
-	machineryOwner, machineryRepo := w.full.MachineryOwner, w.full.MachineryRepo
-	signerWorkflow := w.full.SignerWorkflow
+func (r PinRoots) Resolve(f FileReader, owner, repo, tag string) (verify.Pins, error) {
+	machineryOwner, machineryRepo := r.MachineryOwner, r.MachineryRepo
+	signerWorkflow := r.SignerWorkflow
 
 	// The self-attesting topology (#82): a templated signer identity
 	// means every repository signs for itself — there is no foreign
 	// machinery tree to hop through, and both pins ARE the release
 	// commit: the certificate names the repo's own workflow at the
 	// tag, and its signer digest is the tag's commit.
-	if w.full.SelfSigned {
-		sha, err := w.full.Tags.TagCommit(w.org, repo, tag)
+	if r.SelfSigned {
+		sha, err := r.Tags.TagCommit(owner, repo, tag)
 		if err != nil {
 			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
 		}
@@ -562,15 +686,15 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 
 	var machineryPin string
 
-	if w.org == machineryOwner && repo == machineryRepo {
-		sha, err := w.full.Tags.TagCommit(w.org, repo, tag)
+	if owner == machineryOwner && repo == machineryRepo {
+		sha, err := r.Tags.TagCommit(owner, repo, tag)
 		if err != nil {
 			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
 		}
 
 		machineryPin = sha
 	} else {
-		wf, ok, err := w.forge.FileAt(w.org, repo, ".github/workflows/publish.yml", tag)
+		wf, ok, err := f.FileAt(owner, repo, ".github/workflows/publish.yml", tag)
 		if err != nil {
 			return verify.Pins{}, fmt.Errorf("the publish workflow at the tag is unreadable: %w", err)
 		}
@@ -585,7 +709,7 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 		machineryPin = string(m[1])
 	}
 
-	machineryPublish, ok, err := w.forge.FileAt(
+	machineryPublish, ok, err := f.FileAt(
 		machineryOwner, machineryRepo, ".github/workflows/publish.yml", machineryPin,
 	)
 	if err != nil {
@@ -619,16 +743,11 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 // from the VERIFY policy — the machinery repository is the verifier
 // workflow's own, a fact of the identity, not a second declaration.
 type FullDepth struct {
+	// PinRoots resolves each release's pins — the one derivation the
+	// verb shares (stele#447).
+	PinRoots
+
 	Verifier DeepVerifier
-	// Tags resolves a release tag to its commit — read through git, by
-	// the same resolution the tag audit uses (stele#384).
-	Tags                          TagResolver
-	MachineryOwner, MachineryRepo string
-	SignerWorkflow                string
-	// SelfSigned marks the self-attesting topology: the signer
-	// identity is templated to the repository under verification, so
-	// pins derive from each release's own tag, no machinery hop.
-	SelfSigned bool
 	// VerdictDeclared reports whether the verify policy declares a
 	// trust.verdict — undeclared, the deep verdict half skips with a
 	// log line, never a silent pass and never a refusal of the walk.
@@ -639,32 +758,16 @@ type FullDepth struct {
 // policy's trust identities. verifierWorkflow is empty when the
 // policy declares no verdict obligation.
 func NewFullDepth(v DeepVerifier, tags TagResolver, verifierWorkflow, signerWorkflow string) (*FullDepth, error) {
-	const ownerRepoPath = 3
-
 	if tags == nil {
 		return nil, errors.New("full depth needs a tag resolver: the pins are read through git")
 	}
 
-	fd := &FullDepth{
-		Verifier:        v,
-		Tags:            tags,
-		SignerWorkflow:  signerWorkflow,
-		SelfSigned:      strings.Contains(signerWorkflow, "{"),
-		VerdictDeclared: verifierWorkflow != "",
+	roots, err := NewPinRoots(tags, verifierWorkflow, signerWorkflow)
+	if err != nil {
+		return nil, err
 	}
 
-	if !fd.VerdictDeclared {
-		return fd, nil
-	}
-
-	parts := strings.SplitN(verifierWorkflow, "/", ownerRepoPath)
-	if len(parts) < ownerRepoPath {
-		return nil, fmt.Errorf("verifier workflow %q does not name owner/repo/path", verifierWorkflow)
-	}
-
-	fd.MachineryOwner, fd.MachineryRepo = parts[0], parts[1]
-
-	return fd, nil
+	return &FullDepth{Verifier: v, PinRoots: roots, VerdictDeclared: verifierWorkflow != ""}, nil
 }
 
 // SBOMSuffix reports the policy's SBOM asset suffix — the naming
@@ -676,4 +779,106 @@ func (p *Policy) SBOMSuffix() string {
 	}
 
 	return *p.Evidence.SBOMSuffix
+}
+
+// ReleaseForge is what deriving one release's verify inputs reads: the
+// release's asset listing and each asset's bytes.
+type ReleaseForge interface {
+	AssetReader
+	ReleaseAssets(owner, repo, tag string) ([]string, error)
+}
+
+// ReleaseInputs is what one published release states about itself, as
+// the verify engine takes it: the artifact subjects, and the SBOM
+// assets with the inventory plan they are the denominator of.
+type ReleaseInputs struct {
+	Subjects []verify.Subject
+	SBOMs    verify.SBOMs
+}
+
+// DeriveRelease reads the subjects, SBOM assets and inventory plan one
+// release's own published evidence states — the deep walk's reading,
+// composed for a caller that holds no walk (stele#447: `stele verify`
+// run with no --subjects). Every step is the helper the walk calls;
+// what differs is only what a failure is. The walk records a finding
+// and carries on judging; this derivation has no journal, so each of
+// the walk's findings about the release's claim is a refusal here,
+// spelled as the walk spells it. A refused derivation is never a
+// narrower list: a subject list a verifier was handed short is a
+// verdict about less than the release shipped.
+//
+// The one exception is an owed class bundle the release does not
+// carry. The walk records its absence and reads the bundles that are
+// present; so does this, logged, because the bundles here only
+// cross-check the claim — the attestations themselves are the
+// engine's to fetch and prove, from the store.
+func (e *EvidencePolicy) DeriveRelease(
+	f ReleaseForge, src ContractSource, owner, repo, tag string, log Logf,
+) (*ReleaseInputs, error) {
+	subject := owner + "/" + repo + "@" + tag
+
+	contract, ok, err := src.Contract(owner, repo, tag)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return nil, fmt.Errorf("no evidence contract speaks for %s — neither %s nor a publish workflow"+
+			" at the tag says what the release shipped", subject, *e.ManifestAsset)
+	}
+
+	assets, err := f.ReleaseAssets(owner, repo, tag)
+	if err != nil {
+		return nil, fmt.Errorf("the assets of %s are unreadable: %w", subject, err)
+	}
+
+	have := make(map[string]bool, len(assets))
+	for _, a := range assets {
+		have[a] = true
+	}
+
+	present, absent := e.presentBundles(e.owedBundles(contract), have)
+	for _, b := range slices.Sorted(maps.Keys(absent)) {
+		log("%s: the owed class bundle %s is absent — the claim is cross-checked against the bundles present",
+			subject, b)
+	}
+
+	pinned, err := e.readChecksumPins(f, owner, repo, tag)
+	if err != nil {
+		return nil, err
+	}
+
+	files, sboms := e.splitChecksumPins(pinned)
+
+	if contract.Pinned {
+		if details := e.checksumDisagreement(contract, pinned); len(details) > 0 {
+			return nil, errors.New(strings.Join(details, "; "))
+		}
+	}
+
+	attested, err := readProvenanceSubjects(f, owner, repo, tag, present)
+	if err != nil {
+		return nil, err
+	}
+
+	registry := derivedRegistry(files, attested)
+
+	if contract.Registered {
+		claimed := subjectSet(slices.Concat(files, contract.RegistrySubjects))
+		if stray := unclaimed(attested, claimed); len(stray) > 0 {
+			return nil, errors.New(e.strayMessage(stray))
+		}
+
+		registry = contract.RegistrySubjects
+	}
+
+	subjects := slices.Concat(files, registry)
+	if len(subjects) == 0 {
+		return nil, errors.New(e.namesNoSubjects(contract))
+	}
+
+	return &ReleaseInputs{
+		Subjects: subjects,
+		SBOMs:    verify.SBOMs{Assets: sboms, Planned: e.PlannedInventories(contract, sboms)},
+	}, nil
 }

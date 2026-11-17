@@ -196,6 +196,15 @@ job-level `uses:` lines through the one workflow reader
 `signerWorkflow` at, refusing a tree that pins none, more than one,
 or the signer at a reference that is not a full commit.
 
+For a published release a consumer holds neither tree, so `verify
+release` and `verify vsa` derive an absent digest from the
+publisher's own trees at the tag (stele#447): the caller's publish
+workflow at the tag names the machinery commit, and the machinery
+publish workflow at that commit names the signer commit — the
+two-hop read the deep corpus walk makes, through the same code, or
+the tag's own commit where the signer identity is templated. A
+digest given on the command line is used as given.
+
 ### `trust.verdict`
 
 The second root of trust: VSAs verify against the verifier's own
