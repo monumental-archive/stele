@@ -134,6 +134,10 @@ func deriveStandalone(mode string, args []string, stdout, stderr io.Writer) (int
 		}
 
 		return runDerivePopulation(pa, stdout, stderr), true
+	case deriveClasses:
+		// classes reads the assert policy and the request, nothing
+		// else: which classes a release declares.
+		return deriveClassesCmd(args, stdout, stderr), true
 	case deriveSignerDigest:
 		// signer-digest reads a workflow tree, not a history: the one
 		// commit the tree pins its trusted signer at.
@@ -154,7 +158,7 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest, subjects or population"); err != nil {
+				" vex-subjects, signer-digest, subjects, population or classes"); err != nil {
 			return exitIO
 		}
 
@@ -164,11 +168,11 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	mode := args[0]
 	switch mode {
 	case deriveVersion, deriveNotes, deriveBump, deriveReleasePlan, deriveSBOM, deriveClaims, deriveFacts,
-		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects, derivePopulation:
+		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects, derivePopulation, deriveClasses:
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele derive: unknown mode %q (version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest, subjects, population)\n", mode); err != nil {
+				" vex-subjects, signer-digest, subjects, population, classes)\n", mode); err != nil {
 			return exitIO
 		}
 

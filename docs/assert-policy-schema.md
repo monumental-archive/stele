@@ -189,6 +189,29 @@ version mismatch, never as an unknown-field error.
   disagree with it. An unknown `kind` refuses at load by name, and a
   kind takes exactly its own parameters: one it needs and you omit,
   and one it does not read, each refuse.
+- `classes.<name>.declares` — what requesting this class declares
+  beyond itself, as `stele derive classes` applies it (stele#403).
+  Optional, a list, on the class that triggers it. A release requests
+  classes by name; which classes its evidence then DECLARES can
+  differ, and the difference is yours to state. The kinds are the
+  engine's:
+
+  - `kind: "instead"` — when the request input named by `when` is
+    given (non-empty), the class is declared as `class` in its place;
+    otherwise as itself.
+  - `kind: "after"` — `class` is declared immediately after this one;
+    with `when`, only when that input is given.
+
+  `class` must be declared here and must declare nothing itself:
+  expansion is one pass, never a chain. `output` optionally names a
+  key `derive classes` prints — the target when the expansion fired,
+  empty otherwise — and one key belongs to one expansion. An input a
+  request gives must be some expansion's `when`, and at least one
+  class declaring it must be requested, or it would build nothing.
+  Two `instead` expansions of one class that both apply refuse.
+- `classes.<name>.requestable` — `false` for a class a release never
+  names: only another class's expansion declares it, and requesting
+  it refuses by name. Absent is requestable.
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
 - `storeVsaFromVersion` — the machinery version (inclusive) from
