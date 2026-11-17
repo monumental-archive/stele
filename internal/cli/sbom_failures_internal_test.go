@@ -179,13 +179,29 @@ func TestDeriveUnionRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A document another tool wrote, carrying a package no scanner
+	// can see (stele#396): admitted on the way in, so refused.
+	versionless := filepath.Join(dir, "versionless.spdx.json")
+	doc := `{"name": "widget-img", "packages": [{"name": "libc6", "externalRefs": [` +
+		`{"referenceType": "purl", "referenceLocator": "pkg:deb/debian/libc6"}]}]}`
+
+	if err := os.WriteFile(versionless, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		name  string
 		union string
 		want  string
 	}{
 		{"a document that is not there", filepath.Join(dir, "absent.json"), "absent.json"},
-		{"a document that is not a document", notJSON, "bad.spdx.json"},
+		{"a document that is not a document", notJSON, "bad.spdx.json: sbom: not an SPDX JSON document"},
+		{
+			"a document carrying a versionless PURL",
+			good + "," + versionless,
+			"versionless.spdx.json: sbom: widget-img has 1 PURLs, 1 versionless (pkg:deb/debian/libc6) — a" +
+				" versionless PURL is invisible to every scanner",
+		},
 		{
 			// Two inventories claiming one artifact are two answers
 			// about it, and the view has no way to choose.
@@ -286,5 +302,37 @@ func TestResolverSeamsDefaultToTheRealToolchain(t *testing.T) {
 
 	if _, ok := newNpmResolver().(npm.Runner); !ok {
 		t.Errorf("newNpmResolver = %T, want the npm binary", newNpmResolver())
+	}
+}
+
+// TestDeriveSBOMRefusesItsOwnVersionlessPURL: the rule holds on the
+// way out too (stele#396). A resolver handing back a package with no
+// version renders a versionless PURL, and nothing is written.
+func TestDeriveSBOMRefusesItsOwnVersionlessPURL(t *testing.T) {
+	const unversioned = `{"packages": [
+  {"id": "lab-cli 0.1.0 (path+file:///w/cli)", "name": "lab-cli", "version": "0.1.0", "source": ""},
+  {"id": "ghost (registry+x)", "name": "ghost", "version": "", "source": "registry+x"}],
+ "resolve": {"nodes": [
+  {"id": "lab-cli 0.1.0 (path+file:///w/cli)", "deps": [{"pkg": "ghost (registry+x)", "dep_kinds": [{"kind": ""}]}]},
+  {"id": "ghost (registry+x)", "deps": []}]}}`
+
+	withResolver(t, &stubResolver{metadata: unversioned})
+
+	out := filepath.Join(t.TempDir(), "doc.spdx.json")
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"sbom", "--cargo-package", "lab-cli", "--tree", "/w", "--created", created, "--out", out}
+	if got := deriveCmd(args, &stdout, &stderr); got != exitRefused {
+		t.Fatalf("deriveCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
+	}
+
+	want := "sbom: lab-cli@0.1.0 has 2 PURLs, 1 versionless (pkg:cargo/ghost@)"
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+
+	if _, err := os.Stat(out); err == nil {
+		t.Error("a refused inventory was written")
 	}
 }

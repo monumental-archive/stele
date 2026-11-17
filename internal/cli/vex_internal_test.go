@@ -32,7 +32,16 @@ func (f fakeScanner) Scan(inventory []byte) ([]byte, error) {
 		return nil, f.err
 	}
 
-	if report, ok := f.byInventory[strings.TrimSpace(string(inventory))]; ok {
+	// The fixture inventories are admissible SPDX documents whose NAME
+	// keys the scripted report.
+	label := strings.TrimSpace(string(inventory))
+	if doc, err := jsonx.DecodeForeign[struct {
+		Name string `json:"name"`
+	}](inventory); err == nil {
+		label = doc.Name
+	}
+
+	if report, ok := f.byInventory[label]; ok {
 		return []byte(report), nil
 	}
 
@@ -89,8 +98,13 @@ const vexPolicy = `{"schema": 9,
 func inventory(t *testing.T, dir, name, body string) string {
 	t.Helper()
 
+	// An admissible SPDX document named for the label the fake scanner
+	// keys on: every inventory derive vex reads is admitted first.
+	doc := `{"spdxVersion": "SPDX-2.3", "name": "` + body + `", "packages": [{"name": "x", "externalRefs": [` +
+		`{"referenceType": "purl", "referenceLocator": "pkg:generic/x@1.0.0"}]}]}`
+
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,6 +363,19 @@ func TestDeriveVEXRefusals(t *testing.T) {
 			want:    "parsed to zero packages",
 		},
 		{
+			name:    "an inventory carrying a versionless PURL",
+			subject: "versionless",
+			scanner: fakeScanner{},
+			want: "derive vex: p: sbom: img has 1 PURLs, 1 versionless (pkg:deb/debian/libc6) — a versionless PURL" +
+				" is invisible to every scanner",
+		},
+		{
+			name:    "an inventory that is not SPDX",
+			subject: "notspdx",
+			scanner: fakeScanner{},
+			want:    "derive vex: p: sbom: not an SPDX JSON document",
+		},
+		{
 			name:    "a scanner that died",
 			scanner: fakeScanner{err: errors.New("scanner exploded")},
 			want:    "scanner exploded",
@@ -384,8 +411,22 @@ func TestDeriveVEXRefusals(t *testing.T) {
 			withScanner(t, tt.scanner)
 
 			subject := tt.subject
-			if subject == "" {
+			switch subject {
+			case "":
 				subject = "p=" + inv
+			case "versionless", "notspdx":
+				body := `{"name": "img", "packages": [{"name": "libc6", "externalRefs": [` +
+					`{"referenceType": "purl", "referenceLocator": "pkg:deb/debian/libc6"}]}]}`
+				if subject == "notspdx" {
+					body = "A"
+				}
+
+				path := filepath.Join(dir, subject+".spdx.json")
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+
+				subject = "p=" + path
 			}
 
 			var stdout, stderr bytes.Buffer
