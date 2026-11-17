@@ -396,7 +396,7 @@ func digestAll(dir string, names []string, legs []Leg, chosen [][]string) (*Mani
 	m := &Manifest{Subjects: make([]Subject, 0, len(names))}
 
 	for _, name := range names {
-		d, err := fileDigest(filepath.Join(dir, name))
+		d, err := FileDigest(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
@@ -414,7 +414,10 @@ func digestAll(dir string, names []string, legs []Leg, chosen [][]string) (*Mani
 	return m, nil
 }
 
-func fileDigest(path string) (string, error) {
+// FileDigest is the sha256 of one file's bytes, hex-encoded: the
+// digest a `sha256sum` line carries, defined once for every leg that
+// hashes an asset.
+func FileDigest(path string) (string, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: the asset directory is the caller's, by design
 	if err != nil {
 		return "", fmt.Errorf("release: hashing %s: %w", filepath.Base(path), err)

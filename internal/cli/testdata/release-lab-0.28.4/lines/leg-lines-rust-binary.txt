@@ -1,0 +1,4 @@
+aarch64-apple-darwin acbbae2463ce635fdfc9813ac7f2f36c6e523fc90c3defffd6b416fe9f6b8d8b  release-lab-0.28.4-aarch64-apple-darwin.tar.gz
+aarch64-unknown-linux-musl e9014d282260c2cba9348af358e30048bb5de24bd5c3a31265d635db449efe0b  release-lab-0.28.4-aarch64-unknown-linux-musl.tar.gz
+x86_64-apple-darwin 06c5b4a696dbab292d9c602739a00fa4963cfd137fc3ed8e0f5c6a09aece5f4d  release-lab-0.28.4-x86_64-apple-darwin.tar.gz
+x86_64-unknown-linux-musl d5ffb05bcdb1a166df038b4e871b8daa633d86f87ba4946df916a1d6d535b647  release-lab-0.28.4-x86_64-unknown-linux-musl.tar.gz
