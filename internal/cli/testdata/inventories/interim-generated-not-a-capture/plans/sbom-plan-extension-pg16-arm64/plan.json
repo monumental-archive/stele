@@ -5,9 +5,7 @@
     "artifact": "pg_edtf-pg16",
     "params": {
       "cargoPackage": "pg_edtf",
-      "features": [
-        "pg16"
-      ],
+      "features": ["pg16"],
       "noDefaultFeatures": true
     }
   }

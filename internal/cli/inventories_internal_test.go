@@ -241,7 +241,7 @@ func TestDeriveInventoriesFromBinaries(t *testing.T) {
 // manifest, no plan and no binaries exports the forge's dependency
 // graph — the recorded export, admitted and written as the view.
 func TestDeriveInventoriesFromTheDependencyGraph(t *testing.T) {
-	recorded, err := os.ReadFile("../gh/testdata/dependency-graph-sbom.json")
+	recorded, err := os.ReadFile("../gh/testdata/dependency-graph-sbom.golden")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ import (
 // The recorded response is the forge's real export for a repository
 // with no manifest (monumental-archive/.github, read 2026-11-17): the
 // envelope as served, the SPDX document under its one key.
-const recordedGraph = "testdata/dependency-graph-sbom.json"
+const recordedGraph = "testdata/dependency-graph-sbom.golden"
 
 func graphServer(t *testing.T, body string, status int) *gh.Client {
 	t.Helper()

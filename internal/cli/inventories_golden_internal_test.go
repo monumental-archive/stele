@@ -42,21 +42,29 @@ type goldenInputs struct {
 	Run string `json:"run"`
 }
 
-// capturedResolver serves the cargo metadata captured per selection:
-// cargo/index.json maps a selection's cargo flags to its file.
+// capturedSelection is one cargo/index.json row: a closure
+// selection's cargo flags and the file holding its captured metadata.
+type capturedSelection struct {
+	Flags string `json:"flags"`
+	File  string `json:"file"`
+}
+
+// capturedResolver serves the cargo metadata captured per selection.
 type capturedResolver struct {
 	t     *testing.T
 	dir   string
-	index map[string]string
+	index []capturedSelection
 }
 
 func (r capturedResolver) Metadata(_ string, sel cargo.Selection) ([]byte, error) {
 	key := strings.Join(sel.Args(), " ")
 
-	file, ok := r.index[key]
-	if !ok {
+	i := slices.IndexFunc(r.index, func(c capturedSelection) bool { return c.Flags == key })
+	if i < 0 {
 		r.t.Fatalf("no captured cargo metadata for selection %q", key)
 	}
+
+	file := r.index[i].File
 
 	raw, err := os.ReadFile(filepath.Join(r.dir, "cargo", file)) //nolint:gosec // the set's own fixture
 	if err != nil {
@@ -96,7 +104,7 @@ func goldenSet(t *testing.T, dir string) {
 	t.Helper()
 
 	in := readJSON[goldenInputs](t, filepath.Join(dir, "inputs.json"))
-	index := readJSON[map[string]string](t, filepath.Join(dir, "cargo", "index.json"))
+	index := readJSON[[]capturedSelection](t, filepath.Join(dir, "cargo", "index.json"))
 
 	withResolver(t, capturedResolver{t: t, dir: dir, index: *index})
 
@@ -120,7 +128,8 @@ func goldenSet(t *testing.T, dir string) {
 		t.Fatalf("deriveCmd = %d (stderr: %s)", code, stderr.String())
 	}
 
-	shipped, err := filepath.Glob(filepath.Join(dir, "shipped", "*.spdx.json"))
+	// Shipped bytes are kept as .golden so no formatter touches them.
+	shipped, err := filepath.Glob(filepath.Join(dir, "shipped", "*.golden"))
 	if err != nil || len(shipped) == 0 {
 		t.Fatalf("no shipped documents in %s (%v)", dir, err)
 	}
@@ -139,7 +148,7 @@ func goldenSet(t *testing.T, dir string) {
 	var names []string
 
 	for _, path := range shipped {
-		name := filepath.Base(path)
+		name := strings.TrimSuffix(filepath.Base(path), ".golden")
 		names = append(names, name)
 
 		want, rerr := os.ReadFile(path) //nolint:gosec // the set's own fixture

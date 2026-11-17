@@ -11,9 +11,9 @@ shipped.
 | `inputs.json` | the publish run's facts: `repo`, `version`, `created`, `name`, `classes`, `evidenceClasses`, `machineryVersion`, `pgMajors`, and `run`, the run the plans came from |
 | `assert-policy.json` | the canon's `slsa/assert-policy.json` at the release's pinned canon |
 | `plans/<leg>/plan.json` | the plan artifacts, as `gh run download <run> -p 'sbom-plan-*'` lays them out |
-| `cargo/index.json` | maps each closure selection's cargo flags (`""`, `"--features pg16 --no-default-features"`) to its file |
+| `cargo/index.json` | a list of `{flags, file}`: each closure selection's cargo flags (`""`, `"--features pg16 --no-default-features"`) and the file holding its metadata |
 | `cargo/<file>.json` | `cargo metadata --format-version 1 --locked <flags>` in the released tree, per selection |
-| `shipped/*.spdx.json` | the release's shipped inventory assets, downloaded from the release |
+| `shipped/<asset>.golden` | each shipped inventory asset, downloaded from the release and kept byte for byte (the `.golden` suffix keeps formatters off it) |
 
 ## Sets
 
