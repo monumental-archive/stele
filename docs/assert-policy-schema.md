@@ -1074,6 +1074,27 @@ version skew, refused):
   canonicalises the object for comparison, and only the downstream
   leg that derives the document reads the content.
 
+`stele derive inventory-plan --class <class> --policy <assert-policy>`
+writes a plan for the classes whose leg shape it knows (stele#396),
+and names every document under the class's ONE planned prefix as
+this policy declares it. The producer and the judgment therefore read
+one name: a rename on the policy side is followed, not refused, and a
+class declaring no planned prefix, or more than one, is refused at
+the producer. Two shapes are built:
+
+- packaged crates (`rust-crate`; `--dir <packaged crates> --version
+  <v>`): one entry per `<name>-<v>.crate`, `doc` `<prefix><name>-crate`,
+  `artifact` `<name>-crate`, `params.cargoPackage` `<name>`. A crate
+  not named for the version, or none at all, is refused;
+- one extension cell (`pgrx-extension`; `--crate-dir <crate> --major
+  <n>`): one entry, `doc` `<prefix><package>-pg<n>`, `artifact`
+  `<package>-pg<n>`, `params` `{cargoPackage, features: ["pg<n>"],
+  noDefaultFeatures: true}`, with the package read from the crate's
+  `Cargo.toml`.
+
+The output is laid out as `jq` lays it out (two-space indent), so it
+replaces the build legs' jq lines byte for byte.
+
 Every value is charset-guarded before it can reach a command line,
 because plans originate on build legs that execute caller code.
 Entries restating one identical mapping collapse by canonical

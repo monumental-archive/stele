@@ -1,0 +1,26 @@
+[
+  {
+    "class": "rust-crate",
+    "doc": "sbom-cargo-edtf-crate",
+    "artifact": "edtf-crate",
+    "params": {
+      "cargoPackage": "edtf"
+    }
+  },
+  {
+    "class": "rust-crate",
+    "doc": "sbom-cargo-edtf-cli-crate",
+    "artifact": "edtf-cli-crate",
+    "params": {
+      "cargoPackage": "edtf-cli"
+    }
+  },
+  {
+    "class": "rust-crate",
+    "doc": "sbom-cargo-edtf_core-crate",
+    "artifact": "edtf_core-crate",
+    "params": {
+      "cargoPackage": "edtf_core"
+    }
+  }
+]

@@ -1339,6 +1339,12 @@ func (e *EvidencePolicy) manifestSchema(machineryVersion string) bool {
 	return owedFrom(e.ManifestSchemaFromVersion, machineryVersion)
 }
 
+// PlannedPrefixes is the class's plan vocabulary for a producer
+// outside this package: the build leg that writes a plan names its
+// documents under the prefix the class declares, never one it spells
+// itself (stele#396).
+func (c *ClassPolicy) PlannedPrefixes() []string { return c.plannedPrefixes() }
+
 // owedPlannedPrefixes returns the plan-fulfilled prefix obligations a
 // release under the given machinery version owes from this class —
 // the subset of owedPrefixes the pre-publish plans judgment demands

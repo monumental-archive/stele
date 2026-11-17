@@ -45,6 +45,7 @@ the same statement as this one and tested against it.
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
 | `stele derive vex-subjects` | which published releases one VEX decision reaches, and the subjects a claim about it is signed over |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
+| `stele derive inventory-plan` | a build leg's inventory plan: one entry per packaged crate, or one per extension cell, named under the class's planned prefix in the assert policy |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |
@@ -133,6 +134,7 @@ breaking change costs the most.
 | the release evidence manifest | [docs/assert-policy-schema.md](docs/assert-policy-schema.md) |
 | the report document (`--json`) | [docs/report-schema.md](docs/report-schema.md) |
 | the judged plan set (`assert plans --out`) | [docs/assert-policy-schema.md](docs/assert-policy-schema.md#the-inventory-plan) |
+| the inventory plan (`derive inventory-plan`) | [docs/assert-policy-schema.md](docs/assert-policy-schema.md#the-inventory-plan) |
 | the release plan (`derive release-plan`) | [docs/release-plan.md](docs/release-plan.md) |
 | the subject lines (`derive subjects`) | [docs/subjects.md](docs/subjects.md) |
 | the shields.io endpoint document (`level --shield`) | [docs/level.md](docs/level.md) |

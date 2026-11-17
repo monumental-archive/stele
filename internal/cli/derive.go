@@ -126,7 +126,7 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest or subjects"); err != nil {
+				" vex-subjects, signer-digest, subjects or inventory-plan"); err != nil {
 			return exitIO
 		}
 
@@ -136,11 +136,11 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	mode := args[0]
 	switch mode {
 	case deriveVersion, deriveNotes, deriveBump, deriveReleasePlan, deriveSBOM, deriveClaims, deriveFacts,
-		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects:
+		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects, deriveInventoryPlan:
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele derive: unknown mode %q (version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest, subjects)\n", mode); err != nil {
+				" vex-subjects, signer-digest, subjects, inventory-plan)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -209,29 +209,9 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 			func(doc io.Writer, log *latch) error { return runDeriveClaims(ca, doc, log) })
 	}
 
-	// subjects reads a directory of built assets against the planned
-	// legs; no history, no forge, no document — lines.
-	if mode == deriveSubjects {
-		sa, code := parseSubjectsArgs(args[1:], stderr)
-		if code != exitOK {
-			return code
-		}
-
-		out := &latch{w: stdout}
-
-		return finishDerive(runDeriveSubjects(sa, out), out, stderr)
-	}
-
-	// sbom reads binaries, not a git history; it shares nothing with
-	// the version derivation but the verb.
-	if mode == deriveSBOM {
-		sa, code := parseSBOMArgs(args[1:], stderr)
-		if code != exitOK {
-			return code
-		}
-
-		return runDeriveMode(sa.out, stdout, stderr,
-			func(doc io.Writer, log *latch) error { return runDeriveSBOM(sa, doc, log) })
+	// The modes that read what a build produced.
+	if code, handled := deriveBuildMode(mode, args, stdout, stderr); handled {
+		return code
 	}
 
 	da, na, bump, plan, code := parseDeriveArgs(mode, args[1:], stderr)
@@ -249,6 +229,51 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	out := &latch{w: stdout}
 
 	return finishDerive(runDerive(mode, da, na, bump, out), out, stderr)
+}
+
+// deriveBuildMode dispatches the modes that read what a build leg
+// produced — its assets, its inventory plan, its binaries — rather
+// than a history or the forge. handled=false leaves the mode to the
+// caller.
+func deriveBuildMode(mode string, args []string, stdout, stderr io.Writer) (int, bool) {
+	// subjects reads a directory of built assets against the planned
+	// legs; no history, no forge, no document — lines.
+	if mode == deriveSubjects {
+		sa, code := parseSubjectsArgs(args[1:], stderr)
+		if code != exitOK {
+			return code, true
+		}
+
+		out := &latch{w: stdout}
+
+		return finishDerive(runDeriveSubjects(sa, out), out, stderr), true
+	}
+
+	// inventory-plan reads a build leg's own outputs and the class's
+	// planned prefix, and writes the plan `assert plans` judges.
+	if mode == deriveInventoryPlan {
+		pa, code := parseInventoryPlanArgs(args[1:], stderr)
+		if code != exitOK {
+			return code, true
+		}
+
+		return runDeriveMode(pa.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveInventoryPlan(pa, doc, log) }), true
+	}
+
+	// sbom reads binaries, not a git history; it shares nothing with
+	// the version derivation but the verb.
+	if mode == deriveSBOM {
+		sa, code := parseSBOMArgs(args[1:], stderr)
+		if code != exitOK {
+			return code, true
+		}
+
+		return runDeriveMode(sa.out, stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveSBOM(sa, doc, log) }), true
+	}
+
+	return 0, false
 }
 
 // finishDerive maps one mode's outcome onto its exit code: a broken

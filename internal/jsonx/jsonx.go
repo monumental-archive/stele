@@ -183,6 +183,22 @@ func Encode(w io.Writer, v any) error {
 	return nil
 }
 
+// EncodeIndent writes v to w indented by two spaces and followed by a
+// newline, with no HTML escaping — the layout `jq` prints, for the
+// documents a build leg used to write with it (stele#396), so a
+// producer that replaces a jq line writes the bytes it wrote.
+func EncodeIndent(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(v); err != nil {
+		return fmt.Errorf("jsonx: encode: %w", err)
+	}
+
+	return nil
+}
+
 // Value decodes one arbitrary JSON value — the entry point for data
 // whose shape is not known to any Go type: a policy-declared matcher
 // tree and the forge response it runs against. Objects land as

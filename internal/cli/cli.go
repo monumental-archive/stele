@@ -128,7 +128,8 @@ usage:
               follows — safe to compute twice, and --prepare writes
               the tree it names
     sbom      an artifact's inventory (SPDX 2.3), from one of three
-              sources: the shipped binaries' embedded module lists,
+              sources: the shipped binaries' embedded module lists
+              (stamped with the released commit, --expect-revision),
               a Cargo package's own resolved closure scoped to the
               target it was built for, or an aggregation of
               per-artifact documents into the release view — which is
@@ -159,6 +160,10 @@ usage:
               the class's planned legs must produce, present exactly
               once and nothing unplanned, as sha256 lines flat and
               grouped by leg — or a registry class's image digests
+    inventory-plan  a build leg's inventory plan, the document
+              assert plans judges: one entry per packaged crate or
+              one per extension cell, named under the class's
+              planned prefix in the assert policy
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -271,7 +276,7 @@ usage:
               [--file --rows --rows-tables --rows-prefix --rows-file
               --rows-keys --out])
 
-derive sbom flags: [--out --expect-version] <binary>..., or
+derive sbom flags: [--out --expect-version --expect-revision] <binary>..., or
 --cargo-package --tree --created [--target --features
 --no-default-features --all-features], or --union --union-name
 --created; derive claims
@@ -284,7 +289,8 @@ derive vex-subjects takes --policy --decision --org|--repo
 [--snapshot --out]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --class
 --expected --dir [--subjects-out --leg-subjects-out
---registry-subjects-out]; the other
+--registry-subjects-out]; derive inventory-plan takes --class --policy
+[--dir --version | --crate-dir --major] [--out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups

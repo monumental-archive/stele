@@ -82,6 +82,25 @@ func TestEncode(t *testing.T) {
 	}
 }
 
+// TestEncodeIndent: jq's layout — two-space indent, a trailing
+// newline, and no HTML escaping of a name that carries `&` or `<`.
+func TestEncodeIndent(t *testing.T) {
+	var sb strings.Builder
+
+	v := map[string]any{"a": []string{"x&<y"}}
+	if err := jsonx.EncodeIndent(&sb, v); err != nil {
+		t.Fatalf("EncodeIndent failed: %v", err)
+	}
+
+	if got, want := sb.String(), "{\n  \"a\": [\n    \"x&<y\"\n  ]\n}\n"; got != want {
+		t.Fatalf("EncodeIndent wrote %q, want %q", got, want)
+	}
+
+	if err := jsonx.EncodeIndent(failWriter{}, v); err == nil {
+		t.Fatal("EncodeIndent to a failing writer succeeded, want error")
+	}
+}
+
 // failWriter exercises the encode error guard — the guard-branch rule.
 type failWriter struct{}
 
