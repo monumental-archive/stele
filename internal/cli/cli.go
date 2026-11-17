@@ -103,7 +103,9 @@ usage:
     repro     the reproducibility rebuild: the release's checksum
               manifest against the rebuild's, over the class and
               targets the rebuild declares it covered, one typed
-              finding per artifact that failed to reproduce
+              finding per artifact that failed to reproduce; with
+              --classes, the pre-release form: the first build
+              against the rebuild, class by class
     policy    one committed policy document against this engine's own
               loader, offline and reaching nothing: exit 0 if it
               loads, else the loader's refusal verbatim. The drift
@@ -334,7 +336,8 @@ that is given is used as given. chain adds
 [--class --targets --assert-policy --json] and no trust material — a
 digest comparison signs nothing; --assert-policy types an UNTYPED
 released manifest, --class and --targets scope the judged population
-to what the rebuild covered.
+to what the rebuild covered. Its pre-release form takes --repo --tag
+--classes --first --rebuild [--rehearsal --json].
 verify policy takes exactly one of --assert-policy or --verify-policy,
 naming the document to load, and nothing else.
 level takes --repo|--org [--ref --notes-ref --tag --json
