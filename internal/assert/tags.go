@@ -127,7 +127,8 @@ func Tags(
 		}
 	}
 
-	facts := append(append(append([]report.Fact{}, runFacts...), w.reconciliation()...), fetchFacts(git)...)
+	facts := append(append(append(append([]report.Fact{}, runFacts...), w.reconciliation()...),
+		w.unreachable...), fetchFacts(git)...)
 
 	// A raised floor is only proven by a run that PROVED tags on both
 	// sides of it, so the run reports how many it proved at each —
@@ -202,6 +203,11 @@ type tagsWalk struct {
 	// that says which regimes a run actually covered, rather than
 	// which the policy declared.
 	floors map[string]int
+	// unreachable is one fact per repository whose ledger the walk
+	// read: how many of its links no branch and no tag reaches
+	// (stele#408) — counted on every run, zero included, so a ledger
+	// linking unreachable commits is visible whenever it does.
+	unreachable []report.Fact
 }
 
 // total sums the per-repository reconciliations, from the same slice
@@ -369,7 +375,28 @@ func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 
 	gtime := int64(0)
 
+	var unreachable []string
+
 	for rev := range h.noted {
+		// A linked revision no branch and no tag reaches is an ancestor
+		// of no tag's target, so it can witness nothing (stele#408): it
+		// stays in the linked set and is never a genesis candidate. Read
+		// as it was before git held the history, such a commit could
+		// become the genesis and leave every tag unwitnessed; skipping
+		// it is at least that strict. Asked through the typed presence
+		// read, so git failing is still an error and the walk still
+		// cannot judge.
+		reachable, rerr := w.git.Reachable(w.org, repo, rev)
+		if rerr != nil {
+			return chainHorizon{}, fmt.Errorf("assert: commit %s of %s/%s: %w", rev, w.org, repo, rerr)
+		}
+
+		if !reachable {
+			unreachable = append(unreachable, rev)
+
+			continue
+		}
+
 		meta, merr := w.git.CommitMeta(w.org, repo, rev)
 		if merr != nil {
 			return chainHorizon{}, fmt.Errorf("assert: commit %s of %s/%s: %w", rev, w.org, repo, merr)
@@ -383,6 +410,21 @@ func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 			h.genesis, gtime = rev, meta.CommitEpoch
 		}
 	}
+
+	// Named one line each, in order, and counted in the report: a ledger
+	// that links commits no branch or tag reaches is visible on every
+	// run — whether that ledger is sound is `assert chains`' judgment
+	// (#266), never a finding here.
+	sort.Strings(unreachable)
+
+	for _, rev := range unreachable {
+		w.log("assert: tags: %s: the ledger links %s, a commit no branch or tag reaches — "+
+			"it witnesses no tag and is not a genesis candidate", repo, rev)
+	}
+
+	w.unreachable = append(w.unreachable, report.Fact{
+		Name: "unreachableLinks:" + repo, Value: strconv.Itoa(len(unreachable)),
+	})
 
 	return h, nil
 }

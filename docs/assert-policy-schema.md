@@ -1250,8 +1250,14 @@ Every member is judged or is **loudly unjudgeable**; a member is
 never silently absent. The one obligation that can be unjudgeable is
 the chain link, and the bound there is the LEDGER's rather than the
 declaration's: a source ledger witnesses from its founded genesis —
-the oldest link-noted revision whose first parent carries no link —
-and says nothing before it. Where the genesis does not reach a tag's
+the oldest link-noted revision whose first parent carries no link,
+among those a branch or a tag reaches — and says nothing before it. A
+link on a commit no branch and no tag reaches (a deleted branch,
+rewritten history) is an ancestor of no tag's target, so it witnesses
+nothing: it stays linked, is never the genesis, and is named in the
+run's output and counted per repository (`unreachableLinks:<repo>`)
+— whether that ledger is sound is `assert chains`' question, not this
+walk's (stele#408). Where the genesis does not reach a tag's
 target, the missing link is recorded as a finding carrying a DERIVED
 exception naming that horizon, so the tag stays visible, stays
 counted and never reddens. A missing link INSIDE the horizon is a

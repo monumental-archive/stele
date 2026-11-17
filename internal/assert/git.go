@@ -31,6 +31,11 @@ type GitReader interface {
 	CommitMeta(owner, repo, rev string) (*gitrepo.CommitMeta, error)
 	// IsAncestor reports whether base is an ancestor of (or is) head.
 	IsAncestor(owner, repo, base, head string) (bool, error)
+	// Reachable reports whether a commit is reachable from some branch
+	// or some tag: false means no branch and no tag reaches it, so it is
+	// an ancestor of no tag's target. Absence is typed; a reader that
+	// cannot tell refuses rather than answer false.
+	Reachable(owner, repo, rev string) (bool, error)
 }
 
 // TagResolver resolves one release tag to the commit it targets — the
