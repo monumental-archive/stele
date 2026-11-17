@@ -212,6 +212,42 @@ The producer's obligations, each of which a consumer may rely on:
   rejected push refetches and **rebuilds** — the hash that lands was
   computed against the state that won, never patched up after.
 
+### Two forms: one piece, or signing apart from the push
+
+`stele emit chain` runs the whole contract above in one job. The
+same contract also runs as two halves in two jobs, so the job that
+holds the signing identity never holds the grant that writes the
+repository:
+
+- **`stele emit chain --no-append --out <dir>`** is everything up to
+  and including the self-verification and the read-back, against a
+  scratch copy of the ledger. It reads the notes ref (the tail is
+  verified before it is extended, as above), writes nothing to it
+  and pushes nothing, so it needs no write grant, and its preflight
+  proves no push. It writes each link to `<dir>` as
+  `NNNN-<revision>.json`, oldest first: the file's bytes are the
+  note exactly as git stored it — the format this document
+  specifies, with no wrapper. The name gives the append order and
+  nothing else; the revision a link annotates is the one its signed
+  statement attests, and the two must agree.
+- **`stele emit chain-append --links <dir>`** holds no signing
+  identity and trusts nothing because of where the files came from.
+  For each link, in order, it requires: the revision is on the
+  protected branch and carries no link yet; the predecessor the link
+  names is the ledger's current tip for that revision's chain, by
+  revision and by the hash of its stored note (a genesis link
+  requires no link on its history at all); the chain as it would
+  stand with the link appended passes the verify walk below exactly
+  as `stele verify chain` runs it; and git stores the file's bytes
+  unchanged. Then it pushes by the same compare-and-swap. A rejected
+  push is a **refusal, not a rebuild**: the half that could re-sign
+  is another job, so the ledger moved under the run and the run is
+  re-run from the signing job.
+
+`stele emit chain` is the two halves run in order, by construction:
+one implementation, and on identical repositories the two forms
+publish the same notes ref, byte for byte.
+
 ## Verifying a chain
 
 `stele verify` is the reference consumer. It proves two independent

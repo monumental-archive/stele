@@ -246,7 +246,13 @@ usage:
   stele emit <mode>      produce and place signed evidence; modes:
     chain     source chain links for the pushed revision and any
               holes earlier lapses left, signed via cosign, appended
-              to the notes ledger with a compare-and-swap push
+              to the notes ledger with a compare-and-swap push; with
+              --no-append it signs and writes the links out, and
+              never touches the ledger
+    chain-append  append links chain --no-append wrote, holding no
+              signing identity: each verified as verify would, its
+              predecessor proven the ledger's tip, then pushed; a
+              rejected push refuses (re-run the signing job)
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs; when the
               assert policy owes one, also sign the tag's source
@@ -313,7 +319,12 @@ from the same seal as the report; --org adds [--policy] for the
 declared population, and --org --out-dir <dir> with no track publishes
 <repo>/<track>.report.json and .shield.json per cell. emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
---clone --committer --genesis]; emit vsa adds --tag --subjects --sboms --signer-digest
+--clone --committer --genesis --no-append --out], where --no-append
+signs and writes the links to --out without appending; emit
+chain-append takes --policy --repo --git-dir|--clone --links [--ref
+--remote --committer] and no --machinery-digest or --policy-uri, and
+verifies, appends and pushes those links holding no signing identity;
+emit vsa adds --tag --subjects --sboms --signer-digest
 [--out --assert-policy --git-dir --source-out]; emit manifest takes --classes --store-vsa
 --machinery-version --assets --assert-policy --leg-subjects
 [--registry-subjects --out]
