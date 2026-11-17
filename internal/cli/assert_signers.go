@@ -23,6 +23,7 @@ import (
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/ctlog"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
 	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/trust"
@@ -40,8 +41,8 @@ var (
 
 	newLogClock = func() ctlog.Clock { return ctlog.WallClock{} }
 
-	newSignerForge = func(forge gh.Forge) (assert.SignerForge, string, error) {
-		f, server, err := signerForgeOf(forge)
+	newSignerForge = func(forge gh.Forge, git *gitfetch.Session) (assert.SignerForge, string, error) {
+		f, server, err := signerForgeOf(forge, git)
 		if err != nil {
 			return nil, "", err
 		}
@@ -223,6 +224,20 @@ func (a *signerArgs) run(
 		out = &latch{w: stderr}
 	}
 
+	// Whether a commit is on its repository's default branch is read
+	// from the fetched history (stele#384): every branch, commits-only,
+	// one fetch per repository a match names — none for a range that
+	// holds no match.
+	git := newGitSession(gitfetch.Want{Heads: true}, out.logf)
+	if cerr := git.Check(); cerr != nil {
+		if _, werr := fmt.Fprintf(stderr, "stele assert signer-certificates: %v\n", cerr); werr != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+	defer closeSession(git, stderr)
+
 	forge := newForge()
 	scope := population.Scope{Org: a.org, Repo: a.repo}
 
@@ -231,7 +246,7 @@ func (a *signerArgs) run(
 		return refuseToStart(targetSignerCertificates, scope.Subject(), err, a.jsonOut, stdout, stderr)
 	}
 
-	sforge, server, err := newSignerForge(forge)
+	sforge, server, err := newSignerForge(forge, git)
 	if err != nil {
 		return refuseToStart(targetSignerCertificates, scope.Subject(), err, a.jsonOut, stdout, stderr)
 	}
@@ -280,19 +295,21 @@ func (a *signerArgs) run(
 	return emitReport(rep, a.jsonOut, stdout, stderr)
 }
 
-// liveSignerForge is the reconciliation's forge over the live REST API:
-// the run and the file are the client's own reads, and whether a commit
-// is on its repository's default branch is the default branch read,
-// then the one ancestry reader on main (stele#387's fork, decided on
-// the issue: whichever of #387 and #384 lands second moves this call).
+// liveSignerForge is the reconciliation's forge: the run and the file
+// are the forge client's own REST reads, and whether a commit is on its
+// repository's default branch is the default branch, read from the
+// forge, asked of the fetched history (stele#384) — the one ancestry
+// reader, never a second one beside it.
 type liveSignerForge struct {
 	*gh.Client
+
+	git *gitfetch.Session
 }
 
 // OnDefaultBranch implements assert.SignerForge. A repository the
 // forge answers 404 for is a read that could not complete — absent and
 // invisible to this credential are one answer — never a commit judged
-// off its branch.
+// off its branch. So is any answer the fetched history cannot give.
 func (f liveSignerForge) OnDefaultBranch(owner, repo, sha string) (bool, error) {
 	branch, found, err := f.DefaultBranch(owner, repo)
 	if err != nil {
@@ -303,18 +320,18 @@ func (f liveSignerForge) OnDefaultBranch(owner, repo, sha string) (bool, error) 
 		return false, fmt.Errorf("the forge answers 404 for %s/%s: absent, or not visible to this credential", owner, repo)
 	}
 
-	return f.IsAncestor(owner, repo, sha, branch)
+	return f.git.IsAncestor(owner, repo, sha, "refs/heads/"+branch)
 }
 
 // signerForgeOf is the live reconciliation forge over the run's forge
-// client, and the web origin certificates name that forge by: the
-// server the client was built for (Client.Download is that origin, by
-// NewForServer's construction).
-func signerForgeOf(forge gh.Forge) (liveSignerForge, string, error) {
+// client and git session, and the web origin certificates name that
+// forge by: the server the client was built for (Client.Download is
+// that origin, by NewForServer's construction).
+func signerForgeOf(forge gh.Forge, git *gitfetch.Session) (liveSignerForge, string, error) {
 	c, ok := forge.(*gh.Client)
 	if !ok {
 		return liveSignerForge{}, "", errors.New("this forge cannot read workflow runs")
 	}
 
-	return liveSignerForge{Client: c}, strings.TrimSuffix(c.Download, "/"), nil
+	return liveSignerForge{Client: c, git: git}, strings.TrimSuffix(c.Download, "/"), nil
 }

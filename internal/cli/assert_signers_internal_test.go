@@ -28,6 +28,8 @@ import (
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/ctlog"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
+	"github.com/monumental-archive/stele/internal/gittest"
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
 
@@ -315,7 +317,9 @@ func signerSeams(t *testing.T, l *signerLog, sf assert.SignerForge, sfErr error)
 
 	newLogHTTP = func() ctlog.Doer { return l.srv.Client() }
 	newLogClock = func() ctlog.Clock { return &signerClock{now: signerLogTime.Add(time.Minute)} }
-	newSignerForge = func(gh.Forge) (assert.SignerForge, string, error) { return sf, "https://github.com", sfErr }
+	newSignerForge = func(gh.Forge, *gitfetch.Session) (assert.SignerForge, string, error) {
+		return sf, "https://github.com", sfErr
+	}
 
 	swapForge(t, &levelForge{repos: []string{".github", "signer"}})
 
@@ -688,28 +692,26 @@ func TestAssertSignerCertificatesStreams(t *testing.T) {
 	}
 }
 
-// TestLiveSignerForge: the live adapter over a scripted forge — a
-// commit on the default branch, one off it, a repository the forge
-// answers 404 for (a read that could not complete, never "off its
-// branch"), and a forge that is not the live client.
+// TestLiveSignerForge: the live adapter over a scripted forge for the
+// default branch and a real repository for the history. A commit on
+// the default branch, one on another branch, one the fetched history
+// does not hold (its branch deleted after the push), a repository the
+// forge answers 404 for, and a forge that is not the live client.
 func TestLiveSignerForge(t *testing.T) {
 	t.Parallel()
 
-	const onSHA, offSHA = "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"
+	r := gittest.New(t)
+	onSHA := r.Commit("feat: on the default branch")
+	r.Git("checkout", "-q", "-b", "side")
+	sideSHA := r.Commit("feat: on another branch")
+	r.Git("checkout", "-q", "-b", "gone")
+	goneSHA := r.Commit("feat: on a branch deleted after the push")
+	r.Git("checkout", "-q", "main")
+	r.Git("branch", "-q", "-D", "gone")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/acme/signer", func(w http.ResponseWriter, _ *http.Request) {
-		if _, err := w.Write([]byte(`{"default_branch": "trunk"}`)); err != nil {
-			t.Error(err)
-		}
-	})
-	mux.HandleFunc("/repos/acme/signer/compare/"+onSHA+"...trunk", func(w http.ResponseWriter, _ *http.Request) {
-		if _, err := w.Write([]byte(`{"status": "ahead"}`)); err != nil {
-			t.Error(err)
-		}
-	})
-	mux.HandleFunc("/repos/acme/signer/compare/"+offSHA+"...trunk", func(w http.ResponseWriter, _ *http.Request) {
-		if _, err := w.Write([]byte(`{"status": "diverged"}`)); err != nil {
+		if _, err := w.Write([]byte(`{"default_branch": "main"}`)); err != nil {
 			t.Error(err)
 		}
 	})
@@ -721,16 +723,34 @@ func TestLiveSignerForge(t *testing.T) {
 	c.Base = srv.URL
 	c.HTTP = srv.Client()
 
-	sf, server, err := signerForgeOf(c)
+	git := &gitfetch.Session{
+		Remote: func(_, _ string) string { return r.URL() },
+		Want:   gitfetch.Want{Heads: true},
+	}
+	t.Cleanup(func() {
+		if err := git.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	sf, server, err := signerForgeOf(c, git)
 	if err != nil || server != "https://forge.example" {
 		t.Fatalf("signerForgeOf = %q, %v", server, err)
 	}
 
-	for sha, want := range map[string]bool{onSHA: true, offSHA: false} {
+	for sha, want := range map[string]bool{onSHA: true, sideSHA: false} {
 		on, oerr := sf.OnDefaultBranch("acme", "signer", sha)
 		if oerr != nil || on != want {
 			t.Errorf("OnDefaultBranch(%s) = %v, %v; want %v", sha, on, oerr, want)
 		}
+	}
+
+	// The fetched history holds every branch; a commit on none of them
+	// is not there to be asked about, and git refuses rather than
+	// answers. That refusal is a read that did not complete.
+	if on, oerr := sf.OnDefaultBranch("acme", "signer", goneSHA); oerr == nil ||
+		!strings.Contains(oerr.Error(), "gitrepo: ancestry of "+goneSHA+" in refs/heads/main") {
+		t.Errorf("a commit the history does not hold: %v, %v", on, oerr)
 	}
 
 	if _, oerr := sf.OnDefaultBranch("acme", "gone", onSHA); oerr == nil ||
@@ -738,11 +758,45 @@ func TestLiveSignerForge(t *testing.T) {
 		t.Errorf("a repository the forge answers 404 for: err = %v", oerr)
 	}
 
-	if _, _, ferr := newSignerForge(&levelForge{}); ferr == nil || ferr.Error() != "this forge cannot read workflow runs" {
+	if _, _, ferr := newSignerForge(&levelForge{}, git); ferr == nil ||
+		ferr.Error() != "this forge cannot read workflow runs" {
 		t.Errorf("a forge that is not the live client: err = %v", ferr)
 	}
 
-	if f, s, ferr := newSignerForge(gh.New("")); ferr != nil || f == nil || s != "https://github.com" {
+	if f, s, ferr := newSignerForge(gh.New(""), git); ferr != nil || f == nil || s != gh.DefaultServer {
 		t.Errorf("the live client: %v, %q, %v", f, s, ferr)
+	}
+}
+
+// TestAssertSignerCertificatesNeedsGit: a machine whose git cannot read
+// the fetched history is refused by name before the log is read.
+func TestAssertSignerCertificatesNeedsGit(t *testing.T) {
+	l := newSignerLog(t, signerFillers(10))
+	signerSeams(t, l, &signerForgeStub{}, nil)
+
+	orig := newGitSession
+	newGitSession = func(want gitfetch.Want, log func(string, ...any)) *gitfetch.Session {
+		return &gitfetch.Session{
+			Fetcher: &gitfetch.Fetcher{Git: filepath.Join(t.TempDir(), "no-git")}, Want: want, Log: log,
+		}
+	}
+
+	t.Cleanup(func() { newGitSession = orig })
+
+	cp := filepath.Join(t.TempDir(), "cp.json")
+
+	var out, errs bytes.Buffer
+
+	code := Run([]string{
+		"assert", "signer-certificates", "--policy", signerPolicyFile(t, l.srv.URL),
+		"--checkpoint", cp, "--start-at", "0", "--org", "monumental-archive", "--trusted-root", l.trustedRoot(t),
+	}, &out, &errs)
+
+	if code != exitUsage || !strings.Contains(errs.String(), "gitfetch: git is not installed") {
+		t.Fatalf("exit %d, stderr:\n%s", code, errs.String())
+	}
+
+	if _, err := os.Stat(cp); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a run refused for its git founded a checkpoint")
 	}
 }
