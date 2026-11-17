@@ -28,9 +28,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/osv"
+	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/triage"
+	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vex"
 	"github.com/monumental-archive/stele/internal/vexjoin"
 )
@@ -52,6 +55,15 @@ type vexArgs struct {
 	id          string
 	released    string
 	out         string
+
+	// The coordinates the id and the release view's product derive
+	// from (stele#397): a release by its version, a stream publish by
+	// its run.
+	repo         string
+	version      string
+	run          string
+	releaseView  string
+	verifyPolicy string
 }
 
 // subject pairs one artifact identifier with the inventory describing
@@ -80,7 +92,17 @@ func parseVEXArgs(args []string, stderr io.Writer) (*vexArgs, int) {
 		"directory of the inventories to cover, found by the policy's evidence.sbomSuffix; each document's "+
 			"own name is its product (this or --subjects)")
 	flags.StringVar(&va.vexDir, "vex", "", "directory of recorded *.openvex.json decisions (required)")
-	flags.StringVar(&va.id, "id", "", "the derived document's identifier (required)")
+	flags.StringVar(&va.id, "id", "",
+		"the derived document's identifier; absent, derived from the policy's blastRadius.vexId for --repo with "+
+			"--version or --run")
+	flags.StringVar(&va.repo, "repo", "", "owner/name the document describes (to derive the id or the release view)")
+	flags.StringVar(&va.version, "version", "", "the release's version, without the tag's v (this or --run)")
+	flags.StringVar(&va.run, "run", "", "the run that made a stream publish (this or --version)")
+	flags.StringVar(&va.releaseView, "release-view", "",
+		"the release view's inventory: excluded from --inventories, its product is the verify policy's "+
+			"build.resourceUri for --repo and --version")
+	flags.StringVar(&va.verifyPolicy, "verify-policy", "",
+		"path to the committed verify policy (with --release-view, and only then)")
 	flags.StringVar(&va.released, "released", "",
 		"RFC 3339 instant of the release this document describes, never a clock reading (required)")
 	flags.StringVar(&va.out, "out", "", "file to write the document to; empty prints to stdout")
@@ -106,13 +128,36 @@ func parseVEXArgs(args []string, stderr io.Writer) (*vexArgs, int) {
 		return va, usageFail("--subjects and --inventories are exclusive: one subject list, named once")
 	case va.vexDir == "":
 		return va, usageFail("--vex is required")
-	case va.id == "":
-		return va, usageFail("--id is required")
 	case va.released == "":
 		return va, usageFail("--released is required")
 	}
 
+	if msg := va.coordinateRefusal(); msg != "" {
+		return va, usageFail(msg)
+	}
+
 	return va, exitOK
+}
+
+// coordinateRefusal checks the coordinate flags against each other:
+// what derives the id, and what names the release view.
+func (va *vexArgs) coordinateRefusal() string {
+	switch {
+	case va.version != "" && va.run != "":
+		return "--version and --run are exclusive: a document describes a release or a stream publish, not both"
+	case va.repo != "" && !strings.Contains(va.repo, "/"):
+		return "--repo must be owner/name"
+	case va.id == "" && (va.repo == "" || va.version == "" && va.run == ""):
+		return "--id is required unless --repo with --version or --run derives it from the policy's blastRadius.vexId"
+	case va.releaseView != "" && va.verifyPolicy == "":
+		return "--release-view needs --verify-policy: the view's product is that policy's build.resourceUri"
+	case va.verifyPolicy != "" && va.releaseView == "":
+		return "--verify-policy is read only for --release-view"
+	case va.releaseView != "" && (va.repo == "" || va.version == ""):
+		return "--release-view needs --repo and --version: the view's product is the release's resource"
+	}
+
+	return ""
 }
 
 // parseSubjects reads the pairs. A pair whose product or inventory is
@@ -161,6 +206,11 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 	}
 
 	subjects, err := vexSubjects(va, *pol.Evidence.SBOMSuffix)
+	if err != nil {
+		return err
+	}
+
+	id, err := vexDocumentID(va, br.VEXID)
 	if err != nil {
 		return err
 	}
@@ -214,7 +264,60 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 		return fmt.Errorf("derive vex: triage before releasing: %w", err)
 	}
 
-	return renderVEX(va, *br.VEXAuthor, released, complete, rebuilds, doc, out)
+	return renderVEX(va, vex.Options{ID: id, Author: *br.VEXAuthor, Released: released}, complete, rebuilds, doc, out)
+}
+
+// vexDocumentID is the caller's --id, or the policy's template for a
+// release (by version) or a stream publish (by run).
+func vexDocumentID(va *vexArgs, ids *assert.VEXIDPolicy) (string, error) {
+	if va.id != "" {
+		return va.id, nil
+	}
+
+	owner, repo, _ := strings.Cut(va.repo, "/")
+
+	var (
+		id  string
+		err error
+	)
+
+	if va.version != "" {
+		id, err = ids.ReleaseID(owner, repo, va.version)
+	} else {
+		id, err = ids.StreamID(owner, repo, va.run)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("derive vex: %w", err)
+	}
+
+	return id, nil
+}
+
+// releaseViewSubject names the release view under the release's
+// resource — the verify policy's build.resourceUri, the definition
+// the release verdict names, so the two documents speak for the same
+// thing by construction.
+func releaseViewSubject(va *vexArgs) (subject, error) {
+	f, err := os.Open(va.verifyPolicy)
+	if err != nil {
+		return subject{}, fmt.Errorf("derive vex: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only close
+
+	vp, err := policy.Load(f)
+	if err != nil {
+		return subject{}, fmt.Errorf("derive vex: verify policy: %w", err)
+	}
+
+	owner, repo, _ := strings.Cut(va.repo, "/")
+
+	product, err := verify.ReleaseResource(vp, verify.Coords{Owner: owner, Repo: repo, Tag: "v" + va.version})
+	if err != nil {
+		return subject{}, fmt.Errorf("derive vex: %w", err)
+	}
+
+	return subject{product: product, inventory: va.releaseView}, nil
 }
 
 // vexSubjects is the subject list: the caller's pairs, or the
@@ -224,8 +327,29 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 // name is refused: a statement about "" describes nothing, and a
 // product id composed in its place would be a fact nobody stated.
 func vexSubjects(va *vexArgs, suffix string) ([]subject, error) {
+	var out []subject
+
+	// The release view leads, as the release's own statements always
+	// have; discovery then skips the same file.
+	var view os.FileInfo
+
+	if va.releaseView != "" {
+		s, err := releaseViewSubject(va)
+		if err != nil {
+			return nil, err
+		}
+
+		if view, err = os.Stat(va.releaseView); err != nil {
+			return nil, fmt.Errorf("derive vex: --release-view: %w", err)
+		}
+
+		out = append(out, s)
+	}
+
 	if va.inventories == "" {
-		return parseSubjects(va.subjects)
+		pairs, err := parseSubjects(va.subjects)
+
+		return append(out, pairs...), err
 	}
 
 	entries, err := os.ReadDir(va.inventories)
@@ -233,7 +357,7 @@ func vexSubjects(va *vexArgs, suffix string) ([]subject, error) {
 		return nil, fmt.Errorf("derive vex: --inventories: %w", err)
 	}
 
-	var out []subject
+	discovered := 0
 
 	for _, e := range entries { // os.ReadDir returns name order
 		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), suffix) {
@@ -242,15 +366,25 @@ func vexSubjects(va *vexArgs, suffix string) ([]subject, error) {
 
 		path := filepath.Join(va.inventories, e.Name())
 
+		if view != nil {
+			if info, serr := os.Stat(path); serr == nil && os.SameFile(info, view) {
+				continue
+			}
+		}
+
 		name, nerr := inventoryName(path)
 		if nerr != nil {
 			return nil, nerr
 		}
 
 		out = append(out, subject{product: name, inventory: path})
+		discovered++
 	}
 
-	if len(out) == 0 {
+	// A release whose only inventory is its view (no per-artifact
+	// documents) is a release described whole; with no view, an empty
+	// directory describes nothing.
+	if discovered == 0 && view == nil {
 		return nil, fmt.Errorf("derive vex: %s holds no *%s inventory — a document describing nothing covers nothing",
 			va.inventories, suffix)
 	}
@@ -334,11 +468,9 @@ func coverageOf(product string, d *triage.Decided) vex.Coverage {
 // applies. Nothing to say is the ordinary outcome, not a failure, and
 // saying so in machine-readable form spares the caller a glob.
 func renderVEX(
-	va *vexArgs, author string, released time.Time, complete *vex.Complete, rebuilds int, doc io.Writer, out *latch,
+	va *vexArgs, opts vex.Options, complete *vex.Complete, rebuilds int, doc io.Writer, out *latch,
 ) error {
-	document, err := vex.Render(
-		vex.Options{ID: va.id, Author: author, Released: released}, complete,
-	)
+	document, err := vex.Render(opts, complete)
 	if errors.Is(err, vex.ErrNoCoverage) {
 		out.logf("derived=false")
 		out.logf("no recorded decision applies to this release; %d finding(s) on the rebuild cadence", rebuilds)

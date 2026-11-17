@@ -395,3 +395,64 @@ func TestBlastRadiusStatesTheSupportWindow(t *testing.T) {
 		})
 	}
 }
+
+// TestBlastRadiusVEXKeys pins the derivation's two keys (stele#397):
+// the author and the id templates are refused at load when they could
+// only produce a document nobody asserted or an id built on a typo.
+func TestBlastRadiusVEXKeys(t *testing.T) {
+	t.Parallel()
+
+	with := func(keys string) string {
+		return strings.Replace(blastPolicyJSON,
+			`"osEcosystems": ["debian", "alpine"],`,
+			`"osEcosystems": ["debian", "alpine"], `+keys+`,`, 1)
+	}
+
+	tests := []struct {
+		name string
+		keys string
+		want string
+	}{
+		{"both templates and an author load", `"vexAuthor": "acme", "vexId": {` +
+			`"release": "https://x.example/vex-{owner}-{repo}-v{version}", ` +
+			`"stream": "https://x.example/vex-{owner}-{repo}-{run}"}`, ""},
+		{"an empty author", `"vexAuthor": ""`, "blastRadius.vexAuthor is empty"},
+		{
+			"an id policy templating nothing", `"vexId": {}`,
+			"blastRadius.vexId declares neither a release nor a stream template",
+		},
+		{"an empty release template", `"vexId": {"release": ""}`, "blastRadius.vexId.release is empty"},
+		{
+			"a release template naming a run", `"vexId": {"release": "x-{run}"}`,
+			"blastRadius.vexId.release carries placeholder {run} — it admits only {owner} {repo} {version}",
+		},
+		{
+			"a stream template naming a version", `"vexId": {"stream": "x-{version}"}`,
+			"blastRadius.vexId.stream carries placeholder {version} — it admits only {owner} {repo} {run}",
+		},
+		{
+			"a typo placeholder", `"vexId": {"release": "x-{tag}"}`,
+			"blastRadius.vexId.release carries placeholder {tag}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := assert.LoadPolicy(strings.NewReader(with(tt.keys)))
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("LoadPolicy = %v", err)
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("LoadPolicy = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}

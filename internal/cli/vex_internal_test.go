@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/osv"
 )
 
@@ -712,5 +713,327 @@ func TestDeriveVEXRefusesAnUnreadablePolicy(t *testing.T) {
 	args := withPolicy(vexArgsFor(dir, "p="+inv), "/nonexistent/policy.json")
 	if got := deriveCmd(args, &stdout, &stderr); got != exitRefused || !strings.Contains(stderr.String(), "derive vex:") {
 		t.Fatalf("deriveCmd = %d, stderr %q", got, stderr.String())
+	}
+}
+
+// The id templates as the canon would declare them, and the ids the
+// canon's shell composes today for the same release and stream —
+// written here the way the shell writes them, so the comparison is
+// with today's bytes, not with a second reading of the template.
+const (
+	canonReleaseIDTemplate = "https://openvex.dev/docs/public/vex-{owner}-{repo}-v{version}-derived"
+	canonStreamIDTemplate  = "https://openvex.dev/docs/public/vex-{owner}-{repo}-continuous-{run}-derived"
+	vexIDBlastRadius       = `, "blastRadius": {"osEcosystems": ["debian"], "vexAuthor": "acme", "vexId": {` +
+		`"release": "` + canonReleaseIDTemplate + `", "stream": "` + canonStreamIDTemplate + `"}}`
+)
+
+// canonID renders what publish.yml / continuous.yml compose:
+// vex-${GITHUB_REPOSITORY//\//-}-v${VERSION}-derived and
+// vex-${GITHUB_REPOSITORY//\//-}-continuous-${GITHUB_RUN_ID}-derived.
+func canonID(repository, middle string) string {
+	return "https://openvex.dev/docs/public/vex-" + strings.ReplaceAll(repository, "/", "-") + middle + "-derived"
+}
+
+// derivedDocument runs a decided derivation with the given extra flags
+// and no --id, returning the document.
+// derivation is one run's outputs.
+type derivation struct {
+	doc, stderr string
+	code        int
+}
+
+func derivedDocument(t *testing.T, blastRadius string, extra ...string) derivation {
+	t.Helper()
+
+	dir := vexFixture(t, decidedLeftPad+"\n")
+	inv := inventory(t, dir, "a.spdx.json", "A")
+	withScanner(t, fakeScanner{byInventory: map[string]string{"A": finding("CVE-1", "left-pad", "1.0.0", "npm")}})
+
+	args := withPolicy(vexArgsFor(dir, "p="+inv), vexPolicyWith(t, dir, blastRadius))
+	for i := range args {
+		if args[i] == "--id" {
+			args = append(args[:i], args[i+2:]...)
+
+			break
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := deriveCmd(append(args, extra...), &stdout, &stderr)
+
+	return derivation{doc: stdout.String(), stderr: stderr.String(), code: code}
+}
+
+// TestDeriveVEXDerivesTheID (stele#397): the id is the policy's
+// template for the release or the stream, and equals what the canon
+// writes today character for character.
+func TestDeriveVEXDerivesTheID(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra []string
+		want  string
+	}{
+		{"a release", []string{"--repo", "acme/widget", "--version", "1.2.3"}, canonID("acme/widget", "-v1.2.3")},
+		{
+			"a stream",
+			[]string{"--repo", "acme/widget", "--run", "16123456789"},
+			canonID("acme/widget", "-continuous-16123456789"),
+		},
+		{
+			"--id overrides the template",
+			[]string{"--repo", "acme/widget", "--version", "1.2.3", "--id", "urn:x"},
+			"urn:x",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := derivedDocument(t, vexIDBlastRadius, tt.extra...)
+			if d.code != exitOK {
+				t.Fatalf("deriveCmd = %d (stderr: %s)", d.code, d.stderr)
+			}
+
+			if !strings.Contains(d.doc, `"@id":"`+tt.want+`"`) {
+				t.Fatalf("document = %s, want @id %q", d.doc, tt.want)
+			}
+		})
+	}
+}
+
+// TestDeriveVEXIDRefusals: an id nobody can derive is refused by name.
+func TestDeriveVEXIDRefusals(t *testing.T) {
+	releaseOnly := `, "blastRadius": {"osEcosystems": ["debian"], "vexAuthor": "acme", "vexId": {` +
+		`"release": "` + canonReleaseIDTemplate + `"}}`
+	streamOnly := `, "blastRadius": {"osEcosystems": ["debian"], "vexAuthor": "acme", "vexId": {` +
+		`"stream": "` + canonStreamIDTemplate + `"}}`
+	none := `, "blastRadius": {"osEcosystems": ["debian"], "vexAuthor": "acme"}`
+
+	tests := []struct {
+		name        string
+		blastRadius string
+		extra       []string
+		code        int
+		want        string
+	}{
+		{
+			"a release with no release template", streamOnly,
+			[]string{"--repo", "acme/widget", "--version", "1"},
+			exitRefused, "blastRadius.vexId.release is not declared — pass --id or declare the template",
+		},
+		{
+			"a stream with no stream template", releaseOnly,
+			[]string{"--repo", "acme/widget", "--run", "1"},
+			exitRefused, "blastRadius.vexId.stream is not declared",
+		},
+		{
+			"no vexId at all", none,
+			[]string{"--repo", "acme/widget", "--version", "1"},
+			exitRefused, "blastRadius.vexId.release is not declared",
+		},
+		{
+			"no --repo", vexIDBlastRadius,
+			[]string{"--version", "1"},
+			exitUsage,
+			"--id is required unless --repo with --version or --run derives it",
+		},
+		{
+			"neither version nor run", vexIDBlastRadius,
+			[]string{"--repo", "acme/widget"},
+			exitUsage,
+			"--id is required unless --repo with --version or --run derives it",
+		},
+		{
+			"both version and run", vexIDBlastRadius,
+			[]string{"--repo", "acme/widget", "--version", "1", "--run", "2"},
+			exitUsage, "--version and --run are exclusive",
+		},
+		{
+			"a repo that is not owner/name", vexIDBlastRadius,
+			[]string{"--repo", "widget", "--version", "1"},
+			exitUsage, "--repo must be owner/name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := derivedDocument(t, tt.blastRadius, tt.extra...)
+			if d.code != tt.code || !strings.Contains(d.stderr, tt.want) {
+				t.Fatalf("deriveCmd = %d, stderr %q — want %d and %q", d.code, d.stderr, tt.code, tt.want)
+			}
+		})
+	}
+}
+
+// writeVerifyPolicy writes the cli fixtures' verify policy, optionally
+// without its build section.
+func writeVerifyPolicy(t *testing.T, dir string, withBuild bool) string {
+	t.Helper()
+
+	doc := []byte(testPolicy)
+
+	if !withBuild {
+		v, err := jsonx.Value(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		m, ok := v.(map[string]any)
+		if !ok {
+			t.Fatal("the test policy is not an object")
+		}
+
+		delete(m, "build")
+
+		if doc, err = jsonx.Marshal(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	path := filepath.Join(dir, "verify-policy.json")
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// TestDeriveVEXReleaseView (stele#397): the view leads under the
+// release's resource — the verify policy's build.resourceUri, equal to
+// the purl the canon composes today — and discovery never lists it a
+// second time under its own name.
+func TestDeriveVEXReleaseView(t *testing.T) {
+	dir := vexFixture(t, "")
+	invs := filepath.Join(dir, "dist")
+
+	if err := os.MkdirAll(invs, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	view := inventory(t, invs, "widget-1.2.3.spdx.json", spdx("widget@v1.2.3"))
+	inventory(t, invs, "sbom-cli-1.2.3.spdx.json", spdx("widget-cli"))
+
+	withScanner(t, fakeScanner{})
+
+	args := append(inventoriesArgs(dir, invs),
+		"--repo", "acme/widget", "--version", "1.2.3",
+		"--release-view", view, "--verify-policy", writeVerifyPolicy(t, dir, true))
+
+	var stdout, stderr bytes.Buffer
+
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+	}
+
+	log := stderr.String()
+
+	// pkg:github/${GITHUB_REPOSITORY}@v${VERSION}, as publish.yml writes it.
+	release := strings.Index(log, "pkg:github/acme/widget@v1.2.3: ")
+	artifact := strings.Index(log, "widget-cli: ")
+
+	switch {
+	case release < 0 || artifact < 0 || release > artifact:
+		t.Fatalf("log = %q — want the release view under the release purl, first", log)
+	case strings.HasPrefix(log, "widget@v1.2.3: ") || strings.Contains(log, "\nwidget@v1.2.3: "):
+		t.Fatalf("log = %q — the view was also discovered under its own name", log)
+	case strings.Count(log, " decided, ") != 2:
+		t.Fatalf("log = %q — want the view and the one artifact, nothing twice", log)
+	}
+}
+
+// TestDeriveVEXAReleaseDescribedWhole: a release whose only inventory
+// is its view (no per-artifact documents) is described whole, not
+// refused as an empty directory.
+func TestDeriveVEXAReleaseDescribedWhole(t *testing.T) {
+	dir := vexFixture(t, "")
+	invs := filepath.Join(dir, "dist")
+
+	if err := os.MkdirAll(invs, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	view := inventory(t, invs, "widget-1.2.3.spdx.json", spdx("widget@v1.2.3"))
+
+	withScanner(t, fakeScanner{})
+
+	args := append(inventoriesArgs(dir, invs),
+		"--repo", "acme/widget", "--version", "1.2.3",
+		"--release-view", view, "--verify-policy", writeVerifyPolicy(t, dir, true))
+
+	var stdout, stderr bytes.Buffer
+
+	if got := deriveCmd(args, &stdout, &stderr); got != exitOK ||
+		!strings.Contains(stderr.String(), "pkg:github/acme/widget@v1.2.3: ") {
+		t.Fatalf("deriveCmd = %d, stderr %q", got, stderr.String())
+	}
+}
+
+// TestDeriveVEXReleaseViewRefusals: each guard of the view refuses by
+// name.
+func TestDeriveVEXReleaseViewRefusals(t *testing.T) {
+	dir := vexFixture(t, "")
+	invs := filepath.Join(dir, "dist")
+
+	if err := os.MkdirAll(invs, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	view := inventory(t, invs, "widget-1.2.3.spdx.json", spdx("widget@v1.2.3"))
+	vp := writeVerifyPolicy(t, dir, true)
+
+	buildless := filepath.Join(t.TempDir(), "x")
+	if err := os.MkdirAll(buildless, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	noBuild := writeVerifyPolicy(t, buildless, false)
+
+	coords := []string{"--repo", "acme/widget", "--version", "1.2.3"}
+
+	tests := []struct {
+		name  string
+		extra []string
+		code  int
+		want  string
+	}{
+		{
+			"a view with no verify policy", append([]string{"--release-view", view}, coords...), exitUsage,
+			"--release-view needs --verify-policy",
+		},
+		{
+			"a verify policy with no view", append([]string{"--verify-policy", vp}, coords...), exitUsage,
+			"--verify-policy is read only for --release-view",
+		},
+		{"a view with no version", []string{
+			"--release-view", view, "--verify-policy", vp, "--repo", "acme/widget",
+			"--run", "1",
+		}, exitUsage, "--release-view needs --repo and --version"},
+		{"an unreadable verify policy", append([]string{"--release-view", view, "--verify-policy", "/nonexistent"},
+			coords...), exitRefused, "derive vex:"},
+		{"a verify policy that does not load", append([]string{
+			"--release-view", view, "--verify-policy",
+			filepath.Join(dir, "policy.json"),
+		}, coords...), exitRefused, "derive vex: verify policy:"},
+		{"a verify policy naming no release resource", append([]string{
+			"--release-view", view, "--verify-policy",
+			noBuild,
+		}, coords...), exitRefused, "declares no build.resourceUri"},
+		{"a view that does not exist", append([]string{
+			"--release-view", filepath.Join(invs, "gone.spdx.json"),
+			"--verify-policy", vp,
+		}, coords...), exitRefused, "--release-view:"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withScanner(t, fakeScanner{})
+
+			var stdout, stderr bytes.Buffer
+
+			args := append(inventoriesArgs(dir, invs), tt.extra...)
+			if got := deriveCmd(args, &stdout, &stderr); got != tt.code || !strings.Contains(stderr.String(), tt.want) {
+				t.Fatalf("deriveCmd = %d, stderr %q — want %d and %q", got, stderr.String(), tt.code, tt.want)
+			}
+		})
 	}
 }

@@ -254,7 +254,8 @@ derive sbom flags: [--out --expect-version] <binary>..., or
 takes --policy --repo --branch [--canon-root --canon-digest --out
 --snapshot|--capture]; derive facts takes --archetype --repo --git-dir --server-url
 [--version --rev --tree --title --description]; derive vex
-takes --policy --subjects|--inventories --vex --id --released [--out];
+takes --policy --subjects|--inventories --vex --released [--out --id
+--repo --version|--run --release-view --verify-policy];
 derive vex-subjects takes --policy --decision --org|--repo
 [--snapshot --out]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --class
