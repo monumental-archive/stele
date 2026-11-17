@@ -95,6 +95,18 @@ func (h fakeHistory) Noted() ([]string, error) {
 // the identity and the statement digest.
 type chainWorld struct {
 	t *testing.T
+	// san signs both halves and is the summary's verifier.id; empty
+	// is linkSAN. loggedAt scripts the log's observed instant.
+	san      string
+	loggedAt string
+}
+
+func (cw chainWorld) signer() string {
+	if cw.san == "" {
+		return linkSAN
+	}
+
+	return cw.san
 }
 
 // linkStmt renders one source-provenance statement. ledgerKey is
@@ -137,7 +149,7 @@ func (cw chainWorld) vsaStmt(rev string, levels []any) map[string]any {
 		"subject":       []any{map[string]any{"digest": map[string]any{"gitCommit": rev}}},
 		"predicateType": "https://slsa.dev/verification_summary/v1",
 		"predicate": map[string]any{
-			"verifier":           map[string]any{"id": linkSAN},
+			"verifier":           map[string]any{"id": cw.signer()},
 			"resourceUri":        "git+https://github.com/acme/widget",
 			"policy":             map[string]any{"uri": "https://github.com/acme/canon/tree/v1.0.0"},
 			"verificationResult": "PASSED",
@@ -154,8 +166,9 @@ func (cw chainWorld) half(stmt map[string]any) map[string]any {
 	// The signature covers the DSSE pre-authentication encoding, the
 	// exact bytes the walk must reconstruct and verify.
 	bundle := fakeBundle{
-		SAN: linkSAN, Issuer: issuer,
-		Digests: []string{digestHex(dsse.PAE(chain.StatementType, raw))},
+		SAN: cw.signer(), Issuer: issuer,
+		Digests:  []string{digestHex(dsse.PAE(chain.StatementType, raw))},
+		LoggedAt: cw.loggedAt,
 	}
 
 	return map[string]any{

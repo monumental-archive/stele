@@ -53,6 +53,7 @@ type History interface {
 // enumerated legacy). Constructor: Chain, alone.
 type ChainVerdict struct {
 	links       int
+	changedAt   string
 	ledgerSteps int
 	ledgerTotal int
 	tip         *TipFacts
@@ -60,6 +61,12 @@ type ChainVerdict struct {
 
 // Links reports how many chain links coverage verified.
 func (v *ChainVerdict) Links() int { return v.links }
+
+// IdentityChangedAt is the revision of the first link signed under
+// source.identity when earlier links were signed under
+// source.legacyIdentity — where the chain changed its signer. Empty
+// when the chain never changed (stele#389).
+func (v *ChainVerdict) IdentityChangedAt() string { return v.changedAt }
 
 // TipFacts carries the tip link's verified content onward for the
 // level computation — read only from verified statements. Fields stay
@@ -121,9 +128,10 @@ func (v *ChainVerdict) Tip() (*TipFacts, bool) {
 }
 
 // Chain verifies one repository branch's source chain. Every link's
-// two halves must verify under the policy's link identity over the
-// exact statement bytes the note carries; every revision since
-// genesis must carry a link; the ledger must reach every member.
+// two halves must verify under one source-signing identity over the
+// exact statement bytes the note carries, the identities in the order
+// SourceSigning permits; every revision since genesis must carry a
+// link; the ledger must reach every member.
 func Chain(p *policy.Policy, c Coords, ref string, h History, bv BundleVerifier, log Logf) (*ChainVerdict, error) {
 	if p.Source == nil {
 		return nil, errors.New("verify: the policy declares no source section — the chain walk needs one")
@@ -138,10 +146,10 @@ func Chain(p *policy.Policy, c Coords, ref string, h History, bv BundleVerifier,
 	}
 
 	w := &walker{
-		p:  p,
-		c:  c,
-		bv: bv,
-		id: trust.Identity{SAN: expand(*p.Source.Identity, c), Issuer: *p.Issuer},
+		p:    p,
+		c:    c,
+		bv:   bv,
+		sign: NewSourceSigning(p, c, bv),
 	}
 
 	verdict, err := w.coverage(ref, h, log)
@@ -151,6 +159,10 @@ func Chain(p *policy.Policy, c Coords, ref string, h History, bv BundleVerifier,
 
 	if err := w.linkage(verdict, h, log); err != nil {
 		return nil, err
+	}
+
+	if verdict.changedAt != "" {
+		log("verify: chain %s: source signing identity changed at %s", c.Slug(), verdict.changedAt)
 	}
 
 	log("verify: chain %s: %d link(s) verified, ledger walk %d/%d",
@@ -163,8 +175,11 @@ type walker struct {
 	p      *policy.Policy
 	c      Coords
 	bv     BundleVerifier
-	id     trust.Identity
+	sign   *SourceSigning
 	lstart string
+	// signings is every verified link's classification, TIP FIRST —
+	// the coverage walk's order; judged genesis first at its end.
+	signings []Signing
 }
 
 // coverage walks first-parent from the tip. The genesis link ends
@@ -189,12 +204,14 @@ func (w *walker) coverage(ref string, h History, log Logf) (*ChainVerdict, error
 
 		switch {
 		case isLink:
-			facts, genesis, lerr := w.verifyLink(rev, link)
+			facts, signing, genesis, lerr := w.verifyLink(rev, link)
 			if lerr != nil {
 				return nil, lerr
 			}
 
 			verdict.links++
+			w.signings = append(w.signings, signing)
+
 			if w.lstart == "" {
 				w.lstart = rev
 				verdict.tip = facts
@@ -206,6 +223,16 @@ func (w *walker) coverage(ref string, h History, log Logf) (*ChainVerdict, error
 				if err := refuseHoles(holes); err != nil {
 					return nil, err
 				}
+
+				genesisFirst := slices.Clone(w.signings)
+				slices.Reverse(genesisFirst)
+
+				changedAt, oerr := w.sign.Order(genesisFirst)
+				if oerr != nil {
+					return nil, fmt.Errorf("verify: %w", oerr)
+				}
+
+				verdict.changedAt = changedAt
 
 				return verdict, nil
 			}
@@ -263,16 +290,37 @@ func decodeLink(note []byte) (*chain.Note, bool) {
 	return link, true
 }
 
-// verifyLink proves one link: both halves' signatures over the exact
-// statement bytes, the provenance statement's subject naming this
-// revision, predicate types, the source resource — and returns the
+// verifyLink proves one link: which source-signing identity signed
+// its provenance half (SourceSigning.Classify), both halves'
+// signatures under that one identity over the exact statement bytes,
+// the provenance statement's subject naming this revision, predicate
+// types, the source resource — and returns the classification, the
 // ledger interpretation and the facts the level computation reads.
-func (w *walker) verifyLink(rev string, link *chain.Note) (*TipFacts, bool, error) {
-	provStmt, err := w.verifyHalf(rev, "provenance", link.Provenance)
+func (w *walker) verifyLink(rev string, link *chain.Note) (*TipFacts, Signing, bool, error) {
+	stmtBytes, digest, err := decodeHalf(rev, "provenance", link.Provenance)
 	if err != nil {
-		return nil, false, err
+		return nil, Signing{}, false, err
 	}
 
+	signing, err := w.sign.Classify(rev, link.Provenance.Bundle, digest)
+	if err != nil {
+		return nil, Signing{}, false, fmt.Errorf("verify: link at %s: provenance refused: %w", rev, err)
+	}
+
+	provStmt, err := parseHalf(rev, "provenance", stmtBytes)
+	if err != nil {
+		return nil, Signing{}, false, err
+	}
+
+	facts, genesis, err := w.judgeLink(rev, link, provStmt, signing.Identity())
+
+	return facts, signing, genesis, err
+}
+
+// judgeLink proves the rest of a link once its signer is known.
+func (w *walker) judgeLink(
+	rev string, link *chain.Note, provStmt *intoto.Statement, id trust.Identity,
+) (*TipFacts, bool, error) {
 	if *provStmt.PredicateType != *w.p.Source.ProvenancePredicateType {
 		return nil, false, fmt.Errorf("verify: link at %s: provenance predicate type %q is not the policy's",
 			rev, *provStmt.PredicateType)
@@ -282,12 +330,12 @@ func (w *walker) verifyLink(rev string, link *chain.Note) (*TipFacts, bool, erro
 		return nil, false, fmt.Errorf("verify: link at %s: %w", rev, serr)
 	}
 
-	vsaStmt, err := w.verifyHalf(rev, "vsa", link.VSA)
+	vsaStmt, err := w.verifyHalf(rev, "vsa", link.VSA, id)
 	if err != nil {
 		return nil, false, err
 	}
 
-	levels, err := w.judgeLinkVSA(rev, vsaStmt)
+	levels, err := w.judgeLinkVSA(rev, vsaStmt, id)
 	if err != nil {
 		return nil, false, err
 	}
@@ -327,18 +375,35 @@ func (w *walker) verifyLink(rev string, link *chain.Note) (*TipFacts, bool, erro
 // returns the validated statement. The payload type is inside the
 // signed encoding: a statement re-labelled as another document kind
 // fails here, not in a consumer's assumption.
-func (w *walker) verifyHalf(rev, name string, env *chain.Envelope) (*intoto.Statement, error) {
-	stmtBytes, err := dsse.DecodeBase64(*env.Statement)
+func (w *walker) verifyHalf(rev, name string, env *chain.Envelope, id trust.Identity) (*intoto.Statement, error) {
+	stmtBytes, digest, err := decodeHalf(rev, name, env)
 	if err != nil {
-		return nil, fmt.Errorf("verify: link at %s: %s statement: %w", rev, name, err)
+		return nil, err
 	}
 
-	pae := dsse.PAE(*env.PayloadType, stmtBytes)
-
-	if _, verr := w.bv.Blob(env.Bundle, w.id, sha256Hex(pae)); verr != nil {
+	if _, verr := w.bv.Blob(env.Bundle, id, digest); verr != nil {
 		return nil, fmt.Errorf("verify: link at %s: %s refused: %w", rev, name, verr)
 	}
 
+	return parseHalf(rev, name, stmtBytes)
+}
+
+// decodeHalf reads one half's exact statement bytes and the digest
+// its signature covers: the DSSE pre-authentication encoding.
+//
+//nolint:gocritic // unnamedResult: the pair is documented above — the statement bytes and the covered digest
+func decodeHalf(rev, name string, env *chain.Envelope) ([]byte, string, error) {
+	stmtBytes, err := dsse.DecodeBase64(*env.Statement)
+	if err != nil {
+		return nil, "", fmt.Errorf("verify: link at %s: %s statement: %w", rev, name, err)
+	}
+
+	return stmtBytes, sha256Hex(dsse.PAE(*env.PayloadType, stmtBytes)), nil
+}
+
+// parseHalf decodes and validates a half's statement — called only
+// after its signature verified.
+func parseHalf(rev, name string, stmtBytes []byte) (*intoto.Statement, error) {
 	stmt, err := jsonx.DecodeBytes[intoto.Statement](stmtBytes)
 	if err != nil {
 		return nil, fmt.Errorf("verify: link at %s: %s statement: %w", rev, name, err)
@@ -354,7 +419,7 @@ func (w *walker) verifyHalf(rev, name string, env *chain.Envelope) (*intoto.Stat
 // judgeLinkVSA validates the summary half's predicate and its
 // resource. Levels are carried onward; whether they are HONEST is
 // the level computation's comparison, not the walk's.
-func (w *walker) judgeLinkVSA(rev string, stmt *intoto.Statement) ([]string, error) {
+func (w *walker) judgeLinkVSA(rev string, stmt *intoto.Statement, id trust.Identity) ([]string, error) {
 	if *stmt.PredicateType != vsa.PredicateType {
 		return nil, fmt.Errorf("verify: link at %s: summary predicate type is not the VSA type", rev)
 	}
@@ -372,9 +437,9 @@ func (w *walker) judgeLinkVSA(rev string, stmt *intoto.Statement) ([]string, err
 	// links: verifier.id must BE the identity that signed this half.
 	// The emitter guarantees the tautology; without this the consumer
 	// would let a future emitter drift unnoticed (#19 item 2).
-	if *pred.Verifier.ID != w.id.SAN {
+	if *pred.Verifier.ID != id.SAN {
 		return nil, fmt.Errorf("verify: link at %s: verifier.id %q is not the link signing identity %q",
-			rev, *pred.Verifier.ID, w.id.SAN)
+			rev, *pred.Verifier.ID, id.SAN)
 	}
 
 	if want := expand(*w.p.Source.ResourceURI, w.c); *pred.ResourceURI != want {

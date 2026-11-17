@@ -23,7 +23,7 @@ import (
 
 // manifestPolicyJSON is the evidence vocabulary the stamping reads.
 const manifestPolicyJSON = `{
-  "schema": 8,
+  "schema": 9,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

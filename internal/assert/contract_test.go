@@ -319,7 +319,7 @@ func TestSourcesOrder(t *testing.T) {
 // an unplanned prefix obligation beside its planned one, and one
 // bearing none at all.
 const plannedPolicyJSON = `{
-  "schema": 8,
+  "schema": 9,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

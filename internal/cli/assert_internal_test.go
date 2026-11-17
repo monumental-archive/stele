@@ -269,7 +269,7 @@ func evidenceSnapshotWith(t *testing.T, rewrite func(files map[string]string)) (
 			`"class": "oci-image", "target": "linux-amd64"}]}`,
 		"snap/acme/widget/releases/v1.0.0/assets/attestations-image.intoto.jsonl": bundle,
 		"snap/acme/widget/attestations/" + digest + ".json":                       `[` + bundle + `]`,
-		"policy.json": `{"schema": 8, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
@@ -320,7 +320,7 @@ func TestAssertEvidenceSnapshotEndToEnd(t *testing.T) {
 // not learned its own population, so it seals CANNOT_JUDGE naming the
 // repository — never a pass over a set nobody enumerated.
 func TestAssertPopulationReconciliation(t *testing.T) {
-	base := `{"schema": 8, %s"evidence": {"sbomSuffix": ".spdx.json", ` +
+	base := `{"schema": 9, %s"evidence": {"sbomSuffix": ".spdx.json", ` +
 		`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 		`"manifestAsset": "evidence-manifest.json", ` +
 		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`
@@ -437,7 +437,7 @@ func blastSnapshot(t *testing.T) (string, string, string) {
 		"snap/acme/widget/releases/v1.0.0/assets.json":          `["app.spdx.json"]`,
 		"snap/acme/widget/releases/v1.0.0/assets/app.spdx.json": sbom,
 		"snap/acme/widget/attestations/" + digest + ".json":     `[{"bundle": 1}]`,
-		"policy.json": `{"schema": 8, "evidence": {"sbomSuffix": ".spdx.json", ` +
+		"policy.json": `{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
@@ -599,6 +599,10 @@ func (b attestorBV) Attestation([]byte, trust.Identity, string) (*trust.Verified
 	return v, nil
 }
 
+// LoggedAt reads the verification's own observations; this fake
+// scripts none, so a dated rule finds no logged instant.
+func (attestorBV) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }
+
 func (b attestorBV) Blob([]byte, trust.Identity, string) (*trust.Verified, error) {
 	return nil, errUnusedSeam
 }
@@ -728,7 +732,7 @@ func storeSnapshot(t *testing.T) (string, string) {
 	dir := filepath.Dir(snap)
 	policy := filepath.Join(dir, "store-policy.json")
 
-	content := `{"schema": 8, "issuer": "https://token.actions.githubusercontent.com",
+	content := `{"schema": 9, "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
@@ -917,7 +921,7 @@ func tagsPolicy(t *testing.T) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "policy.json")
-	policy := `{"schema": 8, "issuer": "https://token.example.com", ` +
+	policy := `{"schema": 9, "issuer": "https://token.example.com", ` +
 		`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
 		`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
 		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
@@ -1058,7 +1062,7 @@ func TestNewTagVerifier(t *testing.T) {
 func TestAssertTagsPolicyWithoutSection(t *testing.T) {
 	dir := t.TempDir()
 	policy := filepath.Join(dir, "policy.json")
-	doc := `{"schema": 8, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+	doc := `{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", 	  "classes": {"a": {"bundles": ["b"]}}}}`
 
 	if err := os.WriteFile(policy, []byte(doc), 0o600); err != nil {

@@ -13,7 +13,7 @@ import (
 func TestSignerCertificatesPolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	const base = `{"schema": 8, "issuer": "https://token.example.com",
+	const base = `{"schema": 9, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 	    "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "classes": {"a": {"bundles": ["b"]}}},
 	  "signerCertificates": {"log": "https://ct.example/2026",

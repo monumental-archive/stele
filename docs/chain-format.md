@@ -225,8 +225,11 @@ properties, and names their defects separately:
   requires every ledger member to be reachable — an unreachable
   member is a silent fork, refused.
 
-Both halves of every link must verify under the pinned identity. To
-verify one link by hand, with nothing this tool knows that a
+Both halves of every link must verify under one pinned identity:
+`source.identity`, or `source.legacyIdentity` for the links before
+the chain changed signer, in the order the policy schema's rule
+permits ([policy-schema.md](policy-schema.md#sourcelegacyidentity-optional)).
+To verify one link by hand, with nothing this tool knows that a
 stranger does not:
 
 ```sh
@@ -239,7 +242,7 @@ t='application/vnd.in-toto+json'
 { printf 'DSSEv1 %d %s %d ' "${#t}" "$t" "$(wc -c < st.json)"
   cat st.json; } > pae.bin
 cosign verify-blob --bundle pb.json \
-  --certificate-identity "<the policy's link identity>" \
+  --certificate-identity "<the identity that signed this link>" \
   --certificate-oidc-issuer "<the policy's issuer>" \
   pae.bin
 ```

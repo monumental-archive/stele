@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/policy"
 )
@@ -12,7 +13,7 @@ import (
 // this document with exactly one fact broken, so a failing row names
 // its guard and nothing else.
 const valid = `{
-  "schema": 8,
+  "schema": 9,
   "issuer": "https://token.example.com",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},
@@ -126,7 +127,7 @@ func TestLoadMinimal(t *testing.T) {
 	t.Parallel()
 
 	const minimal = `{
-	  "schema": 8,
+	  "schema": 9,
 	  "issuer": "https://token.example.com",
 	  "trust": {
 	    "provenance": {"signerWorkflow": "{owner}/{repo}/.github/workflows/release.yml"}
@@ -190,16 +191,16 @@ func TestLoadRefusals(t *testing.T) {
 		want string
 	}{
 		{"not json at all", valid, "not json", "decode"},
-		{"unknown field", `"schema": 8`, `"schema": 8, "surprise": true`, wantUnknownField},
-		{"schema absent", `"schema": 8,`, ``, "schema is absent"},
-		{"schema newer", `"schema": 8`, schemaPlusOne(), "not the implemented schema"},
+		{"unknown field", `"schema": 9`, `"schema": 9, "surprise": true`, wantUnknownField},
+		{"schema absent", `"schema": 9,`, ``, "schema is absent"},
+		{"schema newer", `"schema": 9`, schemaPlusOne(), "not the implemented schema"},
 		// The gate fires FIRST (stele#107): a schema-1 document
 		// carrying the pre-#84 vocabulary this decoder no longer knows
 		// must refuse as a VERSION mismatch, never incidentally as an
 		// unknown field — that is the whole reason the gate exists.
 		{
 			"old schema with old vocabulary is a version error",
-			`"schema": 8`,
+			`"schema": 9`,
 			`"schema": 1, "storeVsaFromCanon": true`,
 			"not the implemented schema",
 		},
@@ -444,6 +445,47 @@ func TestLoadRefusals(t *testing.T) {
 			"full 40-hex",
 		},
 		{"leaf reason empty", `"reason": "pre-v2 healed fork"`, `"reason": ""`, "legacyLeaves[0].reason"},
+		{
+			"legacy identity absent inside its block",
+			`"notesRef": "refs/notes/commits"`,
+			`"legacyIdentity": {}, "notesRef": "refs/notes/commits"`,
+			"source.legacyIdentity.identity is absent or empty",
+		},
+		{
+			"legacy identity empty",
+			`"notesRef": "refs/notes/commits"`,
+			`"legacyIdentity": {"identity": ""}, "notesRef": "refs/notes/commits"`,
+			"source.legacyIdentity.identity is absent or empty",
+		},
+		{
+			"legacy identity unknown placeholder",
+			`"notesRef": "refs/notes/commits"`,
+			`"legacyIdentity": {"identity": "https://github.com/{owner}/{repo}/old.yml@{ref}"},` +
+				` "notesRef": "refs/notes/commits"`,
+			"source.legacyIdentity.identity carries unknown placeholder {ref}",
+		},
+		{
+			"legacy identity is the current identity",
+			`"notesRef": "refs/notes/commits"`,
+			`"legacyIdentity": {"identity": "https://github.com/{owner}/{repo}` +
+				`/.github/workflows/source-attest.yml@refs/heads/main"},` +
+				` "notesRef": "refs/notes/commits"`,
+			"source.legacyIdentity.identity is source.identity — a change to the same signer changes nothing",
+		},
+		{
+			"legacy until not RFC 3339",
+			`"notesRef": "refs/notes/commits"`,
+			`"legacyIdentity": {"identity": "https://github.com/{owner}/{repo}/old.yml@refs/heads/main",` +
+				` "until": "2026-11-17"}, "notesRef": "refs/notes/commits"`,
+			`source.legacyIdentity.until "2026-11-17" is not an RFC 3339 instant`,
+		},
+		{
+			"legacy identity unknown field",
+			`"notesRef": "refs/notes/commits"`,
+			`"legacyIdentity": {"identity": "https://github.com/{owner}/{repo}/old.yml@refs/heads/main",` +
+				` "from": "2026-11-17T00:00:00Z"}, "notesRef": "refs/notes/commits"`,
+			wantUnknownField,
+		},
 	}
 
 	for _, tt := range tests {
@@ -714,5 +756,72 @@ func TestEnrichmentAbsent(t *testing.T) {
 
 	if p.Build.Enrichment != nil {
 		t.Errorf("build.enrichment = %+v, want nil when undeclared", p.Build.Enrichment)
+	}
+}
+
+// TestLoadLegacyIdentity: the optional earlier signing identity loads
+// with and without its until, and UntilTime reads what was declared.
+func TestLoadLegacyIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		block     string
+		wantUntil string
+	}{
+		{"absent", ``, ""},
+		{
+			"identity alone",
+			`"legacyIdentity": {"identity": "https://github.com/{owner}/{repo}/old.yml@refs/heads/main"}, `,
+			"",
+		},
+		{
+			"identity and until",
+			`"legacyIdentity": {"identity": "https://github.com/{owner}/{repo}/old.yml@refs/heads/main",` +
+				` "until": "2026-11-17T12:00:00Z"}, `,
+			"2026-11-17T12:00:00Z",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mutate(t, `"notesRef": "refs/notes/commits"`, tt.block+`"notesRef": "refs/notes/commits"`)
+
+			p, err := policy.Load(strings.NewReader(doc))
+			if err != nil {
+				t.Fatalf("Load = %v", err)
+			}
+
+			l := p.Source.LegacyIdentity
+			if tt.block == "" {
+				if l != nil {
+					t.Fatalf("LegacyIdentity = %+v, want absent", l)
+				}
+
+				return
+			}
+
+			at, ok := l.UntilTime()
+			switch {
+			case tt.wantUntil == "" && ok:
+				t.Errorf("UntilTime = %v, true; want none declared", at)
+			case tt.wantUntil != "" && (!ok || at.Format(time.RFC3339) != tt.wantUntil):
+				t.Errorf("UntilTime = %v, %v; want %s", at, ok, tt.wantUntil)
+			}
+		})
+	}
+}
+
+// TestLegacyUntilTimeUnvalidated: a hand-built value that never
+// passed Load reads its declared until as the zero instant — every
+// signing is after it, so skipping validation refuses, never widens.
+func TestLegacyUntilTimeUnvalidated(t *testing.T) {
+	t.Parallel()
+
+	declared := "2026-11-17T12:00:00Z"
+	if at, ok := (&policy.LegacyIdentity{Until: &declared}).UntilTime(); !ok || !at.IsZero() {
+		t.Errorf("UntilTime = %v, %v; want the zero instant, true", at, ok)
 	}
 }

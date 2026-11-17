@@ -26,7 +26,7 @@ import (
 // demands, so a row that breaks one field breaks exactly that field.
 const (
 	cleanVerifyPolicy = `{
-	  "schema": 8,
+	  "schema": 9,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "trust": {
 	    "provenance": {
@@ -36,7 +36,7 @@ const (
 	}`
 
 	cleanAssertPolicy = `{
-	  "schema": 8,
+	  "schema": 9,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {
 	    "sbomSuffix": ".spdx.json",
@@ -56,7 +56,7 @@ const (
 	// bothScopesAssertPolicy names both mechanisms — the world the
 	// closed four-field block could not describe at any value.
 	bothScopesAssertPolicy = `{
-	  "schema": 8,
+	  "schema": 9,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {
 	    "sbomSuffix": ".spdx.json",
@@ -90,7 +90,7 @@ const (
 	// reshape, at the CURRENT epoch: the document a consumer holds
 	// when the pin moves ahead of the policy edit.
 	preScopesAssertPolicy = `{
-	  "schema": 8,
+	  "schema": 9,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {
 	    "sbomSuffix": ".spdx.json",
@@ -143,11 +143,11 @@ func TestVerifyPolicyMirrorsTheLoader(t *testing.T) {
 		{"a clean assert policy", "--assert-policy", cleanAssertPolicy, exitOK},
 		{
 			"a verify policy one epoch behind", "--verify-policy",
-			strings.Replace(cleanVerifyPolicy, `"schema": 8`, `"schema": 5`, 1), exitRefused,
+			strings.Replace(cleanVerifyPolicy, `"schema": 9`, `"schema": 5`, 1), exitRefused,
 		},
 		{
 			"an assert policy one epoch behind", "--assert-policy",
-			strings.Replace(cleanAssertPolicy, `"schema": 8`, `"schema": 5`, 1), exitRefused,
+			strings.Replace(cleanAssertPolicy, `"schema": 9`, `"schema": 5`, 1), exitRefused,
 		},
 		{
 			// proofFloor as a string is the shape the live incident
@@ -160,11 +160,11 @@ func TestVerifyPolicyMirrorsTheLoader(t *testing.T) {
 		},
 		{
 			"a verify policy declaring a key this engine has no field for", "--verify-policy",
-			strings.Replace(cleanVerifyPolicy, `"schema": 8`, `"schema": 8, "sourceLevel": 4`, 1), exitRefused,
+			strings.Replace(cleanVerifyPolicy, `"schema": 9`, `"schema": 9, "sourceLevel": 4`, 1), exitRefused,
 		},
 		{
 			"a document carrying no schema at all", "--verify-policy",
-			strings.Replace(cleanVerifyPolicy, `"schema": 8,`, ``, 1), exitRefused,
+			strings.Replace(cleanVerifyPolicy, `"schema": 9,`, ``, 1), exitRefused,
 		},
 		// The stele#247 reshape, measured from outside in both
 		// directions: the scoped shape loads at this epoch, and the
@@ -367,7 +367,7 @@ func TestVerifyPolicyReachesNothing(t *testing.T) {
 	}
 
 	clean := writePolicyDoc(t, "clean.json", cleanVerifyPolicy)
-	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanVerifyPolicy, `"schema": 8`, `"schema": 5`, 1))
+	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanVerifyPolicy, `"schema": 9`, `"schema": 5`, 1))
 
 	for _, row := range []struct {
 		name string
@@ -391,7 +391,7 @@ func TestVerifyPolicyReachesNothing(t *testing.T) {
 // loader's refusal and the command's own usage error. A clean load
 // writes nothing, so there is no stream on it to fail.
 func TestVerifyPolicyStreamGuards(t *testing.T) {
-	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanAssertPolicy, `"schema": 8`, `"schema": 5`, 1))
+	stale := writePolicyDoc(t, "stale.json", strings.Replace(cleanAssertPolicy, `"schema": 9`, `"schema": 5`, 1))
 
 	t.Run("a refused document", func(t *testing.T) {
 		sweepWriteFailures(t, []string{"verify", modePolicy, "--assert-policy", stale})

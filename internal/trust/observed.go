@@ -246,3 +246,35 @@ func observedFromResult(result *verify.VerificationResult) []ObservedInstant {
 
 	return observed
 }
+
+// LoggedAt is the moment a transparency log observed the verified
+// signing — the instant a dated rule judges a signature by
+// (source.legacyIdentity.until, stele#389). Every transparency-log
+// observation must fall on the permitted side of such a rule, so the
+// LATEST one is returned: a signing logged twice is placed at the
+// later observation, never the more convenient one. A verification
+// that holds no transparency-log observation has no such instant, and
+// says so rather than falling back to an instant of another class.
+func (v *Verified) LoggedAt() (time.Time, error) {
+	var at time.Time
+
+	found := false
+
+	for _, o := range v.Observed {
+		if o.source != SourceTransparencyLog {
+			continue
+		}
+
+		if !found || o.at.After(at) {
+			at = o.at
+		}
+
+		found = true
+	}
+
+	if !found {
+		return time.Time{}, errors.New("trust: no transparency log observed the signing — there is no logged instant")
+	}
+
+	return at, nil
+}

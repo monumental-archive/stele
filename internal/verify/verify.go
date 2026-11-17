@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/trust"
@@ -89,6 +90,9 @@ type BundleVerifier interface {
 	Attestation(bundleJSON []byte, id trust.Identity, sha256Hex string) (*trust.Verified, error)
 	Blob(bundleJSON []byte, id trust.Identity, sha256Hex string) (*trust.Verified, error)
 	Peek(bundleJSON []byte) ([]byte, error)
+	// LoggedAt is the moment a transparency log observed a verified
+	// signing — what the source-signing rule's until is judged by.
+	LoggedAt(v *trust.Verified) (time.Time, error)
 }
 
 // serverURL is the host every GitHub Actions identity URI lives
