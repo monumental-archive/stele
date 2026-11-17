@@ -68,6 +68,11 @@ type Policy struct {
 	// a signing the population performed. Its presence is the declared
 	// obligation; the identity's issuer is the top-level Issuer.
 	SignerCertificates *SignerCertificatesPolicy `json:"signerCertificates,omitempty"`
+	// Published declares where a release's file subjects are served,
+	// for the published-bytes proof (stele#392): the registries, each
+	// claiming subjects by extension and serving them at a URL
+	// template. Its presence is what `assert published` needs.
+	Published *PublishedPolicy `json:"published,omitempty"`
 }
 
 // ChainsPolicy parameterises the chain-coverage audit (stele#94).
@@ -1176,6 +1181,10 @@ func (p *Policy) validate() error {
 	}
 
 	if err := p.validateSignerCertificates(); err != nil {
+		return err
+	}
+
+	if err := p.Published.validate(); err != nil {
 		return err
 	}
 
