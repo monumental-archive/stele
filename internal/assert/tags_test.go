@@ -83,7 +83,10 @@ type fakeTags struct {
 	notes    map[string][]gitrepo.ChainNote
 	meta     map[string]*gitrepo.CommitMeta
 	ancestry map[string]bool // "base...head"
-	refsErr  error
+	// unheld are the revisions no branch or tag reaches; every other
+	// revision is reachable.
+	unheld  map[string]bool
+	refsErr error
 	// torn fails one named read — the tag audit's own version of a
 	// forge that tears mid-walk.
 	torn map[string]error
@@ -127,6 +130,10 @@ func (f *fakeTags) CommitMeta(_, _, rev string) (*gitrepo.CommitMeta, error) {
 
 func (f *fakeTags) IsAncestor(_, _, base, head string) (bool, error) {
 	return f.ancestry[base+"..."+head], f.tear("IsAncestor")
+}
+
+func (f *fakeTags) Reachable(_, _, rev string) (bool, error) {
+	return !f.unheld[rev], f.tear("Reachable")
 }
 
 // tear reports the scripted failure for one named read, if any.
