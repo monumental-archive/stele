@@ -18,30 +18,52 @@ import (
 	"strings"
 )
 
-// repoLocators are the environment variables through which git
-// resolves a repository INDEPENDENTLY of `-C dir` — GIT_DIR and its
-// companions override the directory argument outright. A git hook
-// exports GIT_DIR, so a child git spawned under a hook (the belt's
-// pre-push runs this package's tests) would silently operate on the
-// hook's repository, not the directory it was pointed at. Every git
-// this package or its tests spawn scrubs them via Env; nothing else
-// builds a git environment.
-func repoLocators() []string {
+// repoLocal are the environment variables git itself names as
+// repository-local (`git rev-parse --local-env-vars`), plus
+// GIT_NAMESPACE: each decides, independently of `-C dir`, which
+// repository a child git opens, what configuration it reads, or what
+// history a read sees. A git hook exports GIT_DIR, so a child git
+// spawned under a hook (the belt's pre-push runs this package's
+// tests) would silently operate on the hook's repository; an
+// inherited GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT would carry
+// configuration past the /dev/null pins; GIT_SHALLOW_FILE, the graft
+// file and the replace-object switches change the history a signed
+// walk reports. Every git this package or its tests spawn scrubs
+// them via Env; nothing else builds a git environment.
+//
+// A constant, never git's own answer read at run time: the scrub
+// must not depend on the git it protects against. The test suite
+// reads the installed git's list and reds when a release adds one.
+func repoLocal() []string {
 	return []string{
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=",
+		"GIT_CONFIG=",
+		"GIT_CONFIG_PARAMETERS=",
+		"GIT_CONFIG_COUNT=",
+		"GIT_OBJECT_DIRECTORY=",
 		"GIT_DIR=",
 		"GIT_WORK_TREE=",
+		"GIT_IMPLICIT_WORK_TREE=",
+		"GIT_GRAFT_FILE=",
 		"GIT_INDEX_FILE=",
-		"GIT_OBJECT_DIRECTORY=",
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES=",
+		"GIT_NO_REPLACE_OBJECTS=",
+		"GIT_REPLACE_REF_BASE=",
+		"GIT_PREFIX=",
+		"GIT_SHALLOW_FILE=",
 		"GIT_COMMON_DIR=",
 		"GIT_NAMESPACE=",
-		"GIT_PREFIX=",
+		// The pairs GIT_CONFIG_COUNT indexes, by prefix: their
+		// numbers are unbounded, and a pair left behind would be
+		// read by any count an extra later sets.
+		"GIT_CONFIG_KEY_",
+		"GIT_CONFIG_VALUE_",
 	}
 }
 
 // Env renders the environment for a spawned git: the process
-// environment minus every repo-locating GIT_* variable (so `-C dir`
-// is the ONE way a child git finds its repository), with global and
+// environment minus every repository-local GIT_* variable (so `-C
+// dir` is the ONE way a child git finds its repository, and nothing
+// inherited configures it), with global and
 // system config pinned to /dev/null and lazy fetching refused, plus
 // the caller's extras.
 //
@@ -59,7 +81,7 @@ func Env(extra ...string) []string {
 	for _, kv := range os.Environ() {
 		scrubbed := false
 
-		for _, loc := range repoLocators() {
+		for _, loc := range repoLocal() {
 			if strings.HasPrefix(kv, loc) {
 				scrubbed = true
 
