@@ -24,6 +24,7 @@ import (
 	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/population"
+	"github.com/monumental-archive/stele/internal/published"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/trust"
 	"github.com/monumental-archive/stele/internal/verify"
@@ -1053,26 +1054,19 @@ func parsePlan(text string) ([]verify.Subject, error) {
 }
 
 // parseManifest reads a sha256sum manifest: "<64 hex>  <name>" per
-// line, the exact format the build writes and the signer attests.
+// line, the exact format the build writes and the signer attests —
+// through the one record reader (internal/published), so every
+// manifest input is held to 64 lowercase hex and a whitespace-free
+// name, as the shell it replaced held its records.
 func parseManifest(text string) ([]verify.Subject, error) {
-	var subjects []verify.Subject
+	files, err := published.ParseFiles(text)
+	if err != nil {
+		return nil, fmt.Errorf("manifest: %w", err)
+	}
 
-	line := 0
-
-	for raw := range strings.Lines(text) {
-		line++
-
-		trimmed := strings.TrimRight(raw, "\r\n")
-		if trimmed == "" {
-			continue
-		}
-
-		digest, name, ok := strings.Cut(trimmed, "  ")
-		if !ok || digest == "" || name == "" {
-			return nil, fmt.Errorf("manifest line %d is not a sha256sum record", line)
-		}
-
-		subjects = append(subjects, verify.Subject{Name: name, SHA256: digest})
+	subjects := make([]verify.Subject, 0, len(files))
+	for _, f := range files {
+		subjects = append(subjects, verify.Subject{Name: f.Name, SHA256: f.SHA256})
 	}
 
 	return subjects, nil
