@@ -1,7 +1,8 @@
-// This file: the provenance-verified judgment of one first-party base
-// (stele#402) — the ONE definition the corpus walk (assert evidence)
-// and the build-time gate (`stele verify base`) both apply, so the two
-// cannot come to disagree about what approves a base.
+// This file: the judgment of one first-party base under a scope that
+// claims it by prefix — the ONE definition per kind that the corpus
+// walk (assert evidence) and the build-time gate (`stele verify base`)
+// both apply, so the two cannot come to disagree about what approves a
+// base.
 
 package assert
 
@@ -13,46 +14,138 @@ import (
 	"github.com/monumental-archive/stele/internal/baseimage"
 )
 
-// FirstPartyRunner is the runner environment a first-party base must
+// FirstPartyRunner is the runner environment a shared-signer base must
 // have been built on: GitHub's hosted runners, the Fulcio extension's
 // own value. A base built on a self-hosted runner is refused — the
 // mechanism's decided stance (stele#402), as the canon's shell held it.
 const FirstPartyRunner = "github-hosted"
 
-// JudgeFirstParty judges one reference under this provenance-verified
-// scope: the pin read (a tag and a digest, both required), the source
-// ref derived from the tag by the scope's rules, and the provenance
-// verified under the scope's signer workflow at that ref, from the
-// owner the prefix names, on a hosted runner. diverge records what is
-// wrong with the base; the returned ref is where the base was produced
-// ("" when it was not approved), and the error is a read this run
-// could not make — the walk's blind, never a finding.
+// Approval is what approved one first-party base, named by the fact
+// its kind established: the source ref a shared-signer base was
+// produced at, or the identity a provenance-verified base's provenance
+// verified under. The zero Approval approved nothing.
+type Approval struct {
+	Fact  string
+	Value string
+}
+
+// The facts an approval rests on.
+const (
+	approvalProduced = "produced"
+	approvalIdentity = "identity"
+)
+
+// Approved reports whether anything approved the base.
+func (a Approval) Approved() bool { return a.Value != "" }
+
+// String renders the approval for a log line.
+func (a Approval) String() string {
+	if a.Fact == approvalProduced {
+		return "produced at " + a.Value
+	}
+
+	return "under " + a.Value
+}
+
+// JudgeBase judges one reference under this scope, by the scope's
+// kind. diverge records what is wrong with the base; the Approval says
+// what approved it, zero when nothing did; the error is a read this
+// run could not make — the walk's blind, never a finding.
 //
 // The caller has already decided the reference is under the scope's
-// prefix; a reference outside it is another judgment's, or none.
-func (s *BaseImageScope) JudgeFirstParty(ref string, att Attestor, diverge func(string)) (string, error) {
+// prefix; a reference outside it is another judgment's, or none. A
+// pin-file scope judges no single reference: its subjects are its pin
+// file's, read whole by the walk.
+func (s *BaseImageScope) JudgeBase(ref string, att Attestor, diverge func(string)) (Approval, error) {
+	switch *s.Mechanism {
+	case MechanismProvenanceVerified:
+		return s.judgeProvenance(ref, att, diverge)
+	case MechanismSharedSigner:
+		return s.judgeSharedSigner(ref, att, diverge)
+	case MechanismPinFile:
+	}
+
+	return Approval{}, fmt.Errorf("assert: base scope %s: the %s mechanism judges no single reference",
+		*s.Name, *s.Mechanism)
+}
+
+// judgeProvenance proves a base carries provenance from the identity
+// its own pin implies. Nothing here is a literal: the expected
+// identity is expanded out of the reference, so the identity demanded
+// travels with the pin that names it. The publishing repository is
+// read off the reference path after the prefix.
+func (s *BaseImageScope) judgeProvenance(ref string, att Attestor, diverge func(string)) (Approval, error) {
+	// Compiled here rather than assumed: policy load already refused
+	// an unparsable pattern, and a walk that PANICS on one instead of
+	// refusing would be the wrong failure at the wrong altitude.
+	re, err := regexp.Compile(*s.PinPattern)
+	if err != nil {
+		return Approval{}, fmt.Errorf("assert: base scope %s pinPattern: %w", *s.Name, err)
+	}
+
+	idx := re.FindStringSubmatchIndex(ref)
+	if idx == nil {
+		// The identity is derived from the pin, so a pin the
+		// pattern cannot read leaves nothing to demand. Fail
+		// closed: an unreadable pin is not an approved one.
+		diverge("the pinned reference does not match this scope's pinPattern," +
+			" so the identity that should have published it cannot be derived")
+
+		return Approval{}, nil
+	}
+
+	identity := string(re.ExpandString(nil, *s.Identity, ref, idx))
+	if identity == "" {
+		diverge("this scope's identity template expands to nothing for the pinned reference")
+
+		return Approval{}, nil
+	}
+
+	if verr := att.Verify(
+		publisherOwner(*s.RegistryPrefix), publisherRepo(ref, *s.RegistryPrefix), refDigest(ref),
+		[]Candidate{{Identity: identity}}, *s.PredicateType,
+	); verr != nil {
+		if unseen(verr) {
+			return Approval{}, blind(scopeAssertion(s), ref, "provenance attestations", verr)
+		}
+
+		diverge(fmt.Sprintf("no %s attestation verifies for this base under %s: %v", *s.PredicateType, identity, verr))
+
+		return Approval{}, nil
+	}
+
+	return Approval{Fact: approvalIdentity, Value: identity}, nil
+}
+
+// judgeSharedSigner judges one reference under a shared-signer scope:
+// the pin read (a tag and a digest, both required), the source ref
+// derived from the tag by the scope's rules, and the provenance
+// verified under the scope's signer workflow at that ref, from the
+// owner the prefix names, on a hosted runner.
+func (s *BaseImageScope) judgeSharedSigner(ref string, att Attestor, diverge func(string)) (Approval, error) {
 	rules, err := s.RefRules()
 	if err != nil {
-		return "", fmt.Errorf("assert: base scope %s %w", *s.Name, err)
+		return Approval{}, fmt.Errorf("assert: base scope %s %w", *s.Name, err)
 	}
 
 	pin, err := baseimage.ParsePin(ref)
 	if err != nil {
 		diverge(err.Error())
 
-		return "", nil
+		return Approval{}, nil
 	}
 
 	produced, err := baseimage.DeriveRef(pin, rules)
 	if err != nil {
 		diverge(err.Error())
 
-		return "", nil
+		return Approval{}, nil
 	}
 
+	owner := publisherOwner(*s.RegistryPrefix)
 	candidate := Candidate{Workflow: &WorkflowCandidate{
 		Workflow: serverURL + "/" + *s.SignerWorkflow,
-		Owner:    publisherOwner(*s.RegistryPrefix),
+		Owner:    owner,
 		Ref:      produced,
 		Runner:   FirstPartyRunner,
 	}}
@@ -60,19 +153,22 @@ func (s *BaseImageScope) JudgeFirstParty(ref string, att Attestor, diverge func(
 	// The owner's whole store: an image is not named after the
 	// repository that built it, and the candidate anchors the owner
 	// and the ref rather than trusting a name to say whose it is.
-	verr := att.Verify(publisherOwner(*s.RegistryPrefix), "", pin.Digest, []Candidate{candidate}, *s.PredicateType)
+	verr := att.Verify(owner, "", pin.Digest, []Candidate{candidate}, *s.PredicateType)
 
 	switch {
 	case verr == nil:
-		return produced, nil
+		return Approval{Fact: approvalProduced, Value: produced}, nil
 	case unseen(verr):
-		return "", blind(scopeAssertion(s), ref, "provenance attestations", verr)
+		return Approval{}, blind(scopeAssertion(s), ref, "provenance attestations", verr)
 	}
 
+	// Verified BEFORE it is instantiated: a pin proves the bytes did
+	// not change, and only this proves they are the right bytes (the
+	// canon's .github#715).
 	diverge(fmt.Sprintf("no %s attestation verifies for these bytes at %s — a first-party base is verified"+
-		" before it is instantiated (.github#715): %v", *s.PredicateType, produced, verr))
+		" before it is instantiated: %v", *s.PredicateType, produced, verr))
 
-	return "", nil
+	return Approval{}, nil
 }
 
 // RefRules compiles the scope's tag-to-ref convention, refusing a rule

@@ -52,20 +52,40 @@ func pinFileFields() []field {
 	}
 }
 
+// provenanceFields is the second mechanism, the one the closed
+// four-field block could not say at any value: first-party bases
+// verified against the provenance of the identity their own pin
+// implies.
+func provenanceFields() []field {
+	return []field{
+		{"name", `"org-bases"`},
+		{"mechanism", `"provenance-verified"`},
+		{"fromFile", `"Dockerfile"`},
+		{"registryPrefix", `"ghcr.io/acme/"`},
+		{
+			"pinPattern",
+			`"^ghcr\\.io/acme/(?P<repo>[a-z-]+):(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)[^@]*@sha256:[0-9a-f]{64}$"`,
+		},
+		{"identity", `"https://github.com/acme/${repo}/.github/workflows/publish.yml@refs/tags/v${version}"`},
+		{"predicateType", `"https://slsa.dev/provenance/v1"`},
+	}
+}
+
 // orgRefs is the canon's tag convention as declared rules: `latest`
 // is the continuous stream, built from the default branch; a version,
 // optionally class-decorated (1.2.3-pg18), names its tag.
 const orgRefs = `[{"tag": "^latest$", "ref": "refs/heads/main"},` +
 	` {"tag": "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)(-.*)?$", "ref": "refs/tags/v${version}"}]`
 
-// provenanceFields is the second mechanism, the one the closed
-// four-field block could not say at any value: first-party bases
-// verified against the provenance their declared signer minted at the
-// ref the pin's tag implies.
-func provenanceFields() []field {
+// sharedSignerFields is the third mechanism (stele#402): first-party
+// bases verified against the provenance one declared signer minted, at
+// any signer commit, at the ref the pin's tag implies — the org whose
+// repositories all sign through one shared signer, which a per-pin
+// identity cannot say.
+func sharedSignerFields() []field {
 	return []field{
-		{"name", `"org-bases"`},
-		{"mechanism", `"provenance-verified"`},
+		{"name", `"shared-bases"`},
+		{"mechanism", `"shared-signer"`},
 		{"fromFile", `"Dockerfile"`},
 		{"registryPrefix", `"ghcr.io/acme/"`},
 		{"signerWorkflow", `"acme/signer/.github/workflows/sign.yml"`},
@@ -124,8 +144,9 @@ func setting(fields []field, pairs ...string) string {
 }
 
 var (
-	pinFileScopeJSON    = scope(pinFileFields())
-	provenanceScopeJSON = scope(provenanceFields())
+	pinFileScopeJSON      = scope(pinFileFields())
+	provenanceScopeJSON   = scope(provenanceFields())
+	sharedSignerScopeJSON = scope(sharedSignerFields())
 )
 
 // storePolicy composes a policy declaring exactly the evidence
@@ -157,6 +178,7 @@ var (
 	baseOnlyPolicyJSON       = storePolicy(baseImages(pinFileScopeJSON))
 	provenanceOnlyPolicyJSON = storePolicy(baseImages(provenanceScopeJSON))
 	bothKindsPolicyJSON      = storePolicy(baseImages(pinFileScopeJSON, provenanceScopeJSON))
+	sharedOnlyPolicyJSON     = storePolicy(baseImages(sharedSignerScopeJSON))
 )
 
 const (
@@ -472,12 +494,7 @@ func provenanceForge() *fakeForge {
 func TestProvenanceVerifiedScope(t *testing.T) {
 	t.Parallel()
 
-	wantCandidate := assert.WorkflowCandidate{
-		Workflow: "https://github.com/acme/signer/.github/workflows/sign.yml",
-		Owner:    "acme",
-		Ref:      "refs/tags/v1.2.3",
-		Runner:   "github-hosted",
-	}
+	const wantIdentity = "https://github.com/acme/edtf-postgres/.github/workflows/publish.yml@refs/tags/v1.2.3"
 
 	t.Run("a base with the provenance its pin implies passes", func(t *testing.T) {
 		t.Parallel()
@@ -496,18 +513,14 @@ func TestProvenanceVerifiedScope(t *testing.T) {
 			t.Fatalf("attestor saw %v, want only the first-party base", att.seen)
 		}
 
-		// The ref is derived from the pin's decorated tag (1.2.3-pg18 →
-		// refs/tags/v1.2.3) and the signer is the scope's, at any ref.
-		if len(att.candidates) != 1 || att.candidates[0].Workflow == nil ||
-			*att.candidates[0].Workflow != wantCandidate || att.candidates[0].Identity != "" {
-			t.Fatalf("candidates = %+v, want the workflow candidate %+v", att.candidates, wantCandidate)
+		if len(att.candidates) != 1 || att.candidates[0].Identity != wantIdentity {
+			t.Fatalf("candidates = %+v, want the identity expanded from the pin (%s)", att.candidates, wantIdentity)
 		}
 
-		// The owner's whole store is asked, never a repository read
-		// off the image name: an image is not named after the
-		// repository that built it (edtf-postgres is edtf's).
-		if len(att.asked) != 1 || att.asked[0] != "acme/" {
-			t.Fatalf("asked = %v, want the owner's store", att.asked)
+		// The publishing repository is read off the reference path
+		// after the prefix — the one derivation this mechanism keeps.
+		if len(att.asked) != 1 || att.asked[0] != "acme/edtf-postgres" {
+			t.Fatalf("asked = %v, want the publisher derived from the reference", att.asked)
 		}
 	})
 
@@ -522,7 +535,7 @@ func TestProvenanceVerifiedScope(t *testing.T) {
 		}
 	})
 
-	t.Run("a tag no rule decodes fails closed", func(t *testing.T) {
+	t.Run("a pin the pattern cannot read fails closed", func(t *testing.T) {
 		t.Parallel()
 
 		f := provenanceForge()
@@ -532,32 +545,11 @@ func TestProvenanceVerifiedScope(t *testing.T) {
 
 		rep := runStoreWalk(t, provenanceOnlyPolicyJSON, f, att, nil)
 		if rep.Verdict() != report.VerdictFail {
-			t.Fatalf("verdict = %s — a pin naming no derivable ref is not an approved one", rep.Verdict())
-		}
-
-		if got := rep.Findings(); len(got) != 1 ||
-			!strings.Contains(got[0].Detail, "cannot derive the ref that produced it from tag 'nightly'") {
-			t.Fatalf("findings = %+v, want the undecodable tag named", got)
+			t.Fatalf("verdict = %s — a pin naming no derivable identity is not an approved one", rep.Verdict())
 		}
 
 		if len(att.seen) != 0 {
-			t.Fatal("the attestor was asked despite no derivable ref — the guard must refuse first")
-		}
-	})
-
-	t.Run("a base pinned with no tag fails closed", func(t *testing.T) {
-		t.Parallel()
-
-		f := provenanceForge()
-		f.files["widget:HEAD:Dockerfile"] = "FROM ghcr.io/acme/edtf-postgres@" + baseDigest + "\n"
-
-		att := &fakeAttestor{}
-
-		rep := runStoreWalk(t, provenanceOnlyPolicyJSON, f, att, nil)
-		if got := rep.Findings(); rep.Verdict() != report.VerdictFail || len(got) != 1 ||
-			!strings.Contains(got[0].Detail, "carries a digest but no tag") || len(att.seen) != 0 {
-			t.Fatalf("verdict = %s, findings = %+v, seen = %v — a tagless pin derives no ref",
-				rep.Verdict(), got, att.seen)
+			t.Fatal("the attestor was asked despite no derivable identity — the guard must refuse first")
 		}
 	})
 
@@ -587,6 +579,29 @@ func TestProvenanceVerifiedScope(t *testing.T) {
 		if rep.Verdict() != report.VerdictPass || len(att.seen) != 0 {
 			t.Fatalf("verdict = %s, seen = %v — whose bases those are is another mechanism's question",
 				rep.Verdict(), att.seen)
+		}
+	})
+
+	// The template validates — every group it names the pattern
+	// defines — and still expands to nothing, because the group it
+	// names captured nothing. Demanding an empty identity would ask
+	// the store to vouch for anything at all.
+	t.Run("an identity that expands to nothing fails closed", func(t *testing.T) {
+		t.Parallel()
+
+		fields := setting(provenanceFields(),
+			"pinPattern", `"^ghcr\\.io/acme/edtf-postgres:[^@]*@sha256:[0-9a-f]{64}(?P<tail>)$"`,
+			"identity", `"${tail}"`)
+
+		att := &fakeAttestor{}
+
+		rep := runStoreWalk(t, storePolicy(baseImages(fields)), provenanceForge(), att, nil)
+		if rep.Verdict() != report.VerdictFail {
+			t.Fatalf("verdict = %s — an empty identity demands nothing of anybody", rep.Verdict())
+		}
+
+		if len(att.seen) != 0 {
+			t.Fatal("the attestor was asked under an empty identity — the guard must refuse first")
 		}
 	})
 }
@@ -633,15 +648,148 @@ func TestAPassingPinIsStillRecorded(t *testing.T) {
 	}
 }
 
-// TestProvenanceScopeRefusesAnUnparsablePattern: LoadPolicy refuses a
-// ref rule that does not compile, so the walk's own compile is
-// reachable only through a hand-built Policy — and it must REFUSE there
-// rather than panic, because a walk that dies mid-population reports
-// nothing at all, which is the one outcome worse than a finding.
+// TestProvenanceScopeRefusesAnUnparsablePattern: LoadPolicy refuses an
+// unparsable pinPattern, so the walk's own compile is reachable only
+// through a hand-built Policy — and it must REFUSE there rather than
+// panic, because a walk that dies mid-population reports nothing at
+// all, which is the one outcome worse than a finding.
 func TestProvenanceScopeRefusesAnUnparsablePattern(t *testing.T) {
 	t.Parallel()
 
 	pol, err := assert.LoadPolicy(strings.NewReader(provenanceOnlyPolicyJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bad := "ghcr("
+	pol.Evidence.BaseImages.Scopes[0].PinPattern = &bad
+
+	f := provenanceForge()
+	src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
+
+	_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
+		report.NewJournal(), nil, nil, func(string, ...any) {})
+	if err == nil || !strings.Contains(err.Error(), "pinPattern") {
+		t.Fatalf("Evidence = %v, want the walk to refuse by name", err)
+	}
+}
+
+// TestSharedSignerScope walks the third mechanism (stele#402). The
+// candidate is the declared signer at any commit, anchored to the
+// owner and to the ref the pin's tag implies, and the owner's whole
+// store is asked; every way it could quietly pass is a row.
+func TestSharedSignerScope(t *testing.T) {
+	t.Parallel()
+
+	wantCandidate := assert.WorkflowCandidate{
+		Workflow: "https://github.com/acme/signer/.github/workflows/sign.yml",
+		Owner:    "acme",
+		Ref:      "refs/tags/v1.2.3",
+		Runner:   "github-hosted",
+	}
+
+	t.Run("a base with the provenance its tag implies passes", func(t *testing.T) {
+		t.Parallel()
+
+		att := &fakeAttestor{}
+
+		rep := runStoreWalk(t, sharedOnlyPolicyJSON, provenanceForge(), att, nil)
+		if rep.Verdict() != report.VerdictPass {
+			t.Fatalf("verdict = %s, findings: %+v", rep.Verdict(), rep.Findings())
+		}
+
+		if len(att.seen) != 1 || att.seen[0] != baseDigest {
+			t.Fatalf("attestor saw %v, want only the first-party base", att.seen)
+		}
+
+		// The ref is derived from the pin's decorated tag (1.2.3-pg18 →
+		// refs/tags/v1.2.3) and the signer is the scope's, at any ref.
+		if len(att.candidates) != 1 || att.candidates[0].Workflow == nil ||
+			*att.candidates[0].Workflow != wantCandidate || att.candidates[0].Identity != "" {
+			t.Fatalf("candidates = %+v, want the workflow candidate %+v", att.candidates, wantCandidate)
+		}
+
+		// The owner's whole store is asked, never a repository read
+		// off the image name: an image is not named after the
+		// repository that built it (edtf-postgres is edtf's).
+		if len(att.asked) != 1 || att.asked[0] != "acme/" {
+			t.Fatalf("asked = %v, want the owner's store", att.asked)
+		}
+	})
+
+	t.Run("a base with no verifying attestation fails", func(t *testing.T) {
+		t.Parallel()
+
+		att := &fakeAttestor{refuse: map[string]error{baseDigest: errors.New("no bundle verifies")}}
+
+		rep := runStoreWalk(t, sharedOnlyPolicyJSON, provenanceForge(), att, nil)
+		if got := rep.Findings(); rep.Verdict() != report.VerdictFail || len(got) != 1 ||
+			!strings.Contains(got[0].Detail, "no https://slsa.dev/provenance/v1 attestation verifies for these bytes"+
+				" at refs/tags/v1.2.3 — a first-party base is verified before it is instantiated: no bundle verifies") {
+			t.Fatalf("verdict = %s, findings = %+v", rep.Verdict(), got)
+		}
+	})
+
+	t.Run("a tag no rule decodes fails closed", func(t *testing.T) {
+		t.Parallel()
+
+		f := provenanceForge()
+		f.files["widget:HEAD:Dockerfile"] = "FROM ghcr.io/acme/edtf-postgres:nightly@" + baseDigest + "\n"
+
+		att := &fakeAttestor{}
+
+		rep := runStoreWalk(t, sharedOnlyPolicyJSON, f, att, nil)
+		if got := rep.Findings(); rep.Verdict() != report.VerdictFail || len(got) != 1 ||
+			!strings.Contains(got[0].Detail, "cannot derive the ref that produced it from tag 'nightly'") {
+			t.Fatalf("verdict = %s, findings = %+v — a pin naming no derivable ref is not an approved one",
+				rep.Verdict(), got)
+		}
+
+		if len(att.seen) != 0 {
+			t.Fatal("the attestor was asked despite no derivable ref — the guard must refuse first")
+		}
+	})
+
+	t.Run("a base pinned with no tag fails closed", func(t *testing.T) {
+		t.Parallel()
+
+		f := provenanceForge()
+		f.files["widget:HEAD:Dockerfile"] = "FROM ghcr.io/acme/edtf-postgres@" + baseDigest + "\n"
+
+		att := &fakeAttestor{}
+
+		rep := runStoreWalk(t, sharedOnlyPolicyJSON, f, att, nil)
+		if got := rep.Findings(); rep.Verdict() != report.VerdictFail || len(got) != 1 ||
+			!strings.Contains(got[0].Detail, "carries a digest but no tag") || len(att.seen) != 0 {
+			t.Fatalf("verdict = %s, findings = %+v, seen = %v — a tagless pin derives no ref",
+				rep.Verdict(), got, att.seen)
+		}
+	})
+
+	t.Run("a build file naming only foreign bases produces no finding", func(t *testing.T) {
+		t.Parallel()
+
+		f := provenanceForge()
+		f.files["widget:HEAD:Dockerfile"] = "FROM docker.io/library/debian:trixie@" + contDigest + "\n"
+
+		att := &fakeAttestor{}
+
+		rep := runStoreWalk(t, sharedOnlyPolicyJSON, f, att, nil)
+		if rep.Verdict() != report.VerdictPass || len(att.seen) != 0 {
+			t.Fatalf("verdict = %s, seen = %v — whose bases those are is another mechanism's question",
+				rep.Verdict(), att.seen)
+		}
+	})
+}
+
+// TestSharedSignerScopeRefusesAnUnparsableRule: LoadPolicy refuses a
+// ref rule that does not compile, so the walk's own compile is
+// reachable only through a hand-built Policy — and it must REFUSE there
+// rather than panic.
+func TestSharedSignerScopeRefusesAnUnparsableRule(t *testing.T) {
+	t.Parallel()
+
+	pol, err := assert.LoadPolicy(strings.NewReader(sharedOnlyPolicyJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,8 +802,26 @@ func TestProvenanceScopeRefusesAnUnparsablePattern(t *testing.T) {
 
 	_, err = assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},
 		report.NewJournal(), nil, nil, func(string, ...any) {})
-	if err == nil || !strings.Contains(err.Error(), "assert: base scope org-bases refs[0].tag") {
+	if err == nil || !strings.Contains(err.Error(), "assert: base scope shared-bases refs[0].tag") {
 		t.Fatalf("Evidence = %v, want the walk to refuse by name", err)
+	}
+}
+
+// TestJudgeBaseRefusesAPinFileScope: a pin-file scope judges no single
+// reference — its subjects are its pin file's — so a caller handing it
+// one is refused rather than answered.
+func TestJudgeBaseRefusesAPinFileScope(t *testing.T) {
+	t.Parallel()
+
+	pol, err := assert.LoadPolicy(strings.NewReader(baseOnlyPolicyJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = pol.Evidence.BaseImages.Scopes[0].JudgeBase(orgBaseRef, &fakeAttestor{},
+		func(string) { t.Fatal("a refusal was recorded as a finding") })
+	if err == nil || err.Error() != "assert: base scope pgrx-bases: the pin-file mechanism judges no single reference" {
+		t.Fatalf("JudgeBase = %v", err)
 	}
 }
 
@@ -762,7 +928,7 @@ func TestStorePolicyRefusals(t *testing.T) {
 		return strings.Replace(doc, `"issuer": "https://token.actions.githubusercontent.com",`, "", 1)
 	}
 
-	for _, doc := range []string{storePolicyJSON, provenanceOnlyPolicyJSON} {
+	for _, doc := range []string{storePolicyJSON, provenanceOnlyPolicyJSON, sharedOnlyPolicyJSON} {
 		if _, err := assert.LoadPolicy(strings.NewReader(withoutIssuer(doc))); err == nil || err.Error() !=
 			"assert: policy: issuer is required when evidence.continuous or an evidence.baseImages scope is declared" {
 			t.Fatalf("error = %v, want the issuer refusal", err)
@@ -828,10 +994,11 @@ func TestBaseImageScopeRefusals(t *testing.T) {
 			want: `evidence.baseImages.scopes names "pgrx-bases" twice — scope names are a set`,
 		},
 		{
+			// Of either kind: a reference both claimed would have two
+			// judgments.
 			name: "two scopes declaring one prefix",
-			doc: storePolicy(baseImages(provenanceScopeJSON,
-				setting(provenanceFields(), "name", `"org-bases-again"`))),
-			want: `evidence.baseImages.scopes org-bases and org-bases-again both declare registryPrefix` +
+			doc:  storePolicy(baseImages(provenanceScopeJSON, sharedSignerScopeJSON)),
+			want: `evidence.baseImages.scopes org-bases and shared-bases both declare registryPrefix` +
 				` "ghcr.io/acme/" — one reference, one judgment`,
 		},
 		{
@@ -877,47 +1044,71 @@ func TestBaseImageScopeRefusals(t *testing.T) {
 			want: "does not end at the owner boundary",
 		},
 		{
+			name: "a pin pattern that does not compile",
+			doc:  storePolicy(baseImages(setting(provenanceFields(), "pinPattern", `"ghcr("`))),
+			want: "scopes[org-bases].pinPattern:",
+		},
+		{
+			name: "an identity naming a group the pattern never captures",
+			doc: storePolicy(baseImages(setting(provenanceFields(), "identity",
+				`"https://github.com/acme/${repo}/.github/workflows/publish.yml@refs/tags/v${release}"`))),
+			want: `identity names the capture group "release", which pinPattern does not define`,
+		},
+		{
+			name: "a shared-signer prefix reaching past the owner",
+			doc:  storePolicy(baseImages(setting(sharedSignerFields(), "registryPrefix", `"ghcr.io/acme/db/"`))),
+			want: `scopes[shared-bases].registryPrefix "ghcr.io/acme/db/" does not end at the owner boundary — it` +
+				` must spell <host>/<owner>/, because the owner whose attestation store is read is its last segment`,
+		},
+		{
 			name: "a ref rule whose tag does not compile",
-			doc:  storePolicy(baseImages(setting(provenanceFields(), "refs", `[{"tag": "^ghcr($", "ref": "refs/x"}]`))),
-			want: "scopes[org-bases].refs[0].tag:",
+			doc: storePolicy(baseImages(setting(sharedSignerFields(), "refs",
+				`[{"tag": "^ghcr($", "ref": "refs/x"}]`))),
+			want: "scopes[shared-bases].refs[0].tag:",
 		},
 		{
 			name: "a ref rule whose tag is not anchored",
-			doc: storePolicy(baseImages(setting(provenanceFields(), "refs",
+			doc: storePolicy(baseImages(setting(sharedSignerFields(), "refs",
 				`[{"tag": "latest", "ref": "refs/heads/main"}]`))),
-			want: `scopes[org-bases].refs[0].tag "latest" is not anchored (^…$)`,
+			want: `scopes[shared-bases].refs[0].tag "latest" is not anchored (^…$)`,
 		},
 		{
 			name: "a ref rule naming a ref that is not fully qualified",
-			doc: storePolicy(baseImages(setting(provenanceFields(), "refs",
+			doc: storePolicy(baseImages(setting(sharedSignerFields(), "refs",
 				`[{"tag": "^latest$", "ref": "main"}]`))),
-			want: `scopes[org-bases].refs[0].ref "main" is not a fully qualified ref`,
+			want: `scopes[shared-bases].refs[0].ref "main" is not a fully qualified ref`,
 		},
 		{
 			name: "a ref template naming a group its tag never captures",
-			doc: storePolicy(baseImages(setting(provenanceFields(), "refs",
+			doc: storePolicy(baseImages(setting(sharedSignerFields(), "refs",
 				`[{"tag": "^(?P<version>[0-9.]+)$", "ref": "refs/tags/v${release}"}]`))),
-			want: `scopes[org-bases].refs[0].ref names the capture group "release", which its pattern does not define`,
+			want: `scopes[shared-bases].refs[0].ref names the capture group "release", which its pattern does not define`,
 		},
 		{
 			name: "a ref rule with no ref",
-			doc:  storePolicy(baseImages(setting(provenanceFields(), "refs", `[{"tag": "^latest$"}]`))),
-			want: "scopes[org-bases].refs[0] needs a tag and a ref",
+			doc:  storePolicy(baseImages(setting(sharedSignerFields(), "refs", `[{"tag": "^latest$"}]`))),
+			want: "scopes[shared-bases].refs[0] needs a tag and a ref",
 		},
 		{
 			name: "a ref rule with no tag",
-			doc:  storePolicy(baseImages(setting(provenanceFields(), "refs", `[{"ref": "refs/heads/main"}]`))),
-			want: "scopes[org-bases].refs[0] needs a tag and a ref",
+			doc:  storePolicy(baseImages(setting(sharedSignerFields(), "refs", `[{"ref": "refs/heads/main"}]`))),
+			want: "scopes[shared-bases].refs[0] needs a tag and a ref",
 		},
 		{
 			name: "a signer that is no workflow",
-			doc:  storePolicy(baseImages(setting(provenanceFields(), "signerWorkflow", `"acme/signer"`))),
-			want: `scopes[org-bases].signerWorkflow "acme/signer" is not owner/repo/path-to-workflow`,
+			doc:  storePolicy(baseImages(setting(sharedSignerFields(), "signerWorkflow", `"acme/signer"`))),
+			want: `scopes[shared-bases].signerWorkflow "acme/signer" is not owner/repo/path-to-workflow`,
 		},
 		{
-			name: "a pin-file scope carrying the provenance mechanism's rules",
-			doc:  storePolicy(baseImages(setting(pinFileFields(), "refs", orgRefs))),
-			want: "scopes[pgrx-bases].refs is declared but the pin-file mechanism does not read it",
+			name: "a provenance-verified scope carrying the shared-signer mechanism's rules",
+			doc:  storePolicy(baseImages(setting(provenanceFields(), "refs", orgRefs))),
+			want: "scopes[org-bases].refs is declared but the provenance-verified mechanism does not read it",
+		},
+		{
+			name: "a shared-signer scope carrying a per-pin identity",
+			doc: storePolicy(baseImages(setting(sharedSignerFields(), "identity",
+				`"https://github.com/acme/x/.github/workflows/publish.yml@refs/heads/main"`))),
+			want: "scopes[shared-bases].identity is declared but the shared-signer mechanism does not read it",
 		},
 	}
 
@@ -934,6 +1125,10 @@ func TestBaseImageScopeRefusals(t *testing.T) {
 		},
 		{
 			"provenance-verified", provenanceFields(), "org-bases",
+			[]string{"fromFile", "registryPrefix", "pinPattern", "identity", "predicateType"},
+		},
+		{
+			"shared-signer", sharedSignerFields(), "shared-bases",
 			[]string{"fromFile", "registryPrefix", "signerWorkflow", "refs", "predicateType"},
 		},
 	} {

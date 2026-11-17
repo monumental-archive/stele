@@ -369,16 +369,16 @@ func (w *evidenceWalk) baseImagesInCheckout(pinFiles map[string][]byte) error {
 	return nil
 }
 
-// baseImagesInRepo runs the provenance-verified scopes against one
-// population repository. This mechanism's subjects live in the
-// population rather than in the policy-owning checkout — the caller's
-// build file is where its bases are named — so it rides the repo loop
-// the population already drives.
+// baseImagesInRepo runs the prefix scopes — provenance-verified and
+// shared-signer — against one population repository. Their subjects
+// live in the population rather than in the policy-owning checkout —
+// the caller's build file is where its bases are named — so they ride
+// the repo loop the population already drives.
 func (w *evidenceWalk) baseImagesInRepo(repo string) error {
 	scopes := w.baseScopes()
 	for i := range scopes {
-		if s := &scopes[i]; *s.Mechanism == MechanismProvenanceVerified {
-			if err := w.provenanceScope(s, repo); err != nil {
+		if s := &scopes[i]; *s.Mechanism == MechanismProvenanceVerified || *s.Mechanism == MechanismSharedSigner {
+			if err := w.prefixScope(s, repo); err != nil {
 				return err
 			}
 		}
@@ -444,10 +444,11 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) error {
 	return nil
 }
 
-// provenanceScope proves every base under the scope's registry prefix
-// that this repository's build file instantiates, through the one
-// first-party judgment `stele verify base` applies too.
-func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
+// prefixScope proves every base under the scope's registry prefix
+// that this repository's build file instantiates, by the scope's own
+// judgment (JudgeBase) — the one definition `stele verify base`
+// applies too.
+func (w *evidenceWalk) prefixScope(s *BaseImageScope, repo string) error {
 	content, ok, err := w.forge.FileAt(w.org, repo, *s.FromFile, defaultRef)
 	if err != nil {
 		return fmt.Errorf("assert: build file of %s: %w", repo, err)
@@ -472,28 +473,36 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 
 		pin := w.check(ref, assertion)
 
-		produced, err := s.JudgeFirstParty(ref, w.attestor, pin.Diverged)
-		if err != nil {
+		if _, err := s.JudgeBase(ref, w.attestor, pin.Diverged); err != nil {
 			return err
 		}
 
-		if produced != "" {
-			w.log("assert: evidence: %s base %s checked (produced at %s)", repo, ref, produced)
-		}
+		w.log("assert: evidence: %s base %s checked", repo, ref)
 	}
 
 	return nil
 }
 
-// publisherOwner reads the owner out of a prefix validated at policy
-// load to stop at the owner boundary (`<host>/<owner>/`): its last
-// segment.
+// publisherOwner and publisherRepo split the publishing repository
+// out of a reference: the prefix is validated to stop at the owner
+// boundary (`<host>/<owner>/`), so the owner is its last segment and
+// the repository is the first segment of whatever follows. That
+// precondition is checked at policy load, never assumed here.
 func publisherOwner(prefix string) string {
 	trimmed := strings.TrimSuffix(prefix, "/")
 
 	_, owner, _ := strings.Cut(trimmed, "/")
 
 	return owner
+}
+
+func publisherRepo(ref, prefix string) string {
+	rest := strings.TrimPrefix(ref, prefix)
+	if end := strings.IndexAny(rest, "/:@"); end >= 0 {
+		return rest[:end]
+	}
+
+	return rest
 }
 
 // refDigest is the digest half of a digest-pinned reference — the

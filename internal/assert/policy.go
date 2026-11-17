@@ -748,8 +748,8 @@ type UpstreamBase struct {
 	Path *string `json:"path"`
 }
 
-// RefRule is one tag-to-ref convention of a provenance-verified scope:
-// a tag pattern, and the ref its named groups expand into.
+// RefRule is one tag-to-ref convention of a shared-signer scope: a
+// tag pattern, and the ref its named groups expand into.
 type RefRule struct {
 	Tag *string `json:"tag"`
 	Ref *string `json:"ref"`
@@ -768,12 +768,22 @@ const (
 	// committed file carries, each by an approval attestation from a
 	// declared attestor under a declared predicate.
 	MechanismPinFile BaseImageMechanism = "pin-file"
-	// MechanismProvenanceVerified approves the digest-pinned
-	// first-party bases under a declared registry prefix — those a
-	// population repository's own build file names, or those a build
-	// hands `stele verify base` — each against the provenance its
-	// declared signer minted at the ref the pin's tag implies.
+	// MechanismProvenanceVerified approves the digest-pinned bases a
+	// population repository's own build file names under a declared
+	// registry prefix, each against the provenance of the identity
+	// the pinned reference itself implies — so the approval demanded
+	// cannot drift from the pin that names it.
 	MechanismProvenanceVerified BaseImageMechanism = "provenance-verified"
+	// MechanismSharedSigner approves the digest-pinned bases under a
+	// declared registry prefix against the provenance ONE declared
+	// signer workflow minted, at whatever signer commit, from the
+	// prefix's owner, at the source ref the pin's tag implies by a
+	// declared convention (stele#402). It is the shape of an owner
+	// whose repositories all sign through one shared signer, which a
+	// per-pin identity cannot say: the signer's commit is the
+	// publishing release's to pin, and an image's name is not its
+	// repository's.
+	MechanismSharedSigner BaseImageMechanism = "shared-signer"
 )
 
 // BaseImageScope is one approval scope: a name, the mechanism that
@@ -799,29 +809,38 @@ type BaseImageScope struct {
 	// FromFile is the build file read from every population
 	// repository at its default branch; the digest-pinned references
 	// it carries are this scope's candidate subjects
-	// (provenance-verified).
+	// (provenance-verified, shared-signer).
 	FromFile *string `json:"fromFile,omitempty"`
 	// RegistryPrefix selects which of those references this scope
-	// judges. It ends at the OWNER boundary (`<host>/<owner>/`)
-	// because the publishing repository is read off the path that
-	// follows it — the one derivation this mechanism keeps, whose
-	// precondition validate enforces rather than assumes. References
-	// outside the prefix are out of scope, not findings: whose bases
-	// those are is another mechanism's question
-	// (provenance-verified).
+	// judges. It ends at the OWNER boundary (`<host>/<owner>/`):
+	// provenance-verified reads the publishing repository off the
+	// path that follows it, and shared-signer reads the owner whose
+	// attestation store it asks off its last segment — derivations
+	// whose precondition validate enforces rather than assumes.
+	// References outside the prefix are out of scope, not findings:
+	// whose bases those are is another mechanism's question
+	// (provenance-verified, shared-signer).
 	RegistryPrefix *string `json:"registryPrefix,omitempty"`
-	// SignerWorkflow is the workflow that signs the bases' provenance,
-	// owner/repo/path. Its ref is free: a published base is signed at
-	// whatever signer commit its own release pinned
-	// (trust.WorkflowIdentity) (provenance-verified).
+	// PinPattern parses the pinned reference and Identity is built
+	// from its capture groups, so the expected signer is DERIVED FROM
+	// THE PIN and the two can never disagree — the shape the org
+	// applies wherever an identity could otherwise be restated as a
+	// literal. Every group the template names must exist in the
+	// pattern, which validate checks (provenance-verified).
+	PinPattern *string `json:"pinPattern,omitempty"`
+	Identity   *string `json:"identity,omitempty"`
+	// SignerWorkflow is the one workflow that signs every base's
+	// provenance, owner/repo/path. Its ref is free: a published base
+	// is signed at whatever signer commit its own release pinned
+	// (trust.WorkflowIdentity) (shared-signer).
 	SignerWorkflow *string `json:"signerWorkflow,omitempty"`
 	// Refs is the ordered tag-to-ref convention: the first rule whose
 	// tag pattern matches the pin's tag names the source ref the base
 	// was built at, which the provenance must carry. A tag no rule
-	// matches is refused by name (provenance-verified).
+	// matches is refused by name (shared-signer).
 	Refs []RefRule `json:"refs,omitempty"`
 	// PredicateType is the predicate the approving attestation must
-	// carry. Both mechanisms declare one, because a predicate URI is
+	// carry. Every mechanism declares one, because a predicate URI is
 	// policy data and never a literal in this engine
 	// (docs/versioning.md).
 	PredicateType *string `json:"predicateType,omitempty"`
@@ -872,7 +891,7 @@ func (b *BaseImagesPolicy) validate() error {
 			return err
 		}
 
-		// A prefix ends at the owner boundary (validateProvenance), so
+		// A prefix ends at the owner boundary (ownerBoundary), so
 		// two prefixes overlap only by being equal.
 		if p := s.RegistryPrefix; p != nil {
 			if other, dup := prefixes[*p]; dup {
@@ -955,13 +974,20 @@ func (u *UpstreamBase) Pattern() (*regexp.Regexp, error) {
 	return re, nil
 }
 
-// paramPredicateType is the one parameter BOTH mechanisms own: a
+// paramPredicateType is the one parameter every mechanism owns: a
 // predicate URI is policy data whichever way a base is approved.
 const paramPredicateType = "predicateType"
 
 // paramSignerWorkflow names the signer both the continuous leg and a
-// provenance-verified scope declare.
+// shared-signer scope declare.
 const paramSignerWorkflow = "signerWorkflow"
+
+// paramFromFile and paramRegistryPrefix name the parameters both
+// prefix mechanisms — provenance-verified and shared-signer — own.
+const (
+	paramFromFile       = "fromFile"
+	paramRegistryPrefix = "registryPrefix"
+)
 
 // paramRefs is the one parameter that is a list rather than a string:
 // the ordered tag-to-ref rules. params cannot carry it, so validate
@@ -978,8 +1004,10 @@ func (s *BaseImageScope) params() map[string]*string {
 		"pinFile":           s.PinFile,
 		"attestorRepo":      s.AttestorRepo,
 		"attestorIdentity":  s.AttestorIdentity,
-		"fromFile":          s.FromFile,
-		"registryPrefix":    s.RegistryPrefix,
+		paramFromFile:       s.FromFile,
+		paramRegistryPrefix: s.RegistryPrefix,
+		"pinPattern":        s.PinPattern,
+		"identity":          s.Identity,
 		paramSignerWorkflow: s.SignerWorkflow,
 		paramPredicateType:  s.PredicateType,
 	}
@@ -993,7 +1021,9 @@ func owns(m BaseImageMechanism) []string {
 	case MechanismPinFile:
 		return []string{"pinFile", "attestorRepo", "attestorIdentity", paramPredicateType}
 	case MechanismProvenanceVerified:
-		return []string{"fromFile", "registryPrefix", paramSignerWorkflow, paramRefs, paramPredicateType}
+		return []string{paramFromFile, paramRegistryPrefix, "pinPattern", "identity", paramPredicateType}
+	case MechanismSharedSigner:
+		return []string{paramFromFile, paramRegistryPrefix, paramSignerWorkflow, paramRefs, paramPredicateType}
 	default:
 		return nil
 	}
@@ -1043,28 +1073,64 @@ func (s *BaseImageScope) validate() error {
 		return fmt.Errorf("%s.%s is declared but the %s mechanism does not read it", where, paramRefs, *s.Mechanism)
 	}
 
-	if *s.Mechanism == MechanismProvenanceVerified {
+	switch *s.Mechanism {
+	case MechanismProvenanceVerified:
 		return s.validateProvenance(where)
+	case MechanismSharedSigner:
+		return s.validateSharedSigner(where)
+	case MechanismPinFile:
 	}
 
 	return nil
 }
 
-// validateProvenance checks the preconditions the provenance-verified
-// judgment would otherwise assume: that the prefix stops where the
-// owner does, that the signer is a workflow, and that every tag rule
-// reads and expands.
+// validateProvenance checks the two preconditions the
+// provenance-verified judgment would otherwise assume: that the
+// prefix stops where the owner does, and that the identity template
+// names only groups the pattern actually captures.
 func (s *BaseImageScope) validateProvenance(where string) error {
 	// The publishing repository is read off the reference path
 	// immediately after the prefix, so the prefix must end where the
 	// owner does. A prefix reaching further would swallow the
 	// repository segment and the derivation would address the wrong
 	// repository — silently, and in the direction of a pass.
-	trimmed, slashed := strings.CutSuffix(*s.RegistryPrefix, "/")
-	if !slashed || strings.Count(trimmed, "/") != 1 || strings.HasSuffix(trimmed, "/") {
+	if !ownerBoundary(*s.RegistryPrefix) {
 		return fmt.Errorf(
 			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
 				"because the publishing repository is derived from the reference path that follows it",
+			where, *s.RegistryPrefix,
+		)
+	}
+
+	re, err := regexp.Compile(*s.PinPattern)
+	if err != nil {
+		return fmt.Errorf("%s.pinPattern: %w", where, err)
+	}
+
+	for _, g := range identityGroups(*s.Identity) {
+		if !slices.Contains(re.SubexpNames(), g) {
+			return fmt.Errorf(
+				"%s.identity names the capture group %q, which pinPattern does not define — "+
+					"the expansion would silently drop that segment and demand the wrong identity", where, g,
+			)
+		}
+	}
+
+	return nil
+}
+
+// validateSharedSigner checks the preconditions the shared-signer
+// judgment would otherwise assume: that the prefix stops where the
+// owner does, that the signer is a workflow, and that every tag rule
+// reads and expands.
+func (s *BaseImageScope) validateSharedSigner(where string) error {
+	// The owner whose store is asked is the prefix's last segment, so
+	// the prefix must end there: one reaching into a repository would
+	// name a store nobody keeps.
+	if !ownerBoundary(*s.RegistryPrefix) {
+		return fmt.Errorf(
+			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
+				"because the owner whose attestation store is read is its last segment",
 			where, *s.RegistryPrefix,
 		)
 	}
@@ -1079,6 +1145,14 @@ func (s *BaseImageScope) validateProvenance(where string) error {
 	}
 
 	return nil
+}
+
+// ownerBoundary reports whether a registry prefix spells exactly
+// `<host>/<owner>/`.
+func ownerBoundary(prefix string) bool {
+	trimmed, slashed := strings.CutSuffix(prefix, "/")
+
+	return slashed && strings.Count(trimmed, "/") == 1 && !strings.HasSuffix(trimmed, "/")
 }
 
 // signerWorkflowRE is a workflow named by its repository and path.

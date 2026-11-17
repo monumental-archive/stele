@@ -1,11 +1,11 @@
 // The build-time base gate (stele#402): every reference a build is
 // about to instantiate, judged BEFORE it is instantiated, under the
 // one declaration in the assert policy that claims it — a first-party
-// scope's provenance at the ref the pin's tag implies, or an official
-// image's published provenance held to its declared source. The
-// corpus walk (assert evidence) applies the same first-party judgment
-// to the whole population; this is the gate at the one moment the
-// bytes are about to be used.
+// scope's provenance judgment, of whichever kind the scope is, or an
+// official image's published provenance held to its declared source.
+// The corpus walk (assert evidence) applies the same first-party
+// judgments to the whole population; this is the gate at the one
+// moment the bytes are about to be used.
 
 package cli
 
@@ -200,16 +200,16 @@ func (r *baseRun) judge() {
 		check := r.journal.Check(c.ref, c.assertion())
 
 		if c.scope != nil {
-			produced, err := c.scope.JudgeFirstParty(c.ref, r.att, check.Diverged)
+			approval, err := c.scope.JudgeBase(c.ref, r.att, check.Diverged)
 			if err != nil {
 				r.out.logf("verify base: %v", err)
 
 				return
 			}
 
-			if produced != "" {
-				r.out.logf("verify base: approved first-party base: %s (produced at %s)", c.ref, produced)
-				r.facts = append(r.facts, report.Fact{Name: "produced:" + c.ref, Value: produced})
+			if approval.Approved() {
+				r.out.logf("verify base: approved first-party base: %s (%s)", c.ref, approval)
+				r.facts = append(r.facts, report.Fact{Name: approval.Fact + ":" + c.ref, Value: approval.Value})
 			}
 		} else {
 			facts, err := c.upstream.JudgeUpstream(c.ref, r.binds, r.reader, check.Diverged)

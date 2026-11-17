@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
@@ -38,14 +39,14 @@ const (
 )
 
 // basePolicy is an assert policy declaring the org's first-party scope,
-// signed by signer, and the official postgres image upstream.
+// a shared signer's, and the official postgres image upstream.
 func basePolicy(signer string) string {
 	return `{"schema": 9, "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
 	    "baseImages": {
-	      "scopes": [{"name": "org-bases", "mechanism": "provenance-verified", "fromFile": "Dockerfile",
+	      "scopes": [{"name": "org-bases", "mechanism": "shared-signer", "fromFile": "Dockerfile",
 	        "registryPrefix": "ghcr.io/monumental-archive/", "signerWorkflow": "` + signer + `",
 	        "refs": [{"tag": "^latest$", "ref": "refs/heads/main"},
 	          {"tag": "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)(-.*)?$", "ref": "refs/tags/v${version}"}],
@@ -183,7 +184,7 @@ func TestVerifyBaseRecorded(t *testing.T) {
 			refs: []string{labPgRef}, code: exitRefused,
 			want: []string{
 				"no https://slsa.dev/provenance/v1 attestation verifies for these bytes at refs/tags/v0.28.4 — a" +
-					" first-party base is verified before it is instantiated (.github#715)",
+					" first-party base is verified before it is instantiated: ",
 				"trust: verify",
 			},
 		},
@@ -203,7 +204,7 @@ func TestVerifyBaseRecorded(t *testing.T) {
 			name: "bytes nobody attested", refs: []string{"ghcr.io/monumental-archive/release-lab:latest@sha256:" +
 				strings.Repeat("1", 64)},
 			code: exitRefused,
-			want: []string{"before it is instantiated (.github#715): the store holds no attestation for this subject"},
+			want: []string{"before it is instantiated: the store holds no attestation for this subject"},
 		},
 		{
 			name: "outside the prefix, not judged", refs: []string{debianRef}, code: exitOK,
@@ -238,6 +239,76 @@ func TestVerifyBaseRecorded(t *testing.T) {
 			}
 		})
 	}
+}
+
+// documentedPolicy declares the org's prefix under provenance-verified
+// with the identity the schema document's example spells — each
+// repository signing with its own publish workflow at the release tag.
+func documentedPolicy() string {
+	return `{"schema": 9, "issuer": "https://token.actions.githubusercontent.com",
+	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+	    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}},
+	    "baseImages": {"scopes": [{"name": "org-bases", "mechanism": "provenance-verified",
+	      "fromFile": "Dockerfile", "registryPrefix": "ghcr.io/monumental-archive/",
+	      "pinPattern": "^ghcr\\.io/monumental-archive/(?P<repo>[a-z0-9-]+):` +
+		`(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)[^@]*@sha256:[0-9a-f]{64}$",
+	      "identity": "https://github.com/monumental-archive/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
+	      "predicateType": "https://slsa.dev/provenance/v1"}]}}}`
+}
+
+// recordingAttestor approves everything and records what it was asked.
+type recordingAttestor struct {
+	candidates []assert.Candidate
+}
+
+func (a *recordingAttestor) Verify(_, _, _ string, candidates []assert.Candidate, _ string) error {
+	a.candidates = append(a.candidates, candidates...)
+
+	return nil
+}
+
+// TestVerifyBaseProvenanceVerified: a reference under a
+// provenance-verified scope is judged by that kind's own judgment, the
+// one the corpus walk applies — the identity its pin implies. Not
+// parallel: it swaps the forge and attestor seams.
+func TestVerifyBaseProvenanceVerified(t *testing.T) {
+	root := publicGood(t)
+
+	const documented = "https://github.com/monumental-archive/lab-pg/.github/workflows/publish.yml@refs/tags/v0.28.4"
+
+	t.Run("the identity the pin implies, approved", func(t *testing.T) {
+		att := &recordingAttestor{}
+
+		orig := newAttestor
+		newAttestor = func(gh.Forge, verify.BundleVerifier, string) assert.Attestor { return att }
+
+		t.Cleanup(func() { newAttestor = orig })
+
+		code, stdout, stderr := runBase(t, documentedPolicy(), append(refArgs(labPgRef), "--trusted-root", root)...)
+		if code != exitOK || !strings.Contains(stdout,
+			"verify base: approved first-party base: "+labPgRef+" (under "+documented+")") {
+			t.Fatalf("code %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		if len(att.candidates) != 1 || att.candidates[0].Identity != documented || att.candidates[0].Workflow != nil {
+			t.Fatalf("candidates = %+v, want the exact identity the pin implies", att.candidates)
+		}
+	})
+
+	// Measured on the recorded store: the documented example names the
+	// caller's own publish workflow at the release tag, while the org's
+	// bases carry the shared signer's identity — so that form could
+	// never approve one, which is why shared-signer exists.
+	t.Run("the documented example, over the org's real store", func(t *testing.T) {
+		swapBaseForge(t, gh.Snapshot{Dir: "testdata/base-images"})
+
+		code, stdout, _ := runBase(t, documentedPolicy(), append(refArgs(labPgRef), "--trusted-root", root)...)
+		if code != exitRefused || !strings.Contains(stdout,
+			"no https://slsa.dev/provenance/v1 attestation verifies for this base under "+documented) {
+			t.Fatalf("code %d\nstdout: %s", code, stdout)
+		}
+	})
 }
 
 // baseReport is the part of the report document these rows read.
