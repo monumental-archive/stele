@@ -285,7 +285,7 @@ func TestSignerWatchFollowsCappedPagesToTheEnd(t *testing.T) {
 	const size, start, at = 2345, 17, 1500
 
 	h := newHarness(t, withLeaf(fillerLeaves(size), at, capturedLeaf(t, releaseIndex)))
-	h.log.align = 100
+	h.log.setAlign(100)
 
 	rep, err := h.run(start)
 	if err != nil {
@@ -341,8 +341,8 @@ func TestSignerWatchRefusesAnEmptyPage(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, fillerLeaves(3000))
-	h.log.align = 500
-	h.log.hook = func(w http.ResponseWriter, kind string, before int) bool {
+	h.log.setAlign(500)
+	h.log.setHook(func(w http.ResponseWriter, kind string, before int) bool {
 		if kind != "entries" || before != 3 {
 			return false
 		}
@@ -352,7 +352,7 @@ func TestSignerWatchRefusesAnEmptyPage(t *testing.T) {
 		}{Entries: []entryDoc{}})
 
 		return true
-	}
+	})
 
 	rep, err := h.run(0)
 	if err != nil {
@@ -425,9 +425,9 @@ func TestSignerWatchThrottled(t *testing.T) {
 			t.Parallel()
 
 			h := newHarness(t, fillerLeaves(4000))
-			h.log.align = 500
+			h.log.setAlign(500)
 			h.budget = 5 * time.Minute
-			h.log.hook = throttleAfter(5, tc.retryAfter)
+			h.log.setHook(throttleAfter(5, tc.retryAfter))
 
 			rep, err := h.run(0)
 			if err != nil {
@@ -482,9 +482,9 @@ func TestSignerWatchResumesAtNext(t *testing.T) {
 	leaves := withLeaf(fillerLeaves(3200), 2100, capturedLeaf(t, releaseIndex))
 
 	h := newHarness(t, leaves)
-	h.log.align = 500
+	h.log.setAlign(500)
 	h.log.grow(2500)
-	h.log.hook = throttleAfter(2, "")
+	h.log.setHook(throttleAfter(2, ""))
 	h.budget = time.Minute
 
 	first, err := h.run(0)
@@ -496,11 +496,9 @@ func TestSignerWatchResumesAtNext(t *testing.T) {
 		t.Fatalf("first run: verdict %s, checkpoint %d — want CANNOT_JUDGE at 1000", first.Verdict(), h.lastSaved())
 	}
 
-	h.log.hook = nil
+	h.log.setHook(nil)
 	h.log.grow(3200)
-	h.log.mu.Lock()
-	h.log.requests = nil
-	h.log.mu.Unlock()
+	h.log.forget()
 
 	second, err := h.run(0)
 	if err != nil {
@@ -576,10 +574,8 @@ func TestSignerWatchRefusesAnInconsistentTreeHead(t *testing.T) {
 
 			saves := len(h.saves)
 
-			h.log.mu.Lock()
-			tc.edit(h.log)
-			h.log.requests = nil
-			h.log.mu.Unlock()
+			h.log.rewrite(tc.edit)
+			h.log.forget()
 
 			_, err := h.run(0)
 			if !errors.Is(err, ctlog.ErrInconsistent) {
@@ -614,12 +610,12 @@ func TestSignerWatchHoldsOneChunk(t *testing.T) {
 	}
 
 	h := newHarness(t, fillerLeaves(size))
-	h.log.align = 1000
+	h.log.setAlign(1000)
 	h.chunk = 0 // the production chunk, not a test's
 
 	var held, most uint64
 
-	h.log.onEntriesSent = func(served uint64) {
+	h.log.setOnEntriesSent(func(served uint64) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 
@@ -630,7 +626,7 @@ func TestSignerWatchHoldsOneChunk(t *testing.T) {
 
 		held = served - judged
 		most = max(most, held)
-	}
+	})
 
 	rep, err := h.run(0)
 	if err != nil {

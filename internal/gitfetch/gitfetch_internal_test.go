@@ -541,13 +541,37 @@ func TestAFailedFetchCannotJudge(t *testing.T) {
 // gitServer serves bare repositories over smart HTTP through git's own
 // http-backend, so the fetch is exercised against real git on the
 // wire, with a scripted refusal in front of it when a test wants one.
+//
+// Every field the handler reads or writes is behind mu, and a test
+// reaches them only through the methods below — never by assigning
+// a field (stele#417). The handler runs on the server's goroutines,
+// and the requests come from a git process the race detector cannot
+// see ordering through, so an unguarded write is a race whenever it
+// happens after the server starts.
 type gitServer struct {
 	*httptest.Server
 
-	mu      sync.Mutex
-	auth    []string
-	refuse  func(http.ResponseWriter, *http.Request) bool
-	queries int
+	mu     sync.Mutex
+	auth   []string
+	refuse func(http.ResponseWriter, *http.Request) bool
+}
+
+// refuseWith installs the refusal every later request meets first; it
+// answers true when it wrote the response itself.
+func (s *gitServer) refuseWith(refuse func(http.ResponseWriter, *http.Request) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.refuse = refuse
+}
+
+// authorizations is every Authorization header the server received,
+// in order.
+func (s *gitServer) authorizations() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return slices.Clone(s.auth)
 }
 
 func serveGit(t *testing.T, w *world) *gitServer {
@@ -587,7 +611,6 @@ func serveGit(t *testing.T, w *world) *gitServer {
 	s := &gitServer{}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
-		s.queries++
 		s.auth = append(s.auth, r.Header.Get("Authorization"))
 		refuse := s.refuse
 		s.mu.Unlock()
@@ -626,9 +649,7 @@ func TestTheCredentialTravelsAsAHeaderAndNowhereElse(t *testing.T) {
 
 	encoded := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 
-	srv.mu.Lock()
-	seen := slices.Clone(srv.auth)
-	srv.mu.Unlock()
+	seen := srv.authorizations()
 
 	if len(seen) == 0 || !slices.Contains(seen, "basic "+encoded) {
 		t.Fatalf("Authorization headers = %q, want the basic credential", seen)
@@ -689,10 +710,7 @@ func TestAPublicFetchSendsNoCredential(t *testing.T) {
 
 	fetch(t, &Fetcher{}, srv.remote(), "", everything)
 
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
-
-	for _, a := range srv.auth {
+	for _, a := range srv.authorizations() {
 		if a != "" {
 			t.Fatalf("Authorization = %q on a public fetch", a)
 		}
@@ -713,12 +731,12 @@ func TestNoHelperAndNoPromptRuns(t *testing.T) {
 
 	w := newWorld(t)
 	srv := serveGit(t, &w)
-	srv.refuse = func(rw http.ResponseWriter, _ *http.Request) bool {
+	srv.refuseWith(func(rw http.ResponseWriter, _ *http.Request) bool {
 		rw.Header().Set("WWW-Authenticate", `Basic realm="git"`)
 		rw.WriteHeader(http.StatusUnauthorized)
 
 		return true
-	}
+	})
 
 	_, err := (&Fetcher{}).Fetch(srv.remote(), "", everything)
 	if err == nil || !errors.Is(err, ErrFetch) {
@@ -743,12 +761,12 @@ func TestAThrottledFetchIsTypedAndRetried(t *testing.T) {
 
 	w := newWorld(t)
 	srv := serveGit(t, &w)
-	srv.refuse = func(rw http.ResponseWriter, _ *http.Request) bool {
+	srv.refuseWith(func(rw http.ResponseWriter, _ *http.Request) bool {
 		rw.Header().Set("Retry-After", "30")
 		rw.WriteHeader(http.StatusTooManyRequests)
 
 		return true
-	}
+	})
 
 	var slept []time.Duration
 
@@ -790,11 +808,11 @@ func TestAFailingHostIsRetriedAndARefusalIsNot(t *testing.T) {
 
 			w := newWorld(t)
 			srv := serveGit(t, &w)
-			srv.refuse = func(rw http.ResponseWriter, _ *http.Request) bool {
+			srv.refuseWith(func(rw http.ResponseWriter, _ *http.Request) bool {
 				rw.WriteHeader(tc.status)
 
 				return true
-			}
+			})
 
 			var slept []time.Duration
 

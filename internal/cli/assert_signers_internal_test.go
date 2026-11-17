@@ -69,6 +69,25 @@ func newSignerLog(t *testing.T, leaves [][]byte) *signerLog {
 	return l
 }
 
+// resize serves a head of n entries. Like throttle, it is the only way
+// a test changes what the log serves (stele#417): the handler reads
+// both fields under mu, so a test writes them under mu too, never by
+// assigning the field.
+func (l *signerLog) resize(n uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.size = n
+}
+
+// throttle makes every get-entries read answer 429, or stops it.
+func (l *signerLog) throttle(on bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.throttled = on
+}
+
 func (l *signerLog) send(w http.ResponseWriter, v any) {
 	var buf bytes.Buffer
 	if err := jsonx.Encode(&buf, v); err != nil {
@@ -375,7 +394,7 @@ func TestAssertSignerCertificatesExits(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newSignerLog(t, tc.leaves(t))
-			l.throttled = tc.throttled
+			l.throttle(tc.throttled)
 			signerSeams(t, l, &signerForgeStub{}, nil)
 
 			cp := filepath.Join(t.TempDir(), "checkpoint.json")
@@ -409,7 +428,7 @@ func TestAssertSignerCertificatesExits(t *testing.T) {
 // first wrote and judges only what the log grew by, as a JSON report.
 func TestAssertSignerCertificatesResumes(t *testing.T) {
 	l := newSignerLog(t, signerFillers(60))
-	l.size = 40
+	l.resize(40)
 	signerSeams(t, l, &signerForgeStub{}, nil)
 
 	cp := filepath.Join(t.TempDir(), "checkpoint.json")
@@ -426,9 +445,7 @@ func TestAssertSignerCertificatesResumes(t *testing.T) {
 		t.Fatalf("founding run: exit %d\n%s", code, errs.String())
 	}
 
-	l.mu.Lock()
-	l.size = 60
-	l.mu.Unlock()
+	l.resize(60)
 
 	out.Reset()
 	errs.Reset()
@@ -646,9 +663,7 @@ func TestAssertSignerCertificatesCannotStart(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		l.mu.Lock()
-		l.size = 10
-		l.mu.Unlock()
+		l.resize(10)
 
 		out.Reset()
 		errs.Reset()
