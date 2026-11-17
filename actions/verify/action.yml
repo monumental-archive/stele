@@ -1,0 +1,171 @@
+# Verify a published release with one `uses:` line (stele#386).
+#
+# The action builds stele from the commit it is pinned at: its own
+# checkout, under the action path, is this repository at that commit,
+# so the verifier a caller runs is exactly the code the pin names.
+# There is no download to verify first and no version input that could
+# disagree with the pin. It then runs ONE `stele verify` line. Every
+# input a caller cannot know (the signing pins, and the subjects when
+# none are given) is derived by stele itself (stele#447), never here:
+# this file passes values and reads the sealed report, nothing more.
+#
+# Read-only by construction. The token is the job's own, used to read
+# public evidence; nothing is written, uploaded or signed, and no
+# id-token is asked for. setup-go's cache is off for the same reason:
+# its post step would save one.
+#
+# The step's exit code is stele's. What this file adds is the
+# sentence saying which failure it was: a refusal (the evidence does
+# not verify) or could-not-judge (it could not be read). That is read
+# off the sealed report's verdict, never guessed from the exit code.
+#
+# Nothing is defaulted: a stranger verifying someone else's release
+# names the repository, the tag and the policy.
+---
+name: stele verify
+description: >-
+  Verify a published release's attestations or its published verdict
+  against a policy pinned to a commit, with stele built from the commit
+  this action is pinned at
+inputs:
+  repository:
+    description: The release's repository, as owner/name
+    required: true
+  tag:
+    description: The release tag
+    required: true
+  policy:
+    description: >-
+      The verify policy: an https URI pinned to a commit, or a path in
+      the caller's workspace
+    required: true
+  assert-policy:
+    description: >-
+      The publisher's assert policy, in the same two forms. It says where
+      the release states what it shipped; required unless subjects is
+      given (and, in release mode, to read the release's SBOMs)
+    required: false
+    default: ""
+  subjects:
+    description: >-
+      A sha256sum manifest of the artifacts under verification, a path
+      in the caller's workspace; absent, they are read from the release
+    required: false
+    default: ""
+  mode:
+    description: >-
+      vsa (the published verdict, the spec's consumer procedure) or
+      release (every attestation)
+    required: false
+    default: vsa
+  token:
+    description: Token for reading public evidence; the job's own suffices
+    required: false
+    default: ${{ github.token }}
+outputs:
+  verdict:
+    description: The verdict line, as written to the job summary
+    value: ${{ steps.verify.outputs.verdict }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Go from stele's own go.mod
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: ${{ github.action_path }}/../../go.mod
+        cache: false
+    - name: Build stele at the pinned commit
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        cd "${ACTION_PATH}/../.."
+        CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o "${RUNNER_TEMP}/stele" ./cmd/stele
+    - name: Verify
+      id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+        TAG: ${{ inputs.tag }}
+        POLICY: ${{ inputs.policy }}
+        ASSERT_POLICY: ${{ inputs.assert-policy }}
+        SUBJECTS: ${{ inputs.subjects }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+
+        case "${MODE}" in
+          vsa | release) ;;
+          *)
+            echo "::error::mode is vsa or release, not ${MODE}"
+            exit 2
+            ;;
+        esac
+
+        work="${RUNNER_TEMP}/stele-verify"
+        mkdir -p "${work}"
+
+        # A policy is read where it is pinned. An https URI must name a
+        # commit: a policy read at a moving ref is not the one the
+        # verdict will name.
+        place() {
+          local name=$1 value=$2 out=$3
+          case "${value}" in
+            https://*)
+              if ! [[ ${value} =~ /[0-9a-f]{40}/ ]]; then
+                echo "::error::${name} ${value} is not pinned to a commit"
+                exit 2
+              fi
+              curl -fsSL --proto '=https' --retry 3 -o "${out}" "${value}"
+              ;;
+            *://*)
+              echo "::error::${name} ${value} is neither an https URI nor a workspace path"
+              exit 2
+              ;;
+            /*) cp -- "${value}" "${out}" ;;
+            *) cp -- "${GITHUB_WORKSPACE}/${value}" "${out}" ;;
+          esac
+        }
+
+        place policy "${POLICY}" "${work}/verify-policy.json"
+        args=(verify "${MODE}" --json --policy "${work}/verify-policy.json"
+          --repo "${REPOSITORY}" --tag "${TAG}")
+
+        if [[ -n ${ASSERT_POLICY} ]]; then
+          place assert-policy "${ASSERT_POLICY}" "${work}/assert-policy.json"
+          args+=(--assert-policy "${work}/assert-policy.json")
+        fi
+
+        if [[ -n ${SUBJECTS} ]]; then
+          place subjects "${SUBJECTS}" "${work}/subjects.sha256"
+          args+=(--subjects "${work}/subjects.sha256")
+        fi
+
+        rc=0
+        "${RUNNER_TEMP}/stele" "${args[@]}" > "${work}/report.json" || rc=$?
+
+        verdict=$(jq -r '.verdict // empty' "${work}/report.json" 2> /dev/null || true)
+        finding=$(jq -r '.findings[0] | (.detail // .actual // empty)' "${work}/report.json" 2> /dev/null || true)
+        subject="${REPOSITORY}@${TAG}"
+
+        if ((rc == 0)); then
+          line="stele verify ${MODE} ${subject}: ${verdict} — the evidence verifies"
+        elif [[ ${verdict} == CANNOT_JUDGE || -z ${verdict} ]]; then
+          line="stele verify ${MODE} ${subject}: could not judge — ${finding:-stele refused its inputs (exit ${rc})}"
+        else
+          line="stele verify ${MODE} ${subject}: refused — ${finding}"
+        fi
+
+        line=${line//$'\n'/ }
+        echo "verdict=${line}" >> "${GITHUB_OUTPUT}"
+        echo "${line}" >> "${GITHUB_STEP_SUMMARY}"
+
+        if ((rc != 0)); then
+          echo "::error::${line}"
+          exit "${rc}"
+        fi
+
+        echo "${line}"
+...

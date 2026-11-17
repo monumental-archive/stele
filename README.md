@@ -68,6 +68,19 @@ set of types. Adopting it in a repository with no org behind it is
 [docs/adoption.md](docs/adoption.md), whose minimal policies the test
 suite executes.
 
+Gating on a dependency's evidence is one `uses:` line, with stele
+built from the commit the line pins
+([docs/adoption.md](docs/adoption.md#verifying-someone-elses-release-one-uses-line)):
+
+```yaml
+- uses: monumental-archive/stele/actions/verify@<commit>
+  with:
+    repository: acme/widget
+    tag: v1.2.3
+    policy: https://raw.githubusercontent.com/acme/widget/<commit>/verify-policy.json
+    assert-policy: https://raw.githubusercontent.com/acme/widget/<commit>/assert-policy.json
+```
+
 ## Status
 
 stele began as the port of ~8,000 lines of release and audit bash in

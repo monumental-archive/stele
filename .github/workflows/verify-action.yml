@@ -1,0 +1,97 @@
+# The verify action (stele#386), run from this pull request's own tree
+# against this repository's latest published release, in both modes,
+# and against a tag that does not exist, whose could-not-judge message
+# is asserted. The action builds stele from the tree it runs from, so
+# this job verifies with the code under review.
+#
+# The policies are the canon's, read at the commit this repository's
+# gate already pins in ci.yml: the canon pin is stated once, Renovate
+# moves it, and a second literal here could only drift from it.
+---
+name: verify-action
+
+"on":
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: verify action
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # the action's own tree, and the release's public evidence
+    steps:
+      - name: Check out the pull request's tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Name the latest release and the canon's policies
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)
+          canon=$(grep -oE 'monumental-archive/\.github/\.github/workflows/ci\.yml@[0-9a-f]{40}' \
+            .github/workflows/ci.yml | cut -d@ -f2 | sort -u || true)
+          if [[ -z ${canon} || ${canon} == *$'\n'* ]]; then
+            echo "::error::ci.yml must pin the canon gate at exactly one commit, found: ${canon:-none}"
+            exit 1
+          fi
+          base="https://raw.githubusercontent.com/monumental-archive/.github/${canon}/slsa"
+          {
+            echo "tag=${tag}"
+            echo "policy=${base}/verify-policy.json"
+            echo "assert-policy=${base}/assert-policy.json"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Verify the published verdict
+        uses: $/actions/verify
+        with:
+          repository: ${{ github.repository }}
+          tag: ${{ steps.inputs.outputs.tag }}
+          policy: ${{ steps.inputs.outputs.policy }}
+          assert-policy: ${{ steps.inputs.outputs.assert-policy }}
+      - name: Verify every attestation
+        uses: $/actions/verify
+        with:
+          repository: ${{ github.repository }}
+          tag: ${{ steps.inputs.outputs.tag }}
+          policy: ${{ steps.inputs.outputs.policy }}
+          assert-policy: ${{ steps.inputs.outputs.assert-policy }}
+          mode: release
+      - name: Verify a tag that does not exist
+        id: missing
+        continue-on-error: true
+        uses: $/actions/verify
+        with:
+          repository: ${{ github.repository }}
+          tag: v0.0.0-no-such-tag
+          policy: ${{ steps.inputs.outputs.policy }}
+          assert-policy: ${{ steps.inputs.outputs.assert-policy }}
+      - name: Assert the missing tag could not be judged
+        env:
+          OUTCOME: ${{ steps.missing.outcome }}
+          VERDICT: ${{ steps.missing.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          if [[ ${OUTCOME} != failure ]]; then
+            echo "::error::verifying a tag that does not exist ended ${OUTCOME}, not failure"
+            exit 1
+          fi
+          if [[ ${VERDICT} != *": could not judge — "* ]]; then
+            echo "::error::the missing tag's verdict is not could-not-judge: ${VERDICT}"
+            exit 1
+          fi
+          echo "${VERDICT}"
+...

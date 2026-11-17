@@ -46,7 +46,44 @@ dependency:
   `env:`. Orchestration is deliberately out of scope
   ([chain-format](chain-format.md) and the repo charter both say so);
   any CI that can run a binary under an OIDC identity can run this
-  one.
+  one. One stated exception: **verifying** is offered as an action;
+  producing evidence is not (#157).
+
+## Verifying someone else's release: one `uses:` line
+
+A project that gates on a dependency's evidence runs the verify
+action, pinned to a stele commit. It builds stele from exactly that
+commit — no download to verify, no version input that could disagree
+with the pin — and runs one `stele verify`:
+
+```yaml
+permissions:
+  contents: read
+steps:
+  - uses: monumental-archive/stele/actions/verify@<commit>
+    with:
+      repository: acme/widget
+      tag: v1.2.3
+      policy: https://raw.githubusercontent.com/acme/widget/<commit>/verify-policy.json
+      assert-policy: https://raw.githubusercontent.com/acme/widget/<commit>/assert-policy.json
+```
+
+Nothing is defaulted: you name the repository, the tag and the
+policy. A policy is an https URI pinned to a commit, or a path in
+your workspace. `mode` is `vsa` (the default: the published verdict,
+the specification's consumer procedure) or `release` (every
+attestation). The signing pins are derived by stele from the
+publisher's own trees at the tag; the subjects are read from the
+release, which is what the publisher's `assert-policy` is for — or
+pass a sha256sum manifest of the artifacts you hold as `subjects`
+and it is not needed (except to read the SBOMs in `release` mode).
+
+The action needs `contents: read` and the job's own token, used only
+to read public evidence; it writes, uploads and signs nothing, and
+asks for no `id-token`. Its exit code is stele's. On failure it says
+which kind it was — **refused** (the evidence does not verify) or
+**could not judge** (it could not be read) — and the verdict line is
+written to the job summary and set as the `verdict` output.
 
 ## The policy floor
 
