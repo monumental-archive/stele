@@ -17,6 +17,13 @@ import (
 	"github.com/monumental-archive/stele/internal/oci"
 )
 
+// assertUpstream is the judgment an upstream entry records a
+// reference under.
+const assertUpstream = "upstream-provenance"
+
+// Assertion names the judgment this entry records a reference under.
+func (u *UpstreamBase) Assertion() string { return assertUpstream + ":" + *u.Image }
+
 // Covers reports whether a reference is of this entry's image, pinned
 // or not: a reference with no digest is still this image's, and is
 // refused under it rather than passed by as nobody's. Both sides are

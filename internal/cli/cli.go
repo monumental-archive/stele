@@ -104,6 +104,12 @@ usage:
               manifest against the rebuild's, over the class and
               targets the rebuild declares it covered, one typed
               finding per artifact that failed to reproduce
+    base      every base a build is about to instantiate, under the
+              one declaration in the assert policy that claims it: a
+              first-party base's provenance at the ref its tag
+              implies, an official image's published provenance held
+              to its declared source; a reference nothing claims is
+              named, and a build with none to judge exits 0
     policy    one committed policy document against this engine's own
               loader, offline and reaching nothing: exit 0 if it
               loads, else the loader's refusal verbatim. The drift

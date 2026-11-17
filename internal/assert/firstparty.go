@@ -114,6 +114,10 @@ func (s *BaseImageScope) RefRules() ([]baseimage.RefRule, error) {
 	return rules, nil
 }
 
+// Assertion names the judgment a scope records a reference under: one
+// name, shared by the corpus walk and the build-time gate.
+func (s *BaseImageScope) Assertion() string { return scopeAssertion(s) }
+
 // Covers reports whether a reference is under this scope's prefix.
 func (s *BaseImageScope) Covers(ref string) bool {
 	return s.RegistryPrefix != nil && strings.HasPrefix(ref, *s.RegistryPrefix)

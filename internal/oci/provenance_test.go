@@ -135,6 +135,47 @@ func TestStatements(t *testing.T) {
 	}
 }
 
+// TestStatementsByDigestAlone holds the canon's #1144 fix: the read
+// addresses the pinned bytes by digest alone, never the tag beside
+// them, so upstream republishing the tag leaves the pinned index
+// readable — read through the tag, that republish made the canon's
+// approval run red for as long as a newer build sat unrolled.
+func TestStatementsByDigestAlone(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+
+	index := func(prov string) v1.ImageIndex {
+		img := platformImage(t)
+
+		return mutate.AppendManifests(empty.Index,
+			mutate.IndexAddendum{
+				Add:      img,
+				Platform: &v1.Platform{OS: "linux", Architecture: "amd64"},
+			},
+			w.attestationFor(t, img, statementLayer(provV02, prov)),
+		)
+	}
+
+	pinned, republished := index(`{"build": "pinned"}`), index(`{"build": "republished"}`)
+
+	for _, idx := range []v1.ImageIndex{pinned, republished} {
+		if err := remote.WriteIndex(w.tag("14-bookworm"), idx); err != nil {
+			t.Fatalf("pushing the index: %v", err)
+		}
+	}
+
+	dig, err := pinned.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := oci.Client{}.Statements(w.repo, dig.String(), provV02)
+	if err != nil || len(got) != 1 || string(got[0].Statements[0]) != `{"build": "pinned"}` {
+		t.Fatalf("Statements = %+v, %v; want the pinned index's provenance", got, err)
+	}
+}
+
 func TestStatementsRefusals(t *testing.T) {
 	t.Parallel()
 
