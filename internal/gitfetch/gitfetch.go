@@ -19,11 +19,9 @@ package gitfetch
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -272,7 +270,7 @@ func (f *Fetcher) fill(dir, remote, token string, want Want) (*Fetched, error) {
 		}
 	}
 
-	env := authEnv(remote, token)
+	env := gitrepo.AuthEnv(remote, token)
 
 	present, err := f.present(dir, remote, env, want)
 	if err != nil {
@@ -365,40 +363,6 @@ func commitSpecs(want Want, present map[string]bool) []string {
 	}
 
 	return specs
-}
-
-// authEnv is the environment a networked git runs under: no prompt,
-// no credential helper (Apple's git reads a helper from its own
-// built-in config even with the system config pinned away, measured on
-// stele#384, so the helper list is reset rather than trusted to be
-// empty), and the credential — when there is one — as an extra header
-// scoped to the remote's own origin, set through git's environment
-// configuration so it is never an argument and never written down.
-func authEnv(remote, token string) []string {
-	cfg := [][2]string{
-		{"credential.helper", ""},
-		{"core.askPass", ""},
-	}
-
-	if token != "" {
-		if u, err := url.Parse(remote); err == nil && (u.Scheme == "https" || u.Scheme == "http") {
-			header := "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
-			cfg = append(cfg, [2]string{"http." + u.Scheme + "://" + u.Host + "/.extraheader", header})
-		}
-	}
-
-	env := []string{
-		"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "GIT_CONFIG_PARAMETERS=",
-		"GIT_CONFIG_COUNT=" + strconv.Itoa(len(cfg)),
-	}
-
-	for i, kv := range cfg {
-		env = append(env,
-			"GIT_CONFIG_KEY_"+strconv.Itoa(i)+"="+kv[0],
-			"GIT_CONFIG_VALUE_"+strconv.Itoa(i)+"="+kv[1])
-	}
-
-	return env
 }
 
 // network runs one command that reaches the remote, on the ladder: a

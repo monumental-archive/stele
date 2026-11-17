@@ -10,7 +10,6 @@ package gitrepo
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -317,7 +316,7 @@ func (r *Repo) DryRunPushNotes(remote, token, rev string) error {
 		return fmt.Errorf("gitrepo: could not annotate %s for the push proof: %w", rev, err)
 	}
 
-	_, pushErr := r.gitAuth(token, "push", "-q", "--dry-run", remote, r.notesRef+":"+r.notesRef)
+	_, pushErr := r.gitAuth(remote, token, "push", "-q", "--dry-run", remote, r.notesRef+":"+r.notesRef)
 
 	if _, rerr := r.git("update-ref", r.notesRef, strings.TrimSpace(string(orig))); rerr != nil {
 		return fmt.Errorf("gitrepo: restoring %s after the push proof: %w", r.notesRef, rerr)
@@ -334,7 +333,7 @@ func (r *Repo) DryRunPushNotes(remote, token, rev string) error {
 // FetchNotes force-updates the local notes ref from the remote — the
 // refetch half of the append's compare-and-swap loop.
 func (r *Repo) FetchNotes(remote, token string) error {
-	if _, err := r.gitAuth(token, "fetch", "-q", remote, "+"+r.notesRef+":"+r.notesRef); err != nil {
+	if _, err := r.gitAuth(remote, token, "fetch", "-q", remote, "+"+r.notesRef+":"+r.notesRef); err != nil {
 		return fmt.Errorf("gitrepo: fetch %s: %w", r.notesRef, err)
 	}
 
@@ -345,7 +344,7 @@ func (r *Repo) FetchNotes(remote, token string) error {
 // the fast-forward requirement is the compare-and-swap: a push that
 // lands proves the predecessor this run hashed was still the tail.
 func (r *Repo) PushNotes(remote, token string) error {
-	if _, err := r.gitAuth(token, "push", "-q", remote, r.notesRef+":"+r.notesRef); err != nil {
+	if _, err := r.gitAuth(remote, token, "push", "-q", remote, r.notesRef+":"+r.notesRef); err != nil {
 		return fmt.Errorf("gitrepo: push %s: %w", r.notesRef, err)
 	}
 
@@ -423,7 +422,7 @@ func Clone(dir, remote, token, name, email, branch, notesRef string) (*Repo, err
 	// would not fast-forward is not a conflict to resolve but a stale
 	// local ref to overwrite. The branch fetch is strict — a branch
 	// the remote does not have is an error in its own right.
-	if _, err := r.gitAuth(token, "fetch", "-q", remote, "+"+branch+":"+branch); err != nil {
+	if _, err := r.gitAuth(remote, token, "fetch", "-q", remote, "+"+branch+":"+branch); err != nil {
 		return nil, fmt.Errorf("gitrepo: fetching %s from %s: %w", branch, remote, err)
 	}
 
@@ -438,7 +437,7 @@ func Clone(dir, remote, token, name, email, branch, notesRef string) (*Repo, err
 	}
 
 	if hasLedger {
-		if _, err := r.gitAuth(token, "fetch", "-q", remote, "+"+notesRef+":"+notesRef); err != nil {
+		if _, err := r.gitAuth(remote, token, "fetch", "-q", remote, "+"+notesRef+":"+notesRef); err != nil {
 			return nil, fmt.Errorf("gitrepo: fetching %s from %s: %w", notesRef, remote, err)
 		}
 	}
@@ -463,7 +462,7 @@ func (r *Repo) SetNotesRef(notesRef string) error {
 // remoteHasRef reports whether the remote currently has the exact
 // ref, via ls-remote — zero matching lines means absent.
 func (r *Repo) remoteHasRef(remote, token, ref string) (bool, error) {
-	out, err := r.gitAuth(token, "ls-remote", "--refs", remote, ref)
+	out, err := r.gitAuth(remote, token, "ls-remote", "--refs", remote, ref)
 	if err != nil {
 		return false, fmt.Errorf("gitrepo: probing %s on %s: %w", ref, remote, err)
 	}
@@ -471,18 +470,17 @@ func (r *Repo) remoteHasRef(remote, token, ref string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
-// gitAuth runs one network subcommand, attaching the token as a basic
-// auth header when one is given — the same header shape GitHub's own
-// checkout uses; anonymous when empty (file-protocol remotes, tests).
-func (r *Repo) gitAuth(token string, args ...string) ([]byte, error) {
+// gitAuth runs one network subcommand against remote. With a token, the
+// credential reaches git through AuthEnv alone — its environment
+// configuration, never an argument, so the arguments a failed command
+// prints carry none (stele#395). Anonymous (file-protocol remotes,
+// tests) the command runs exactly as any other.
+func (r *Repo) gitAuth(remote, token string, args ...string) ([]byte, error) {
 	if token == "" {
 		return r.git(args...)
 	}
 
-	header := "AUTHORIZATION: basic " +
-		base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
-
-	return r.git(append([]string{"-c", "http.extraheader=" + header}, args...)...)
+	return r.run(AuthEnv(remote, token), nil, args...)
 }
 
 // git runs one subcommand against the repository with a hermetic
@@ -496,6 +494,14 @@ func (r *Repo) git(args ...string) ([]byte, error) {
 // `notes add -F -` without ever transiting a string variable that
 // could normalise it.
 func (r *Repo) gitIn(stdin []byte, args ...string) ([]byte, error) {
+	return r.run(nil, stdin, args...)
+}
+
+// run is the one spawn: git in the repository, under the hermetic
+// environment plus extra, with stdin when given. A failure names the
+// arguments — they are what makes it diagnosable, and no argument
+// carries a credential — then git's own words.
+func (r *Repo) run(extra []string, stdin []byte, args ...string) ([]byte, error) {
 	full := append([]string{"-C", r.dir}, args...)
 
 	// The argument vector is built from validated inputs and this
@@ -504,7 +510,7 @@ func (r *Repo) gitIn(stdin []byte, args ...string) ([]byte, error) {
 	// and this is the reviewed exception.
 	//nolint:gosec,noctx // fixed executable, validated args; local read, no cancellation surface
 	cmd := exec.Command("git", full...)
-	cmd.Env = Env()
+	cmd.Env = Env(extra...)
 
 	var stdout, stderr bytes.Buffer
 
