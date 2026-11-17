@@ -65,6 +65,7 @@ the same statement as this one and tested against it.
 | `stele emit chain` | source-chain links for the pushed revision and any holes earlier lapses left |
 | `stele emit vsa` | the build-track VSA predicate, from a full release verification; beside it, when the assert policy owes one, the release tag's signed source verdict |
 | `stele emit manifest` | the release evidence manifest: the declared contract a stranger reads at the tag |
+| `stele emit enrichment` | the build-enrichment predicate: the names the policy's `build.enrichment` owes, each computed from the source the caller declares |
 
 ## Exit codes
 

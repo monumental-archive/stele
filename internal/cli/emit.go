@@ -180,7 +180,7 @@ type emitArgs struct {
 // emitCmd dispatches `stele emit <mode>`.
 func emitCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain, vsa or manifest"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain, vsa, manifest or enrichment"); err != nil {
 			return exitIO
 		}
 
@@ -193,8 +193,12 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 	case emitManifest:
 		// Its own path: it shares none of the chain/vsa flag surface.
 		return emitManifestCmd(args[1:], stdout, stderr)
+	case emitEnrichment:
+		// Its own path too: no trust root, no signer, nothing verified.
+		return emitEnrichmentCmd(args[1:], stdout, stderr)
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa, manifest)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa, manifest, enrichment)\n",
+			mode); err != nil {
 			return exitIO
 		}
 

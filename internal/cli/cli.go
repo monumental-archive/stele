@@ -253,6 +253,15 @@ usage:
               stranger reads at the tag; every value a stated fact and
               every published asset pinned and typed, read back
               through the assert reader before it leaves
+    enrichment  the build-enrichment predicate the workflow signs:
+              the names the policy's build.enrichment requires and
+              permits, each computed from the source the caller
+              declares — a file of the policy tree or of the released
+              source, or rows of a TOML table file for the keys the
+              build consumed (--policy --policy-tree --policy-repo
+              --machinery-digest --repo --tag --source-revision
+              [--file --rows --rows-tables --rows-prefix --rows-file
+              --rows-keys --out])
 
 derive sbom flags: [--out --expect-version] <binary>..., or
 --cargo-package --tree --created [--target --features
