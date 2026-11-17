@@ -488,6 +488,10 @@ type Client struct {
 	HTTP     *http.Client
 	// Sleep is the retry clock; nil means time.Sleep.
 	Sleep func(time.Duration)
+	// Attempts bounds the transient-failure ladder; zero means the
+	// default. A caller with a ladder of its own (ghstore's propagation
+	// wait) sets 1, so the two never multiply into one long silence.
+	Attempts int
 }
 
 // New builds a live client against the public GitHub API.
@@ -725,31 +729,75 @@ type attestationsResponse struct {
 	} `json:"attestations"`
 }
 
+// Attestation is one stored attestation bundle and the page that
+// served it — the URL a reader can name when it cites where the
+// evidence was found.
+type Attestation struct {
+	Bundle jsonx.Raw
+	Page   string
+}
+
 // Attestations implements Forge.
 func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
-	body, _, ok, err := c.get(
-		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/attestations/sha256:"+sha256Hex+"?per_page=100",
-		"application/vnd.github+json",
+	listed, found, err := c.AttestationPages(
+		"/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/attestations/sha256:" + sha256Hex,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	if !ok {
+	if !found {
 		return nil, nil // an empty store is an answer here
 	}
 
-	decoded, err := jsonx.DecodeForeign[attestationsResponse](body)
-	if err != nil {
-		return nil, fmt.Errorf("gh: attestations of sha256:%s: %w", sha256Hex, err)
-	}
-
-	out := make([]jsonx.Raw, 0, len(decoded.Attestations))
-	for _, a := range decoded.Attestations {
+	out := make([]jsonx.Raw, 0, len(listed))
+	for _, a := range listed {
 		out = append(out, a.Bundle)
 	}
 
 	return out, nil
+}
+
+// AttestationPages reads EVERY page of an attestation listing at path
+// (stele#439): the endpoint answers an object holding an
+// `attestations` array, one page at a time, and a subject past one
+// page was read as its first hundred — a verdict on page two read as
+// absent, a decision held on page two read as unsigned.
+//
+// The walk is paged's, rule for rule: the forge's rel="next" is
+// followed exactly as written (the attestation listing's is a cursor
+// on another path form, so it could not be rebuilt if one tried), a
+// next link off the API origin refuses, and a listing that has not
+// ended by maxPages refuses by name. Pages are concatenated in order.
+//
+// found is false only when the FIRST page answers 404 — a store that
+// holds nothing for the subject, which is an answer. Any failure after
+// a page has been read fails the whole read: a partial store is never
+// returned as the store.
+func (c *Client) AttestationPages(path string) ([]Attestation, bool, error) {
+	if strings.Contains(path, "?") {
+		return nil, false, fmt.Errorf("gh: %s: the path carries its own query; the walk owns the query string", path)
+	}
+
+	var out []Attestation
+
+	found, err := c.walk(path, path+"?per_page=100", func(page int, target string, body []byte) error {
+		decoded, derr := jsonx.DecodeForeign[attestationsResponse](body)
+		if derr != nil {
+			return fmt.Errorf("gh: %s: page %d: %w", path, page, derr)
+		}
+
+		for _, a := range decoded.Attestations {
+			out = append(out, Attestation{Bundle: a.Bundle, Page: target})
+		}
+
+		return nil
+	})
+	if err != nil || !found {
+		return nil, found, err
+	}
+
+	return out, true, nil
 }
 
 type packageVersion struct {
@@ -1030,7 +1078,12 @@ func (c *Client) get(path, accept string) ([]byte, string, bool, error) {
 func (c *Client) fetch(target, what, accept string) ([]byte, string, bool, error) {
 	var lastErr error
 
-	for attempt := 1; attempt <= transientAttempts; attempt++ {
+	budget := c.Attempts
+	if budget <= 0 {
+		budget = transientAttempts
+	}
+
+	for attempt := 1; attempt <= budget; attempt++ {
 		if attempt > 1 {
 			c.sleep(RetryWait(lastErr, time.Duration(attempt-1)*transientBackoff))
 		}
@@ -1043,7 +1096,7 @@ func (c *Client) fetch(target, what, accept string) ([]byte, string, bool, error
 		lastErr = err
 	}
 
-	return nil, "", false, fmt.Errorf("gh: %s: after %d attempts: %w", what, transientAttempts, lastErr)
+	return nil, "", false, fmt.Errorf("gh: %s: after %d attempts: %w", what, budget, lastErr)
 }
 
 // sleep is the injectable clock — retry tests need no wall time.
@@ -1154,7 +1207,6 @@ func (c *Client) once(target, path, accept string) ([]byte, string, bool, error)
 // next URL off the API's own origin refuses: the request carries the
 // credential, and a link is not a reason to hand it to another host.
 func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
-	const maxPages = 50
 	// perPage is the page size asked for on the first request. The
 	// forge carries it into the next links it writes.
 	const perPage = 100
@@ -1169,39 +1221,76 @@ func (c *Client) paged(path string, filters ...string) ([][]byte, error) {
 		query += "&" + strings.Join(filters, "&")
 	}
 
-	target, what := c.Base+query, query
-
 	var pages [][]byte
 
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return nil, fmt.Errorf("gh: %s: pagination did not converge in %d pages", path, maxPages)
-		}
-
-		body, next, ok, err := c.fetch(target, what, "application/vnd.github+json")
-		if err != nil {
-			return nil, err
-		}
-
-		if !ok {
-			return nil, fmt.Errorf("gh: %s: not found", path)
-		}
-
+	found, err := c.walk(path, query, func(page int, _ string, body []byte) error {
 		// Every paginated endpoint here answers with a JSON array; a body
 		// that is not one is a refusal by name, never a page handed to a
 		// caller that will misread it.
 		if _, derr := jsonx.DecodeForeign[[]jsonx.Raw](body); derr != nil {
-			return nil, fmt.Errorf("gh: %s: page %d is not a JSON array: %w", path, page, derr)
+			return fmt.Errorf("gh: %s: page %d is not a JSON array: %w", path, page, derr)
 		}
 
 		pages = append(pages, body)
 
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		return nil, fmt.Errorf("gh: %s: not found", path)
+	}
+
+	return pages, nil
+}
+
+// maxPages is the backstop against a forge that links in a circle.
+const maxPages = 50
+
+// walk is the one page walk (#322, stele#439): request query, hand
+// each page to take, and follow the response's rel="next" exactly as
+// the forge wrote it until a response names none. A next link off the
+// API origin refuses — the request carries the credential, and a link
+// is not a reason to hand it to another host — and a listing still
+// linking at maxPages refuses by name.
+//
+// found is false only when the first page answers 404. A 404 on any
+// later page is an error: the forge linked to a page it then could not
+// serve, and what was read before it is not the listing.
+func (c *Client) walk(path, query string, take func(page int, target string, body []byte) error) (bool, error) {
+	target, what := c.Base+query, query
+
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return false, fmt.Errorf("gh: %s: pagination did not converge in %d pages", path, maxPages)
+		}
+
+		body, next, ok, err := c.fetch(target, what, "application/vnd.github+json")
+		if err != nil {
+			return false, err
+		}
+
+		if !ok {
+			if page == 1 {
+				return false, nil
+			}
+
+			return false, fmt.Errorf("gh: %s: page %d, linked by page %d, answered not found — a partial"+
+				" listing is not the listing", path, page, page-1)
+		}
+
+		if err := take(page, target, body); err != nil {
+			return false, err
+		}
+
 		if next == "" {
-			return pages, nil
+			return true, nil
 		}
 
 		if !sameOrigin(next, c.Base) {
-			return nil, fmt.Errorf("gh: %s: page %d links its next page off the API origin %s", path, page, c.Base)
+			return false, fmt.Errorf("gh: %s: page %d links its next page off the API origin %s", path, page, c.Base)
 		}
 
 		target, what = next, next
