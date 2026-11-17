@@ -256,8 +256,8 @@ func (w *evidenceWalk) checksumPins(repo, tag string) ([]verify.Subject, error) 
 }
 
 // readChecksumPins is checksumPins' reading, reachable without a walk.
-func (p *EvidencePolicy) readChecksumPins(f AssetReader, owner, repo, tag string) ([]verify.Subject, error) {
-	raw, err := f.Asset(owner, repo, tag, *p.Checksums)
+func (e *EvidencePolicy) readChecksumPins(f AssetReader, owner, repo, tag string) ([]verify.Subject, error) {
+	raw, err := f.Asset(owner, repo, tag, *e.Checksums)
 	if err != nil {
 		return nil, fmt.Errorf("the checksum manifest is unreadable: %w", err)
 	}
@@ -317,7 +317,7 @@ func (w *evidenceWalk) checksumAgreement(subject string, contract *Contract, pin
 // to different bytes — the comparison itself, which the walk records
 // as a finding and the verb refuses on. A contract that pins nothing
 // disagrees with nothing.
-func (p *EvidencePolicy) checksumDisagreement(contract *Contract, pinned []verify.Subject) []string {
+func (e *EvidencePolicy) checksumDisagreement(contract *Contract, pinned []verify.Subject) []string {
 	var details []string
 
 	for _, s := range pinned {
@@ -327,7 +327,7 @@ func (p *EvidencePolicy) checksumDisagreement(contract *Contract, pinned []verif
 		}
 
 		details = append(details, fmt.Sprintf("%s: %s pins %s, the evidence manifest pins %s",
-			s.Name, *p.Checksums, s.SHA256, declared))
+			s.Name, *e.Checksums, s.SHA256, declared))
 	}
 
 	return details
@@ -353,7 +353,7 @@ func (w *evidenceWalk) checksumSubjects(pinned []verify.Subject) ([]verify.Subje
 // without a walk.
 //
 //nolint:gocritic // unnamedResult: subjects then sboms, as checksumSubjects documents
-func (p *EvidencePolicy) splitChecksumPins(pinned []verify.Subject) ([]verify.Subject, []verify.Subject) {
+func (e *EvidencePolicy) splitChecksumPins(pinned []verify.Subject) ([]verify.Subject, []verify.Subject) {
 	var subjects, sboms []verify.Subject
 
 	for _, s := range pinned {
@@ -366,9 +366,9 @@ func (p *EvidencePolicy) splitChecksumPins(pinned []verify.Subject) ([]verify.Su
 		// taken FIRST: the shared classifier calls an SBOM a document,
 		// and this walk needs the subset by name.
 		switch {
-		case strings.HasSuffix(s.Name, *p.SBOMSuffix):
+		case strings.HasSuffix(s.Name, *e.SBOMSuffix):
 			sboms = append(sboms, s)
-		case p.Classify(s.Name) == evidence.TypeEvidence:
+		case e.Classify(s.Name) == evidence.TypeEvidence:
 		default:
 			subjects = append(subjects, s)
 		}
@@ -466,17 +466,17 @@ func derivedRegistry(files, attested []verify.Subject) []verify.Subject {
 
 // strayMessage is the one spelling of a release whose provenance
 // attests subjects its claim does not name.
-func (p *EvidencePolicy) strayMessage(stray []string) string {
-	return "provenance attests subject(s) neither " + *p.Checksums +
+func (e *EvidencePolicy) strayMessage(stray []string) string {
+	return "provenance attests subject(s) neither " + *e.Checksums +
 		" nor the evidence manifest names: " + strings.Join(stray, "; ")
 }
 
 // namesNoSubjects is the one spelling of a release that claims no
 // artifact at all.
-func (p *EvidencePolicy) namesNoSubjects(contract *Contract) string {
+func (e *EvidencePolicy) namesNoSubjects(contract *Contract) string {
 	return fmt.Sprintf(
 		"the release names no artifact subjects — %s pins no artifact and %s names none: a release that"+
-			" claims nothing verifies nothing", *p.Checksums, registrySource(contract),
+			" claims nothing verifies nothing", *e.Checksums, registrySource(contract),
 	)
 }
 
@@ -743,10 +743,11 @@ func (r PinRoots) Resolve(f FileReader, owner, repo, tag string) (verify.Pins, e
 // from the VERIFY policy — the machinery repository is the verifier
 // workflow's own, a fact of the identity, not a second declaration.
 type FullDepth struct {
-	Verifier DeepVerifier
 	// PinRoots resolves each release's pins — the one derivation the
 	// verb shares (stele#447).
 	PinRoots
+
+	Verifier DeepVerifier
 	// VerdictDeclared reports whether the verify policy declares a
 	// trust.verdict — undeclared, the deep verdict half skips with a
 	// log line, never a silent pass and never a refusal of the walk.
@@ -811,7 +812,7 @@ type ReleaseInputs struct {
 // present; so does this, logged, because the bundles here only
 // cross-check the claim — the attestations themselves are the
 // engine's to fetch and prove, from the store.
-func (p *EvidencePolicy) DeriveRelease(
+func (e *EvidencePolicy) DeriveRelease(
 	f ReleaseForge, src ContractSource, owner, repo, tag string, log Logf,
 ) (*ReleaseInputs, error) {
 	subject := owner + "/" + repo + "@" + tag
@@ -823,7 +824,7 @@ func (p *EvidencePolicy) DeriveRelease(
 
 	if !ok {
 		return nil, fmt.Errorf("no evidence contract speaks for %s — neither %s nor a publish workflow"+
-			" at the tag says what the release shipped", subject, *p.ManifestAsset)
+			" at the tag says what the release shipped", subject, *e.ManifestAsset)
 	}
 
 	assets, err := f.ReleaseAssets(owner, repo, tag)
@@ -836,21 +837,21 @@ func (p *EvidencePolicy) DeriveRelease(
 		have[a] = true
 	}
 
-	present, absent := p.presentBundles(p.owedBundles(contract), have)
+	present, absent := e.presentBundles(e.owedBundles(contract), have)
 	for _, b := range slices.Sorted(maps.Keys(absent)) {
 		log("%s: the owed class bundle %s is absent — the claim is cross-checked against the bundles present",
 			subject, b)
 	}
 
-	pinned, err := p.readChecksumPins(f, owner, repo, tag)
+	pinned, err := e.readChecksumPins(f, owner, repo, tag)
 	if err != nil {
 		return nil, err
 	}
 
-	files, sboms := p.splitChecksumPins(pinned)
+	files, sboms := e.splitChecksumPins(pinned)
 
 	if contract.Pinned {
-		if details := p.checksumDisagreement(contract, pinned); len(details) > 0 {
+		if details := e.checksumDisagreement(contract, pinned); len(details) > 0 {
 			return nil, errors.New(strings.Join(details, "; "))
 		}
 	}
@@ -865,7 +866,7 @@ func (p *EvidencePolicy) DeriveRelease(
 	if contract.Registered {
 		claimed := subjectSet(slices.Concat(files, contract.RegistrySubjects))
 		if stray := unclaimed(attested, claimed); len(stray) > 0 {
-			return nil, errors.New(p.strayMessage(stray))
+			return nil, errors.New(e.strayMessage(stray))
 		}
 
 		registry = contract.RegistrySubjects
@@ -873,11 +874,11 @@ func (p *EvidencePolicy) DeriveRelease(
 
 	subjects := slices.Concat(files, registry)
 	if len(subjects) == 0 {
-		return nil, errors.New(p.namesNoSubjects(contract))
+		return nil, errors.New(e.namesNoSubjects(contract))
 	}
 
 	return &ReleaseInputs{
 		Subjects: subjects,
-		SBOMs:    verify.SBOMs{Assets: sboms, Planned: p.PlannedInventories(contract, sboms)},
+		SBOMs:    verify.SBOMs{Assets: sboms, Planned: e.PlannedInventories(contract, sboms)},
 	}, nil
 }

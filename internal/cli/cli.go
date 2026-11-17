@@ -316,8 +316,14 @@ offline document, or [--tuf-root --tuf-mirror] for a private Sigstore
 instance; naming none resolves one through TUF from the anchor pinned
 in this binary.
 
-verify flags: --policy --repo; release/vsa add
---tag --subjects --signer-digest --machinery-digest; chain adds
+verify flags: --policy --repo; release/vsa add --tag [--subjects
+--signer-digest --machinery-digest --assert-policy], and release adds
+[--sboms --inventories]. An absent digest is derived from the trees
+at the tag, the walk's own resolution; absent --subjects, --sboms and
+their plan are read from the release's own evidence, which the
+publisher's --assert-policy locates — one of --subjects or
+--assert-policy is required. Every derived value is printed; a flag
+that is given is used as given. chain adds
 --git-dir [--ref]; source-vsa adds --tag --git-dir --assert-policy
 --machinery-digest; repro takes --repo --tag --released --rebuilt
 [--class --targets --assert-policy --json] and no trust material — a

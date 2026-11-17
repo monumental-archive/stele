@@ -11,7 +11,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/monumental-archive/stele/internal/assert"
@@ -42,13 +41,13 @@ type checkedTags struct {
 func (c *checkedTags) TagCommit(owner, repo, tag string) (string, error) {
 	if !c.checked {
 		if err := c.s.Check(); err != nil {
-			return "", err //nolint:wrapcheck // the session names the git it refused
+			return "", err
 		}
 
 		c.checked = true
 	}
 
-	return c.s.TagCommit(owner, repo, tag) //nolint:wrapcheck // the session names the tag it could not read
+	return c.s.TagCommit(owner, repo, tag)
 }
 
 // contractSources is the one composition of where a release's
@@ -67,16 +66,13 @@ func (va *verifyArgs) subjectsDerived() bool { return va.subjects == "" }
 func (va *verifyArgs) sbomsDerived() bool { return va.mode == modeRelease && va.sboms == "" }
 
 // loadEvidencePolicy reads the publisher's assert policy, whose
-// evidence section says where a release states what it shipped.
+// evidence section says where a release states what it shipped. The
+// section is one the loader itself requires, so a policy without it
+// never reaches here.
 func (va *verifyArgs) loadEvidencePolicy() error {
 	ap, err := loadAssertPolicyFile(va.assertPolicy)
 	if err != nil {
 		return err
-	}
-
-	if ap.Evidence == nil {
-		return errors.New("the assert policy declares no evidence section — " +
-			"it does not say where a release states what it shipped")
 	}
 
 	va.evidence = ap.Evidence
@@ -152,12 +148,12 @@ func (va *verifyArgs) derivePins(forge gh.Forge, out *latch) error {
 
 	roots, err := assert.NewPinRoots(tags, verifierWorkflow, *va.p.Trust.Provenance.SignerWorkflow)
 	if err != nil {
-		return err //nolint:wrapcheck // the caller names the release
+		return err
 	}
 
 	pins, err := roots.Resolve(forge, va.coords.Owner, va.coords.Repo, va.tag)
 	if err != nil {
-		return err //nolint:wrapcheck // the caller names the release
+		return err
 	}
 
 	if va.signerPin == "" {
