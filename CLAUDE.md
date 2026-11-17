@@ -13,7 +13,8 @@ enumerated under each describe what is BUILT today, not a closed
 universe — the vocabulary stays open, per the first Rule):
 
 - **derive** — versions from conventional commits, SBOM assembly, VEX
-  from triage decisions, OCI image facts
+  from triage decisions, OCI image facts, the signer digest a
+  workflow tree pins (#392, read through `internal/workflow`)
 - **assert** — image facts, evidence-bundle completeness (releases,
   continuous digests, base approvals), advisory blast radius, release
   tags (tagger role, gitsign signature from the declared epoch, chain

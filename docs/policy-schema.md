@@ -190,6 +190,11 @@ in a config drifts from the pin the certificate actually carries.
 `stele verify` therefore takes the pinned tree (or an explicit
 digest) as an invocation input and asserts the derivation is
 single-valued; the policy names only the identity that must match.
+`stele derive signer-digest` is that derivation: it reads the tree's
+job-level `uses:` lines through the one workflow reader
+(`internal/workflow`) and prints the one commit they call
+`signerWorkflow` at, refusing a tree that pins none, more than one,
+or the signer at a reference that is not a full commit.
 
 ### `trust.verdict`
 

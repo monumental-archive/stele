@@ -125,8 +125,8 @@ type deriveArgs struct {
 func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex or"+
-				" vex-subjects"); err != nil {
+			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex,"+
+				" vex-subjects or signer-digest"); err != nil {
 			return exitIO
 		}
 
@@ -136,15 +136,27 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	mode := args[0]
 	switch mode {
 	case deriveVersion, deriveNotes, deriveBump, deriveReleasePlan, deriveSBOM, deriveClaims, deriveFacts,
-		deriveVEX, deriveVEXSubjects:
+		deriveVEX, deriveVEXSubjects, deriveSignerDigest:
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele derive: unknown mode %q (version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects)\n", mode); err != nil {
+				" vex-subjects, signer-digest)\n", mode); err != nil {
 			return exitIO
 		}
 
 		return exitUsage
+	}
+
+	// signer-digest reads a workflow tree, not a history: the one
+	// commit the tree pins its trusted signer at.
+	if mode == deriveSignerDigest {
+		sa, code := parseSignerDigestArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		return runDeriveMode("", stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveSignerDigest(sa, doc, log) })
 	}
 
 	// vex-subjects walks the org's published inventories rather than
