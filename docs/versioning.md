@@ -35,11 +35,12 @@ Every stele document that is **read live** carries the SAME number,
 | verify policy | `internal/policy`, [policy-schema.md](policy-schema.md) |
 | assert policy | `internal/assert`, [assert-policy-schema.md](assert-policy-schema.md) |
 | report | `internal/report`, [report-schema.md](report-schema.md) |
+| release plan | `internal/release`, [release-plan.md](release-plan.md) |
 
 Live-read means nothing historical carries the number: the policies
-are read from the consuming tree as it stands now, and a report is
-generated fresh by the run that emits it. Bumping them costs a text
-edit and nothing else.
+are read from the consuming tree as it stands now, and a report or a
+release plan is generated fresh by the run that emits it. Bumping
+them costs a text edit and nothing else.
 
 Per-document numbers were considered and rejected. They buy
 tolerance no reader can use — there are no dual readers, so every
