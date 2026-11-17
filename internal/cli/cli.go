@@ -330,7 +330,10 @@ level takes --repo|--org [--ref --notes-ref --tag --json
 --shield <path>], where --shield writes a shields.io endpoint document
 from the same seal as the report; --org adds [--policy] for the
 declared population, and --org --out-dir <dir> with no track publishes
-<repo>/<track>.report.json and .shield.json per cell. emit adds --machinery-digest --policy-uri; emit chain
+<repo>/<track>.report.json and .shield.json per cell; [--published
+<dir>] seeds the empty --out-dir from the board as published, measures
+over it, and names every cell on which the two disagree (exit 1, or 4
+when a cell judged before cannot be judged now). emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis --no-append --out], where --no-append
 signs and writes the links to --out without appending; emit
