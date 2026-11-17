@@ -49,6 +49,15 @@ type MemberDoc struct {
 	// listed, so walks that ask no track question still read it, and
 	// silent on every evidence track.
 	Exclusion bool `json:"exclusion"`
+	// Visibility is the forge listing's own word for the repository,
+	// verbatim and never judged; absent where no listing was read
+	// (the single-repository scope) or the listing did not say.
+	Visibility string `json:"visibility,omitempty"`
+	// ReleaseTags reports whether the repository carries a tag the
+	// policy's tags.tagPattern selects — the definition the tag audit
+	// reads. Absent where the policy declares no tags section, or the
+	// caller did not ask; never false for "could not see".
+	ReleaseTags *bool `json:"releaseTags,omitempty"`
 }
 
 // Reconciliation is the two directions of the name reconciliation, and
@@ -126,7 +135,7 @@ func (s *Set) Declared() bool { return s.declared }
 // document reads one member through the same bears() every walk
 // filters by.
 func (m member) document() MemberDoc {
-	doc := MemberDoc{Repo: m.name, Tracks: []string{}, TracksDeclared: !m.all}
+	doc := MemberDoc{Repo: m.name, Tracks: []string{}, TracksDeclared: !m.all, Visibility: m.visibility}
 
 	for _, t := range level.Tracks() {
 		if m.bears(t) {

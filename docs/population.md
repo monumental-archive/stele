@@ -27,19 +27,25 @@ stele derive population --policy assert-policy.json \
       "repo": "widget",
       "tracks": ["build", "source", "dependency"],
       "tracksDeclared": false,
-      "exclusion": false
+      "exclusion": false,
+      "visibility": "public",
+      "releaseTags": true
     },
     {
       "repo": "lab",
       "tracks": [],
       "tracksDeclared": true,
-      "exclusion": true
+      "exclusion": true,
+      "visibility": "private",
+      "releaseTags": false
     },
     {
       "repo": "signer",
       "tracks": ["source"],
       "tracksDeclared": true,
-      "exclusion": false
+      "exclusion": false,
+      "visibility": "public",
+      "releaseTags": false
     }
   ],
   "reconciliation": { "undeclared": [], "unlisted": [], "unexercised": [] }
@@ -62,6 +68,17 @@ stele derive population --policy assert-policy.json \
   reaches it. `exclusion` marks a member bearing evidence on no
   track. It is still listed, so a walk that asks no track question
   still reads it.
+  - `visibility` is the forge listing's own word for the repository,
+    printed verbatim and never judged. It is absent where no listing
+    was read (the `--repo` form) or the listing did not say. The
+    roster's own `visibility` is a declaration about coverage, not
+    this fact.
+  - `releaseTags` says whether the repository carries a tag the
+    policy's `tags.tagPattern` selects. That is the definition
+    `assert tags` reads, through the same git reader (every tag,
+    commits-only, no tree). It is absent when the policy declares no
+    `tags` section, and on the `--repo` form, which fetches nothing.
+    It is never `false` for "could not see".
 - `reconciliation` — always three lists, possibly empty, so an absent
   key is never read as agreement.
   - `undeclared`: listed repositories the declaration does not
@@ -81,6 +98,8 @@ stele derive population --policy assert-policy.json \
 - `4` — the listing could not be read, the forge cannot list the
   organisation, or the default predicate admitted nobody. An empty
   answer is a blind read until shown otherwise (stele#69).
+- `4` — a member's tags could not be read. The member is named:
+  whether it has released is unknown, not no.
 - `2` — usage.
 
 ## The one-repository question

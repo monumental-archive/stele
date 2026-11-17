@@ -266,3 +266,43 @@ func TestDocumentIsTheWalksPopulation(t *testing.T) {
 		}
 	}
 }
+
+// TestDocumentVisibility (stele#388): the listing's own word for each
+// member, printed verbatim — whatever the forge calls it — and absent
+// on the single-repository scope, which reads no listing.
+func TestDocumentVisibility(t *testing.T) {
+	t.Parallel()
+
+	listed := lister{repos: []gh.Repo{
+		{Name: "canon", Visibility: "public"},
+		{Name: "vault", Visibility: "internal"},
+		{Name: "plain"},
+	}}
+
+	for _, decl := range []*population.Declaration{nil, {Repositories: []population.Entry{
+		{Repo: new("canon")}, {Repo: new("vault")}, {Repo: new("plain")},
+	}}} {
+		set, err := population.Scope{Org: "acme"}.Resolve(listed, decl)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+
+		var got []string
+		for _, m := range set.Document().Members {
+			got = append(got, m.Repo+"="+m.Visibility)
+		}
+
+		if !slices.Equal(got, []string{"canon=public", "vault=internal", "plain="}) {
+			t.Fatalf("visibility = %v (declared %v)", got, decl != nil)
+		}
+	}
+
+	single, err := population.Scope{Repo: "acme/canon"}.Resolve(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m, _ := single.Member("canon"); m.Visibility != "" || m.ReleaseTags != nil {
+		t.Fatalf("single scope member = %+v — no listing was read, so no visibility is printed", m)
+	}
+}

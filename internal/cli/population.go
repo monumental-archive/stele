@@ -15,9 +15,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/monumental-archive/stele/internal/gitfetch"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/level"
 	"github.com/monumental-archive/stele/internal/population"
 )
@@ -113,13 +116,65 @@ func runDerivePopulation(pa *populationArgs, stdout, stderr io.Writer) int {
 			" admits — an empty answer is a blind read until shown otherwise", set.Subject())
 	}
 
+	doc := set.Document()
+
 	if pa.repo != "" {
 		if rerr := askMembership(pa, set, pol.Population != nil); rerr != nil {
 			return say(stderr, exitRefused, "derive population: %v", rerr)
 		}
+	} else if pol.Tags != nil {
+		// The org form says which members carry a release tag; the
+		// single-repository question does not ask it.
+		if code := markReleaseTags(&doc, *pol.Tags.TagPattern, stderr); code != exitOK {
+			return code
+		}
 	}
 
-	return printPopulation(pa.out, new(set.Document()), stdout, stderr)
+	return printPopulation(pa.out, &doc, stdout, stderr)
+}
+
+// markReleaseTags reads each member's tag refs through the session the
+// tag audit reads through, and marks the members carrying a tag the
+// policy's tags.tagPattern selects — the audit's own definition of a
+// release tag, so the two cannot disagree about which repositories have
+// released. A member whose tags cannot be read is CANNOT_JUDGE for the
+// run, named, never "carries none".
+func markReleaseTags(doc *population.Document, pattern string, stderr io.Writer) int {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		// Validated at policy load; reaching here is a loader defect.
+		return say(stderr, exitUsage, "derive population: tags.tagPattern: %v", err)
+	}
+
+	log := &latch{w: stderr}
+
+	// Not shallow: git refuses a --depth fetch whose tag glob matches
+	// nothing, so a shallow read would make every untagged member look
+	// unreadable. Commits-only still brings down no tree.
+	git := newGitSession(gitfetch.Want{Tags: true}, log.logf)
+	if cerr := git.Check(); cerr != nil {
+		return say(stderr, exitBlind, "derive population: %v — release tags cannot be read", cerr)
+	}
+	defer closeSession(git, stderr)
+
+	for i := range doc.Members {
+		m := &doc.Members[i]
+
+		refs, rerr := git.TagRefs(doc.Owner, m.Repo)
+		if rerr != nil {
+			return say(stderr, exitBlind, "derive population: the tags of %s/%s could not be read — "+
+				"whether it has released is unknown, not no: %v", doc.Owner, m.Repo, rerr)
+		}
+
+		carries := slices.ContainsFunc(refs, func(r gitrepo.TagRef) bool { return re.MatchString(r.Name) })
+		m.ReleaseTags = &carries
+	}
+
+	if log.err != nil {
+		return exitIO
+	}
+
+	return exitOK
 }
 
 // askMembership answers the single-repository question: the repository

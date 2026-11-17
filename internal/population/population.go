@@ -343,6 +343,10 @@ type member struct {
 	// nothing — which is not the same as declaring none, and the two
 	// resolve to opposite sets (Set.Surfaces).
 	surfaces *[]Surface
+	// visibility is the listing's word for the repository, carried for
+	// printing (stele#388) and read by no rule: "" where no listing
+	// was read, or the listing did not say.
+	visibility string
 }
 
 func (m member) bears(t level.Track) bool { return m.all || m.in[t.Key()] }
@@ -596,7 +600,7 @@ func (s Scope) Resolve(lister gh.RepoLister, d *Declaration) (*Set, error) {
 	if d == nil {
 		for _, r := range listed {
 			if defaultIn(r) {
-				set.members = append(set.members, member{name: r.Name, all: true})
+				set.members = append(set.members, member{name: r.Name, all: true, visibility: r.Visibility})
 			}
 		}
 
@@ -695,7 +699,9 @@ func (s Scope) roster(set *Set, listed []gh.Repo, d *Declaration) (*Set, error) 
 
 		matched[r.Name] = true
 
-		set.members = append(set.members, membership(e))
+		m := membership(e)
+		m.visibility = r.Visibility
+		set.members = append(set.members, m)
 	}
 
 	var unlisted []string

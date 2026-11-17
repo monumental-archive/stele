@@ -8,10 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
+	"github.com/monumental-archive/stele/internal/gittest"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
 )
@@ -322,5 +325,136 @@ func TestDerivePopulationWritesWhereAsked(t *testing.T) {
 	run := derivePop("--policy", policy, "--org", "acme", "--out", filepath.Join(t.TempDir(), "no", "such", "x"))
 	if run.code != exitIO {
 		t.Fatalf("code = %d, want %d", run.code, exitIO)
+	}
+}
+
+// popTagsSection declares the tag obligation: release tags are the
+// ones tags.tagPattern selects.
+const popTagsSection = `"issuer": "https://token.example.com",
+  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
+    "identityPattern": "^https://github\\.com/acme/", "proofFloor": {"floor": "certificate-transparency"},
+    "notesRef": "refs/notes/commits", "epochs": {"canon": "v0.1.0"}},`
+
+// popTagWorld serves the three members as real repositories: canon
+// tagged v1.0.0, lab tagged only "nightly" (no release tag), signer
+// untagged. The listing names each one's visibility.
+func popTagWorld(t *testing.T) map[string]*gittest.Repo {
+	t.Helper()
+
+	canon, lab, signer := gittest.New(t), gittest.New(t), gittest.New(t)
+
+	canon.Lightweight("v1.0.0", canon.Commit("feat: one"))
+	lab.Lightweight("nightly", lab.Commit("chore: build"))
+	signer.Commit("feat: sign")
+
+	return map[string]*gittest.Repo{"acme/canon": canon, "acme/lab": lab, "acme/signer": signer}
+}
+
+func popVisibleOrg() *popForge {
+	return &popForge{repos: []gh.Repo{
+		{Name: "canon", Visibility: "public"},
+		{Name: "lab", Visibility: "private"},
+		{Name: "signer", Visibility: "public"},
+	}}
+}
+
+// TestDerivePopulationReleaseTagsAndVisibility (stele#388): each
+// member's visibility is the listing's word, and releaseTags says
+// whether it carries a tag tags.tagPattern selects.
+func TestDerivePopulationReleaseTagsAndVisibility(t *testing.T) {
+	swapPopForge(t, popVisibleOrg())
+	swapGitRemotes(t, popTagWorld(t))
+
+	run := derivePop("--policy", popPolicy(t, popTagsSection+popRoster), "--org", "acme")
+	if run.code != exitOK {
+		t.Fatalf("code = %d, stderr %q", run.code, run.stderr)
+	}
+
+	var got []string
+
+	for _, m := range decodePop(t, run.stdout).Members {
+		tagged := "absent"
+		if m.ReleaseTags != nil {
+			tagged = strconv.FormatBool(*m.ReleaseTags)
+		}
+
+		got = append(got, m.Repo+":"+m.Visibility+":"+tagged)
+	}
+
+	if !slices.Equal(got, []string{"canon:public:true", "lab:private:false", "signer:public:false"}) {
+		t.Fatalf("members = %v", got)
+	}
+}
+
+// TestDerivePopulationNoTagsSectionAsksNoTags: with no tags section the
+// field is absent — never false — and no repository is fetched.
+func TestDerivePopulationNoTagsSectionAsksNoTags(t *testing.T) {
+	swapPopForge(t, popVisibleOrg())
+	swapGitRemotes(t, nil) // every fetch would fail
+
+	run := derivePop("--policy", popPolicy(t, popRoster), "--org", "acme")
+	if run.code != exitOK {
+		t.Fatalf("code = %d, stderr %q", run.code, run.stderr)
+	}
+
+	for _, m := range decodePop(t, run.stdout).Members {
+		if m.ReleaseTags != nil {
+			t.Fatalf("member %+v — no tags section, so no release-tag answer", m)
+		}
+	}
+}
+
+// TestDerivePopulationUnreadableTags: a member whose tags cannot be
+// read makes the run exit 4 with the member named — whether it has
+// released is unknown, not no.
+func TestDerivePopulationUnreadableTags(t *testing.T) {
+	swapPopForge(t, popVisibleOrg())
+
+	world := popTagWorld(t)
+	delete(world, "acme/lab")
+	swapGitRemotes(t, world)
+
+	run := derivePop("--policy", popPolicy(t, popTagsSection+popRoster), "--org", "acme")
+	if run.code != exitBlind ||
+		!strings.Contains(run.stderr, "the tags of acme/lab could not be read — whether it has released is unknown, not no") {
+		t.Fatalf("code = %d, stderr %q", run.code, run.stderr)
+	}
+
+	if run.stdout != "" {
+		t.Fatalf("a run that could not look printed %q", run.stdout)
+	}
+}
+
+// TestDerivePopulationUnusableGit: a machine whose git cannot fetch is
+// CANNOT_JUDGE for the release-tag answer.
+func TestDerivePopulationUnusableGit(t *testing.T) {
+	swapPopForge(t, popVisibleOrg())
+
+	orig := newGitSession
+	newGitSession = func(want gitfetch.Want, log func(string, ...any)) *gitfetch.Session {
+		return &gitfetch.Session{Fetcher: &gitfetch.Fetcher{Git: "/nonexistent/git"}, Want: want, Log: log}
+	}
+
+	t.Cleanup(func() { newGitSession = orig })
+
+	run := derivePop("--policy", popPolicy(t, popTagsSection+popRoster), "--org", "acme")
+	if run.code != exitBlind || !strings.Contains(run.stderr, "release tags cannot be read") {
+		t.Fatalf("code = %d, stderr %q", run.code, run.stderr)
+	}
+}
+
+// TestDerivePopulationOneRepositoryFetchesNothing: the --repo question
+// is answered without reading any tag.
+func TestDerivePopulationOneRepositoryFetchesNothing(t *testing.T) {
+	swapPopForge(t, popVisibleOrg())
+	swapGitRemotes(t, nil)
+
+	run := derivePop("--policy", popPolicy(t, popTagsSection+popRoster), "--repo", "acme/signer", "--tracks", "source")
+	if run.code != exitOK {
+		t.Fatalf("code = %d, stderr %q", run.code, run.stderr)
+	}
+
+	if m := decodePop(t, run.stdout).Members[0]; m.ReleaseTags != nil || m.Visibility != "" {
+		t.Fatalf("member = %+v — the single-repository answer reads no listing and no tag", m)
 	}
 }
