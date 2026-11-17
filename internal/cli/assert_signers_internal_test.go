@@ -7,11 +7,15 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -738,19 +742,14 @@ func TestLiveSignerForge(t *testing.T) {
 		t.Fatalf("signerForgeOf = %q, %v", server, err)
 	}
 
-	for sha, want := range map[string]bool{onSHA: true, sideSHA: false} {
+	// The fetched history holds every branch at full depth, so a commit
+	// it does not hold — its branch deleted after the push — is on no
+	// branch: false, an answer, exactly as a commit held off the branch.
+	for sha, want := range map[string]bool{onSHA: true, sideSHA: false, goneSHA: false} {
 		on, oerr := sf.OnDefaultBranch("acme", "signer", sha)
 		if oerr != nil || on != want {
 			t.Errorf("OnDefaultBranch(%s) = %v, %v; want %v", sha, on, oerr, want)
 		}
-	}
-
-	// The fetched history holds every branch; a commit on none of them
-	// is not there to be asked about, and git refuses rather than
-	// answers. That refusal is a read that did not complete.
-	if on, oerr := sf.OnDefaultBranch("acme", "signer", goneSHA); oerr == nil ||
-		!strings.Contains(oerr.Error(), "gitrepo: ancestry of "+goneSHA+" in refs/heads/main") {
-		t.Errorf("a commit the history does not hold: %v, %v", on, oerr)
 	}
 
 	if _, oerr := sf.OnDefaultBranch("acme", "gone", onSHA); oerr == nil ||
@@ -799,4 +798,248 @@ func TestAssertSignerCertificatesNeedsGit(t *testing.T) {
 	if _, err := os.Stat(cp); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a run refused for its git founded a checkpoint")
 	}
+}
+
+// syntheticSignerLeaf is an RFC 6962 X.509 entry for a certificate the
+// signer watch reads: the subject, the issuer, the Build Signer Digest
+// and the Run Invocation URI, nothing else.
+func syntheticSignerLeaf(t *testing.T, san, digest, runURI string) []byte {
+	t.Helper()
+
+	utf8 := func(oid asn1.ObjectIdentifier, v string) pkix.Extension {
+		der, err := asn1.MarshalWithParams(v, "utf8")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return pkix.Extension{Id: oid, Value: der}
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u, err := url.Parse(san)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    signerLogTime,
+		NotAfter:     signerLogTime.Add(10 * time.Minute),
+		URIs:         []*url.URL{u},
+		ExtraExtensions: []pkix.Extension{
+			utf8(asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, "https://token.actions.githubusercontent.com"),
+			utf8(asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 10}, digest),
+			utf8(asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 21}, runURI),
+		},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leaf, err := cttls.Marshal(ct.MerkleTreeLeaf{
+		Version:  ct.V1,
+		LeafType: ct.TimestampedEntryLeafType,
+		TimestampedEntry: &ct.TimestampedEntry{
+			Timestamp: uint64(signerLogTime.UnixMilli()),
+			EntryType: ct.X509LogEntryType,
+			X509Entry: &ct.ASN1Cert{Data: der},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return leaf
+}
+
+// signingForge is the forge's REST surface for one signing run: the
+// listing, the run, its files and the repositories' default branches.
+func signingForge(t *testing.T, run, publish, release string) *gh.Client {
+	t.Helper()
+
+	serve := func(body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			if _, err := w.Write([]byte(body)); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/orgs/acme/repos", serve(`[{"name": ".github"}, {"name": "signer"}, {"name": "widget"}]`))
+	mux.HandleFunc("/repos/acme/widget/actions/runs/7", serve(run))
+	mux.HandleFunc("/repos/acme/.github/contents/.github/workflows/publish.yml", serve(publish))
+	mux.HandleFunc("/repos/acme/widget/contents/.github/workflows/release.yml", serve(release))
+	mux.HandleFunc("/repos/acme/signer", serve(`{"default_branch": "main"}`))
+	mux.HandleFunc("/repos/acme/.github", serve(`{"default_branch": "main"}`))
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := gh.New("")
+	c.Base = srv.URL
+	c.HTTP = srv.Client()
+
+	return c
+}
+
+// TestAssertSignerCertificatesDeletedBranch is the fail-before/pass-
+// after row of stele#387's absent-commit fork: a commit whose branch
+// was deleted after the push is held by no branch of the fetched
+// history. Before, git refused to answer for it, the chunk was never
+// done and the run exited 4 with no finding — the forgery this watch
+// exists for, stalled at one index forever. Now it is the finding,
+// with the chunk done and the checkpoint past it; and a git that
+// cannot fetch still leaves the chunk undone.
+func TestAssertSignerCertificatesDeletedBranch(t *testing.T) {
+	cases := []struct {
+		name string
+		// deleteSigner and deleteCaller put the signer commit D, and the
+		// caller workflow's commit C, on a branch deleted after the push.
+		deleteSigner, deleteCaller bool
+		unreachable                bool
+		code                       int
+		finding                    string
+		next                       uint64
+	}{
+		{
+			name: "the signer commit on a deleted branch", deleteSigner: true,
+			code: exitRefused, finding: "assert: CT index 5: signer-branch: signer commit %[1]s is not on acme/signer's " +
+				"default branch", next: 12,
+		},
+		{
+			name: "the caller workflow's commit on a deleted branch", deleteCaller: true,
+			code: exitRefused, finding: "assert: CT index 5: caller-branch: acme/.github/.github/workflows/publish.yml at " +
+				"%[2]s is not on acme/.github's default branch", next: 12,
+		},
+		{
+			name: "both on their default branches", code: exitOK, next: 12,
+		},
+		{
+			name: "a signer repository git cannot fetch", unreachable: true,
+			code: exitBlind, next: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, root, d, c := signingWorld(t, tc.deleteSigner, tc.deleteCaller, tc.unreachable)
+
+			cp := filepath.Join(t.TempDir(), "checkpoint.json")
+
+			var out, errs bytes.Buffer
+
+			code := Run([]string{
+				"assert", "signer-certificates", "--policy", policy, "--checkpoint", cp, "--start-at", "0",
+				"--org", "acme", "--trusted-root", root,
+			}, &out, &errs)
+
+			if code != tc.code {
+				t.Fatalf("exit %d, want %d\nstdout:\n%s\nstderr:\n%s", code, tc.code, out.String(), errs.String())
+			}
+
+			if tc.finding != "" {
+				if want := fmt.Sprintf(tc.finding, d, c); !strings.Contains(out.String(), want) {
+					t.Errorf("stdout does not carry the finding %q:\n%s", want, out.String())
+				}
+
+				if n := strings.Count(out.String(), "assert: CT index "); n != 1 {
+					t.Errorf("%d findings, want exactly one:\n%s", n, out.String())
+				}
+			}
+
+			got, err := ctlog.ReadCheckpoint(cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got.Next != tc.next {
+				t.Fatalf("the checkpoint is at %d, want %d", got.Next, tc.next)
+			}
+		})
+	}
+}
+
+// signingWorld is one signing, end to end: the signer and canon
+// repositories as real git, the signer commit D and the caller
+// workflow's commit C each on main or on a branch deleted after the
+// push, the forge's REST answers for the run and its files, and a log
+// holding the certificate at index 5 of 12. It returns the policy, the
+// trusted root, D and C.
+//
+//nolint:gocritic // unnamedResult: the policy and trusted-root paths, then the two commits
+func signingWorld(t *testing.T, deleteSigner, deleteCaller, unreachable bool) (string, string, string, string) {
+	t.Helper()
+
+	commitOn := func(r *gittest.Repo, deleted bool, msg string) string {
+		if !deleted {
+			return r.Commit(msg)
+		}
+
+		r.Git("checkout", "-q", "-b", "pushed-then-deleted")
+		sha := r.Commit(msg)
+		r.Git("checkout", "-q", "main")
+		r.Git("branch", "-q", "-D", "pushed-then-deleted")
+
+		return sha
+	}
+
+	signer := gittest.New(t)
+	signer.Commit("feat: the signer")
+	d := commitOn(signer, deleteSigner, "feat: the signing workflow at D")
+
+	canon := gittest.New(t)
+	canon.Commit("feat: the canon")
+	c := commitOn(canon, deleteCaller, "feat: publish.yml at C")
+
+	repos := map[string]*gittest.Repo{"acme/signer": signer, "acme/.github": canon}
+	if unreachable {
+		delete(repos, "acme/signer")
+	}
+
+	swapGitRemotes(t, repos)
+
+	const w = "1111111111111111111111111111111111111111"
+
+	run := fmt.Sprintf(`{"path": ".github/workflows/release.yml", "head_sha": %q, "event": "push",
+	  "html_url": "https://github.com/acme/widget/actions/runs/7", "repository": {"full_name": "acme/widget"},
+	  "referenced_workflows": [
+	    {"path": "acme/.github/.github/workflows/publish.yml@%[2]s", "sha": %[2]q},
+	    {"path": "acme/signer/.github/workflows/sign.yml@%[3]s", "sha": %[3]q}]}`, w, c, d)
+	publish := "on: workflow_call\njobs:\n  sign:\n    uses: acme/signer/.github/workflows/sign.yml@" + d + "\n"
+	release := "on: push\njobs:\n  publish:\n    uses: acme/.github/.github/workflows/publish.yml@" + c + "\n"
+
+	leaves := signerFillers(12)
+	leaves[5] = syntheticSignerLeaf(t, "https://github.com/acme/signer/.github/workflows/sign.yml@"+d, d,
+		"https://github.com/acme/widget/actions/runs/7/attempts/1")
+
+	l := newSignerLog(t, leaves)
+
+	origHTTP, origClock := newLogHTTP, newLogClock
+	newLogHTTP = func() ctlog.Doer { return l.srv.Client() }
+	newLogClock = func() ctlog.Clock { return &signerClock{now: signerLogTime.Add(time.Minute)} }
+
+	t.Cleanup(func() { newLogHTTP, newLogClock = origHTTP, origClock })
+
+	swapForge(t, signingForge(t, run, publish, release))
+
+	policy := filepath.Join(t.TempDir(), "assert-policy.json")
+	if err := os.WriteFile(policy, []byte(fmt.Sprintf(`{"schema": 8,
+	  "issuer": "https://token.actions.githubusercontent.com",
+	  "population": {"repositories": [{"repo": ".github"}, {"repo": "signer"}, {"repo": "widget"}]},
+	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt", "umbrellaBundle": "u.jsonl",
+	    "manifestAsset": "m.json", "classes": {"a": {"bundles": ["b"]}}},
+	  "signerCertificates": {"log": %q, "signers": [
+	    {"workflow": "acme/signer/.github/workflows/sign.yml", "callers": ["acme/.github"]}]}}`,
+		l.srv.URL)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return policy, l.trustedRoot(t), d, c
 }

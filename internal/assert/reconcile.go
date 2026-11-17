@@ -19,6 +19,13 @@
 // run is in a callers repository — its own top-level workflow at the
 // run's head commit.
 //
+// "On the default branch" is decided from the repository's default
+// branch, as the forge names it, and the fetched history of every
+// branch at full depth (stele#384): a commit that history does not
+// hold is on no branch — a branch pushed, a certificate minted, the
+// branch deleted — and fails `signer-branch` or `caller-branch` as any
+// commit off the branch does.
+//
 // A run the forge answers 404 for is a finding on `run`: deleted
 // cannot be told from never existed. Any other read that cannot be
 // completed is not a finding — the chunk it sits in is not done.

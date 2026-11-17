@@ -298,8 +298,10 @@ func (a *signerArgs) run(
 // liveSignerForge is the reconciliation's forge: the run and the file
 // are the forge client's own REST reads, and whether a commit is on its
 // repository's default branch is the default branch, read from the
-// forge, asked of the fetched history (stele#384) — the one ancestry
-// reader, never a second one beside it.
+// forge, asked of the fetched history (stele#384) — every branch,
+// commits-only, at full depth — never a second ancestry reader beside
+// it. A commit that history does not hold is on no branch, and so not
+// on the default one: the deleted-branch forgery is a finding.
 type liveSignerForge struct {
 	*gh.Client
 
@@ -309,7 +311,7 @@ type liveSignerForge struct {
 // OnDefaultBranch implements assert.SignerForge. A repository the
 // forge answers 404 for is a read that could not complete — absent and
 // invisible to this credential are one answer — never a commit judged
-// off its branch. So is any answer the fetched history cannot give.
+// off its branch. So is a fetch or a git read that fails.
 func (f liveSignerForge) OnDefaultBranch(owner, repo, sha string) (bool, error) {
 	branch, found, err := f.DefaultBranch(owner, repo)
 	if err != nil {
@@ -320,7 +322,7 @@ func (f liveSignerForge) OnDefaultBranch(owner, repo, sha string) (bool, error) 
 		return false, fmt.Errorf("the forge answers 404 for %s/%s: absent, or not visible to this credential", owner, repo)
 	}
 
-	return f.git.IsAncestor(owner, repo, sha, "refs/heads/"+branch)
+	return f.git.OnBranch(owner, repo, sha, "refs/heads/"+branch)
 }
 
 // signerForgeOf is the live reconciliation forge over the run's forge

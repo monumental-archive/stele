@@ -1474,7 +1474,12 @@ when it does not:
 
 The candidates are the `callers` workflows the run called and — when
 the run is in a `callers` repository — its own top-level workflow at
-the run's head commit. Workflow files are read through the one
+the run's head commit. "On the default branch" is decided from the
+repository's default branch as the forge names it and the fetched
+history of every branch at full depth: a commit that history does not
+hold is on no branch — a branch pushed, a certificate minted, the
+branch deleted — and fails `signer-branch` or `caller-branch` like any
+commit off the branch. Workflow files are read through the one
 workflow reader, by the platform's grammar: a candidate that is
 absent or does not parse pins nothing, and a top-level workflow that
 is absent or does not parse cannot be shown not to call the signer,
