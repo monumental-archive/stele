@@ -31,6 +31,10 @@ func TestParsePin(t *testing.T) {
 			Repository: "ghcr.io/acme/ext", Tag: "1.2.3-pg18", Digest: pinDigest,
 		},
 		"localhost:5000/acme/ext:1@" + pinDigest: {Repository: "localhost:5000/acme/ext", Tag: "1", Digest: pinDigest},
+		// Docker's short form resolves as the build resolves it.
+		"postgres:14-bookworm@" + pinDigest: {
+			Repository: "index.docker.io/library/postgres", Tag: "14-bookworm", Digest: pinDigest,
+		},
 	} {
 		got, err := baseimage.ParsePin(ref)
 		if err != nil {
@@ -63,6 +67,23 @@ func TestParsePinRefusals(t *testing.T) {
 				" derived — pin as image:tag@sha256:… (Renovate rolls both together)",
 		},
 		{
+			// The grammar would default the tag to latest; the pin
+			// refuses rather than derive from a tag nobody wrote.
+			"a short name with no tag — never defaulted to latest",
+			"postgres@" + pinDigest,
+			"postgres@" + pinDigest + " carries a digest but no tag",
+		},
+		{
+			"a registry port is not a tag",
+			"localhost:5000/acme/db@" + pinDigest,
+			"carries a digest but no tag",
+		},
+		{
+			"an empty tag",
+			"ghcr.io/acme/db:@" + pinDigest,
+			"is not an image reference",
+		},
+		{
 			"a digest that is not one",
 			"ghcr.io/acme/db:latest@sha256:abc",
 			"ghcr.io/acme/db:latest@sha256:abc: the digest is not sha256:<64 lowercase hex>",
@@ -83,6 +104,29 @@ func TestParsePinRefusals(t *testing.T) {
 				t.Fatalf("ParsePin = %+v, %v; want the refusal %q", got, err, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseUpstreamPin holds the upstream reading's own words: the
+// same pin form, its refusals naming an upstream base and the source
+// its tag derives.
+func TestParseUpstreamPin(t *testing.T) {
+	t.Parallel()
+
+	got, err := baseimage.ParseUpstreamPin("docker.io/library/postgres:14-bookworm@" + pinDigest)
+	if err != nil || got.Repository != "index.docker.io/library/postgres" || got.Tag != "14-bookworm" {
+		t.Fatalf("ParseUpstreamPin = %+v, %v", got, err)
+	}
+
+	for ref, want := range map[string]string{
+		"postgres:14-bookworm": "postgres:14-bookworm is an upstream base with no digest — there is nothing to" +
+			" verify; pin as image:tag@sha256:…",
+		"postgres@" + pinDigest: "postgres@" + pinDigest + " carries a digest but no tag, so the source it must" +
+			" name cannot be derived — pin as image:tag@sha256:… (Renovate rolls both together)",
+	} {
+		if _, err := baseimage.ParseUpstreamPin(ref); err == nil || err.Error() != want {
+			t.Errorf("ParseUpstreamPin(%s) = %v, want %q", ref, err, want)
+		}
 	}
 }
 

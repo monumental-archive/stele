@@ -28,26 +28,48 @@ type Pin struct {
 	Digest     string
 }
 
-// ParsePin reads a reference pinned as image:tag@sha256:…, refusing
-// each half missing in the words the pin form is taught by.
+// ParsePin reads a first-party base's reference, pinned as
+// image:tag@sha256:…, refusing each half missing in the words the pin
+// form is taught by: the tag derives the ref that produced the bytes.
 func ParsePin(ref string) (Pin, error) {
+	return parsePin(ref, "a first-party base", "the ref that produced it")
+}
+
+// ParseUpstreamPin reads an official image's reference the same way:
+// its tag derives the source the image's provenance must name.
+func ParseUpstreamPin(ref string) (Pin, error) {
+	return parsePin(ref, "an upstream base", "the source it must name")
+}
+
+// parsePin is the one reading behind both. Docker's short forms
+// resolve as the build resolves them (postgres:14 is
+// index.docker.io/library/postgres:14), but the tag is never
+// defaulted: the reference grammar would supply `latest` for a missing
+// one, and a ref derived from a tag nobody wrote is a guess.
+func parsePin(ref, noun, derives string) (Pin, error) {
 	image, digest, ok := strings.Cut(ref, "@")
 	if !ok {
-		return Pin{}, fmt.Errorf("%s is a first-party base with no digest — there is nothing to verify; pin as"+
-			" image:tag@sha256:…", ref)
+		return Pin{}, fmt.Errorf("%s is %s with no digest — there is nothing to verify; pin as"+
+			" image:tag@sha256:…", ref, noun)
 	}
 
 	if !digestRE.MatchString(digest) {
 		return Pin{}, fmt.Errorf("%s: the digest is not sha256:<64 lowercase hex>; pin as image:tag@sha256:…", ref)
 	}
 
-	tag, err := name.NewTag(image, name.StrictValidation)
-	if err != nil {
-		if _, rerr := name.NewRepository(image, name.StrictValidation); rerr == nil {
-			return Pin{}, fmt.Errorf("%s carries a digest but no tag, so the ref that produced it cannot be"+
-				" derived — pin as image:tag@sha256:… (Renovate rolls both together)", ref)
+	// A tag lives in the last path segment; a colon before it is a
+	// registry's port.
+	if !strings.Contains(image[strings.LastIndex(image, "/")+1:], ":") {
+		if _, err := name.NewRepository(image); err == nil {
+			return Pin{}, fmt.Errorf("%s carries a digest but no tag, so %s cannot be derived — pin as"+
+				" image:tag@sha256:… (Renovate rolls both together)", ref, derives)
 		}
 
+		return Pin{}, fmt.Errorf("%s is not an image reference; pin as image:tag@sha256:…", ref)
+	}
+
+	tag, err := name.NewTag(image)
+	if err != nil {
 		return Pin{}, fmt.Errorf("%s is not an image reference; pin as image:tag@sha256:…", ref)
 	}
 

@@ -758,11 +758,22 @@ func TestStrangerScopedPolicy(t *testing.T) {
 func TestStorePolicyRefusals(t *testing.T) {
 	t.Parallel()
 
-	noIssuer := strings.Replace(storePolicyJSON,
-		`"issuer": "https://token.actions.githubusercontent.com",`, "", 1)
-	if _, err := assert.LoadPolicy(strings.NewReader(noIssuer)); err == nil ||
-		!strings.Contains(err.Error(), "issuer") {
-		t.Fatalf("error = %v, want the issuer refusal", err)
+	withoutIssuer := func(doc string) string {
+		return strings.Replace(doc, `"issuer": "https://token.actions.githubusercontent.com",`, "", 1)
+	}
+
+	for _, doc := range []string{storePolicyJSON, provenanceOnlyPolicyJSON} {
+		if _, err := assert.LoadPolicy(strings.NewReader(withoutIssuer(doc))); err == nil || err.Error() !=
+			"assert: policy: issuer is required when evidence.continuous or an evidence.baseImages scope is declared" {
+			t.Fatalf("error = %v, want the issuer refusal", err)
+		}
+	}
+
+	// Only an attestation has an issuer: a section of upstream entries
+	// alone judges unsigned provenance, and owes none.
+	upstreamOnly := withoutIssuer(storePolicy(`"baseImages": {"upstream": [` + pgEntry + `]}`))
+	if _, err := assert.LoadPolicy(strings.NewReader(upstreamOnly)); err != nil {
+		t.Fatalf("an upstream-only section without an issuer = %v, want it loaded", err)
 	}
 
 	badPattern := strings.Replace(storePolicyJSON, `sign\\.yml@([0-9a-f]{40})`, `sign(`, 1)
@@ -815,6 +826,13 @@ func TestBaseImageScopeRefusals(t *testing.T) {
 			name: "two scopes sharing a name",
 			doc:  storePolicy(baseImages(pinFileScopeJSON, pinFileScopeJSON)),
 			want: `evidence.baseImages.scopes names "pgrx-bases" twice — scope names are a set`,
+		},
+		{
+			name: "two scopes declaring one prefix",
+			doc: storePolicy(baseImages(provenanceScopeJSON,
+				setting(provenanceFields(), "name", `"org-bases-again"`))),
+			want: `evidence.baseImages.scopes org-bases and org-bases-again both declare registryPrefix` +
+				` "ghcr.io/acme/" — one reference, one judgment`,
 		},
 		{
 			name: "a scope with no mechanism",

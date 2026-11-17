@@ -866,6 +866,41 @@ func storeSnapshot(t *testing.T) (string, string) {
 	return snap, policy
 }
 
+// TestStoreHalvesDeclared: a scope or the continuous leg owes the walk
+// a root; a section of upstream entries alone owes none, because the
+// walk never reads them and they judge unsigned provenance.
+func TestStoreHalvesDeclared(t *testing.T) {
+	t.Parallel()
+
+	load := func(evidence string) *assert.Policy {
+		pol, err := assert.LoadPolicy(strings.NewReader(`{"schema": 9,
+		  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+		    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+		    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}` + evidence + `}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return pol
+	}
+
+	if storeHalvesDeclared(load("")) {
+		t.Fatal("a policy with no store half owes a root")
+	}
+
+	upstream := load(`, "baseImages": {"upstream": [{"image": "docker.io/library/postgres",
+	  "tagPattern": "^(?P<major>[0-9]+)-(?P<suite>[a-z]+)$",
+	  "source": "https://github.com/docker-library/postgres.git", "path": "${major}/${suite}"}]}`)
+	if storeHalvesDeclared(upstream) {
+		t.Fatal("a section of upstream entries alone owes a root")
+	}
+
+	upstream.Evidence.BaseImages.Scopes = []assert.BaseImageScope{{}}
+	if !storeHalvesDeclared(upstream) {
+		t.Fatal("a declared scope owes no root")
+	}
+}
+
 // TestAssertEvidenceStoreGuards pins the CLI contract for the store
 // halves: a policy declaring them always resolves trust material —
 // never a silent skip — and a declared pin file absent from the

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
 
@@ -16,19 +17,23 @@ import (
 	"github.com/monumental-archive/stele/internal/oci"
 )
 
-// Covers reports whether a pinned reference is of this entry's image.
-// Both sides are normalised through the reference grammar, so a
-// declared docker.io/library/postgres covers index.docker.io's
-// spelling of the same repository.
-func (u *UpstreamBase) Covers(pin baseimage.Pin) bool {
+// Covers reports whether a reference is of this entry's image, pinned
+// or not: a reference with no digest is still this image's, and is
+// refused under it rather than passed by as nobody's. Both sides are
+// read through the reference grammar, so a declared
+// docker.io/library/postgres covers postgres:14 and index.docker.io's
+// spelling alike.
+func (u *UpstreamBase) Covers(ref string) bool {
 	declared, err := name.NewRepository(*u.Image)
 	if err != nil {
 		return false
 	}
 
-	got, err := name.NewRepository(pin.Repository)
+	image, _, _ := strings.Cut(ref, "@")
 
-	return err == nil && got.Name() == declared.Name()
+	got, err := name.ParseReference(image)
+
+	return err == nil && got.Context().Name() == declared.Name()
 }
 
 // CheckBinds refuses a caller binding naming a group the entry's tag
@@ -83,8 +88,15 @@ func (u *UpstreamBase) Expected(pin baseimage.Pin, binds map[string]string) (str
 // upstream's, zero when it was not verified; the error is a read the
 // run could not make.
 func (u *UpstreamBase) JudgeUpstream(
-	pin baseimage.Pin, binds map[string]string, reader oci.StatementReader, diverge func(string),
+	ref string, binds map[string]string, reader oci.StatementReader, diverge func(string),
 ) (baseimage.UpstreamFacts, error) {
+	pin, err := baseimage.ParseUpstreamPin(ref)
+	if err != nil {
+		diverge(err.Error())
+
+		return baseimage.UpstreamFacts{}, nil
+	}
+
 	directory, err := u.Expected(pin, binds)
 	if err != nil {
 		diverge(err.Error())

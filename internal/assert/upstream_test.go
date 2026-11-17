@@ -159,12 +159,28 @@ func TestUpstreamJudgment(t *testing.T) {
 
 	entry := &upstreamPolicy(t, `"upstream": [`+pgEntry+`]`).Evidence.BaseImages.Upstream[0]
 
-	if !entry.Covers(pgPin(t, "index.docker.io/library/postgres:14-bookworm@"+pgPinDigest)) {
-		t.Fatal("the entry does not cover its own image under the registry's canonical spelling")
+	// The entry covers its image however the build spells it, pinned
+	// or not: an unpinned reference is still this image's, and is
+	// refused under it rather than passed by as nobody's.
+	for _, ref := range []string{
+		"index.docker.io/library/postgres:14-bookworm@" + pgPinDigest,
+		"postgres:14-bookworm@" + pgPinDigest,
+		"postgres:14-bookworm",
+		"postgres",
+	} {
+		if !entry.Covers(ref) {
+			t.Fatalf("the entry does not cover %s", ref)
+		}
 	}
 
-	if entry.Covers(pgPin(t, "docker.io/library/mysql:8-bookworm@"+pgPinDigest)) {
-		t.Fatal("the entry covers another image")
+	for _, ref := range []string{
+		"docker.io/library/mysql:8-bookworm@" + pgPinDigest,
+		"ghcr.io/library/postgres:14-bookworm@" + pgPinDigest,
+		"docker.io/Library/postgres:14",
+	} {
+		if entry.Covers(ref) {
+			t.Fatalf("the entry covers %s", ref)
+		}
 	}
 
 	tests := []struct {
@@ -186,6 +202,18 @@ func TestUpstreamJudgment(t *testing.T) {
 			want:  pgPinRef + `: the tag's major is "14", the caller bound "15"`,
 		},
 		{
+			name: "no digest — nothing to verify", ref: "postgres:14-bookworm",
+			want: "postgres:14-bookworm is an upstream base with no digest — there is nothing to verify",
+		},
+		{
+			name: "a digest but no tag — nothing to derive the source from", ref: "postgres@" + pgPinDigest,
+			want: "carries a digest but no tag, so the source it must name cannot be derived",
+		},
+		{
+			name: "Docker's short form, verified", ref: "postgres:14-bookworm@" + pgPinDigest,
+			reader: statements{platforms: pgPlatforms(pgSourceURI)},
+		},
+		{
 			name: "a tag the pattern does not read", ref: "docker.io/library/postgres:latest@" + pgPinDigest,
 			want: "tag 'latest' does not match ^(?P<major>[0-9]+)-(?P<suite>[a-z]+)$ — the source it must name" +
 				" cannot be derived",
@@ -203,7 +231,7 @@ func TestUpstreamJudgment(t *testing.T) {
 
 			var findings []string
 
-			facts, err := entry.JudgeUpstream(pgPin(t, tt.ref), tt.binds, tt.reader,
+			facts, err := entry.JudgeUpstream(tt.ref, tt.binds, tt.reader,
 				func(d string) { findings = append(findings, d) })
 			if err != nil {
 				t.Fatalf("JudgeUpstream = %v", err)
@@ -221,7 +249,7 @@ func TestUpstreamJudgment(t *testing.T) {
 
 	// The registry not answering is a read the run could not make,
 	// never a finding about the image.
-	_, err := entry.JudgeUpstream(pgPin(t, pgPinRef), nil, statements{err: errors.New("connection refused")},
+	_, err := entry.JudgeUpstream(pgPinRef, nil, statements{err: errors.New("connection refused")},
 		func(string) { t.Fatal("a failed read was recorded as a finding") })
 	if err == nil || !strings.Contains(err.Error(), "verify: reading "+pgPinRef+"'s provenance: connection refused") {
 		t.Fatalf("a failed read = %v", err)
@@ -265,7 +293,34 @@ func TestUpstreamHandBuilt(t *testing.T) {
 	}
 
 	entry.Image = &image
-	if entry.Covers(pgPin(t, pgPinRef)) {
+	if entry.Covers(pgPinRef) {
 		t.Fatal("an entry whose image is no reference covered a pin")
+	}
+}
+
+// TestBaseClaimants holds the one-claimant rule the build-time gate
+// dispatches on: a reference under a scope's prefix is that scope's,
+// one of an upstream entry's image is that entry's, and anything else
+// is nobody's.
+func TestBaseClaimants(t *testing.T) {
+	t.Parallel()
+
+	b := upstreamPolicy(t, `"scopes": [`+pinFileScopeJSON+`, `+provenanceScopeJSON+`], "upstream": [`+
+		pgEntry+`]`).Evidence.BaseImages
+
+	if s := b.Claimant("ghcr.io/acme/db:latest@" + pgPinDigest); s == nil || *s.Name != "org-bases" {
+		t.Fatalf("Claimant(first-party) = %+v, want org-bases", s)
+	}
+
+	if u := b.UpstreamFor("postgres:14-bookworm@" + pgPinDigest); u == nil || *u.Image != "docker.io/library/postgres" {
+		t.Fatalf("UpstreamFor(postgres) = %+v", u)
+	}
+
+	// A pin-file scope declares no prefix and claims nothing here: its
+	// population is its pin file, which only the corpus walk reads.
+	for _, ref := range []string{"docker.io/library/debian:trixie@" + pgPinDigest, "ghcr.io/other/db:1.0.0"} {
+		if b.Claimant(ref) != nil || b.UpstreamFor(ref) != nil {
+			t.Fatalf("%s has a claimant", ref)
+		}
 	}
 }

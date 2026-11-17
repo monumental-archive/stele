@@ -854,7 +854,7 @@ func (b *BaseImagesPolicy) validate() error {
 		return err
 	}
 
-	names := map[string]bool{}
+	names, prefixes := map[string]bool{}, map[string]string{}
 
 	for i := range b.Scopes {
 		s := &b.Scopes[i]
@@ -870,6 +870,17 @@ func (b *BaseImagesPolicy) validate() error {
 
 		if err := s.validate(); err != nil {
 			return err
+		}
+
+		// A prefix ends at the owner boundary (validateProvenance), so
+		// two prefixes overlap only by being equal.
+		if p := s.RegistryPrefix; p != nil {
+			if other, dup := prefixes[*p]; dup {
+				return fmt.Errorf("evidence.baseImages.scopes %s and %s both declare registryPrefix %q — one"+
+					" reference, one judgment", other, *s.Name, *p)
+			}
+
+			prefixes[*p] = *s.Name
 		}
 	}
 
@@ -1291,8 +1302,11 @@ func (p *Policy) validate() error {
 		return err
 	}
 
-	if (e.Continuous != nil || e.BaseImages != nil) && (p.Issuer == nil || *p.Issuer == "") {
-		return errors.New("issuer is required when evidence.continuous or evidence.baseImages is declared")
+	// Only an attestation has an issuer: an upstream entry judges
+	// unsigned provenance, so a section declaring only those owes none.
+	if (e.Continuous != nil || e.BaseImages != nil && len(e.BaseImages.Scopes) > 0) &&
+		(p.Issuer == nil || *p.Issuer == "") {
+		return errors.New("issuer is required when evidence.continuous or an evidence.baseImages scope is declared")
 	}
 
 	if e.Continuous != nil {

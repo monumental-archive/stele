@@ -118,3 +118,30 @@ func (s *BaseImageScope) RefRules() ([]baseimage.RefRule, error) {
 func (s *BaseImageScope) Covers(ref string) bool {
 	return s.RegistryPrefix != nil && strings.HasPrefix(ref, *s.RegistryPrefix)
 }
+
+// Claimant is the first-party scope whose prefix covers a reference,
+// nil when none does. Load refuses two scopes declaring one prefix, so
+// at most one claims any reference: one reference, one judgment.
+func (b *BaseImagesPolicy) Claimant(ref string) *BaseImageScope {
+	for i := range b.Scopes {
+		if s := &b.Scopes[i]; s.Covers(ref) {
+			return s
+		}
+	}
+
+	return nil
+}
+
+// UpstreamFor is the upstream entry naming a reference's image, nil
+// when none does. Load refuses one image declared twice, and an image
+// under a scope's prefix, so a reference has at most one claimant
+// across both lists.
+func (b *BaseImagesPolicy) UpstreamFor(ref string) *UpstreamBase {
+	for i := range b.Upstream {
+		if u := &b.Upstream[i]; u.Covers(ref) {
+			return u
+		}
+	}
+
+	return nil
+}
