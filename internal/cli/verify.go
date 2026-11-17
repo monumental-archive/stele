@@ -363,6 +363,20 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	// A --targets that was GIVEN and is empty is refused, never read as
+	// "every target" (.github#637, stele#223): omitting the flag is the
+	// claim that the rebuild covered the whole scope, and a matrix that
+	// rendered nothing into it would make that claim by accident.
+	if named(fs, "targets") && strings.TrimSpace(targets) == "" {
+		who := class
+		if who == "" {
+			who = "the rebuild"
+		}
+
+		return fail(who + " declares no rebuild target — an undeclared population judges every target the class" +
+			" published")
+	}
+
 	switch {
 	case repo == "" || !strings.Contains(repo, "/"):
 		return fail("--repo must be owner/repo")
@@ -431,6 +445,20 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		j, report.NoCanary(), report.NoJudgedSet(), pop.facts(len(built))...)
 
 	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// named reports whether a flag was given on the command line at all —
+// the one way to tell an empty value from an absent one.
+func named(fs *flag.FlagSet, name string) bool {
+	given := false
+
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+
+	return given
 }
 
 // declaredTargets splits the --targets declaration WITHOUT dropping
