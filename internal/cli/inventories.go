@@ -67,8 +67,8 @@ type dependencyGraph interface {
 	DependencyGraphSBOM(owner, repo string) ([]byte, error)
 }
 
-// inventoriesArgs is the mode's whole argument surface.
-type inventoriesArgs struct {
+// releaseInventoriesArgs is the mode's whole argument surface.
+type releaseInventoriesArgs struct {
 	policy          string
 	classes         string
 	evidenceClasses string
@@ -85,11 +85,11 @@ type inventoriesArgs struct {
 	plans           []string
 }
 
-// parseInventoriesArgs parses and validates the flags.
+// parseReleaseInventoriesArgs parses and validates the flags.
 //
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
-func parseInventoriesArgs(args []string, stderr io.Writer) (*inventoriesArgs, int) {
-	ia := &inventoriesArgs{}
+func parseReleaseInventoriesArgs(args []string, stderr io.Writer) (*releaseInventoriesArgs, int) {
+	ia := &releaseInventoriesArgs{}
 
 	flags := flag.NewFlagSet("stele derive inventories", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -148,7 +148,7 @@ func parseInventoriesArgs(args []string, stderr io.Writer) (*inventoriesArgs, in
 
 // inventoriesRun is one run's resolved facts.
 type inventoriesRun struct {
-	ia     *inventoriesArgs
+	ia     *releaseInventoriesArgs
 	pol    *assert.Policy
 	suffix string
 	base   string
@@ -157,7 +157,7 @@ type inventoriesRun struct {
 
 // runDeriveInventories derives the release's inventories and prints
 // the list of documents the release decision covers.
-func runDeriveInventories(ia *inventoriesArgs, doc io.Writer, out *latch) error {
+func runDeriveInventories(ia *releaseInventoriesArgs, doc io.Writer, out *latch) error {
 	pol, err := loadAssertPolicy(ia.policy)
 	if err != nil {
 		return fmt.Errorf("derive inventories: %w", err)
@@ -506,7 +506,7 @@ func (r *inventoriesRun) write(name string, document *sbom.Document) error {
 // baseName is the release view's base: the caller's, else the
 // repository's own name, with a leading dot stripped — a dotfile is
 // skipped by every glob that collects release assets.
-func baseName(ia *inventoriesArgs) string {
+func baseName(ia *releaseInventoriesArgs) string {
 	base := ia.name
 	if base == "" {
 		_, base, _ = strings.Cut(ia.repo, "/")

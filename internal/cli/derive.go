@@ -263,7 +263,7 @@ func deriveBuildMode(mode string, args []string, stdout, stderr io.Writer) (int,
 
 	// inventories derives a release's every inventory in one call.
 	if mode == deriveInventories {
-		ia, code := parseInventoriesArgs(args[1:], stderr)
+		ia, code := parseReleaseInventoriesArgs(args[1:], stderr)
 		if code != exitOK {
 			return code, true
 		}

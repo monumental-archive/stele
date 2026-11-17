@@ -13,6 +13,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -57,7 +58,12 @@ func (r capturedResolver) Metadata(_ string, sel cargo.Selection) ([]byte, error
 		r.t.Fatalf("no captured cargo metadata for selection %q", key)
 	}
 
-	return os.ReadFile(filepath.Join(r.dir, "cargo", file)) //nolint:gosec // the set's own fixture
+	raw, err := os.ReadFile(filepath.Join(r.dir, "cargo", file)) //nolint:gosec // the set's own fixture
+	if err != nil {
+		return nil, fmt.Errorf("captured metadata %s: %w", file, err)
+	}
+
+	return raw, nil
 }
 
 // volatile masks what a re-derivation cannot reproduce: the instant
