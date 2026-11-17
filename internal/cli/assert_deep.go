@@ -17,6 +17,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
 	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/verify"
 )
@@ -25,7 +26,9 @@ import (
 // policy's trust identities. Swappable in tests.
 //
 //nolint:gochecknoglobals // test seam, written only by test setup
-var newDeepVerifier = func(vp *policy.Policy, forge gh.Forge, bv verify.BundleVerifier) (*assert.FullDepth, error) {
+var newDeepVerifier = func(
+	vp *policy.Policy, forge gh.Forge, tags assert.TagResolver, bv verify.BundleVerifier,
+) (*assert.FullDepth, error) {
 	ev := &engineVerifier{
 		vp:    vp,
 		store: forgeStore{forge: forge},
@@ -40,7 +43,29 @@ var newDeepVerifier = func(vp *policy.Policy, forge gh.Forge, bv verify.BundleVe
 		verifierWorkflow = *vp.Trust.Verdict.VerifierWorkflow
 	}
 
-	return assert.NewFullDepth(ev, verifierWorkflow, *vp.Trust.Provenance.SignerWorkflow)
+	return assert.NewFullDepth(ev, tags, verifierWorkflow, *vp.Trust.Provenance.SignerWorkflow)
+}
+
+// openFullDepth builds the full-depth options with the session release
+// pins resolve through: a release tag becomes its commit through git,
+// by the same resolution the tag audit reads (stele#384) — each
+// repository's tags at depth one, a tag and the commit it names and
+// nothing behind them. The caller closes the session when the walk
+// ends.
+func openFullDepth(
+	verifyPolicyPath string, rootJSON []byte, forge gh.Forge, log func(string, ...any),
+) (*assert.FullDepth, *gitfetch.Session, error) {
+	pins := newGitSession(gitfetch.Want{Tags: true, Shallow: true}, log)
+	if err := pins.Check(); err != nil {
+		return nil, nil, err
+	}
+
+	fd, err := loadFullDepth(verifyPolicyPath, rootJSON, forge, pins)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return fd, pins, nil
 }
 
 // loadFullDepth reads the trust authority and builds the full-depth
@@ -48,7 +73,9 @@ var newDeepVerifier = func(vp *policy.Policy, forge gh.Forge, bv verify.BundleVe
 // The trusted-root document arrives already resolved: the caller
 // resolves once for the whole run, so the deep half and the store
 // halves cannot end up holding different trust material.
-func loadFullDepth(verifyPolicyPath string, rootJSON []byte, forge gh.Forge) (*assert.FullDepth, error) {
+func loadFullDepth(
+	verifyPolicyPath string, rootJSON []byte, forge gh.Forge, tags assert.TagResolver,
+) (*assert.FullDepth, error) {
 	vf, err := os.Open(verifyPolicyPath) //nolint:gosec // the policy path is operator-supplied by design
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the refusal names the path already
@@ -66,7 +93,7 @@ func loadFullDepth(verifyPolicyPath string, rootJSON []byte, forge gh.Forge) (*a
 		return nil, berr
 	}
 
-	return newDeepVerifier(vp, forge, bv)
+	return newDeepVerifier(vp, forge, tags, bv)
 }
 
 // storeHalvesDeclared reports whether this policy gives the walk a

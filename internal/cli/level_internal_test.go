@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gittest"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/pkgtime"
@@ -792,10 +793,11 @@ func (f *fileForge) FileAt(_, _, path, _ string) ([]byte, bool, error) {
 	return got, ok, nil
 }
 
-// TestLevelSourceReadsTheForgeNotAClone: the source track needs no
-// local checkout, so a forge that cannot serve history leaves the
-// track unevaluated rather than crashing or demanding a clone.
-func TestLevelSourceReadsTheForgeNotAClone(t *testing.T) {
+// TestLevelSourceWithoutItsHistoryIsUnevaluated: the source track
+// fetches the history it reads (stele#384), so a history it could not
+// fetch leaves the chain's requirements unevaluated — never a crash,
+// and never a demand for a checkout.
+func TestLevelSourceWithoutItsHistoryIsUnevaluated(t *testing.T) {
 	swapLevelSeams(t, &levelForge{}, nil)
 
 	var stdout, stderr bytes.Buffer
@@ -882,5 +884,37 @@ func TestLevelOrgNamesWhatItCouldNotLookAt(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), "acme/vault: not looked at") {
 		t.Errorf("the run does not say what it could not look at:\n%s", stderr.String())
+	}
+}
+
+// TestLevelSourceReadsTheHistoryItFetched (stele#384): the source
+// track fetches the measured branch and the ledger itself and reads
+// them — the revisions reach the report's ladder, the chain walk runs
+// over the fetched ledger (an unfounded one here: walked, none found),
+// and the report counts the fetch.
+func TestLevelSourceReadsTheHistoryItFetched(t *testing.T) {
+	swapLevelSeams(t, &levelForge{}, nil)
+
+	r := gittest.New(t)
+	r.Commit("feat: the first")
+	r.Commit("fix: the second")
+	swapGitRemotes(t, map[string]*gittest.Repo{"acme/widget": r})
+
+	var stdout, stderr bytes.Buffer
+
+	Run([]string{"level", "source", "--repo", "acme/widget", "--json"}, &stdout, &stderr)
+
+	if strings.Contains(stderr.String(), "history unreadable") {
+		t.Fatalf("the fetched history did not read:\n%s", stderr.String())
+	}
+
+	for _, want := range []string{"gitfetch: acme/widget fetched in "} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("the run did not say %q:\n%s", want, stderr.String())
+		}
+	}
+
+	if !strings.Contains(stdout.String(), `{"name":"gitFilterIgnored","value":"0"}`) {
+		t.Fatalf("the report does not count the fetch:\n%s", stdout.String())
 	}
 }

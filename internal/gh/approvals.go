@@ -18,9 +18,9 @@ import (
 )
 
 // ApprovalsReader is the review-history surface the source track's
-// two-party judgment reads through. Its own interface, like TagReader
-// and RulesReader, and for the same reason: a fake that scripts
-// approvals should not have to script releases.
+// two-party judgment reads through. Its own interface, like
+// RulesReader, and for the same reason: a fake that scripts approvals
+// should not have to script releases.
 type ApprovalsReader interface {
 	// Approvals reports how many distinct trusted persons agreed to
 	// the change that produced rev. found is false when the forge

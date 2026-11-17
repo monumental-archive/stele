@@ -68,8 +68,8 @@ func swapForge(t *testing.T, f gh.Forge) {
 	t.Cleanup(func() { newForge = orig })
 }
 
-// TestAssertCaptureThrough pins the capture mode on all three walking
-// targets: the walk answers AND leaves a snapshot behind. A capture
+// TestAssertCaptureThrough pins the capture mode on the walking targets
+// that read the forge: the walk answers AND leaves a snapshot behind. A capture
 // that recorded nothing would still exit 0, so the directory is the
 // assertion.
 func TestAssertCaptureThrough(t *testing.T) {
@@ -112,31 +112,6 @@ func TestAssertCaptureThrough(t *testing.T) {
 
 		assertRecorded(t, into)
 	})
-
-	t.Run("tags", func(t *testing.T) {
-		snap, policy := tagsSnapshot(t)
-		swapForge(t, gh.Snapshot{Dir: snap})
-		swapTagVerifier(t, scriptedTagVerifier{})
-
-		root := filepath.Join(t.TempDir(), "root.json")
-		if err := os.WriteFile(root, []byte(`{}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-
-		into := filepath.Join(t.TempDir(), "capture")
-
-		var stdout, stderr bytes.Buffer
-
-		code := Run([]string{
-			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-			"--trusted-root", root, "--capture", into,
-		}, &stdout, &stderr)
-		if code != exitOK {
-			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
-		}
-
-		assertRecorded(t, into)
-	})
 }
 
 // assertRecorded fails unless the capture directory holds something.
@@ -153,33 +128,6 @@ func assertRecorded(t *testing.T, dir string) {
 	}
 }
 
-// TestAssertTagsForgeCannotReadTags: the tag audit needs a forge that
-// reads refs, and one that cannot must refuse by name rather than
-// walk an empty tag list to PASS.
-func TestAssertTagsForgeCannotReadTags(t *testing.T) {
-	_, policy := tagsSnapshot(t)
-	swapForge(t, &storeForge{})
-	swapTagVerifier(t, scriptedTagVerifier{})
-
-	root := filepath.Join(t.TempDir(), "root.json")
-	if err := os.WriteFile(root, []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var stdout, stderr bytes.Buffer
-
-	code := Run([]string{
-		"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--trusted-root", root,
-	}, &stdout, &stderr)
-	if code != exitUsage {
-		t.Fatalf("Run = %d, want %d", code, exitUsage)
-	}
-
-	if !strings.Contains(stderr.String(), "cannot read tags") {
-		t.Errorf("stderr = %q, want the tag-reader refusal", stderr.String())
-	}
-}
-
 // TestAssertUsageMatrix walks the flag guards of the three walking
 // targets in one table: each row is one broken flag combination and
 // the refusal it must name.
@@ -193,7 +141,7 @@ func TestAssertUsageMatrix(t *testing.T) {
 
 	_, evidencePolicy := evidenceSnapshot(t)
 	_, blastPolicy, vex := blastSnapshot(t)
-	_, tagsPolicy := tagsSnapshot(t)
+	tagsPol := tagsPolicy(t)
 
 	cases := []struct {
 		name string
@@ -290,14 +238,14 @@ func TestAssertUsageMatrix(t *testing.T) {
 		{
 			"tags: an unreadable trusted root",
 			[]string{
-				"assert", "tags", "--repo", "acme/widget", "--policy", tagsPolicy,
+				"assert", "tags", "--repo", "acme/widget", "--policy", tagsPol,
 				"--trusted-root", filepath.Join(dir, "absent-root.json"),
 			},
 			"absent-root.json",
 		},
 		{
 			"tags: signing epochs resolve a root rather than skipping",
-			[]string{"assert", "tags", "--repo", "acme/widget", "--policy", tagsPolicy},
+			[]string{"assert", "tags", "--repo", "acme/widget", "--policy", tagsPol},
 			"tuf ",
 		},
 	}
@@ -759,7 +707,7 @@ func TestLoadFullDepthRefusesABrokenRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadFullDepth(vp, []byte("not a trusted root"), &storeForge{}); err == nil {
+	if _, err := loadFullDepth(vp, []byte("not a trusted root"), &storeForge{}, noPins{}); err == nil {
 		t.Fatal("loadFullDepth accepted a root that is not one")
 	}
 }

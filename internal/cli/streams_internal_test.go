@@ -210,8 +210,8 @@ func TestAssertStreamGuards(t *testing.T) {
 		})
 	})
 
-	t.Run("tags over a snapshot", func(t *testing.T) {
-		snap, policy := tagsSnapshot(t)
+	t.Run("tags over a fetched history", func(t *testing.T) {
+		policy := tagsWorld(t)
 		swapTagVerifier(t, scriptedTagVerifier{})
 		root := filepath.Join(t.TempDir(), "root.json")
 
@@ -220,8 +220,7 @@ func TestAssertStreamGuards(t *testing.T) {
 		}
 
 		sweepWriteFailures(t, []string{
-			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-			"--trusted-root", root, "--snapshot", snap,
+			"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--trusted-root", root,
 		})
 	})
 
@@ -230,7 +229,9 @@ func TestAssertStreamGuards(t *testing.T) {
 	})
 
 	t.Run("tags walk torn", func(t *testing.T) {
-		_, policy := tagsSnapshot(t)
+		// A repository whose history is not there to fetch.
+		swapGitRemotes(t, nil)
+		policy := tagsPolicy(t)
 		swapTagVerifier(t, scriptedTagVerifier{})
 		root := filepath.Join(t.TempDir(), "root.json")
 
@@ -239,8 +240,7 @@ func TestAssertStreamGuards(t *testing.T) {
 		}
 
 		sweepWriteFailures(t, []string{
-			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-			"--trusted-root", root, "--snapshot", t.TempDir(),
+			"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--trusted-root", root,
 		})
 	})
 

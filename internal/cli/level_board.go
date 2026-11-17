@@ -33,6 +33,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/board"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
 	"github.com/monumental-archive/stele/internal/level"
 	"github.com/monumental-archive/stele/internal/population"
 )
@@ -71,6 +72,18 @@ type plan struct {
 	set *population.Set
 }
 
+// hasSource reports whether the run measures any source cell — the
+// one track that reads git.
+func (p plan) hasSource() bool {
+	for _, c := range p.cells {
+		if c.Track == level.TrackSource {
+			return true
+		}
+	}
+
+	return false
+}
+
 // levelBoard measures every cell the population holds and publishes
 // it under --out-dir.
 func levelBoard(args []string, stdout, stderr io.Writer) int {
@@ -87,11 +100,27 @@ func levelBoard(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
+	// One session for the run, reading the source cells' history: each
+	// repository fetched once, and the whole of it removed at the end
+	// (stele#384). A run with a source cell and no usable git refuses
+	// before it measures anything.
+	git := newGitSession(gitfetch.Want{Branches: []string{opts.ref}, NotesRef: opts.notesRef}, out.logf)
+	if p.hasSource() {
+		if err := git.Check(); err != nil {
+			if _, werr := fmt.Fprintf(stderr, "stele level: %v\n", err); werr != nil {
+				return exitIO
+			}
+
+			return exitUsage
+		}
+	}
+	defer closeSession(git, stderr)
+
 	b := board.Board{Dir: opts.outDir}
 	kept := 0
 
 	for _, c := range p.cells {
-		outcome, err := b.Publish(c, opts.measure(c, p, forge, out))
+		outcome, err := b.Publish(c, opts.measure(c, p, forge, git, out))
 		if err != nil {
 			if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
 				return exitIO
@@ -213,7 +242,9 @@ func (opts *boardArgs) empty(out *latch) int {
 
 // measure judges one cell through the single-cell path, so the board
 // and `stele level <track> --repo …` cannot answer differently.
-func (opts *boardArgs) measure(c board.Cell, p plan, forge gh.Forge, out *latch) *level.Assessment {
+func (opts *boardArgs) measure(
+	c board.Cell, p plan, forge gh.Forge, git *gitfetch.Session, out *latch,
+) *level.Assessment {
 	la := &levelArgs{
 		track: c.Track.Key(), owner: opts.owner, name: c.Repo,
 		repo:     opts.owner + "/" + c.Repo,
@@ -221,6 +252,7 @@ func (opts *boardArgs) measure(c board.Cell, p plan, forge gh.Forge, out *latch)
 		notesRef: opts.notesRef,
 		root:     opts.root,
 		surfaces: p.set.Surfaces(c.Repo),
+		git:      git,
 	}
 
 	return level.Assess(c.Track, la.gather(forge, out))

@@ -166,13 +166,14 @@ usage:
     tags         every release tag: minted by the declared role,
                  signed from the repository's epoch on (verified
                  natively, no gitsign binary), target carries a
-                 source chain link (--org|--repo --policy
-                 [--debt --snapshot|--capture])
+                 source chain link — over the history it fetches with
+                 git (--org|--repo --policy [--debt])
     chains       every repository in the population: a founded source
                  chain verifies end to end over every protected
                  branch, or the repository is a declared exception —
-                 cloneless, over the forge's own API (--org|--repo
-                 --policy --verify-policy [--debt --snapshot|--capture])
+                 over the history it fetches with git, no checkout and
+                 no source (--org|--repo --policy --verify-policy
+                 [--debt])
     plans        pre-publish: the build legs' inventory plans against
                  the planned obligations the post-publish walk reads,
                  and the judged plan set emitted for the derivation

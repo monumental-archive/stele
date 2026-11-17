@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
-	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/report"
 )
@@ -66,8 +66,8 @@ const (
 // target: the minting tagger, a payload and a signature. One
 // definition, so a fixture that differs from another differs in the
 // fact under test and nowhere else.
-func signedTagObject(target string) *gh.TagObject {
-	return &gh.TagObject{
+func signedTagObject(target string) *gitrepo.TagObject {
+	return &gitrepo.TagObject{
 		Tagger: "release-mint[bot]", Target: target,
 		Payload:   []byte("object x\ntagger release-mint[bot] <m@e> 1755000000 +0000\n"),
 		Signature: []byte("-----BEGIN SIGNED MESSAGE-----\nx\n-----END SIGNED MESSAGE-----\n"),
@@ -76,12 +76,12 @@ func signedTagObject(target string) *gh.TagObject {
 
 const link = `{"version": 2, "provenance": {"bundle": {}}}`
 
-// fakeTags scripts the TagReader.
+// fakeTags scripts the GitReader.
 type fakeTags struct {
-	refs     map[string][]gh.TagRef
-	objects  map[string]*gh.TagObject
-	notes    map[string][]gh.ChainNote
-	meta     map[string]*gh.CommitMeta
+	refs     map[string][]gitrepo.TagRef
+	objects  map[string]*gitrepo.TagObject
+	notes    map[string][]gitrepo.ChainNote
+	meta     map[string]*gitrepo.CommitMeta
 	ancestry map[string]bool // "base...head"
 	refsErr  error
 	// torn fails one named read — the tag audit's own version of a
@@ -89,7 +89,7 @@ type fakeTags struct {
 	torn map[string]error
 }
 
-func (f *fakeTags) TagRefs(_, repo string) ([]gh.TagRef, error) {
+func (f *fakeTags) TagRefs(_, repo string) ([]gitrepo.TagRef, error) {
 	if f.refsErr != nil {
 		return nil, f.refsErr
 	}
@@ -97,20 +97,26 @@ func (f *fakeTags) TagRefs(_, repo string) ([]gh.TagRef, error) {
 	return f.refs[repo], nil
 }
 
-func (f *fakeTags) TagObject(_, _, sha string) (*gh.TagObject, error) {
-	obj, ok := f.objects[sha]
-	if !ok {
-		return nil, errors.New("no such tag object scripted")
+// ResolveTag scripts the one resolution: a lightweight tag names its
+// target, an annotated one resolves through its scripted object.
+func (f *fakeTags) ResolveTag(_, _ string, ref gitrepo.TagRef) (string, *gitrepo.TagObject, error) {
+	if !ref.Annotated {
+		return ref.ObjectSHA, nil, nil
 	}
 
-	return obj, nil
+	obj, ok := f.objects[ref.ObjectSHA]
+	if !ok {
+		return "", nil, errors.New("no such tag object scripted")
+	}
+
+	return obj.Target, obj, nil
 }
 
-func (f *fakeTags) ChainNotes(_, repo, _ string) ([]gh.ChainNote, error) {
+func (f *fakeTags) ChainNotes(_, repo, _ string) ([]gitrepo.ChainNote, error) {
 	return f.notes[repo], f.tear("ChainNotes")
 }
 
-func (f *fakeTags) CommitMeta(_, _, rev string) (*gh.CommitMeta, error) {
+func (f *fakeTags) CommitMeta(_, _, rev string) (*gitrepo.CommitMeta, error) {
 	m, ok := f.meta[rev]
 	if !ok {
 		return nil, errors.New("no commit meta scripted for " + rev)
@@ -160,18 +166,18 @@ func (v *fakeTagVerifier) Verify(_, _ []byte, floor string) (assert.TagProof, er
 // tag on a linked revision.
 func conformantTags() *fakeTags {
 	return &fakeTags{
-		refs: map[string][]gh.TagRef{
+		refs: map[string][]gitrepo.TagRef{
 			"widget": {{Name: "v1.1.0", ObjectSHA: tagObjSHA, Annotated: true}},
 		},
-		objects: map[string]*gh.TagObject{tagObjSHA: signedTagObject(linkedRev)},
-		notes: map[string][]gh.ChainNote{
+		objects: map[string]*gitrepo.TagObject{tagObjSHA: signedTagObject(linkedRev)},
+		notes: map[string][]gitrepo.ChainNote{
 			"widget": {
 				{Rev: genesisRev, Note: []byte(link)},
 				{Rev: linkedRev, Note: []byte(link)},
 				{Rev: preGenesisRev, Note: []byte(`{"seed": true}`)},
 			},
 		},
-		meta: map[string]*gh.CommitMeta{
+		meta: map[string]*gitrepo.CommitMeta{
 			genesisRev: {Parents: []string{preGenesisRev}, CommitEpoch: 100},
 			linkedRev:  {Parents: []string{genesisRev}, CommitEpoch: 200},
 		},
@@ -217,17 +223,17 @@ const raisedFloorPolicyJSON = `{
 // signed, annotated and linked — the ONLY thing that differs across
 // them is what they owe.
 func spanningTags() *fakeTags {
-	refs := []gh.TagRef{}
-	objects := map[string]*gh.TagObject{}
+	refs := []gitrepo.TagRef{}
+	objects := map[string]*gitrepo.TagObject{}
 
 	for i, name := range []string{"v1.1.0", "v1.2.0", "v1.3.0", "v1.4.0"} {
 		sha := fmt.Sprintf("00000000000000000000000000000000000000d%d", i)
-		refs = append(refs, gh.TagRef{Name: name, ObjectSHA: sha, Annotated: true})
+		refs = append(refs, gitrepo.TagRef{Name: name, ObjectSHA: sha, Annotated: true})
 		objects[sha] = signedTagObject(linkedRev)
 	}
 
 	f := conformantTags()
-	f.refs = map[string][]gh.TagRef{"widget": refs}
+	f.refs = map[string][]gitrepo.TagRef{"widget": refs}
 	f.objects = objects
 
 	return f
@@ -249,7 +255,7 @@ func preGenesisTags() *fakeTags {
 // and on a target the genesis does not reach (unjudgeable).
 func mixedTags() *fakeTags {
 	f := preGenesisTags()
-	f.refs["widget"] = []gh.TagRef{
+	f.refs["widget"] = []gitrepo.TagRef{
 		{Name: "v1.0.0", ObjectSHA: tagObjSHA2, Annotated: true},
 		{Name: "v1.1.0", ObjectSHA: tagObjSHA3, Annotated: true},
 		{Name: "v1.2.0", ObjectSHA: tagObjSHA, Annotated: true},
@@ -264,7 +270,7 @@ func mixedTags() *fakeTags {
 // note, so no founded genesis and nothing the chain can witness.
 func unfoundedTags() *fakeTags {
 	f := conformantTags()
-	f.notes["widget"] = []gh.ChainNote{{Rev: preGenesisRev, Note: []byte(`{"seed": true}`)}}
+	f.notes["widget"] = []gitrepo.ChainNote{{Rev: preGenesisRev, Note: []byte(`{"seed": true}`)}}
 
 	return f
 }
@@ -620,7 +626,7 @@ func TestTagsDefects(t *testing.T) {
 		{
 			"a lightweight tag reddens",
 			func(f *fakeTags, _ *fakeTagVerifier) {
-				f.refs["widget"] = []gh.TagRef{{Name: "v1.1.0", ObjectSHA: linkedRev, Annotated: false}}
+				f.refs["widget"] = []gitrepo.TagRef{{Name: "v1.1.0", ObjectSHA: linkedRev, Annotated: false}}
 			},
 			"lightweight",
 		},
@@ -719,7 +725,7 @@ func TestTagsPopulationBounds(t *testing.T) {
 		t.Parallel()
 
 		f := conformantTags()
-		f.refs["widget"] = []gh.TagRef{{Name: "v1.0.0", ObjectSHA: tagObjSHA, Annotated: true}}
+		f.refs["widget"] = []gitrepo.TagRef{{Name: "v1.0.0", ObjectSHA: tagObjSHA, Annotated: true}}
 		f.objects[tagObjSHA].Signature = nil
 
 		tv := &fakeTagVerifier{}
@@ -751,10 +757,10 @@ func TestTagsBounds(t *testing.T) {
 		t.Parallel()
 
 		f := conformantTags()
-		f.refs["gadget"] = []gh.TagRef{{Name: "v9.9.9", ObjectSHA: tagObjSHA2, Annotated: true}}
-		f.objects[tagObjSHA2] = &gh.TagObject{Tagger: "release-mint[bot]", Target: linkedRev}
+		f.refs["gadget"] = []gitrepo.TagRef{{Name: "v9.9.9", ObjectSHA: tagObjSHA2, Annotated: true}}
+		f.objects[tagObjSHA2] = &gitrepo.TagObject{Tagger: "release-mint[bot]", Target: linkedRev}
 		f.notes["gadget"] = f.notes["widget"]
-		f.meta[genesisRev] = &gh.CommitMeta{Parents: []string{preGenesisRev}, CommitEpoch: 100}
+		f.meta[genesisRev] = &gitrepo.CommitMeta{Parents: []string{preGenesisRev}, CommitEpoch: 100}
 
 		tv := &fakeTagVerifier{}
 
@@ -859,7 +865,7 @@ func TestTagsWalkEdges(t *testing.T) {
 		t.Parallel()
 
 		f := conformantTags()
-		f.refs["widget"] = []gh.TagRef{{Name: "v1.weird", ObjectSHA: tagObjSHA, Annotated: true}}
+		f.refs["widget"] = []gitrepo.TagRef{{Name: "v1.weird", ObjectSHA: tagObjSHA, Annotated: true}}
 		f.objects[tagObjSHA].Signature = nil
 
 		rep := runTags(t, f, &fakeTagVerifier{})
@@ -872,7 +878,7 @@ func TestTagsWalkEdges(t *testing.T) {
 		t.Parallel()
 
 		f := conformantTags()
-		f.refs["widget"] = []gh.TagRef{{Name: "nightly", ObjectSHA: tagObjSHA, Annotated: false}}
+		f.refs["widget"] = []gitrepo.TagRef{{Name: "nightly", ObjectSHA: tagObjSHA, Annotated: false}}
 		f.refs["gadget"] = nil
 
 		rep := runTags(t, f, &fakeTagVerifier{})
@@ -969,11 +975,11 @@ func TestTagsDebtStalenessFollowsWhatWasChecked(t *testing.T) {
 	}
 
 	f := conformantTags()
-	f.refs["widget"] = []gh.TagRef{
+	f.refs["widget"] = []gitrepo.TagRef{
 		{Name: "v1.1.0", ObjectSHA: tagObjSHA, Annotated: true},
 		{Name: "v1.0.0", ObjectSHA: tagObjSHA2, Annotated: true},
 	}
-	f.objects[tagObjSHA2] = &gh.TagObject{Tagger: "release-mint[bot]", Target: linkedRev}
+	f.objects[tagObjSHA2] = &gitrepo.TagObject{Tagger: "release-mint[bot]", Target: linkedRev}
 
 	rep, err := assert.Tags(loadTagsPolicy(t), repoPop(t, "acme/widget"),
 		f, &fakeTagVerifier{}, report.NewJournal(debt...), func(string, ...any) {})

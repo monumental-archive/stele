@@ -100,7 +100,7 @@ func (s storeWalk) run(t *testing.T, j *report.Journal) (*report.Report, error) 
 			verifier, signer = "", "{owner}/{repo}/.github/workflows/release.yml"
 		}
 
-		fd, err := assert.NewFullDepth(s.deep, verifier, signer)
+		fd, err := assert.NewFullDepth(s.deep, s.forge, verifier, signer)
 		if err != nil {
 			t.Fatal(err)
 		}

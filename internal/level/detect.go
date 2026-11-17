@@ -19,6 +19,7 @@ package level
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
@@ -231,7 +232,46 @@ type Evidence struct {
 	// one would take a stranger's host for the producer's.
 	UnrecognisedSources []string
 
+	// HistoryFetch is what fetching the source history saw, nil when
+	// the run fetched none (stele#384). It reaches no rung: a remote
+	// that ignored the commits-only filter served the same history,
+	// only more of it, so the report counts it beside the verdict and
+	// nothing judges it.
+	HistoryFetch *HistoryFetch
+
 	Now time.Time
+}
+
+// HistoryFetch is one history fetch, as the report counts it.
+type HistoryFetch struct {
+	// FilterIgnored reports that the remote ignored the commits-only
+	// filter: the history is correct, the download was larger.
+	FilterIgnored bool
+}
+
+// fetchFacts counts, beside the verdict, the fetches that served the
+// measured histories and how many remotes ignored the filter — no
+// fact at all when nothing was fetched.
+func fetchFacts(members ...*Evidence) []report.Fact {
+	fetched, ignored := false, 0
+
+	for _, ev := range members {
+		if ev.HistoryFetch == nil {
+			continue
+		}
+
+		fetched = true
+
+		if ev.HistoryFetch.FilterIgnored {
+			ignored++
+		}
+	}
+
+	if !fetched {
+		return nil
+	}
+
+	return []report.Fact{{Name: "gitFilterIgnored", Value: strconv.Itoa(ignored)}}
 }
 
 // LiveRules is what the forge's rules API says is enforced on the
@@ -374,8 +414,9 @@ func Assess(t Track, ev *Evidence) *Assessment {
 		Determined:       1,
 		PopulationDetail: "repository with a determinable ladder",
 		Now:              ev.Now,
-		ExtraFacts: append(reasons,
+		ExtraFacts: append(append(reasons,
 			report.Fact{Name: "requirementCoverage", Value: fmt.Sprintf("%d/%d", detected, total)}),
+			fetchFacts(ev)...),
 	}
 
 	if blind && scalar == 0 {
@@ -576,7 +617,7 @@ func AssessPopulation(t Track, members []*Evidence, unlooked []string, now time.
 		Determined:       determined,
 		PopulationDetail: populationDetail,
 		Findings:         findings,
-		ExtraFacts:       append(facts, unexercisedFacts(unlooked)...),
+		ExtraFacts:       append(append(facts, unexercisedFacts(unlooked)...), fetchFacts(members...)...),
 		Now:              now,
 	})
 }

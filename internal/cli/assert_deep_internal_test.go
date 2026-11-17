@@ -7,6 +7,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -51,13 +52,21 @@ func TestForgeStore(t *testing.T) {
 	})
 }
 
+// noPins is the tag resolver of a test whose walk resolves no pin:
+// reaching it is a test defect, said as one.
+type noPins struct{}
+
+func (noPins) TagCommit(_, _, _ string) (string, error) {
+	return "", errors.New("this test resolves no release pin")
+}
+
 func TestLoadFullDepth(t *testing.T) {
 	t.Parallel()
 
 	t.Run("an unreadable verify policy refuses", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}); err == nil {
+		if _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}, noPins{}); err == nil {
 			t.Fatal("loadFullDepth accepted a missing verify policy")
 		}
 	})
@@ -70,7 +79,7 @@ func TestLoadFullDepth(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if _, err := loadFullDepth(p, nil, &storeForge{}); err == nil {
+		if _, err := loadFullDepth(p, nil, &storeForge{}, noPins{}); err == nil {
 			t.Fatal("loadFullDepth accepted a policy with no trust section")
 		}
 	})
@@ -92,9 +101,13 @@ func TestLoadFullDepthHappyPath(t *testing.T) {
 
 	t.Cleanup(func() { newBundleVerifier = orig })
 
-	full, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{})
+	full, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{}, noPins{})
 	if err != nil {
 		t.Fatalf("loadFullDepth = %v", err)
+	}
+
+	if _, ok := full.Tags.(noPins); !ok {
+		t.Fatalf("Tags = %T, want the resolver the run handed in — pins are read through git", full.Tags)
 	}
 
 	if full.MachineryOwner != "acme" || full.MachineryRepo != "canon" {
@@ -157,8 +170,11 @@ func deepSnapshot(t *testing.T, rewrite func(files map[string]string)) []string 
 
 	origBV, origDeep := newBundleVerifier, newDeepVerifier
 	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{}, nil }
-	newDeepVerifier = func(vp *policy.Policy, _ gh.Forge, _ verify.BundleVerifier) (*assert.FullDepth, error) {
-		return assert.NewFullDepth(passDeep{}, *vp.Trust.Verdict.VerifierWorkflow, *vp.Trust.Provenance.SignerWorkflow)
+	newDeepVerifier = func(
+		vp *policy.Policy, _ gh.Forge, tags assert.TagResolver, _ verify.BundleVerifier,
+	) (*assert.FullDepth, error) {
+		return assert.NewFullDepth(passDeep{}, tags, *vp.Trust.Verdict.VerifierWorkflow,
+			*vp.Trust.Provenance.SignerWorkflow)
 	}
 
 	t.Cleanup(func() { newBundleVerifier, newDeepVerifier = origBV, origDeep })

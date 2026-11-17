@@ -45,7 +45,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
-	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
@@ -103,7 +103,7 @@ type linkNote struct {
 // runFacts are the caller's facts about the run itself — the trust
 // material it held, which the walk cannot know.
 func Tags(
-	pol *Policy, pop *population.Set, tags gh.TagReader, tv TagVerifier, j *report.Journal, log Logf,
+	pol *Policy, pop *population.Set, git GitReader, tv TagVerifier, j *report.Journal, log Logf,
 	runFacts ...report.Fact,
 ) (*report.Report, error) {
 	tp := pol.Tags
@@ -117,7 +117,7 @@ func Tags(
 	}
 
 	w := &tagsWalk{
-		pol: tp, org: pop.Owner(), tags: tags, tv: tv, j: j, log: log,
+		pol: tp, org: pop.Owner(), git: git, tv: tv, j: j, log: log,
 		tagRE: regexp.MustCompile(*tp.TagPattern), floors: map[string]int{},
 	}
 
@@ -127,7 +127,7 @@ func Tags(
 		}
 	}
 
-	facts := append(append([]report.Fact{}, runFacts...), w.reconciliation()...)
+	facts := append(append(append([]report.Fact{}, runFacts...), w.reconciliation()...), fetchFacts(git)...)
 
 	// A raised floor is only proven by a run that PROVED tags on both
 	// sides of it, so the run reports how many it proved at each —
@@ -188,7 +188,7 @@ const factsPerRepo = 4
 type tagsWalk struct {
 	pol   *TagsPolicy
 	org   string
-	tags  gh.TagReader
+	git   GitReader
 	tv    TagVerifier
 	j     *report.Journal
 	log   Logf
@@ -245,12 +245,12 @@ func (w *tagsWalk) reconciliation() []report.Fact {
 }
 
 func (w *tagsWalk) repo(repo string) error {
-	refs, err := w.tags.TagRefs(w.org, repo)
+	refs, err := w.git.TagRefs(w.org, repo)
 	if err != nil {
 		return fmt.Errorf("assert: tags of %s/%s: %w", w.org, repo, err)
 	}
 
-	var listed []gh.TagRef
+	var listed []gitrepo.TagRef
 
 	for _, r := range refs {
 		if w.tagRE.MatchString(r.Name) {
@@ -288,10 +288,10 @@ func (w *tagsWalk) repo(repo string) error {
 // judges the population half. The ledger is read only when there is a
 // member to judge — a repository whose whole listing predates its
 // epoch owes nothing and is asked nothing.
-func (w *tagsWalk) split(repo, epoch string, listed []gh.TagRef) (tagCount, error) {
+func (w *tagsWalk) split(repo, epoch string, listed []gitrepo.TagRef) (tagCount, error) {
 	count := tagCount{repo: repo, epoch: epoch, listed: len(listed)}
 
-	admitted := make([]gh.TagRef, 0, len(listed))
+	admitted := make([]gitrepo.TagRef, 0, len(listed))
 
 	for _, ref := range listed {
 		if inPopulation(ref.Name, epoch) {
@@ -351,7 +351,7 @@ func (h chainHorizon) unwitnessed(target string) string {
 // horizon derives the linked-revision set and the chain genesis — the
 // oldest link whose first parent carries no link.
 func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
-	notes, err := w.tags.ChainNotes(w.org, repo, *w.pol.NotesRef)
+	notes, err := w.git.ChainNotes(w.org, repo, *w.pol.NotesRef)
 	if err != nil {
 		return chainHorizon{}, fmt.Errorf("assert: chain notes of %s/%s: %w", w.org, repo, err)
 	}
@@ -370,7 +370,7 @@ func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 	gtime := int64(0)
 
 	for rev := range h.noted {
-		meta, merr := w.tags.CommitMeta(w.org, repo, rev)
+		meta, merr := w.git.CommitMeta(w.org, repo, rev)
 		if merr != nil {
 			return chainHorizon{}, fmt.Errorf("assert: commit %s of %s/%s: %w", rev, w.org, repo, merr)
 		}
@@ -397,7 +397,7 @@ func (w *tagsWalk) witnesses(repo, subject, target string, h chainHorizon) (bool
 		return false, nil
 	}
 
-	within, err := w.tags.IsAncestor(w.org, repo, h.genesis, target)
+	within, err := w.git.IsAncestor(w.org, repo, h.genesis, target)
 	if err != nil {
 		return false, fmt.Errorf("assert: ancestry of %s: %w", subject, err)
 	}
@@ -408,7 +408,7 @@ func (w *tagsWalk) witnesses(repo, subject, target string, h chainHorizon) (bool
 // tag judges one member of the population and reports whether every
 // obligation it owes reached a verdict. False is the loud case, never
 // the quiet one: the tag is named, counted and excused, never dropped.
-func (w *tagsWalk) tag(repo string, ref gh.TagRef, epoch string, h chainHorizon) (bool, error) {
+func (w *tagsWalk) tag(repo string, ref gitrepo.TagRef, epoch string, h chainHorizon) (bool, error) {
 	subject := repo + "@" + ref.Name
 
 	target, obj, err := w.resolveTarget(repo, ref)
@@ -482,24 +482,21 @@ func (w *tagsWalk) link(repo, subject, target string, h chainHorizon) (bool, err
 	return false, nil
 }
 
-// resolveTarget dereferences the ref: an annotated tag through its
-// object, a lightweight tag directly (obj nil marks lightweight).
-func (w *tagsWalk) resolveTarget(repo string, ref gh.TagRef) (string, *gh.TagObject, error) {
-	if !ref.Annotated {
-		return ref.ObjectSHA, nil, nil
-	}
-
-	obj, err := w.tags.TagObject(w.org, repo, ref.ObjectSHA)
+// resolveTarget dereferences the ref through the one resolution
+// (gitrepo.ResolveTag): an annotated tag through its object, a
+// lightweight tag directly (obj nil marks lightweight).
+func (w *tagsWalk) resolveTarget(repo string, ref gitrepo.TagRef) (string, *gitrepo.TagObject, error) {
+	target, obj, err := w.git.ResolveTag(w.org, repo, ref)
 	if err != nil {
 		return "", nil, fmt.Errorf("assert: tag object of %s/%s@%s: %w", w.org, repo, ref.Name, err)
 	}
 
-	return obj.Target, obj, nil
+	return target, obj, nil
 }
 
 // signature judges the signing obligation on one annotated tag,
 // against the floor that tag owes.
-func (w *tagsWalk) signature(subject string, obj *gh.TagObject, floor string) {
+func (w *tagsWalk) signature(subject string, obj *gitrepo.TagObject, floor string) {
 	c := w.j.Check(subject, assertTagSignature)
 
 	if len(obj.Signature) == 0 {

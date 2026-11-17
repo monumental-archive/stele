@@ -40,7 +40,7 @@ Four verbs and a judge:
 | `assert` | evidence against a declaration, over an org or one repo: image facts, evidence-bundle completeness, advisory blast radius against VEX, release tags, chain coverage of the whole population, pre-publish inventory plans against the same obligations the post-publish walk reads, and the caller/callee `permissions:` join across a workflow tree — exit 0 pass, 1 fail, 4 could-not-judge |
 | `emit` | source-chain links, VSA predicates, the release evidence manifest — the JSON that gets signed |
 | `verify` | every attestation against a pinned signer identity, the published verdict, the source-chain walk, and the reproducibility rebuild's typed verdict |
-| `level` | what a repository's live, publicly fetchable evidence actually supports, per SLSA track — no clone, no policy, no trusted root, no declaration taken |
+| `level` | what a repository's live, publicly fetchable evidence actually supports, per SLSA track — no policy, no trusted root, no declaration taken; it needs `git` and fetches the history itself, with no checkout, no source downloaded and nothing left behind |
 
 Workflows orchestrate, the platform signs, **stele computes and
 checks**. It holds no key, mints no certificate, and never runs caller

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
-	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
 )
@@ -67,8 +67,8 @@ const (
 func oneRepo() *fakeForge { return &fakeForge{repos: []string{"widget"}} }
 
 // chainNotes builds one repo's notes map entry: a link-shaped note.
-func linkNotes() []gh.ChainNote {
-	return []gh.ChainNote{{Rev: linkedRev, Note: []byte(link)}}
+func linkNotes() []gitrepo.ChainNote {
+	return []gitrepo.ChainNote{{Rev: linkedRev, Note: []byte(link)}}
 }
 
 func runChains(
@@ -84,7 +84,7 @@ func TestChainsVerifiedPopulation(t *testing.T) {
 	t.Parallel()
 
 	forge := &fakeForge{repos: []string{"widget", "lab"}}
-	tags := &fakeTags{notes: map[string][]gh.ChainNote{"widget": linkNotes()}}
+	tags := &fakeTags{notes: map[string][]gitrepo.ChainNote{"widget": linkNotes()}}
 	cv := &fakeChainVerifier{links: map[string]int{"widget": 3}}
 
 	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
@@ -107,7 +107,7 @@ func TestChainsUnactivatedWithoutExceptionIsRed(t *testing.T) {
 	t.Parallel()
 
 	forge := &fakeForge{repos: []string{"widget", "gadget"}}
-	tags := &fakeTags{notes: map[string][]gh.ChainNote{"widget": linkNotes()}}
+	tags := &fakeTags{notes: map[string][]gitrepo.ChainNote{"widget": linkNotes()}}
 	cv := &fakeChainVerifier{links: map[string]int{"widget": 1}}
 
 	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
@@ -133,7 +133,7 @@ func TestChainsOptOutCannotExcuseABrokenChain(t *testing.T) {
 	// assertion alone, so the defect stays red and the excuse goes
 	// stale, both visible.
 	forge := &fakeForge{repos: []string{"lab"}}
-	tags := &fakeTags{notes: map[string][]gh.ChainNote{"lab": linkNotes()}}
+	tags := &fakeTags{notes: map[string][]gitrepo.ChainNote{"lab": linkNotes()}}
 	cv := &fakeChainVerifier{broken: map[string]error{"lab": errors.New("link 2: signature refused")}}
 
 	rep, err := runChains(t, loadChainsPolicy(t), orgPop(t, forge, nil), tags, cv)
@@ -158,7 +158,7 @@ func TestChainsScaffoldingNotesAreNotAFoundedChain(t *testing.T) {
 	// Notes exist but none is link-shaped: unactivated, and the
 	// engine is never asked to walk what is not there.
 	forge := &fakeForge{repos: []string{"gadget"}}
-	tags := &fakeTags{notes: map[string][]gh.ChainNote{
+	tags := &fakeTags{notes: map[string][]gitrepo.ChainNote{
 		"gadget": {{Rev: linkedRev, Note: []byte(`{"scaffold": true}`)}},
 	}}
 	cv := &fakeChainVerifier{}

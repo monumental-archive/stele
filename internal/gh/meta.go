@@ -3,9 +3,9 @@
 // declare them — the licence the forge detects, and the repository
 // description.
 //
-// Its own interface, like RulesReader and TagReader, and for the same
-// reason: the facts resolver has no business being handed a seam that
-// can list releases.
+// Its own interface, like RulesReader, and for the same reason: the
+// facts resolver has no business being handed a seam that can list
+// releases.
 
 package gh
 

@@ -43,9 +43,19 @@ func repoLocators() []string {
 // Env renders the environment for a spawned git: the process
 // environment minus every repo-locating GIT_* variable (so `-C dir`
 // is the ONE way a child git finds its repository), with global and
-// system config pinned to /dev/null, plus the caller's extras.
+// system config pinned to /dev/null and lazy fetching refused, plus
+// the caller's extras.
+//
+// Lazy fetching is the one way a READ networks: in a partial clone, a
+// command that touches an object the fetch withheld asks the promisor
+// remote for it on demand. Measured on a commits-only fetch
+// (stele#384): `git log` and `git show -s` reach for the tip's tree,
+// so without this a read would quietly download source this package
+// never asked for. With it, those reads answer from the commits alone
+// and anything that truly needs a withheld object refuses instead.
+// Explicit fetches and pushes are unaffected.
 func Env(extra ...string) []string {
-	out := make([]string, 0, len(os.Environ())+2+len(extra))
+	out := make([]string, 0, len(os.Environ())+3+len(extra))
 
 	for _, kv := range os.Environ() {
 		scrubbed := false
@@ -63,7 +73,7 @@ func Env(extra ...string) []string {
 		}
 	}
 
-	out = append(out, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out = append(out, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_NO_LAZY_FETCH=1")
 
 	return append(out, extra...)
 }
@@ -92,6 +102,23 @@ func Open(dir, notesRef string) (*Repo, error) {
 
 	return r, nil
 }
+
+// OpenObjects validates that dir is a git repository and returns a
+// Repo read for its objects alone — tag refs, tag objects, commits —
+// with no ledger bound. A ledger read on it refuses by name: reading
+// an unbound notes ref would silently mean git's default one.
+func OpenObjects(dir string) (*Repo, error) {
+	r := &Repo{dir: dir}
+	if _, err := r.git("rev-parse", "--git-dir"); err != nil {
+		return nil, fmt.Errorf("gitrepo: %s is not a git repository: %w", dir, err)
+	}
+
+	return r, nil
+}
+
+// errNoLedger refuses a ledger read on a repository opened for its
+// objects alone.
+var errNoLedger = errors.New("gitrepo: this repository was opened with no notes ref, so it has no ledger to read")
 
 // Tip resolves a fully qualified ref to its commit.
 func (r *Repo) Tip(ref string) (string, error) {
@@ -136,6 +163,10 @@ func (r *Repo) Parent(rev string) (string, error) {
 // are the bytes stored — `notes show` output is close but not
 // contractually identical.
 func (r *Repo) Note(rev string) ([]byte, error) {
+	if r.notesRef == "" {
+		return nil, errNoLedger
+	}
+
 	out, err := r.git("notes", "--ref", r.notesRef, "list", rev)
 	if err != nil {
 		// `notes list <obj>` exits 1 with "no note found" — absence,
@@ -164,6 +195,10 @@ func (r *Repo) Note(rev string) ([]byte, error) {
 // A repository with no notes ref at all has an empty ledger, which
 // the engine judges — absence here is data, not an error.
 func (r *Repo) Noted() ([]string, error) {
+	if r.notesRef == "" {
+		return nil, errNoLedger
+	}
+
 	// The ref not existing is absence-of-ledger, not failure — the
 	// deliberate nil-on-error the engine's members walk expects.
 	if _, err := r.git("rev-parse", "--verify", "--quiet", r.notesRef); err != nil {

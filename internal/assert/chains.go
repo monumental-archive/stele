@@ -14,8 +14,9 @@
 // the declared exceptions carry the unactivated assertion alone, so
 // an opt-out can only ever excuse absence, structurally.
 //
-// The walk is cloneless — the notes ref, the branch tips and every
-// blob come from the forge's own API (gh.History), the same surface
+// The walk needs git and fetches what it reads itself (stele#384): the
+// notes ref, the branch tips and every note come from one fetch per
+// repository — no checkout, no source — read through the same surface
 // verify.Chain already walks. The verification itself sits behind
 // ChainVerifier so every guard branch here is table-tested; the CLI
 // binds the real engine.
@@ -27,7 +28,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
 	"github.com/monumental-archive/stele/internal/report"
@@ -35,7 +35,7 @@ import (
 
 // ChainVerifier proves one repository's chain over one branch ref —
 // the trust boundary behind a seam. The CLI binds verify.Chain over
-// the forge-backed history; tests script it.
+// the fetched history; tests script it.
 type ChainVerifier interface {
 	// Verify walks and cryptographically verifies the chain, returning
 	// the number of links it proved.
@@ -54,7 +54,7 @@ const assertionUnactivated = "unactivated"
 // runFacts are the caller's facts about the run itself — the trust
 // material it held, which the walk cannot know.
 func Chains(
-	pol *Policy, pop *population.Set, tags gh.TagReader, cv ChainVerifier,
+	pol *Policy, pop *population.Set, git GitReader, cv ChainVerifier,
 	notesRef string, refs []string, j *report.Journal, log Logf, runFacts ...report.Fact,
 ) (*report.Report, error) {
 	cp := pol.Chains
@@ -83,7 +83,7 @@ func Chains(
 		)
 	}
 
-	w := &chainsWalk{org: org, tags: tags, cv: cv, notesRef: notesRef, refs: refs, j: j, log: log}
+	w := &chainsWalk{org: org, git: git, cv: cv, notesRef: notesRef, refs: refs, j: j, log: log}
 
 	for _, repo := range repos {
 		if err := w.repo(repo); err != nil {
@@ -94,6 +94,7 @@ func Chains(
 	facts := append(append([]report.Fact{}, runFacts...),
 		report.Fact{Name: "chainsVerified", Value: strconv.Itoa(w.verified)},
 		report.Fact{Name: "links", Value: strconv.Itoa(w.links)})
+	facts = append(facts, fetchFacts(git)...)
 
 	return report.Seal("assert chains", pop.Subject(), pop.Population(ChainsSubjects.track), j,
 		report.NoCanary(), report.NoJudgedSet(), facts...), nil
@@ -101,7 +102,7 @@ func Chains(
 
 type chainsWalk struct {
 	org      string
-	tags     gh.TagReader
+	git      GitReader
 	cv       ChainVerifier
 	notesRef string
 	refs     []string
@@ -145,7 +146,7 @@ func (w *chainsWalk) repo(repo string) error {
 // link-shaped note — the same shape test the tag audit applies, so
 // scaffolding notes never count as a founded chain.
 func (w *chainsWalk) founded(repo string) (bool, error) {
-	notes, err := w.tags.ChainNotes(w.org, repo, w.notesRef)
+	notes, err := w.git.ChainNotes(w.org, repo, w.notesRef)
 	if err != nil {
 		return false, err
 	}

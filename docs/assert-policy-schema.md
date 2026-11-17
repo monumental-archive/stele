@@ -1093,7 +1093,9 @@ authority. Pins are derived per release from the trees a stranger
 reads: the caller's publish workflow at the tag carries the
 machinery pin, the machinery repository's publish workflow at that
 pin carries the signer pin, and the machinery repository's own
-releases run at the tag commit. Refusals
+releases run at the tag commit — a tag resolved to its commit through
+`git`, by the same resolution the tag walk reads every tag through,
+one fetch of each repository's tags at depth one. Refusals
 land in the walk's own taxonomy: verdict refusals carry a
 `vsa:`-prefixed assertion (so burn derivation and debt lines apply
 exactly as at presence depth, and the deep verdict check yields
@@ -1225,6 +1227,15 @@ judged through the full observer stance — the same verifier every
 bundle passes — regardless of floor, so a receipt that does not prove
 refuses loudly. And the tag's target carries a source chain link.
 
+The tags, their signatures, the ledger and the commit history the
+link is judged over are git objects, and the walk reads them with
+`git` (2.44 or newer), one fetch per repository: every branch and
+every tag commits-only, the notes ref whole — no checkout, no source,
+nothing left behind. A remote that ignores the commits-only filter is
+said in the run's output and counted in the report
+(`gitFilterIgnored`); a fetch that does not complete, throttled or
+otherwise, seals CANNOT_JUDGE and never a finding about the subject.
+
 ### What the tag walk covered, and how it says so
 
 Every member is judged or is **loudly unjudgeable**; a member is
@@ -1303,8 +1314,10 @@ with no link-shaped note on the declared notes ref is **unactivated**:
 a finding unless a declared exception names it, because an
 unactivated repository is silent by construction (#266). A founded
 chain is walked and cryptographically verified through the verify
-engine (`verify chain`, per protected branch, over the forge's own
-API — no clone); a founded chain that fails to verify is a finding
+engine (`verify chain`, per protected branch, over the history the
+walk fetches itself with `git` — each protected branch commits-only and
+the notes ref whole: no checkout, no source, nothing left behind); a
+founded chain that fails to verify is a finding
 that **no exception can excuse** — declared exceptions carry the
 `unactivated` assertion alone, so an opt-out excuses absence,
 structurally never a defect. A zero population seals CANNOT_JUDGE.

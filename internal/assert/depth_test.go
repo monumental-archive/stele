@@ -98,7 +98,7 @@ func runDeepWalk(t *testing.T, f *fakeForge, deep *fakeDeep) *report.Report {
 func runDeepWalkPolicy(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert.Policy) *report.Report {
 	t.Helper()
 
-	full, err := assert.NewFullDepth(deep,
+	full, err := assert.NewFullDepth(deep, f,
 		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestDepthFullBounds(t *testing.T) {
 			"    uses: acme/canon/.github/workflows/publish.yml@" + machineryPin40 + " # v1.20.0\n"
 
 		deep := &fakeDeep{}
-		full, err := assert.NewFullDepth(deep,
+		full, err := assert.NewFullDepth(deep, f,
 			"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
 		if err != nil {
 			t.Fatal(err)
@@ -371,8 +371,17 @@ func TestDepthFullBounds(t *testing.T) {
 	t.Run("a malformed verifier workflow refuses at construction", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := assert.NewFullDepth(&fakeDeep{}, "not-a-workflow", "s"); err == nil {
+		if _, err := assert.NewFullDepth(&fakeDeep{}, deepForge(), "not-a-workflow", "s"); err == nil {
 			t.Fatal("NewFullDepth accepted a workflow that names no owner/repo")
+		}
+	})
+
+	t.Run("no tag resolver refuses at construction", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := assert.NewFullDepth(&fakeDeep{}, nil, "", "{owner}/{repo}/.github/workflows/release.yml")
+		if err == nil || err.Error() != "full depth needs a tag resolver: the pins are read through git" {
+			t.Fatalf("NewFullDepth = %v, want the missing resolver named", err)
 		}
 	})
 }
@@ -398,7 +407,7 @@ func TestDepthClassDemand(t *testing.T) {
 
 	f := deepForge()
 	deep := &fakeDeep{}
-	full, ferr := assert.NewFullDepth(deep,
+	full, ferr := assert.NewFullDepth(deep, f,
 		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
 	if ferr != nil {
 		t.Fatal(ferr)
@@ -487,7 +496,7 @@ func runDeepDemandSource(t *testing.T, f *fakeForge, deep *fakeDeep, pol *assert
 ) (*report.Report, string) {
 	t.Helper()
 
-	full, err := assert.NewFullDepth(deep,
+	full, err := assert.NewFullDepth(deep, f,
 		"acme/canon/.github/workflows/verify-release.yml", "acme/signer/.github/workflows/sign.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -648,7 +657,7 @@ func TestDepthSelfAttesting(t *testing.T) {
 
 		deep := &fakeDeep{}
 
-		full, err := assert.NewFullDepth(deep, "", "{owner}/{repo}/.github/workflows/release.yml")
+		full, err := assert.NewFullDepth(deep, f, "", "{owner}/{repo}/.github/workflows/release.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -686,7 +695,7 @@ func TestDepthSelfAttesting(t *testing.T) {
 
 		f := deepForge()
 
-		full, err := assert.NewFullDepth(&fakeDeep{}, "", "acme/signer/.github/workflows/sign.yml")
+		full, err := assert.NewFullDepth(&fakeDeep{}, f, "", "acme/signer/.github/workflows/sign.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
