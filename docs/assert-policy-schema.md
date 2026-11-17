@@ -636,11 +636,11 @@ requires exactly its own parameters: one it needs and you omit is
 refused by name, and one it does not read is refused too, for the same
 reason.
 
-Scopes never reference another section. A `provenance-verified` scope
-declares its own signer fields even where `evidence.continuous`
-carries the same values — coupling the two would make base approval
-inexpressible for an adopter who verifies bases and publishes no
-rolling digests. Keeping one org's document free of internal
+Scopes never reference another section. A `provenance-verified` or
+`shared-signer` scope declares its own signer fields even where
+`evidence.continuous` carries the same values — coupling the two
+would make base approval inexpressible for an adopter who verifies
+bases and publishes no rolling digests. Keeping one org's document free of internal
 repetition is that org's authoring problem, never the schema's.
 
 **pin-file** — every digest-pinned base reference in `pinFile` must
@@ -675,9 +675,53 @@ unreadable pin is not an approved one), an identity template that
 expands to nothing, and an attestation that refuses. A repository
 whose `fromFile` is absent builds no image — an answer, not a gap.
 
-Two scopes may not declare one `registryPrefix`: a prefix ends at the
-owner boundary, so two that overlap are equal, and a reference both
-claimed would have two judgments.
+**shared-signer** — the bases under `registryPrefix` that a population
+repository's `fromFile` instantiates, or that a build hands
+`stele verify base`, must carry a `predicateType` attestation from ONE
+declared signer workflow. It is the shape of an owner whose
+repositories all sign through one shared signer, which
+`provenance-verified`'s per-pin identity cannot say: the signer's
+commit is whatever the publishing release pinned — a base is normally
+signed at an older signer commit than the tree that builds on it —
+and an image's name need not be its repository's.
+
+```json
+{
+  "name": "org-bases",
+  "mechanism": "shared-signer",
+  "fromFile": "Dockerfile",
+  "registryPrefix": "ghcr.io/acme/",
+  "signerWorkflow": "acme/signer/.github/workflows/sign.yml",
+  "refs": [
+    {"tag": "^latest$", "ref": "refs/heads/main"},
+    {
+      "tag": "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)(-.*)?$",
+      "ref": "refs/tags/v${version}"
+    }
+  ],
+  "predicateType": "https://slsa.dev/provenance/v1"
+}
+```
+
+The pin must carry a tag and a digest: the digest is what is
+verified, the tag is what the source ref is derived from. `refs` is
+the ordered tag-to-ref convention — the first rule whose anchored
+pattern matches the tag names the ref, its template expanded from the
+pattern's named groups — and a tag no rule matches is refused by name
+rather than guessed at. The attestation must verify with a
+certificate naming `signerWorkflow` at ANY ref (only the commit after
+`@` is free; host, owner, repository and path are exact), a source
+repository of the prefix's owner, the derived source ref, and a
+GitHub-hosted runner: a base built on a self-hosted runner is refused.
+It is looked up in the OWNER's attestation store, an organisation's
+or a user's, never in a repository read off the image path; that is
+why `registryPrefix` must end at the owner boundary. Four things fail
+closed, each its own finding: a pin with no digest, a pin with no
+tag, a tag no rule decodes, and an attestation that refuses.
+
+Two scopes may not declare one `registryPrefix`, of either kind: a
+prefix ends at the owner boundary, so two that overlap are equal, and
+a reference both claimed would have two judgments.
 
 **upstream** — beside the scopes, the official images a build may
 instantiate and the source each one's published provenance must name.
