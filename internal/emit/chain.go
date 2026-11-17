@@ -65,35 +65,12 @@ func Chain(
 	p *policy.Policy, in *ChainInputs,
 	g Git, s Signer, bv BlobVerifier, now func() time.Time, log Logf,
 ) error {
-	if in == nil {
-		return errors.New("emit: no inputs")
-	}
-
-	if p.Source == nil {
-		return errors.New("emit: the policy declares no source section — the chain emitter needs one")
-	}
-
-	pb, err := validateChainInputs(p, in)
+	e, err := newChainRun(p, in, g, s, bv, now, log)
 	if err != nil {
 		return err
 	}
 
-	onBranch, err := g.IsAncestor(in.Rev, in.Ref)
-	if err != nil {
-		return err
-	}
-
-	if !onBranch {
-		return fmt.Errorf("emit: %s is not on %s — the emitter attests protected-ref revisions only", in.Rev, in.Ref)
-	}
-
-	e := &chainRun{
-		p: p, pb: pb, in: in, g: g, s: s, bv: bv, now: now, log: log,
-		id:   trust.Identity{SAN: expand(*p.Source.Identity, in.Owner, in.Repo), Issuer: *p.Issuer},
-		sign: verify.NewSourceSigning(p, verify.Coords{Owner: in.Owner, Repo: in.Repo}, bv),
-	}
-
-	if err := e.preflight(); err != nil {
+	if err := e.preflight(true); err != nil {
 		return err
 	}
 
@@ -109,14 +86,14 @@ func Chain(
 			return err
 		}
 
-		if emitted == 0 {
+		if len(emitted) == 0 {
 			log("emit: every revision since genesis already carries a link — nothing to emit")
 
 			return nil
 		}
 
 		if err := g.PushNotes(); err == nil {
-			log("emit: %d chain link(s) pushed (attempt %d)", emitted, attempt)
+			log("emit: %d chain link(s) pushed (attempt %d)", len(emitted), attempt)
 
 			return nil
 		}
@@ -125,6 +102,73 @@ func Chain(
 	}
 
 	return fmt.Errorf("emit: the notes ref would not fast-forward after %d attempts", pushAttempts)
+}
+
+// ChainLinks is the signing half of Chain on its own (stele#390):
+// everything up to and including the stranger's self-verification
+// and the note writes, then it stops — no push, and no push proof,
+// because the job that signs must not hold the grant a push needs.
+// It returns the revisions it linked, oldest first; the caller reads
+// each stored note back out of g and hands the bytes to the append
+// half, which judges them as a stranger would. Chain is this half
+// followed by the push, so the two cannot drift.
+func ChainLinks(
+	p *policy.Policy, in *ChainInputs,
+	g Git, s Signer, bv BlobVerifier, now func() time.Time, log Logf,
+) ([]string, error) {
+	e, err := newChainRun(p, in, g, s, bv, now, log)
+	if err != nil {
+		return nil, err
+	}
+
+	if perr := e.preflight(false); perr != nil {
+		return nil, perr
+	}
+
+	emitted, err := e.once()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(emitted) == 0 {
+		log("emit: every revision since genesis already carries a link — nothing to emit")
+	}
+
+	return emitted, nil
+}
+
+// newChainRun validates one emission's inputs and binds its state.
+func newChainRun(
+	p *policy.Policy, in *ChainInputs,
+	g Git, s Signer, bv BlobVerifier, now func() time.Time, log Logf,
+) (*chainRun, error) {
+	if in == nil {
+		return nil, errors.New("emit: no inputs")
+	}
+
+	if p.Source == nil {
+		return nil, errors.New("emit: the policy declares no source section — the chain emitter needs one")
+	}
+
+	pb, err := validateChainInputs(p, in)
+	if err != nil {
+		return nil, err
+	}
+
+	onBranch, err := g.IsAncestor(in.Rev, in.Ref)
+	if err != nil {
+		return nil, err
+	}
+
+	if !onBranch {
+		return nil, fmt.Errorf("emit: %s is not on %s — the emitter attests protected-ref revisions only", in.Rev, in.Ref)
+	}
+
+	return &chainRun{
+		p: p, pb: pb, in: in, g: g, s: s, bv: bv, now: now, log: log,
+		id:   trust.Identity{SAN: expand(*p.Source.Identity, in.Owner, in.Repo), Issuer: *p.Issuer},
+		sign: verify.NewSourceSigning(p, verify.Coords{Owner: in.Owner, Repo: in.Repo}, bv),
+	}, nil
 }
 
 // validateChainInputs refuses inputs that could not name an honest
@@ -194,7 +238,11 @@ type chainRun struct {
 // each with its own named refusal. The identity guard rides here
 // too: an emitter running under an unreserved workflow path would
 // mint links nobody can verify against the published contract.
-func (e *chainRun) preflight() error {
+//
+// provePush is false only for the signing half alone (ChainLinks):
+// the push proof needs the very grant that half must not hold, and
+// the append half proves the push by making it.
+func (e *chainRun) preflight(provePush bool) error {
 	if e.in.WorkflowRef == "" {
 		// An emitter that cannot state its own workflow identity
 		// cannot prove it runs under the reserved path, and an
@@ -221,7 +269,7 @@ func (e *chainRun) preflight() error {
 
 	// At genesis there is no ledger to prove a fast-forward against;
 	// every later emission proves the push before signing.
-	if !e.in.Genesis {
+	if provePush && !e.in.Genesis {
 		if err := e.g.DryRunPushNotes(e.in.Rev); err != nil {
 			return fmt.Errorf("emit: preflight: %w", err)
 		}
@@ -231,34 +279,34 @@ func (e *chainRun) preflight() error {
 }
 
 // once discovers what needs a link against the CURRENT local ledger
-// state and emits it: build, sign, self-verify, write. Returns how
-// many links were written; zero means the ledger already covers
-// everything and there is nothing to push.
-func (e *chainRun) once() (int, error) {
+// state and emits it: build, sign, self-verify, write. Returns the
+// revisions linked, oldest first; none means the ledger already
+// covers everything and there is nothing to push.
+func (e *chainRun) once() ([]string, error) {
 	heal, tail, err := e.discover()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if len(heal) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 
 	if tail != "" {
 		if err := e.verifyTail(tail); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 
 	for _, rev := range heal {
 		if err := e.link(rev, tail); err != nil {
-			return 0, err
+			return nil, err
 		}
 
 		tail = rev
 	}
 
-	return len(heal), nil
+	return heal, nil
 }
 
 // discover walks first-parent from the pushed revision toward the

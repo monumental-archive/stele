@@ -1,6 +1,9 @@
-// The emit verb: argument surface for the two emission modes. `emit
+// The emit verb: argument surface for the emission modes. `emit
 // chain` assembles, signs (via cosign — the capability boundary stays
-// above this tool) and appends source chain links; `emit vsa` runs
+// above this tool) and appends source chain links — or, with
+// --no-append, signs and hands the links out for `emit chain-append`
+// to verify and push from a job holding no signing identity
+// (stele#390); `emit vsa` runs
 // the full release verification and renders the build-track VSA
 // predicate the workflow then signs — fed by the verdict type, so a
 // predicate cannot exist unearned.
@@ -29,8 +32,9 @@ import (
 
 // The two emission modes, the dispatch vocabulary.
 const (
-	emitChain = "chain"
-	emitVSA   = "vsa"
+	emitChain       = "chain"
+	emitChainAppend = "chain-append"
+	emitVSA         = "vsa"
 )
 
 // ownerRW is the mode for files this process stages for itself.
@@ -151,6 +155,12 @@ type emitArgs struct {
 	genesis      bool
 	policyURI    string
 	machineryPin string
+	noAppend     bool
+	linksOut     string
+
+	// chain-append
+	linksIn   string
+	linkFiles []emit.LinkFile
 
 	// vsa
 	tag         string
@@ -181,7 +191,8 @@ type emitArgs struct {
 // emitCmd dispatches `stele emit <mode>`.
 func emitCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain, vsa, manifest or enrichment"); err != nil {
+		const modes = "chain, chain-append, vsa, manifest or enrichment"
+		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: "+modes); err != nil {
 			return exitIO
 		}
 
@@ -190,7 +201,7 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case emitChain, emitVSA:
+	case emitChain, emitChainAppend, emitVSA:
 	case emitManifest:
 		// Its own path: it shares none of the chain/vsa flag surface.
 		return emitManifestCmd(args[1:], stdout, stderr)
@@ -198,8 +209,8 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 		// Its own path too: no trust root, no signer, nothing verified.
 		return emitEnrichmentCmd(args[1:], stdout, stderr)
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa, manifest, enrichment)\n",
-			mode); err != nil {
+		const modes = "chain, chain-append, vsa, manifest, enrichment"
+		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (%s)\n", mode, modes); err != nil {
 			return exitIO
 		}
 
@@ -241,30 +252,34 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 	fs.StringVar(&ea.policyPath, "policy", "", "path to the committed verify policy (required)")
 	ea.root.register(fs)
 	fs.StringVar(&ea.repo, "repo", "", "owner/repo being attested (required)")
-	fs.StringVar(&ea.machineryPin, "machinery-digest", "",
-		"commit digest the policy tree is pinned at — the VSA's policy.digest (required)")
-	fs.StringVar(&ea.policyURI, "policy-uri", "",
-		"URI where a stranger reads the policy at that pin (required)")
+
+	if mode != emitChainAppend {
+		fs.StringVar(&ea.machineryPin, "machinery-digest", "",
+			"commit digest the policy tree is pinned at — the VSA's policy.digest (required)")
+		fs.StringVar(&ea.policyURI, "policy-uri", "",
+			"URI where a stranger reads the policy at that pin (required)")
+	}
+
+	if mode == emitChain || mode == emitChainAppend {
+		registerLedgerFlags(fs, ea)
+	}
 
 	switch mode {
 	case emitChain:
-		fs.StringVar(&ea.gitDir, "git-dir", "",
-			"local clone with the branch and notes ref fetched (required without --clone; refused with it)")
-		fs.StringVar(&ea.ref, "ref", "refs/heads/main", "fully qualified protected branch ref")
 		fs.StringVar(&ea.rev, "rev", "", "the pushed revision (required)")
 		fs.StringVar(&ea.claims, "claims", "", "path to the claims stage's payload JSON (required)")
 		fs.StringVar(&ea.actor, "actor", "", "login of the actor who triggered the run (required)")
 		fs.StringVar(&ea.actorID, "actor-id", "", "id of the actor who triggered the run (required)")
-		fs.StringVar(&ea.remote, "remote", "origin", "remote the notes ref is fetched from and pushed to")
-		fs.StringVar(&ea.clone, "clone", "",
-			"clone URL: the engine materializes its own scratch repository and fetches the branch under "+
-				"attestation and the ledger this policy names. Omitted, --git-dir must already exist and "+
-				"nothing networks before the push")
-		fs.StringVar(&ea.committer, "committer", "",
-			"name <email> every note this run writes is authored by; required with --clone, since a scratch "+
-				"tree has no identity to inherit and the author lands in a permanent ledger")
 		fs.BoolVar(&ea.genesis, "genesis", false,
 			"found the chain: refused when any link already exists on the walked history")
+		fs.BoolVar(&ea.noAppend, "no-append", false,
+			"sign and self-verify, write the links to --out and stop: nothing is written to the ledger or "+
+				"pushed, and no push grant is needed; `emit chain-append` appends them")
+		fs.StringVar(&ea.linksOut, "out", "", "with --no-append: the directory the signed links are written to")
+	case emitChainAppend:
+		fs.StringVar(&ea.linksIn, "links", "",
+			"directory of signed links from `emit chain --no-append` (required); each is verified before it is "+
+				"appended")
 	case emitVSA:
 		fs.StringVar(&ea.tag, "tag", "", "release tag (required)")
 		fs.StringVar(&ea.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
@@ -331,21 +346,79 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 
 	ea.rootJSON = rootJSON
 
-	if ea.mode == emitChain {
+	switch ea.mode {
+	case emitChain:
 		return ea.loadChain(fail)
+	case emitChainAppend:
+		return ea.loadChainAppend(fail)
+	default:
+		return ea.loadVSA(fail)
+	}
+}
+
+// registerLedgerFlags registers the flags both chain halves share:
+// where the repository is and how the ledger reaches its remote.
+func registerLedgerFlags(fs *flag.FlagSet, ea *emitArgs) {
+	fs.StringVar(&ea.gitDir, "git-dir", "",
+		"local clone with the branch and notes ref fetched (required without --clone; refused with it)")
+	fs.StringVar(&ea.ref, "ref", "refs/heads/main", "fully qualified protected branch ref")
+	fs.StringVar(&ea.remote, "remote", "origin", "remote the notes ref is fetched from and pushed to")
+	fs.StringVar(&ea.clone, "clone", "",
+		"clone URL: the engine materializes its own scratch repository and fetches the branch under "+
+			"attestation and the ledger this policy names. Omitted, --git-dir must already exist and "+
+			"nothing networks before the push")
+	fs.StringVar(&ea.committer, "committer", "",
+		"name <email> every note this run writes is authored by; required with --clone, since a scratch "+
+			"tree has no identity to inherit and the author lands in a permanent ledger")
+}
+
+// loadTree refuses the repository flags' contradictions — the same
+// rule for both chain halves.
+func (ea *emitArgs) loadTree() error {
+	switch {
+	case ea.clone != "" && ea.gitDir != "":
+		return errors.New("--git-dir cannot accompany --clone — the engine materializes its own scratch " +
+			"repository, and a caller-named path is the restated preparation --clone exists to remove")
+	case ea.clone == "" && ea.gitDir == "":
+		return errors.New("--git-dir is required without --clone")
 	}
 
-	return ea.loadVSA(fail)
+	return nil
+}
+
+// loadChainAppend reads the append half's links. The directory is
+// read whole before anything touches the repository, so a malformed
+// hand-off refuses before the ledger is opened.
+func (ea *emitArgs) loadChainAppend(fail func(error) int) int {
+	if err := ea.loadTree(); err != nil {
+		return fail(err)
+	}
+
+	if ea.linksIn == "" {
+		return fail(errors.New("--links is required"))
+	}
+
+	links, err := emit.ReadLinks(ea.linksIn)
+	if err != nil {
+		return fail(err)
+	}
+
+	ea.linkFiles = links
+
+	return exitOK
 }
 
 // loadChain reads the chain mode's file inputs.
 func (ea *emitArgs) loadChain(fail func(error) int) int {
+	if err := ea.loadTree(); err != nil {
+		return fail(err)
+	}
+
 	switch {
-	case ea.clone != "" && ea.gitDir != "":
-		return fail(errors.New("--git-dir cannot accompany --clone — the engine materializes its own scratch " +
-			"repository, and a caller-named path is the restated preparation --clone exists to remove"))
-	case ea.clone == "" && ea.gitDir == "":
-		return fail(errors.New("--git-dir is required without --clone"))
+	case ea.noAppend && ea.linksOut == "":
+		return fail(errors.New("--no-append needs --out: the signed links must land somewhere the append half reads"))
+	case !ea.noAppend && ea.linksOut != "":
+		return fail(errors.New("--out is the --no-append hand-off; without --no-append the links are appended here"))
 	}
 
 	if ea.claims == "" {
@@ -419,23 +492,32 @@ func (ea *emitArgs) loadVSA(fail func(error) int) int {
 
 // runEmit runs the selected mode against real dependencies.
 func runEmit(ea *emitArgs, out *latch) error {
-	if ea.mode == emitChain {
+	switch ea.mode {
+	case emitChain:
 		return runEmitChain(ea, out)
+	case emitChainAppend:
+		return runEmitChainAppend(ea, out)
+	default:
+		if err := ea.vsaIn.resolve(ea, out.logf); err != nil {
+			return err
+		}
+
+		return runEmitVSA(ea, out)
+	}
+}
+
+// emitToken is the credential the ledger's fetch and push carry.
+func emitToken() string {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return token
 	}
 
-	if err := ea.vsaIn.resolve(ea, out.logf); err != nil {
-		return err
-	}
-
-	return runEmitVSA(ea, out)
+	return os.Getenv("GH_TOKEN")
 }
 
 // runEmitChain assembles the engine's dependencies and emits.
 func runEmitChain(ea *emitArgs, out *latch) error {
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		token = os.Getenv("GH_TOKEN")
-	}
+	token := emitToken()
 
 	workDir, err := os.MkdirTemp("", "stele-emit-*")
 	if err != nil {
@@ -462,7 +544,98 @@ func runEmitChain(ea *emitArgs, out *latch) error {
 		Claims:       ea.claimsDoc,
 	}
 
+	if ea.noAppend {
+		return signLinks(ea, in, g, workDir, out)
+	}
+
 	return emit.Chain(ea.p, in, g, newSigner(workDir), ea.bv, emitNow, out.logf)
+}
+
+// notesStager is the repository surface the signing half alone needs:
+// a scratch ledger to write into, so git stores every link exactly as
+// it would in the ledger while the ledger itself never moves.
+type notesStager interface {
+	StageNotes() (func() error, error)
+}
+
+// signLinks is `emit chain --no-append`: the signing half against a
+// staged ledger, its stored notes read back out and handed to the
+// append half as files.
+func signLinks(ea *emitArgs, in *emit.ChainInputs, g emit.Git, workDir string, out *latch) (err error) {
+	st, ok := g.(notesStager)
+	if !ok {
+		return errors.New("emit: this repository cannot stage a ledger — --no-append has nowhere to sign against")
+	}
+
+	release, err := st.StageNotes()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if rerr := release(); rerr != nil && err == nil {
+			err = rerr
+		}
+	}()
+
+	revs, err := emit.ChainLinks(ea.p, in, g, newSigner(workDir), ea.bv, emitNow, out.logf)
+	if err != nil {
+		return err
+	}
+
+	links := make([]emit.LinkFile, 0, len(revs))
+
+	for _, rev := range revs {
+		note, nerr := g.Note(rev)
+		if nerr != nil {
+			return fmt.Errorf("emit: reading the staged note for %s: %w", rev, nerr)
+		}
+
+		links = append(links, emit.LinkFile{Rev: rev, Note: note})
+	}
+
+	if err := emit.WriteLinks(ea.linksOut, links); err != nil {
+		return err
+	}
+
+	out.logf("emit: %d signed link(s) written to %s — nothing appended or pushed", len(links), ea.linksOut)
+
+	return nil
+}
+
+// ledgerGit is the append half's view of the repository: the walk's
+// history plus the ledger write, which the emit seam's Git does not
+// carry on its own.
+type ledgerGit interface {
+	emit.Git
+	Noted() ([]string, error)
+}
+
+// runEmitChainAppend is `emit chain-append`: no signer, no workflow
+// identity — the links are judged as a stranger would judge them,
+// then appended and pushed.
+func runEmitChainAppend(ea *emitArgs, out *latch) error {
+	token := emitToken()
+
+	workDir, err := os.MkdirTemp("", "stele-emit-*")
+	if err != nil {
+		return fmt.Errorf("emit: staging directory: %w", err)
+	}
+	defer os.RemoveAll(workDir) //nolint:errcheck // best-effort cleanup of a temp dir
+
+	g, err := emitRepo(ea, token, workDir)
+	if err != nil {
+		return err
+	}
+
+	lg, ok := g.(ledgerGit)
+	if !ok {
+		return errors.New("emit: this repository cannot list its ledger — the append half cannot verify against it")
+	}
+
+	in := &emit.AppendInputs{Owner: ea.coords.Owner, Repo: ea.coords.Repo, Ref: ea.ref, Links: ea.linkFiles}
+
+	return emit.Append(ea.p, in, lg, ea.bv, out.logf)
 }
 
 // runEmitVSA verifies the release in full and renders the verdict

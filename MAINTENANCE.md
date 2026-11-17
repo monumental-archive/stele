@@ -62,7 +62,8 @@ the same statement as this one and tested against it.
 | `stele level source` | the source chain measured with no expected identity |
 | `stele level dependency` | the DRAFT dependency track, marked draft in every output |
 | `stele emit` | the JSON that gets signed |
-| `stele emit chain` | source-chain links for the pushed revision and any holes earlier lapses left |
+| `stele emit chain` | source-chain links for the pushed revision and any holes earlier lapses left; `--no-append` signs and writes them to a directory without touching the ledger |
+| `stele emit chain-append` | the push half: links `emit chain --no-append` wrote, each verified as `verify chain` would and proven to extend the ledger's current tip, appended and pushed with no signing identity |
 | `stele emit vsa` | the build-track VSA predicate, from a full release verification; beside it, when the assert policy owes one, the release tag's signed source verdict |
 | `stele emit manifest` | the release evidence manifest: the declared contract a stranger reads at the tag |
 | `stele emit enrichment` | the build-enrichment predicate: the names the policy's `build.enrichment` owes, each computed from the source the caller declares |
