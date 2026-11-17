@@ -14,9 +14,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/gh"
 )
@@ -251,36 +254,117 @@ func TestCommitSHA(t *testing.T) {
 	}
 }
 
-// TestOwnerAttestations holds the owner-level read: an empty repository
-// asks the owner's whole store, the endpoint an image's attestations are
-// found at when its name is not its repository's.
-func TestOwnerAttestations(t *testing.T) {
-	t.Parallel()
+// The recorded owner-level answers (testdata/owner-attestations/SOURCE.md).
+const (
+	labPgHex = "ca2d60b355aeaf2837e96cdb5b7595cf09398260c864e08bcf39c91f79f76384"
+	miseHex  = "23ba592fcbc61f057e2b82c1eafd085832712ba0c759b714ca16cd06babca378"
+)
 
-	const digest = "1111111111111111111111111111111111111111111111111111111111111111"
+// recordedOwner reads one recorded answer.
+func recordedOwner(t *testing.T, name string) []byte {
+	t.Helper()
+
+	b, err := os.ReadFile(filepath.Join("testdata", "owner-attestations", name)) //nolint:gosec // fixed testdata
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return b
+}
+
+// ownerForge serves the recorded owner-level answers, each at the one
+// documented path for its kind of account, so a read through the other
+// form finds nothing there.
+func ownerForge(t *testing.T) *gh.Client {
+	t.Helper()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/orgs/acme/attestations/sha256:"+digest, func(w http.ResponseWriter, _ *http.Request) {
-		writeBody(w, []byte(`{"attestations": [{"bundle": {"owner": true}}]}`))
-	})
-	mux.HandleFunc("/repos/acme/widget/attestations/sha256:"+digest, func(w http.ResponseWriter, _ *http.Request) {
-		writeBody(w, []byte(`{"attestations": [{"bundle": {"repo": true}}]}`))
-	})
+
+	for path, file := range map[string]string{
+		"/users/monumental-archive": "type-monumental-archive.json",
+		"/users/jdx":                "type-jdx.json",
+		"/orgs/monumental-archive/attestations/sha256:" + labPgHex:              "orgs-monumental-archive.json",
+		"/users/jdx/attestations/sha256:" + miseHex:                             "users-jdx.json",
+		"/repos/monumental-archive/release-lab/attestations/sha256:" + labPgHex: "orgs-monumental-archive.json",
+	} {
+		body := recordedOwner(t, file)
+
+		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) { writeBody(w, body) })
+	}
+
+	for path, body := range map[string]string{
+		"/users/ghost-bot":  `{"login": "ghost-bot", "type": "Bot"}`,
+		"/users/typeless":   `{"login": "typeless"}`,
+		"/users/unparsable": `not json`,
+		"/users/unreadable": ``,
+	} {
+		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			if body == "" {
+				w.WriteHeader(http.StatusForbidden)
+
+				return
+			}
+
+			writeBody(w, []byte(body))
+		})
+	}
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
 	c := gh.New("")
 	c.Base = srv.URL
+	c.Sleep = func(time.Duration) {}
 	ownTransport(c, srv)
 
-	owner, err := c.Attestations("acme", "", digest)
-	if err != nil || len(owner) != 1 || string(owner[0]) != `{"owner": true}` {
-		t.Fatalf("owner store = %s, %v", owner, err)
+	return c
+}
+
+// TestOwnerAttestations holds the owner-level read on the recorded
+// answers: an empty repository asks the owner's whole store, in the
+// documented form for the owner's kind — an organisation's under
+// /orgs, a user's under /users — through the same envelope as a
+// repository's store.
+func TestOwnerAttestations(t *testing.T) {
+	t.Parallel()
+
+	c := ownerForge(t)
+
+	for _, tt := range []struct{ owner, repo, hex string }{
+		{"monumental-archive", "", labPgHex},
+		{"jdx", "", miseHex},
+		{"monumental-archive", "release-lab", labPgHex},
+	} {
+		got, err := c.Attestations(tt.owner, tt.repo, tt.hex)
+		if err != nil || len(got) != 1 || !strings.Contains(string(got[0]), `"dsseEnvelope"`) {
+			t.Fatalf("Attestations(%s, %q) = %d bundle(s), %v; want the recorded one", tt.owner, tt.repo, len(got), err)
+		}
 	}
 
-	repo, err := c.Attestations("acme", "widget", digest)
-	if err != nil || len(repo) != 1 || string(repo[0]) != `{"repo": true}` {
-		t.Fatalf("repository store = %s, %v", repo, err)
+	// A digest the owner's store holds nothing for is an empty store,
+	// the answer the repository read gives too.
+	if got, err := c.Attestations("monumental-archive", "", strings.Repeat("1", 64)); err != nil || len(got) != 0 {
+		t.Fatalf("an absent digest = %v, %v; want the empty store", got, err)
+	}
+}
+
+// TestOwnerAttestationsRefusals: an owner whose store cannot be named
+// is refused by name, never read as an empty store — an empty answer
+// there would be a finding against a base nobody could look up.
+func TestOwnerAttestationsRefusals(t *testing.T) {
+	t.Parallel()
+
+	c := ownerForge(t)
+
+	for owner, want := range map[string]string{
+		"nobody":     `gh: owner "nobody" does not exist`,
+		"ghost-bot":  `gh: owner "ghost-bot" is a Bot account, which keeps no attestation store`,
+		"typeless":   `gh: owner "typeless": the forge states no account type`,
+		"unparsable": "gh: owner unparsable:",
+		"unreadable": "HTTP 403",
+	} {
+		if got, err := c.Attestations(owner, "", labPgHex); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Attestations(%s) = %v, %v; want the refusal %q", owner, got, err, want)
+		}
 	}
 }

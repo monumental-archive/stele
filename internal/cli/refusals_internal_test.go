@@ -703,8 +703,8 @@ func provenanceScopePolicy(t *testing.T) *assert.Policy {
 	    "classes": {"oci-image": {"bundles": ["b.jsonl"]}},
 	    "baseImages": {"scopes": [{"name": "org-bases", "mechanism": "provenance-verified",
 	      "fromFile": "Dockerfile", "registryPrefix": "ghcr.io/acme/",
-	      "signerWorkflow": "acme/signer/.github/workflows/sign.yml",
-	      "refs": [{"tag": "^(?P<version>[0-9.]+)$", "ref": "refs/tags/v${version}"}],
+	      "pinPattern": "^ghcr\\.io/acme/(?P<repo>[a-z-]+):(?P<version>[0-9.]+)@sha256:[0-9a-f]{64}$",
+	      "identity": "https://github.com/acme/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
 	      "predicateType": "https://slsa.dev/provenance/v1"}]}}}`
 
 	pol, err := assert.LoadPolicy(strings.NewReader(content))

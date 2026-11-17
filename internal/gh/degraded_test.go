@@ -69,6 +69,13 @@ func everyRead() []read {
 
 			return len(out) > 0, err
 		}},
+		// The owner's store is named by the owner's kind, read first: a
+		// 404 there is an owner that does not exist, never an answer.
+		{name: "OwnerAttestations", decodes: true, call: func(c *gh.Client) (bool, error) {
+			out, err := c.Attestations("acme", "", testHex)
+
+			return len(out) > 0, err
+		}},
 		{name: "PackageVersionDigest", decodes: true, call: func(c *gh.Client) (bool, error) {
 			out, err := c.PackageVersionDigest("acme", "widget", "latest")
 
