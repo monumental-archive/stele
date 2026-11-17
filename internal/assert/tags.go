@@ -19,8 +19,9 @@
 // declaration's job, and moving under the walk when the ledger was
 // re-emitted). The chain link is the only thing a ledger can witness,
 // and it witnesses from its genesis onward — the oldest link-noted
-// revision whose first parent carries no link. For a target the
-// genesis does not reach, the missing link is UNKNOWABLE rather than
+// revisions whose first parent carries no link, every one tied at that
+// commit time (stele#414). For a target no member of the genesis
+// reaches, the missing link is UNKNOWABLE rather than
 // defective: the finding is recorded and carries a derived exception
 // naming the horizon, so the tag stays visible, stays counted and
 // never reddens. Whether a repository founds a chain at all is
@@ -338,8 +339,14 @@ func (w *tagsWalk) split(repo, epoch string, listed []gitrepo.TagRef) (tagCount,
 // the revisions it links, and the founded genesis before which it
 // says nothing at all.
 type chainHorizon struct {
-	noted   map[string]bool
-	genesis string
+	noted map[string]bool
+	// genesis is every genesis candidate tied at the oldest commit time,
+	// sorted by revision id — one member in every ledger seen so far,
+	// none when the ledger founds no chain (stele#414). A set, never a
+	// pick: two branches founded in the same second are a legitimate
+	// history, and choosing one of them would rest the verdict on
+	// whichever the walk happened to see first.
+	genesis []string
 }
 
 // unwitnessed names why the ledger cannot answer for one target — the
@@ -347,15 +354,22 @@ type chainHorizon struct {
 // from one definition, so the excuse in the document and the sentence
 // in the log can never say different things.
 func (h chainHorizon) unwitnessed(target string) string {
-	if h.genesis == "" {
+	switch len(h.genesis) {
+	case 0:
 		return "the ledger founds no chain, so no link on target " + target + " can be witnessed here"
-	}
+	case 1:
+		return "the ledger's founded genesis " + h.genesis[0] + " does not reach target " + target
+	default:
+		last := len(h.genesis) - 1
 
-	return "the ledger's founded genesis " + h.genesis + " does not reach target " + target
+		return "the ledger's founded genesis is tied at one commit time between " +
+			strings.Join(h.genesis[:last], ", ") + " and " + h.genesis[last] +
+			", and none of them reaches target " + target
+	}
 }
 
-// horizon derives the linked-revision set and the chain genesis — the
-// oldest link whose first parent carries no link.
+// horizon derives the linked-revision set and the chain genesis — every
+// link of the oldest commit time whose first parent carries no link.
 func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 	notes, err := w.git.ChainNotes(w.org, repo, *w.pol.NotesRef)
 	if err != nil {
@@ -377,7 +391,10 @@ func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 
 	var unreachable []string
 
-	for rev := range h.noted {
+	// In revision-id order, never the map's: the genesis set, the
+	// skipped links, the lines naming them and even which revision a
+	// failing read names come out the same on every run (stele#414).
+	for _, rev := range sortedRevs(h.noted) {
 		// A linked revision no branch and no tag reaches is an ancestor
 		// of no tag's target, so it can witness nothing (stele#408): it
 		// stays in the linked set and is never a genesis candidate. Read
@@ -406,17 +423,21 @@ func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 			continue // its first parent is linked: not a genesis candidate
 		}
 
-		if h.genesis == "" || meta.CommitEpoch < gtime {
-			h.genesis, gtime = rev, meta.CommitEpoch
+		// Every candidate of the oldest commit time, kept as a set: what
+		// the loop ends holding does not depend on the order the map
+		// yields revisions in (stele#414).
+		switch {
+		case len(h.genesis) == 0 || meta.CommitEpoch < gtime:
+			h.genesis, gtime = []string{rev}, meta.CommitEpoch
+		case meta.CommitEpoch == gtime:
+			h.genesis = append(h.genesis, rev)
 		}
 	}
 
-	// Named one line each, in order, and counted in the report: a ledger
-	// that links commits no branch or tag reaches is visible on every
-	// run — whether that ledger is sound is `assert chains`' judgment
-	// (#266), never a finding here.
-	sort.Strings(unreachable)
-
+	// Named one line each, in id order, and counted in the report: a
+	// ledger that links commits no branch or tag reaches is visible on
+	// every run — whether that ledger is sound is `assert chains`'
+	// judgment (#266), never a finding here.
 	for _, rev := range unreachable {
 		w.log("assert: tags: %s: the ledger links %s, a commit no branch or tag reaches — "+
 			"it witnesses no tag and is not a genesis candidate", repo, rev)
@@ -429,22 +450,41 @@ func (w *tagsWalk) horizon(repo string) (chainHorizon, error) {
 	return h, nil
 }
 
+// sortedRevs lists a revision set in id order.
+func sortedRevs(set map[string]bool) []string {
+	revs := make([]string, 0, len(set))
+	for rev := range set {
+		revs = append(revs, rev)
+	}
+
+	sort.Strings(revs)
+
+	return revs
+}
+
 // witnesses reports whether the ledger is in a position to answer for
-// one target at all: the founded genesis reaches it. A ledger that
-// founds no chain witnesses nothing — that absence is `assert chains`'
-// finding (#266), and judging it again here would redden every tag of
-// a repository for one missing ledger.
+// one target at all: a member of the founded genesis reaches it. With
+// a tie, either founded chain may be the one that reaches the tag, so
+// any member is enough — which judges at least every tag a single pick
+// would have, and never excuses one a run could have judged
+// (stele#414). Asked in id order, so even a failing read is the same
+// read on every run. A ledger that founds no chain witnesses nothing —
+// that absence is `assert chains`' finding (#266), and judging it
+// again here would redden every tag of a repository for one missing
+// ledger.
 func (w *tagsWalk) witnesses(repo, subject, target string, h chainHorizon) (bool, error) {
-	if h.genesis == "" {
-		return false, nil
+	for _, genesis := range h.genesis {
+		within, err := w.git.IsAncestor(w.org, repo, genesis, target)
+		if err != nil {
+			return false, fmt.Errorf("assert: ancestry of %s: %w", subject, err)
+		}
+
+		if within {
+			return true, nil
+		}
 	}
 
-	within, err := w.git.IsAncestor(w.org, repo, h.genesis, target)
-	if err != nil {
-		return false, fmt.Errorf("assert: ancestry of %s: %w", subject, err)
-	}
-
-	return within, nil
+	return false, nil
 }
 
 // tag judges one member of the population and reports whether every
