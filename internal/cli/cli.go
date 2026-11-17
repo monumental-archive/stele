@@ -307,7 +307,8 @@ derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
---date --changelog]; bump adds [--check --date]; release-plan takes the
+--date --changelog]; bump adds [--check --date --expect
+--manifest-dir]; release-plan takes the
 notes flags plus [--branch --staging --subject --also --prepare --out].
 
 exit codes: 0 success; 1 refused — a judgment that found divergence,
