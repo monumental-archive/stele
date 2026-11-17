@@ -727,7 +727,7 @@ func TestLoadFullDepthRefusesABrokenRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadFullDepth(vp, []byte("not a trusted root"), &storeForge{}, noPins{}); err == nil {
+	if _, _, err := loadFullDepth(vp, []byte("not a trusted root"), &storeForge{}, noPins{}, false, nil); err == nil {
 		t.Fatal("loadFullDepth accepted a root that is not one")
 	}
 }

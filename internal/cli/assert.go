@@ -18,7 +18,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/assert"
@@ -383,11 +382,13 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if depth == depthFull {
-		fd, pins, derr := openFullDepth(verifyPolicyPath, rootJSON, forge, out.logf)
+		owesSource := pol.Evidence.SourceVerdictFromVersion != nil
+
+		fd, closeAll, derr := openFullDepth(verifyPolicyPath, rootJSON, forge, owesSource, out.logf)
 		if derr != nil {
 			return usageFail(derr.Error())
 		}
-		defer closeSession(pins, stderr)
+		defer closeAll(stderr)
 
 		full = fd
 	}
@@ -1372,15 +1373,12 @@ var newTagVerifier = func(rootJSON []byte, sanPattern, issuer string) (assert.Ta
 		return nil, fmt.Errorf("verifier: %w", err)
 	}
 
-	re, err := regexp.Compile(sanPattern)
+	id, err := tagIdentity(sanPattern, issuer)
 	if err != nil {
-		return nil, fmt.Errorf("identity pattern: %w", err)
+		return nil, err
 	}
 
-	return tagTrust{
-		v:  v,
-		id: trust.TagIdentity{SANPattern: re, Issuer: issuer},
-	}, nil
+	return tagTrust{v: v, id: id}, nil
 }
 
 // tagTrust adapts trust.VerifyTag to the walk's seam.

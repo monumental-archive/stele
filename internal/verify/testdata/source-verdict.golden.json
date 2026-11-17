@@ -1,0 +1,39 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "uri": "https://github.com/acme/widget/commit/1111111111111111111111111111111111111111",
+      "digest": { "gitCommit": "1111111111111111111111111111111111111111" },
+      "annotations": { "sourceRefs": ["refs/tags/v1.2.3"] }
+    }
+  ],
+  "predicateType": "https://slsa.dev/verification_summary/v1",
+  "predicate": {
+    "verifier": {
+      "id": "https://github.com/acme/canon/.github/workflows/verify-release.yml"
+    },
+    "timeVerified": "2026-11-17T12:00:00Z",
+    "resourceUri": "git+https://github.com/acme/widget",
+    "policy": {
+      "uri": "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
+      "digest": { "gitCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    "inputAttestations": [
+      {
+        "uri": "git+https://github.com/acme/widget@refs/notes/commits#1111111111111111111111111111111111111111/provenance",
+        "digest": {
+          "sha256": "b7a7b56c63d3837529678af076c30b33ca4ef7bdbcc17f8f9ebca1308477b17e"
+        }
+      },
+      {
+        "uri": "git+https://github.com/acme/widget@refs/notes/commits#1111111111111111111111111111111111111111/vsa",
+        "digest": {
+          "sha256": "9656103919c192f28f6db7de1f2d099195097ba0ce6334ebdcf34d14ee950ec3"
+        }
+      }
+    ],
+    "verificationResult": "PASSED",
+    "verifiedLevels": ["SLSA_SOURCE_LEVEL_3"],
+    "slsaVersion": "1.2"
+  }
+}

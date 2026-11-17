@@ -57,6 +57,10 @@ type ChainVerdict struct {
 	ledgerSteps int
 	ledgerTotal int
 	tip         *TipFacts
+	// verified holds every link coverage verified, by revision — the
+	// facts a per-commit verdict reads (stele#391). The tip is one of
+	// them; nothing else may enter.
+	verified map[string]*TipFacts
 }
 
 // Links reports how many chain links coverage verified.
@@ -79,6 +83,7 @@ type TipFacts struct {
 	properties map[string]bool
 	repaired   bool
 	vsaLevels  []string
+	halves     []Ref
 }
 
 // Revision is the tip link's revision.
@@ -114,6 +119,27 @@ func (f *TipFacts) VSALevels() []string {
 	copy(out, f.vsaLevels)
 
 	return out
+}
+
+// Halves names the link's two signed halves — provenance, then the
+// summary — by the ledger address they were read from and the sha256
+// of each half's signature bundle: the evidence a verdict copying this
+// link's level rests on, in the inputAttestations shape.
+func (f *TipFacts) Halves() []Ref {
+	out := make([]Ref, len(f.halves))
+	copy(out, f.halves)
+
+	return out
+}
+
+// Link returns the verified facts of the link on one revision of the
+// walked branch. ok=false means this walk verified no link there —
+// the revision is off the walked first-parent history, or carries
+// none — never that a link failed: a failing link refused the walk.
+func (v *ChainVerdict) Link(rev string) (*TipFacts, bool) {
+	facts, ok := v.verified[rev]
+
+	return facts, ok
 }
 
 // Tip returns the verified tip link's facts. ok=false means the walk
@@ -190,7 +216,7 @@ func (w *walker) coverage(ref string, h History, log Logf) (*ChainVerdict, error
 		return nil, fmt.Errorf("verify: %s: %w", ref, err)
 	}
 
-	verdict := &ChainVerdict{}
+	verdict := &ChainVerdict{verified: map[string]*TipFacts{}}
 
 	var holes []string
 
@@ -211,6 +237,7 @@ func (w *walker) coverage(ref string, h History, log Logf) (*ChainVerdict, error
 
 			verdict.links++
 			w.signings = append(w.signings, signing)
+			verdict.verified[rev] = facts
 
 			if w.lstart == "" {
 				w.lstart = rev
@@ -355,6 +382,7 @@ func (w *walker) judgeLink(
 		properties: map[string]bool{},
 		repaired:   pred.Repaired != nil,
 		vsaLevels:  levels,
+		halves:     []Ref{w.halfRef(rev, "provenance", link.Provenance), w.halfRef(rev, "vsa", link.VSA)},
 	}
 
 	if pred.CommitTime != nil {
@@ -368,6 +396,18 @@ func (w *walker) judgeLink(
 	}
 
 	return facts, genesis, nil
+}
+
+// halfRef addresses one verified half: the ledger it lives in, the
+// revision its note annotates and which half it is, with the sha256
+// of the bundle that signed it — the bytes this walk verified. The
+// address is stele's own convention, built on the policy's declared
+// source resource rather than a host written here:
+// <source.resourceUri>@<notesRef>#<revision>/<half>.
+func (w *walker) halfRef(rev, name string, env *chain.Envelope) Ref {
+	uri := expand(*w.p.Source.ResourceURI, w.c) + "@" + *w.p.Source.NotesRef + "#" + rev + "/" + name
+
+	return Ref{URI: uri, SHA256: sha256Hex(env.Bundle)}
 }
 
 // verifyHalf proves one half's signature over the DSSE

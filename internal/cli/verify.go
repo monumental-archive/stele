@@ -33,12 +33,13 @@ import (
 // prove the claim. Distinct from usage (2) and stream failure (3).
 const exitRefused = 1
 
-// The four mode names, the dispatch vocabulary.
+// The mode names, the dispatch vocabulary.
 const (
-	modeRelease = "release"
-	modeVSA     = "vsa"
-	modeChain   = "chain"
-	modeRepro   = "repro"
+	modeRelease   = "release"
+	modeVSA       = "vsa"
+	modeSourceVSA = "source-vsa"
+	modeChain     = "chain"
+	modeRepro     = "repro"
 )
 
 // The effect seams, swapped only by tests: building the
@@ -205,13 +206,17 @@ type verifyArgs struct {
 	sbomList      []verify.Subject
 	inventoryList []verify.Subject
 	bv            verify.BundleVerifier
+	// source-vsa: the assert policy names the asset the verdict is
+	// published as.
+	assertPolicy string
+	sourceAsset  string
 }
 
 // verifyCmd dispatches `stele verify <mode>`.
 func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele verify: a mode is required: release, vsa, chain, repro or policy"); err != nil {
+			"stele verify: a mode is required: release, vsa, source-vsa, chain, repro or policy"); err != nil {
 			return exitIO
 		}
 
@@ -231,10 +236,10 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 		// WITH — and writes nothing on success, which is why it takes
 		// only the stream it refuses on.
 		return loadPolicyDoc(args[1:], stderr)
-	case modeRelease, modeVSA, modeChain:
+	case modeRelease, modeVSA, modeSourceVSA, modeChain:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele verify: unknown mode %q (release, vsa, chain, repro, policy)\n", mode); err != nil {
+			"stele verify: unknown mode %q (release, vsa, source-vsa, chain, repro, policy)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -851,6 +856,10 @@ func declaredPop(va *verifyArgs) report.Population {
 		return report.PopulationFromEvidence(len(va.subjectList), "release subjects")
 	}
 
+	if va.mode == modeSourceVSA {
+		return report.PopulationFromEvidence(1, "release tag")
+	}
+
 	return report.PopulationFromEvidence(1, "branch ref under walk")
 }
 
@@ -883,6 +892,8 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&va.machineryPin, "machinery-digest", "",
 			"commit digest the verifier/decision identities are pinned at (required)")
+	case modeSourceVSA:
+		registerSourceVSAFlags(fs, va)
 	case modeChain:
 		fs.StringVar(&va.gitDir, "git-dir", "", "local clone with the branch and notes ref fetched (required)")
 		fs.StringVar(&va.ref, "ref", "refs/heads/main", "fully qualified branch ref to walk")
@@ -950,6 +961,12 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 	if va.mode == modeRelease {
 		if berr := va.loadSBOMs(); berr != nil {
 			return fail(berr)
+		}
+	}
+
+	if va.mode == modeSourceVSA {
+		if serr := va.loadSourceVSA(); serr != nil {
+			return fail(serr)
 		}
 	}
 
@@ -1079,7 +1096,7 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 
 		return &verifyOutcome{
 			pop:   report.PopulationFromEvidence(len(va.subjectList), "release subjects"),
-			facts: []report.Fact{{Name: "sourceRevision", Value: verdict.SourceRevision()}},
+			facts: []report.Fact{{Name: factSourceRevision, Value: verdict.SourceRevision()}},
 		}, nil
 	case modeVSA:
 		// The empty demand, never nil: a stranger has no evidence
@@ -1099,13 +1116,15 @@ func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 		// declares that obligation, because a verdict alone does not
 		// carry it.
 		if rev := verdict.SourceRevision(); rev != "" {
-			facts = append(facts, report.Fact{Name: "sourceRevision", Value: rev})
+			facts = append(facts, report.Fact{Name: factSourceRevision, Value: rev})
 		}
 
 		return &verifyOutcome{
 			pop:   report.PopulationFromEvidence(len(va.subjectList), "release subjects"),
 			facts: facts,
 		}, nil
+	case modeSourceVSA:
+		return runSourceVSA(va, out)
 	default: // chain — the mode switch upstream admits no other value
 		return runWalk(va, out)
 	}
