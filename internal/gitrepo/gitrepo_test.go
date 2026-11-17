@@ -683,70 +683,147 @@ func TestPreflightProofs(t *testing.T) {
 	}
 }
 
-// TestEnvScrubsRepoLocators pins the hook-safety guarantee: every
-// environment variable through which git resolves a repository
-// independently of `-C dir` is removed, one table row per variable.
-// A git hook exports GIT_DIR, and the belt's pre-push runs this
+// TestEnvScrubsEveryLocalEnvVar pins the hook-safety guarantee
+// against git's OWN list: every variable the installed git names as
+// repository-local (`git rev-parse --local-env-vars`), GIT_NAMESPACE,
+// and a GIT_CONFIG_COUNT pair are set, and Env must carry none of
+// them. A git hook exports GIT_DIR, and the belt's pre-push runs this
 // suite — an inherited locator silently redirects every fixture
 // command into the REAL repository (observed live: fixture commits
-// landing on a work branch during push, stele#101's PR).
-func TestEnvScrubsRepoLocators(t *testing.T) {
-	locators := []string{
-		"GIT_DIR",
-		"GIT_WORK_TREE",
-		"GIT_INDEX_FILE",
-		"GIT_OBJECT_DIRECTORY",
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
-		"GIT_COMMON_DIR",
-		"GIT_NAMESPACE",
-		"GIT_PREFIX",
+// landing on a work branch during push, stele#101's PR); an inherited
+// config variable carries configuration past the /dev/null pins
+// (stele#426). A git release that adds a local variable reds this.
+func TestEnvScrubsEveryLocalEnvVar(t *testing.T) {
+	//nolint:noctx // local probe, no cancellation surface
+	out, err := exec.Command("git", "rev-parse", "--local-env-vars").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --local-env-vars: %v", err)
 	}
 
-	for _, name := range locators {
-		t.Run(name, func(t *testing.T) { //nolint:paralleltest // t.Setenv forbids parallel
-			t.Setenv(name, "/decoy")
+	names := append(strings.Fields(string(out)), "GIT_NAMESPACE", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0")
+	if len(names) < 15 {
+		t.Fatalf("git names only %d local variable(s): %v", len(names), names)
+	}
 
-			for _, kv := range gitrepo.Env() {
-				if strings.HasPrefix(kv, name+"=") {
-					t.Fatalf("Env() carries %s — a hook's repository would hijack -C", kv)
+	for _, name := range names {
+		t.Setenv(name, "/decoy")
+	}
+
+	for _, kv := range gitrepo.Env() {
+		name, _, _ := strings.Cut(kv, "=")
+		if slices.Contains(names, name) {
+			t.Errorf("Env() carries %s — an inherited repository-local variable reaches every spawned git", kv)
+		}
+	}
+}
+
+// TestEnvExtrasAndPins proves the config pins survive and extras
+// append after them, so a caller's override wins — including a
+// GIT_CONFIG_COUNT of the caller's own over an inherited one the
+// scrub removed (auth.go's credential header rides exactly so).
+func TestEnvExtrasAndPins(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "7")
+
+	for _, tt := range []struct {
+		name  string
+		extra []string
+		want  []string
+		gone  []string
+	}{
+		{
+			name:  "pins and an extra",
+			extra: []string{"GIT_AUTHOR_NAME=t"},
+			want:  []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_AUTHOR_NAME=t"},
+			gone:  []string{"GIT_CONFIG_COUNT=7"},
+		},
+		{
+			name:  "an extra GIT_CONFIG_COUNT survives",
+			extra: []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=x"},
+			want:  []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=x"},
+			gone:  []string{"GIT_CONFIG_COUNT=7"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := gitrepo.Env(tt.extra...)
+
+			for _, want := range tt.want {
+				if !slices.Contains(env, want) {
+					t.Errorf("Env() lacks %s", want)
+				}
+			}
+
+			for _, gone := range tt.gone {
+				if slices.Contains(env, gone) {
+					t.Errorf("Env() still carries the inherited %s", gone)
 				}
 			}
 		})
 	}
 }
 
-// TestEnvExtrasAndPins proves the config pins survive and extras
-// append after them, so a caller's override wins.
-func TestEnvExtrasAndPins(t *testing.T) {
-	t.Parallel()
+// TestEnvHookedGitStaysInDir is the behavioural half: with a hook's
+// environment inherited — GIT_DIR pointing at a decoy repository, or
+// a GIT_CONFIG_COUNT pair declaring the repository bare — a fixture
+// git still operates on the -C work tree and the decoy stays empty.
+func TestEnvHookedGitStaysInDir(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		env  func(decoy string) map[string]string
+	}{
+		{
+			name: "an inherited GIT_DIR",
+			env: func(decoy string) map[string]string {
+				return map[string]string{"GIT_DIR": filepath.Join(decoy, ".git")}
+			},
+		},
+		{
+			// The row stele#426 names. Measured on git 2.50.1: repository
+			// discovery reads core.bare from the repository's own config
+			// only, so this row holds even without the scrub — the row
+			// below is the one that reds when inherited config leaks.
+			name: "an inherited config pair making the repository bare",
+			env: func(string) map[string]string {
+				return map[string]string{
+					"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.bare", "GIT_CONFIG_VALUE_0": "true",
+				}
+			},
+		},
+		{
+			name: "an inherited config pair changing what a read reports",
+			env: func(string) map[string]string {
+				return map[string]string{
+					"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.abbrev", "GIT_CONFIG_VALUE_0": "40",
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			decoy := t.TempDir()
+			fx := repo(t)
 
-	env := gitrepo.Env("GIT_AUTHOR_NAME=t")
+			for k, v := range tt.env(decoy) {
+				t.Setenv(k, v)
+			}
 
-	for _, want := range []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_AUTHOR_NAME=t"} {
-		if !slices.Contains(env, want) {
-			t.Errorf("Env() lacks %s", want)
-		}
-	}
-}
+			git := gitCmd(t, fx.dir)
+			git("commit", "-q", "--allow-empty", "-m", "chore: stay home")
 
-// TestEnvHookedGitStaysInDir is the behavioural half: with GIT_DIR
-// pointing at a decoy repository (a hook's environment), a fixture
-// git still operates on the -C directory and the decoy stays empty.
-func TestEnvHookedGitStaysInDir(t *testing.T) { //nolint:paralleltest // t.Setenv forbids parallel
-	decoy := t.TempDir()
-	fx := repo(t)
+			tip := strings.TrimSpace(git("rev-parse", "HEAD"))
+			if strings.TrimSpace(git("log", "-1", "--format=%s")) != "chore: stay home" || tip == fx.tip {
+				t.Fatal("the commit did not land in the -C repository")
+			}
 
-	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+			if bare := strings.TrimSpace(git("rev-parse", "--is-bare-repository")); bare != "false" {
+				t.Fatalf("the -C work tree reads as bare=%s — inherited configuration reached the child git", bare)
+			}
 
-	git := gitCmd(t, fx.dir)
-	git("commit", "-q", "--allow-empty", "-m", "chore: stay home")
+			if short := strings.TrimSpace(git("rev-parse", "--short", "HEAD")); len(short) == len(tip) {
+				t.Fatalf("--short answered the full %s — inherited configuration reached the child git", short)
+			}
 
-	tip := strings.TrimSpace(git("rev-parse", "HEAD"))
-	if strings.TrimSpace(git("log", "-1", "--format=%s")) != "chore: stay home" || tip == fx.tip {
-		t.Fatal("the commit did not land in the -C repository")
-	}
-
-	if _, err := os.Stat(filepath.Join(decoy, ".git")); err == nil {
-		t.Fatal("the decoy GIT_DIR was written — the hook's repository would have been vandalised")
+			if _, err := os.Stat(filepath.Join(decoy, ".git")); err == nil {
+				t.Fatal("the decoy GIT_DIR was written — the hook's repository would have been vandalised")
+			}
+		})
 	}
 }
