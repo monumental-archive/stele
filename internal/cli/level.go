@@ -40,7 +40,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	yaml "go.yaml.in/yaml/v3"
+	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"

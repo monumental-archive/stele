@@ -8,7 +8,7 @@ package manifest
 import (
 	"fmt"
 
-	yaml "go.yaml.in/yaml/v3"
+	yaml "go.yaml.in/yaml/v4"
 )
 
 // citation is the pair of rewritten scalars: two sites of one type, in
