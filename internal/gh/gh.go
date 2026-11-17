@@ -869,9 +869,76 @@ func (c *Client) FailedRuns(owner, repo, branch string) ([]string, error) {
 	return out, nil
 }
 
-func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
-	u := fmt.Sprintf("%s/%s/%s/releases/download/%s/%s", c.Download,
+// AssetURL is the public download address of one release asset: the
+// address a stranger pulls, and the one Asset reads. One definition, so
+// a leg that downloads through another client — the release proof,
+// which pulls anonymously and on its own schedule — cannot spell it
+// differently from this one.
+func (c *Client) AssetURL(owner, repo, tag, name string) string {
+	return fmt.Sprintf("%s/%s/%s/releases/download/%s/%s", c.Download,
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(tag), url.PathEscape(name))
+}
+
+// commitResponse is the one field of a commit the resolution reads.
+type commitResponse struct {
+	SHA string `json:"sha"`
+}
+
+// CommitSHA resolves a ref — a tag, a branch, a commit — to the commit
+// it names now. ok=false means the forge knows no such ref there: an
+// answer, kept apart from a read that failed.
+//
+//nolint:gocritic // unnamedResult: the commit, whether the ref exists, the error
+func (c *Client) CommitSHA(owner, repo, ref string) (string, bool, error) {
+	body, _, found, err := c.get(
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/commits/"+url.PathEscape(ref), ghJSON,
+	)
+	if err != nil || !found {
+		return "", false, err
+	}
+
+	commit, err := jsonx.DecodeForeign[commitResponse](body)
+	if err != nil {
+		return "", false, fmt.Errorf("gh: commit %s/%s@%s: %w", owner, repo, ref, err)
+	}
+
+	return commit.SHA, true, nil
+}
+
+// BlobURL is where a stranger reads one file of a repository at a
+// revision, on the forge's own pages: the address a policy document is
+// cited by. RawURL is the same file's bytes. Both are the forge's
+// standard layout, defined once here for every leg that cites a file.
+func (c *Client) BlobURL(owner, repo, rev, path string) string {
+	return fmt.Sprintf("%s/%s/%s/blob/%s/%s", c.Download, url.PathEscape(owner), url.PathEscape(repo),
+		url.PathEscape(rev), escapePath(path))
+}
+
+// RawURL is one file's bytes at a revision. The public forge serves
+// them from its raw host; an enterprise host serves them under the
+// repository's /raw/ path.
+func (c *Client) RawURL(owner, repo, rev, path string) string {
+	if c.Download == DefaultServer {
+		return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", url.PathEscape(owner),
+			url.PathEscape(repo), url.PathEscape(rev), escapePath(path))
+	}
+
+	return fmt.Sprintf("%s/%s/%s/raw/%s/%s", c.Download, url.PathEscape(owner), url.PathEscape(repo),
+		url.PathEscape(rev), escapePath(path))
+}
+
+// escapePath escapes a repository-relative path segment by segment.
+func escapePath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+
+	return strings.Join(parts, "/")
+}
+
+func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
+	u := c.AssetURL(owner, repo, tag, name)
 
 	//nolint:noctx // the CLI has no cancellation surface; the client carries the timeout
 	req, err := http.NewRequest(http.MethodGet, u, http.NoBody)

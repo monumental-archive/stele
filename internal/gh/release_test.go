@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/gh"
@@ -140,5 +141,112 @@ func TestReleaseByTagUnreadableBody(t *testing.T) {
 
 	if _, found, err := client.ReleaseByTag("acme", "widget", "v1.0.0"); err == nil || found {
 		t.Errorf("ReleaseByTag = (%t, %v), want a decode refusal", found, err)
+	}
+}
+
+// TestAssetURL holds the one spelling of a release asset's public
+// address, for the forge and for an enterprise host: every path segment
+// escaped, so a name cannot climb out of the release it names.
+func TestAssetURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, server, tag, asset, want string
+	}{
+		{
+			"the public forge", gh.DefaultServer, "v1.0.0", "app.tar.gz",
+			"https://github.com/acme/widget/releases/download/v1.0.0/app.tar.gz",
+		},
+		{
+			"an enterprise host", "https://forge.example.com/", "v1.0.0", "app.bin",
+			"https://forge.example.com/acme/widget/releases/download/v1.0.0/app.bin",
+		},
+		{
+			"a name that tries to leave its release", gh.DefaultServer, "release/1", "../../x y",
+			"https://github.com/acme/widget/releases/download/release%2F1/..%2F..%2Fx%20y",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := gh.NewForServer(tt.server, "").AssetURL("acme", "widget", tt.tag, tt.asset); got != tt.want {
+				t.Fatalf("AssetURL = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFileURLs holds the forge's two citations of a file: its page and
+// its bytes, on the public forge and on an enterprise host.
+func TestFileURLs(t *testing.T) {
+	t.Parallel()
+
+	const rev = "1111111111111111111111111111111111111111"
+
+	pub := gh.New("")
+	ent := gh.NewForServer("https://forge.example.com", "")
+
+	tests := []struct{ got, want string }{
+		{
+			pub.BlobURL("acme", "policy", rev, "slsa/verify policy.json"),
+			"https://github.com/acme/policy/blob/" + rev + "/slsa/verify%20policy.json",
+		},
+		{
+			pub.RawURL("acme", "widget", rev, "Cargo.lock"),
+			"https://raw.githubusercontent.com/acme/widget/" + rev + "/Cargo.lock",
+		},
+		{
+			ent.BlobURL("acme", "policy", rev, "mise/mise.lock"),
+			"https://forge.example.com/acme/policy/blob/" + rev + "/mise/mise.lock",
+		},
+		{
+			ent.RawURL("acme", "widget", rev, "sub/package-lock.json"),
+			"https://forge.example.com/acme/widget/raw/" + rev + "/sub/package-lock.json",
+		},
+	}
+
+	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("got %s, want %s", tt.got, tt.want)
+		}
+	}
+}
+
+// TestCommitSHA holds the ref resolution's three answers: a commit, no
+// such ref, and a body that is not a commit.
+func TestCommitSHA(t *testing.T) {
+	t.Parallel()
+
+	const sha = "1111111111111111111111111111111111111111"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/canon/commits/v1.68.8", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`{"sha": "`+sha+`", "commit": {"message": "x"}}`))
+	})
+	mux.HandleFunc("/repos/acme/canon/commits/garbled", func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`[1, 2]`))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := gh.New("")
+	c.Base = srv.URL
+	ownTransport(c, srv)
+
+	got, ok, err := c.CommitSHA("acme", "canon", "v1.68.8")
+	if err != nil || !ok || got != sha {
+		t.Fatalf("CommitSHA = %q, %v, %v", got, ok, err)
+	}
+
+	if got, ok, err := c.CommitSHA("acme", "canon", "v0.0.0"); err != nil || ok || got != "" {
+		t.Fatalf("an unknown ref = %q, %v, %v; want no answer and no error", got, ok, err)
+	}
+
+	if _, _, err := c.CommitSHA("acme", "canon", "garbled"); err == nil ||
+		!strings.Contains(err.Error(), "gh: commit acme/canon@garbled") {
+		t.Fatalf("a body that is no commit = %v", err)
 	}
 }

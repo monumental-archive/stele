@@ -110,6 +110,10 @@ var (
 	refRE = regexp.MustCompile(`^refs/.+$`)
 )
 
+// PlausibleTag reports whether tag could name a release: the one rule
+// every leg that puts a caller's tag into an address holds it to.
+func PlausibleTag(tag string) bool { return tagRE.MatchString(tag) }
+
 // validateCoords refuses coordinates that could not name a release:
 // every downstream expectation is substituted from these, so a
 // malformed coordinate is a malformed expectation.
@@ -144,6 +148,12 @@ func validateSubjects(subjects []Subject) error {
 
 	return nil
 }
+
+// Expand substitutes the policy template vocabulary for one release —
+// the one expansion every leg that writes or judges a templated field
+// uses, so an emitter and the verifier judging its output cannot
+// expand the same template two ways.
+func Expand(tmpl string, c Coords) string { return expand(tmpl, c) }
 
 // expand substitutes the policy template vocabulary — verbatim,
 // nothing else interpolated (docs/policy-schema.md).

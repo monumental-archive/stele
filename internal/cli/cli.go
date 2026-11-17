@@ -209,6 +209,15 @@ usage:
                  written back, the rest reported outstanding
                  (--policy --checkpoint --org|--repo [--start-at
                  --budget --debt --json])
+    published    a release's declared subjects against the stores
+                 that serve them: every file pulled back and compared
+                 to its built digest (a 404 waited on for ten
+                 minutes, any other failure tried three times), every
+                 image tag resolved to its attested index; the
+                 policy's published section says which registry
+                 serves which file (--policy --repo [--subjects
+                 --images --release-tag --package --mode --rehearsal
+                 --out --debt --json])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,
