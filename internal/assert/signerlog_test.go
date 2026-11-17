@@ -38,8 +38,8 @@ type fakeLog struct {
 	mu     sync.Mutex
 	leaves [][]byte
 	tree   *testonly.Tree
-	// size is the tree head this log serves now; it grows between runs
-	// by being set.
+	// size is the tree head this log serves now; it grows between runs,
+	// through grow.
 	size uint64
 	// align caps a response at the next multiple of align past start;
 	// zero serves everything asked for.
@@ -111,6 +111,55 @@ func (l *fakeLog) logs() logSource {
 type logSource map[string]*root.TransparencyLog
 
 func (s logSource) CTLogs() map[string]*root.TransparencyLog { return s }
+
+// The setters below are the only way a test changes what the log
+// serves (stele#417): every field the handler reads is written under
+// mu, never assigned by a test, so a change made while the server is
+// up cannot race a request it is answering.
+
+// setAlign caps every get-entries answer at the next multiple of n
+// past its start; zero serves everything asked for.
+func (l *fakeLog) setAlign(n uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.align = n
+}
+
+// setHook installs the hook that may answer a request itself; nil
+// removes it.
+func (l *fakeLog) setHook(hook func(w http.ResponseWriter, kind string, entriesBefore int) bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.hook = hook
+}
+
+// setOnEntriesSent installs the callback told how many entries the log
+// has served after each get-entries answer.
+func (l *fakeLog) setOnEntriesSent(sent func(served uint64)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.onEntriesSent = sent
+}
+
+// rewrite edits the log's history under its lock: the forked tree a
+// head is computed over, and the size it serves.
+func (l *fakeLog) rewrite(edit func(l *fakeLog)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	edit(l)
+}
+
+// forget clears the record of requests seen so far.
+func (l *fakeLog) forget() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.requests = nil
+}
 
 // grow serves a larger head; the leaves must already exist.
 func (l *fakeLog) grow(size uint64) {

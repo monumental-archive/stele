@@ -48,7 +48,7 @@ func TestSignerWatchRefusals(t *testing.T) {
 		{
 			name: "a tree head the log will not serve",
 			edit: func(h *harness) {
-				h.log.hook = func(w http.ResponseWriter, kind string, _ int) bool {
+				h.log.setHook(func(w http.ResponseWriter, kind string, _ int) bool {
 					if kind != "sth" {
 						return false
 					}
@@ -56,7 +56,7 @@ func TestSignerWatchRefusals(t *testing.T) {
 					http.NotFound(w, nil)
 
 					return true
-				}
+				})
 			},
 			want: "ctlog: get-sth: HTTP 404",
 		},
@@ -115,7 +115,7 @@ func TestSignerWatchRefusesAnUnprovenHead(t *testing.T) {
 	}
 
 	h.log.grow(1500)
-	h.log.hook = func(w http.ResponseWriter, kind string, _ int) bool {
+	h.log.setHook(func(w http.ResponseWriter, kind string, _ int) bool {
 		if kind != "consistency" {
 			return false
 		}
@@ -123,7 +123,7 @@ func TestSignerWatchRefusesAnUnprovenHead(t *testing.T) {
 		http.Error(w, "no", http.StatusBadRequest)
 
 		return true
-	}
+	})
 
 	if _, err := h.run(0); err == nil || !strings.Contains(err.Error(), "get-sth-consistency 1000..1500: HTTP 400") {
 		t.Fatalf("err = %v, want the unserved proof named", err)
@@ -174,7 +174,7 @@ func TestSignerWatchStopsPartway(t *testing.T) {
 		h := reconcileHarness(t, releaseIndex)
 		h.chunk = 10
 		h.budget = time.Minute
-		h.log.onEntriesSent = func(uint64) { h.clock.Sleep(time.Hour) }
+		h.log.setOnEntriesSent(func(uint64) { h.clock.Sleep(time.Hour) })
 
 		rep, err := h.run(0)
 		if err != nil {
