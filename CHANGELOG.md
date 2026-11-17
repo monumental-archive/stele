@@ -10,6 +10,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.23.0](https://github.com/monumental-archive/stele/compare/v0.22.3...v0.23.0) - 2026-11-17
+
+### Breaking
+
+- read git objects with one git fetch per repository ([#405](https://github.com/monumental-archive/stele/pull/405))
+
+### Fixed
+
+- update golang.org/x/mod to v0.43.0 ([#381](https://github.com/monumental-archive/stele/pull/381))
+- print the evidence that classified a throttle ([#394](https://github.com/monumental-archive/stele/pull/394))
+- pass the token to git through its environment, not argv ([#406](https://github.com/monumental-archive/stele/pull/406))
+
 ## [0.22.3](https://github.com/monumental-archive/stele/compare/v0.22.2...v0.22.3) - 2026-11-15
 
 ### Fixed
