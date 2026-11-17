@@ -441,3 +441,36 @@ func TestDecodeForeignStreamEdges(t *testing.T) {
 		t.Errorf("err = %v, want it to name which value failed", err)
 	}
 }
+
+// TestCompact: whitespace goes and nothing else moves — key order,
+// escapes and number spellings are the document's own — and anything
+// that is not exactly one value is refused.
+func TestCompact(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, in, want, err string
+	}{
+		{"whitespace only", "{\n  \"b\": 1,\n  \"a\": [ 1.0, \"x\\u00e9\" ]\n}\n", "{\"b\":1,\"a\":[1.0,\"x\\u00e9\"]}", ""},
+		{"already compact", `{"a":null}`, `{"a":null}`, ""},
+		{"not JSON", `{"a":`, "", "jsonx: value"},
+		{"two values", `{} {}`, "", "trailing data"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := jsonx.Compact([]byte(tt.in))
+			if tt.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.err) {
+					t.Fatalf("Compact = %q, %v; want an error naming %q", got, err, tt.err)
+				}
+
+				return
+			}
+
+			if err != nil || string(got) != tt.want {
+				t.Fatalf("Compact = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}

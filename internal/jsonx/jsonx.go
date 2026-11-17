@@ -225,5 +225,23 @@ func Value(b []byte) (any, error) {
 	return v, nil
 }
 
+// Compact renders one JSON value with its insignificant whitespace
+// removed and nothing else changed — key order, string escapes and
+// number spellings stay exactly as written, the `jq -c` rendering of a
+// document whose bytes carry nothing jq would respell. Anything that
+// is not exactly one value is refused, as Value refuses it.
+func Compact(b []byte) ([]byte, error) {
+	if _, err := Value(b); err != nil {
+		return nil, err
+	}
+
+	var out bytes.Buffer
+	if err := json.Compact(&out, b); err != nil {
+		return nil, fmt.Errorf("jsonx: compact: %w", err)
+	}
+
+	return out.Bytes(), nil
+}
+
 // Number is a JSON number in its source spelling — see Value.
 type Number = json.Number

@@ -43,10 +43,10 @@ the same statement as this one and tested against it.
 | `stele derive facts` | the OCI image metadata one release asserts on its images |
 | `stele derive vex` | this release's coverage document, findings joined to recorded decisions; the base-layer ecosystems and the author read from the assert policy, the inventories given as pairs or found in a directory |
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
-| `stele derive vex-subjects` | which published releases one VEX decision reaches, and the subjects a claim about it is signed over |
+| `stele derive vex-subjects` | the signing plan for one or more VEX decisions: per decision, the releases it reaches and the subjects a claim about it is signed over, or why it is refused; `--unsigned-only` omits what the attestation store already holds |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
 | `stele derive inventories` | a release's every inventory in one call — per-artifact documents from the judged plans and the view folded from them, the shipped binaries' own, or the forge's dependency graph — and the decision's inventory list |
-| `stele derive inventory-plan` | a build leg's inventory plan: one entry per packaged crate, or one per extension cell, named under the class's planned prefix in the assert policy |
+| `stele derive inventory-plan` | a build leg's inventory plan, by the inventory kind its class declares in the assert policy: one entry per packaged crate, or one per variant cell, named under the class's planned prefix |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |
@@ -68,6 +68,7 @@ the same statement as this one and tested against it.
 | `stele emit chain` | source-chain links for the pushed revision and any holes earlier lapses left; `--no-append` signs and writes them to a directory without touching the ledger |
 | `stele emit chain-append` | the push half: links `emit chain --no-append` wrote, each verified as `verify chain` would and proven to extend the ledger's current tip, appended and pushed with no signing identity |
 | `stele emit vsa` | the build-track VSA predicate, from a full release verification; beside it, when the assert policy owes one, the release tag's signed source verdict |
+| `stele emit decision` | the release decision a commit point signs — its predicate and the sha256 subject lines it covers, refused unless every required proof succeeded |
 | `stele emit manifest` | the release evidence manifest: the declared contract a stranger reads at the tag |
 | `stele emit enrichment` | the build-enrichment predicate: the names the policy's `build.enrichment` owes, each computed from the source the caller declares |
 

@@ -5,12 +5,12 @@
 // artifact, so the leg states it as data from its own inputs; the
 // prove leg derives the closures from that data.
 //
-// Two producers were shell in the canon's build workflows. What each
-// class's leg plans is a release contract fact, so it lives in the
-// rows below beside #393's subject definitions. The prefix a document
-// is named under is NOT one of those facts: it is the class's planned
-// prefix as the assert policy declares it, handed in by the caller,
-// so the producer and the judgment cannot disagree about a name.
+// Nothing here knows a class. A class declares in the assert policy
+// which producer kind writes its plan and that kind's parameters (the
+// artifact suffix, the variant templates), and the documents are named
+// under the class's one planned prefix — so the producer and the
+// judgment read one declaration, and a stranger's class with its own
+// naming shape needs no change here.
 
 package release
 
@@ -24,70 +24,9 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/monumental-archive/stele/internal/assert"
 )
-
-// The plan shapes a class's leg produces.
-const (
-	// shapeCrates plans one document per packaged crate: the leg
-	// packaged crates for a registry, and each crate is an artifact.
-	shapeCrates = "crates"
-	// shapeExtension plans one document for one crate built for one
-	// Postgres major: the same crate built per major is one artifact
-	// per major (#492).
-	shapeExtension = "extension"
-)
-
-// PlanClass is one class's statement of how its build leg plans its
-// inventories: a view of the class's row in the release contract's one
-// list (subjects.go).
-type PlanClass struct {
-	// Name is the evidence class, as the manifest and the policy
-	// spell it, and as the plan entry carries it.
-	Name  string
-	shape string
-}
-
-// PlanClassNamed returns the plan producer for name: the class's row,
-// when the row names a plan shape.
-func PlanClassNamed(name string) (*PlanClass, bool) {
-	c, ok := classRow(name)
-	if !ok || c.plan == "" {
-		return nil, false
-	}
-
-	return &PlanClass{Name: c.Name, shape: c.plan}, true
-}
-
-// PlanClasses lists the classes with a plan producer, in row order,
-// for a usage line.
-func PlanClasses() []string {
-	var out []string
-
-	for _, c := range assetClasses() {
-		if c.plan != "" {
-			out = append(out, c.Name)
-		}
-	}
-
-	return out
-}
-
-// ExtensionClasses names the classes that plan per Postgres major: the
-// classes whose documents the per-major coverage check reads.
-func ExtensionClasses() map[string]bool {
-	out := map[string]bool{}
-
-	for _, c := range assetClasses() {
-		if c.plan == shapeExtension {
-			out[c.Name] = true
-		}
-	}
-
-	return out
-}
-
-// Crates reports whether the class plans from packaged crates.
-func (c *PlanClass) Crates() bool { return c.shape == shapeCrates }
 
 // PlanEntry is one planned document, in the field order `assert plans`
 // reads and the canon's jq wrote.
@@ -105,52 +44,49 @@ type PlanParams struct {
 	NoDefaultFeatures bool     `json:"noDefaultFeatures,omitempty"`
 }
 
-// PlanInputs are the leg's own inputs. Which fields a class reads is
-// its shape's: a crates leg reads Dir and Version, an extension leg
-// CrateDir and Major.
+// PlanInputs are the leg's own inputs. Which fields a kind reads is
+// its own: a crates leg reads Dir and Version, a variants leg CrateDir
+// and Variant.
 type PlanInputs struct {
-	// Prefix is the class's planned prefix, from the assert policy.
-	Prefix string
-	// Dir holds the packaged crates (a crates leg).
+	// Dir holds the packaged crates (crates).
 	Dir string
 	// Version is the release version every packaged crate is named
-	// for (a crates leg).
+	// for (crates).
 	Version string
-	// CrateDir is the extension crate's directory (an extension leg).
+	// CrateDir is the crate the cell built (variants).
 	CrateDir string
-	// Major is the Postgres major this cell built (an extension leg).
-	Major string
+	// Variant is the variant this cell built (variants).
+	Variant string
 }
 
-// Plan writes the class's plan from the leg's inputs.
-func (c *PlanClass) Plan(in *PlanInputs) ([]PlanEntry, error) {
-	if in.Prefix == "" {
-		return nil, fmt.Errorf("%s: no planned prefix — the policy names the documents, the leg does not", c.Name)
-	}
+// InventoryPlan writes one class's plan from the leg's inputs, by the producer
+// kind the class declares.
+func InventoryPlan(class string, cp *assert.ClassPolicy, in *PlanInputs) ([]PlanEntry, error) {
+	inv := cp.Inventory
 
-	if c.shape == shapeCrates {
-		return c.cratesPlan(in)
+	switch {
+	case inv == nil:
+		return nil, fmt.Errorf("class %q declares no inventory — its leg has no plan to write", class)
+	case *inv.Kind == assert.InventoryCrates:
+		return cratesPlan(class, cp.PlannedPrefix(), *inv.ArtifactSuffix, in)
+	case *inv.Kind == assert.InventoryVariants:
+		return variantPlan(class, cp.PlannedPrefix(), inv, in)
+	default:
+		return nil, fmt.Errorf("class %q declares inventory kind %q, which stele writes no plan for", class, *inv.Kind)
 	}
-
-	return c.extensionPlan(in)
 }
 
-// crateSuffix names a source crate's artifact apart from a binary
-// built out of it (the canon's #833): the prefix says what the
-// artifact is made of, the suffix which artifact it is.
-const crateSuffix = "-crate"
-
-// cratesPlan reads the packaged crates: what `cargo package` left is
+// cratesPlan reads the packaged crates: what the packaging step left is
 // exactly what the registry receives, so the planned set, the signed
 // set and the published set cannot differ.
-func (c *PlanClass) cratesPlan(in *PlanInputs) ([]PlanEntry, error) {
+func cratesPlan(class, prefix, suffix string, in *PlanInputs) ([]PlanEntry, error) {
 	if in.Dir == "" || in.Version == "" {
-		return nil, fmt.Errorf("%s plans from packaged crates: the directory and the version are required", c.Name)
+		return nil, fmt.Errorf("%s plans from packaged crates: the directory and the version are required", class)
 	}
 
 	paths, err := filepath.Glob(filepath.Join(in.Dir, "*.crate"))
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", c.Name, err)
+		return nil, fmt.Errorf("%s: %w", class, err)
 	}
 
 	names := map[string]bool{}
@@ -180,9 +116,9 @@ func (c *PlanClass) cratesPlan(in *PlanInputs) ([]PlanEntry, error) {
 	entries := make([]PlanEntry, 0, len(sorted))
 	for _, name := range sorted {
 		entries = append(entries, PlanEntry{
-			Class:    c.Name,
-			Doc:      in.Prefix + name + crateSuffix,
-			Artifact: name + crateSuffix,
+			Class:    class,
+			Doc:      prefix + name + suffix,
+			Artifact: name + suffix,
 			Params:   PlanParams{CargoPackage: name},
 		})
 	}
@@ -190,22 +126,18 @@ func (c *PlanClass) cratesPlan(in *PlanInputs) ([]PlanEntry, error) {
 	return entries, nil
 }
 
-// majorRE is a Postgres major as a cell names it.
-var planMajorRE = regexp.MustCompile(`^\d+$`)
+// variantRE is a variant as a cell names it: one plain segment, since
+// it is spliced into a document name and a feature name.
+var variantRE = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
 
-// ExtensionArtifact names the artifact one extension crate built for
-// one major is: the one definition the producer writes and the
-// per-major coverage check reads.
-func ExtensionArtifact(pkg, major string) string { return pkg + "-pg" + major }
-
-// extensionPlan reads the crate's own name and plans the cell's one
-// document: this crate, built with exactly `--features pg<major>` and
-// no defaults, because those are the cell's own build inputs.
-func (c *PlanClass) extensionPlan(in *PlanInputs) ([]PlanEntry, error) {
-	if in.CrateDir == "" || !planMajorRE.MatchString(in.Major) {
+// variantPlan reads the crate's own name and plans the cell's one
+// document: this crate, built with exactly the declared features for
+// this variant, because those are the cell's own build inputs.
+func variantPlan(class, prefix string, inv *assert.InventoryPolicy, in *PlanInputs) ([]PlanEntry, error) {
+	if in.CrateDir == "" || !variantRE.MatchString(in.Variant) {
 		return nil, fmt.Errorf(
-			"%s plans one cell: the crate directory and a numeric Postgres major are required (major %q)",
-			c.Name, in.Major,
+			"%s plans one cell: the crate directory and a plain variant are required (variant %q)",
+			class, in.Variant,
 		)
 	}
 
@@ -214,16 +146,16 @@ func (c *PlanClass) extensionPlan(in *PlanInputs) ([]PlanEntry, error) {
 		return nil, err
 	}
 
-	artifact := ExtensionArtifact(pkg, in.Major)
+	artifact := inv.VariantArtifact(pkg, in.Variant)
 
 	return []PlanEntry{{
-		Class:    c.Name,
-		Doc:      in.Prefix + artifact,
+		Class:    class,
+		Doc:      prefix + artifact,
 		Artifact: artifact,
 		Params: PlanParams{
 			CargoPackage:      pkg,
-			Features:          []string{"pg" + in.Major},
-			NoDefaultFeatures: true,
+			Features:          inv.VariantFeatures(in.Variant),
+			NoDefaultFeatures: *inv.NoDefaultFeatures,
 		},
 	}}, nil
 }

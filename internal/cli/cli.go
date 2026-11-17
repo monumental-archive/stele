@@ -148,10 +148,13 @@ usage:
               CONTENT against the forge's live enforcement state
               through the policy's declared table; a lapsed control
               is absent, an unreadable one refuses
-    vex-subjects  which published releases one VEX decision reaches,
-              and the subjects a claim about it is signed over —
-              the assert engine's own inventory walk and join, read
-              from the other direction
+    vex-subjects  the signing plan for VEX decisions: per decision,
+              which published releases it reaches and the subjects
+              a claim about it is signed over — the assert engine's
+              own inventory walk and join, read from the other
+              direction — or why it is refused; with
+              --unsigned-only, the decisions the store already holds
+              are omitted (exit 4 when the store cannot be read)
     signer-digest  the one commit a workflow tree pins its trusted
               signer at, read from the job-level uses: lines the
               platform runs; the signer is the policy's, a tree
@@ -167,9 +170,9 @@ usage:
               graph for a tree tracking no manifest — and the list of
               documents the release decision covers on stdout
     inventory-plan  a build leg's inventory plan, the document
-              assert plans judges: one entry per packaged crate or
-              one per extension cell, named under the class's
-              planned prefix in the assert policy
+              assert plans judges, by the kind the class declares in
+              the assert policy: one entry per packaged crate, or one
+              per variant cell, named under the class's planned prefix
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -285,6 +288,10 @@ usage:
               --machinery-digest --repo --tag --source-revision
               [--file --rows --rows-tables --rows-prefix --rows-file
               --rows-keys --out])
+    decision  the release decision a commit point signs: every
+              required proof judged by name, the covered documents
+              hashed into subject lines, read back through the
+              verifier's decision reader before it is written
 
 derive sbom flags: [--out --expect-version --expect-revision] <binary>..., or
 --cargo-package --tree --created [--target --features
@@ -295,15 +302,15 @@ takes --policy --repo --branch [--canon-root --canon-digest --out
 [--version --rev --tree --title --description]; derive vex
 takes --policy --subjects|--inventories --vex --released [--out --id
 --repo --version|--run --release-view --verify-policy];
-derive vex-subjects takes --policy --decision --org|--repo
-[--snapshot --out]; derive signer-digest takes --policy
+derive vex-subjects takes --policy --decision... --org|--repo
+[--snapshot --out --unsigned-only --store]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --class
 --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; derive inventory-plan takes --class --policy
-[--dir --version | --crate-dir --major] [--out]; derive inventories
+[--dir --version | --crate-dir --variant] [--out]; derive inventories
 takes --policy --classes --repo --version --created --out-dir
 [--evidence-classes --machinery-version --name --tree --binaries-dir
---expect-revision --pg-majors] [<plan>...]; the other
+--expect-revision --variants] [<plan>...]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
@@ -347,7 +354,9 @@ emit vsa adds --tag --subjects --sboms --signer-digest
 [--out --assert-policy --git-dir --source-out]; emit manifest takes --classes --store-vsa
 --machinery-version --assets --assert-policy --leg-subjects
 [--registry-subjects --out]
-and none of the above.
+and none of the above; emit decision takes --policy --classes --proof
+--covered --predicate-out --subjects-out and --tag or --stream
+[--inventory --also], and none of the above either.
 GITHUB_TOKEN/GH_TOKEN authenticates store reads and the notes push.
 `
 

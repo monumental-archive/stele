@@ -45,7 +45,7 @@ func vexSubjectsSnapshot(t *testing.T) (string, string, string) {
 			`"manifestAsset": "evidence-manifest.json", ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
 			`"blastRadius": {"osEcosystems": ["debian"]}}`,
-		"decision.openvex.json": `{"timestamp": "2026-01-01T00:00:00Z",
+		"decision.openvex.json": `{"@context": "https://openvex.dev/ns/v0.2.0", "timestamp": "2026-01-01T00:00:00Z",
 	  "statements": [{"vulnerability": {"name": "RUSTSEC-2021-0127"}, "status": "not_affected",
 	   "products": [{"@id": "pkg:cargo/serde_cbor@0.11.2"}]}]}`,
 	}
@@ -92,21 +92,27 @@ func TestDeriveVEXSubjectsEndToEnd(t *testing.T) {
 		t.Fatalf("the document was not written: %v", err)
 	}
 
-	doc, err := jsonx.DecodeBytes[vexsubjects.Document](written)
+	plan, err := jsonx.DecodeBytes[vexsubjects.Plan](written)
 	if err != nil {
-		t.Fatalf("the document does not decode: %v\n%s", err, written)
+		t.Fatalf("the plan does not decode: %v\n%s", err, written)
 	}
 
-	if len(doc.Releases) != 1 || doc.Releases[0].Subject() != "widget@v1.0.0" {
-		t.Fatalf("releases = %+v, want the affected release", doc.Releases)
+	if len(plan.Cells) != 1 || len(plan.Held) != 0 || len(plan.Refused) != 0 {
+		t.Fatalf("plan = %+v, want one cell and nothing held or refused", plan)
 	}
 
-	if len(doc.Subjects) != 2 {
-		t.Errorf("subjects = %+v, want the release's whole manifest", doc.Subjects)
+	cell := plan.Cells[0]
+	if len(cell.Releases) != 1 || cell.Releases[0].Subject() != "widget@v1.0.0" {
+		t.Fatalf("releases = %+v, want the affected release", cell.Releases)
 	}
 
-	if doc.Decision != decision {
-		t.Errorf("decision = %q, want the document it was derived for", doc.Decision)
+	if want := strings.Repeat("a", 64) + "  widget-1.0.0.tar.gz\n" + strings.Repeat("b", 64) +
+		"  app.spdx.json"; cell.Subjects != want {
+		t.Errorf("subjects = %q, want the release's whole manifest as sha256sum lines", cell.Subjects)
+	}
+
+	if cell.Decision != decision || cell.Slug != "decision" {
+		t.Errorf("decision = %q slug = %q, want the document it was derived for", cell.Decision, cell.Slug)
 	}
 
 	// The verb says what it found on the progress stream: a derivation

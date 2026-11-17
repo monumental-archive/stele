@@ -30,14 +30,26 @@ const inventoriesPolicy = `{
     "classes": {
       "rust-crate": {
         "bundles": ["attestations-crates.intoto.jsonl"],
-        "assetPrefixes": [{"prefix": "sbom-cargo-", "owedFrom": "1.0.0", "planned": true}]
+        "assetPrefixes": [{"prefix": "sbom-cargo-", "owedFrom": "1.0.0", "planned": true}],
+        "inventory": {"kind": "crates", "artifactSuffix": "-crate"}
       },
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
-        "assetPrefixes": [{"prefix": "sbom-pgrx-", "owedFrom": "1.0.0", "planned": true}]
+        "assetPrefixes": [{"prefix": "sbom-pgrx-", "owedFrom": "1.0.0", "planned": true}],
+        "inventory": {"kind": "variants", "artifact": "{package}-pg{variant}", "features": ["pg{variant}"],
+          "noDefaultFeatures": true}
       },
-      "go-binary": {"bundles": ["attestations-binaries.intoto.jsonl"]},
-      "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}
+      "go-binary": {"bundles": ["attestations-binaries.intoto.jsonl"], "inventory": {"kind": "binaries"}},
+      "oci-image": {"bundles": ["attestations-image.intoto.jsonl"], "inventory": {"kind": "none"}},
+      "source-archive": {"bundles": ["attestations-source.intoto.jsonl"], "inventory": {"kind": "planned"}},
+      "wasm-npm": {"bundles": ["attestations-npm.intoto.jsonl"]},
+      "lua-module": {
+        "bundles": ["attestations-lua.intoto.jsonl"],
+        "assetPrefixes": [{"prefix": "inv-lua-", "planned": true}],
+        "inventory": {"kind": "variants", "artifact": "{package}_lua{variant}", "features": ["lua{variant}"],
+          "noDefaultFeatures": false}
+      },
+      "firmware": {"bundles": ["attestations-fw.intoto.jsonl"], "inventory": {"kind": "binaries"}}
     }
   }
 }`
@@ -149,7 +161,7 @@ func TestDeriveInventoriesFromPlans(t *testing.T) {
 	inventoriesWorld(t, nil, stubGraph{})
 
 	out := t.TempDir()
-	args := inventoriesArgsFor(t, "rust-crate,pgrx-extension", out, append([]string{"--pg-majors", "16,17"},
+	args := inventoriesArgsFor(t, "rust-crate,pgrx-extension", out, append([]string{"--variants", "16,17"},
 		withPlans("rust-crate,pgrx-extension", planFiles(t, cratePlan, extPlan16, extPlan17, extPlan16))...)...)
 
 	code, stdout, stderr := runInventories(t, args)
@@ -342,14 +354,43 @@ func TestDeriveInventoriesRefusals(t *testing.T) {
 		},
 		{
 			// shell: "pg-majors names 17 but no pgrx inventory covers it"
-			name: "a requested major no plan covers",
+			name: "a requested variant no plan covers",
 			args: func(t *testing.T, out string) []string {
 				t.Helper()
 
-				return inventoriesArgsFor(t, "pgrx-extension", out, append([]string{"--pg-majors", "16,17"},
+				return inventoriesArgsFor(t, "pgrx-extension", out, append([]string{"--variants", "16,17"},
 					withPlans("pgrx-extension", planFiles(t, extPlan16))...)...)
 			},
-			want: "derive inventories: pg-majors names 17 but no extension inventory covers it",
+			want: "derive inventories: --variants names 17 but no pgrx-extension inventory covers it",
+		},
+		{
+			name: "variants requested of a release with no variants class",
+			args: func(t *testing.T, out string) []string {
+				t.Helper()
+
+				return inventoriesArgsFor(t, "rust-crate", out, append([]string{"--variants", "16"},
+					withPlans("rust-crate", planFiles(t, cratePlan))...)...)
+			},
+			want: "derive inventories: --variants names 16, but no class the release ran declares the variants kind",
+		},
+		{
+			name: "a class the policy does not declare",
+			args: func(t *testing.T, out string) []string {
+				t.Helper()
+
+				return inventoriesArgsFor(t, "zig-lib", out)
+			},
+			want: `derive inventories: class "zig-lib" is not declared in the assert policy`,
+		},
+		{
+			name: "a class declaring no inventory",
+			args: func(t *testing.T, out string) []string {
+				t.Helper()
+
+				return inventoriesArgsFor(t, "wasm-npm", out)
+			},
+			want: `derive inventories: class "wasm-npm" declares no inventory (evidence.classes.wasm-npm.inventory)` +
+				" — the release cannot say what it owes",
 		},
 		{
 			name: "plans that do not pass judgment",
@@ -565,4 +606,35 @@ func TestDeriveInventoriesUsage(t *testing.T) {
 			t.Fatalf("deriveCmd = %d, want %d", code, exitIO)
 		}
 	})
+}
+
+// TestDeriveInventoriesForAStranger: classes this org does not have,
+// naming their artifacts their own way — a variants class covering
+// its variants by its own template, and a binaries class beside it
+// refused by the same rule as the canon's — with no code change.
+func TestDeriveInventoriesForAStranger(t *testing.T) {
+	inventoriesWorld(t, nil, stubGraph{})
+
+	luaPlan := func(v string) string {
+		return `[{"class": "lua-module", "doc": "inv-lua-pg_edtf_lua` + v + `", "artifact": "pg_edtf_lua` + v + `",` +
+			` "params": {"cargoPackage": "pg_edtf", "features": ["lua` + v + `"]}}]`
+	}
+
+	out := t.TempDir()
+	args := inventoriesArgsFor(t, "lua-module", out, append([]string{"--variants", "53,54"},
+		withPlans("lua-module", planFiles(t, luaPlan("53"), luaPlan("54")))...)...)
+
+	code, stdout, stderr := runInventories(t, args)
+	if code != exitOK {
+		t.Fatalf("deriveCmd = %d (stderr: %s)", code, stderr)
+	}
+
+	if want := `["inv-lua-pg_edtf_lua53-0.4.2.spdx.json","inv-lua-pg_edtf_lua54-0.4.2.spdx.json"]` + "\n"; stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+
+	code, _, stderr = runInventories(t, inventoriesArgsFor(t, "firmware,lua-module", t.TempDir()))
+	if code != exitRefused || !strings.Contains(stderr, "firmware cannot yet ship beside lua-module") {
+		t.Fatalf("deriveCmd = %d, stderr %q; want the binaries-beside-a-plan refusal", code, stderr)
+	}
 }

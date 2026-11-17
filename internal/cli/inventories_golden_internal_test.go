@@ -37,7 +37,7 @@ type goldenInputs struct {
 	Classes         string `json:"classes"`
 	EvidenceClasses string `json:"evidenceClasses"`
 	Machinery       string `json:"machineryVersion"`
-	PgMajors        string `json:"pgMajors"`
+	Variants        string `json:"variants"`
 	// Run names the publish run the plans were downloaded from.
 	Run string `json:"run"`
 }
@@ -118,7 +118,7 @@ func goldenSet(t *testing.T, dir string) {
 	args := []string{
 		"inventories", "--policy", filepath.Join(dir, "assert-policy.json"),
 		"--classes", in.Classes, "--repo", in.Repo, "--version", in.Version, "--created", in.Created,
-		"--name", in.Name, "--tree", dir, "--out-dir", out, "--pg-majors", in.PgMajors,
+		"--name", in.Name, "--tree", dir, "--out-dir", out, "--variants", in.Variants,
 		"--evidence-classes", in.EvidenceClasses, "--machinery-version", in.Machinery,
 	}
 

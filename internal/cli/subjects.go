@@ -102,13 +102,6 @@ func parseSubjectsArgs(args []string, stderr io.Writer) (*subjectsArgs, int) {
 		return sa, exitOK
 	}
 
-	// A class the release contract knows for its inventory alone is not
-	// unknown: it has no subjects defined, and says so by name.
-	if release.ClassDefined(sa.class) {
-		return sa, usageFail(fmt.Sprintf("class %q has no file or registry subjects defined: subjects are defined"+
-			" for %s", sa.class, strings.Join(release.SubjectClasses(), ", ")))
-	}
-
 	return sa, usageFail(fmt.Sprintf("unknown class %q: subjects are defined for %s",
 		sa.class, strings.Join(release.SubjectClasses(), ", ")))
 }

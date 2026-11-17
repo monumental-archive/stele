@@ -128,6 +128,43 @@ version mismatch, never as an unknown-field error.
   the engine, which refuses the RUN (never the release) when the two
   documents have drifted
   ([policy-schema.md](policy-schema.md#buildenrichment-optional)).
+- `classes.<name>.inventory` (optional) — what a release of this class
+  owes as inventory (stele#396): an engine-owned `kind` and exactly
+  that kind's parameters, flat on the declaration. The kinds are code,
+  each a judgment the derive leg computes; the parameters are the
+  adopter's. An unknown kind, a missing parameter, and a parameter the
+  kind does not read are each refused at load, by name, as the
+  `baseImages` mechanisms are.
+
+  | kind | the release's inventory | parameters |
+  | --- | --- | --- |
+  | `binaries` | read out of the class's shipped binaries | none |
+  | `none` | the class adds none of its own | none |
+  | `planned` | derived from the plan the class's build leg emits | none |
+  | `crates` | planned; stele writes the plan from the leg's packaged crates | `artifactSuffix` |
+  | `variants` | planned; stele writes the plan for one crate built once per variant | `artifact`, `features`, `noDefaultFeatures` |
+
+  A `binaries` or `none` class declaring planned prefixes is refused
+  (it owes no plan). A `crates` or `variants` class must declare
+  exactly one planned prefix: its documents are named under it.
+  `artifactSuffix` names a source crate's artifact apart from a
+  binary built out of it (`<crate><artifactSuffix>`). The `artifact`
+  template names `{package}` and `{variant}`; each `features` entry
+  may name `{variant}`; `noDefaultFeatures` is declared, never
+  defaulted. For example:
+
+  ```json
+  "inventory": {
+    "kind": "variants",
+    "artifact": "{package}-pg{variant}",
+    "features": ["pg{variant}"],
+    "noDefaultFeatures": true
+  }
+  ```
+
+  Absent, the class declares no inventory role, and `derive
+  inventories` or `derive inventory-plan` refuses the class by name
+  when it runs.
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
 - `storeVsaFromVersion` — the machinery version (inclusive) from
@@ -1100,25 +1137,24 @@ version skew, refused):
   leg that derives the document reads the content.
 
 `stele derive inventory-plan --class <class> --policy <assert-policy>`
-writes a plan for the classes whose leg shape it knows (stele#396),
-and names every document under the class's ONE planned prefix as
-this policy declares it. The producer and the judgment therefore read
-one name: a rename on the policy side is followed, not refused, and a
-class declaring no planned prefix, or more than one, is refused at
-the producer. Two shapes are built:
+writes a plan for a class whose declared inventory kind is one stele
+produces (stele#396), and names every document under the class's ONE
+planned prefix. The producer and the judgment therefore read one
+declaration: a rename on the policy side is followed, not refused,
+and a class the policy does not declare, or declares with no kind
+stele produces, is refused at the producer. The two kinds:
 
-- packaged crates (`rust-crate`; `--dir <packaged crates> --version
-  <v>`): one entry per `<name>-<v>.crate`, `doc` `<prefix><name>-crate`,
-  `artifact` `<name>-crate`, `params.cargoPackage` `<name>`. A crate
-  not named for the version, or none at all, is refused;
-- one extension cell (`pgrx-extension`; `--crate-dir <crate> --major
-  <n>`): one entry, `doc` `<prefix><package>-pg<n>`, `artifact`
-  `<package>-pg<n>`, `params` `{cargoPackage, features: ["pg<n>"],
-  noDefaultFeatures: true}`, with the package read from the crate's
-  `Cargo.toml`.
+- `crates` (`--dir <packaged crates> --version <v>`): one entry per
+  `<name>-<v>.crate`, `doc` `<prefix><name><artifactSuffix>`,
+  `artifact` `<name><artifactSuffix>`, `params.cargoPackage` `<name>`.
+  A crate not named for the version, or none at all, is refused;
+- `variants` (`--crate-dir <crate> --variant <v>`): one entry for the
+  cell, `artifact` the declared template rendered for the crate's
+  `package.name` and the variant, `doc` `<prefix><artifact>`, `params`
+  `{cargoPackage, features, noDefaultFeatures}` from the declaration.
 
 The output is laid out as `jq` lays it out (two-space indent), so it
-replaces the build legs' jq lines byte for byte.
+replaces a build leg's jq line byte for byte.
 
 Every value is charset-guarded before it can reach a command line,
 because plans originate on build legs that execute caller code.
@@ -1156,15 +1192,14 @@ deliberately ask two different questions (stele#143):
 `stele derive inventories --policy <assert-policy> --classes <ran>
 --repo <owner/repo> --version <v> --created <instant> --out-dir <dir>
 [--evidence-classes --machinery-version] [--name --tree --binaries-dir
---expect-revision --pg-majors] [<plan files...>]` writes every
+--expect-revision --variants] [<plan files...>]` writes every
 inventory a release ships and prints, as one JSON array on stdout, the
-documents the release decision covers (stele#396). Which inventory a
-class owes is the release contract's (`internal/release`): a class
-whose shipped binaries carry their module list (`go-binary`), a class
-that adds no inventory of its own (`oci-image`), and every other
-class, which plans. The sequence:
+documents the release decision covers (stele#396). What each class
+owes is its declared `inventory` kind; a class the policy does not
+declare, or declares with no inventory, is refused by name. The
+sequence:
 
-- a binaries-carry class beside a planning class is refused
+- a `binaries` class beside a planning class is refused
   (.github#784): the plan path has no plan for the binaries, and the
   release would publish an inventory omitting them;
 - with `--binaries-dir` and no planning class, the binaries speak for
@@ -1175,7 +1210,8 @@ class, which plans. The sequence:
 - with plans, the plans are judged exactly as `assert plans` judges
   them, and nothing derives from plans that did not pass. One
   document per judged entry (`<doc>-<version><sbomSuffix>`), every
-  `--pg-majors` major covered by an extension entry, and the view
+  `--variants` value covered for every `variants` class the release
+  ran (by the class's own artifact template), and the view
   (`<name>-<version><sbomSuffix>`) folded from the documents. The list
   names the per-artifact documents; the view bears no decision;
 - with neither, a tree whose index tracks a `Cargo.lock` or `go.mod`

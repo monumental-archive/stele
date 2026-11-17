@@ -191,7 +191,7 @@ type emitArgs struct {
 // emitCmd dispatches `stele emit <mode>`.
 func emitCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		const modes = "chain, chain-append, vsa, manifest or enrichment"
+		const modes = "chain, chain-append, vsa, manifest, enrichment or decision"
 		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: "+modes); err != nil {
 			return exitIO
 		}
@@ -208,8 +208,11 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 	case emitEnrichment:
 		// Its own path too: no trust root, no signer, nothing verified.
 		return emitEnrichmentCmd(args[1:], stdout, stderr)
+	case emitDecision:
+		// Its own path too: a decision needs no root, repository or pin.
+		return emitDecisionCmd(args[1:], stdout, stderr)
 	default:
-		const modes = "chain, chain-append, vsa, manifest, enrichment"
+		const modes = "chain, chain-append, vsa, manifest, enrichment, decision"
 		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (%s)\n", mode, modes); err != nil {
 			return exitIO
 		}

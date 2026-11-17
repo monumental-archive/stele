@@ -8,8 +8,8 @@ shipped.
 
 | path | content |
 | --- | --- |
-| `inputs.json` | the publish run's facts: `repo`, `version`, `created`, `name`, `classes`, `evidenceClasses`, `machineryVersion`, `pgMajors`, and `run`, the run the plans came from |
-| `assert-policy.json` | the canon's `slsa/assert-policy.json` at the release's pinned canon |
+| `inputs.json` | the publish run's facts: `repo`, `version`, `created`, `name`, `classes`, `evidenceClasses`, `machineryVersion`, `variants`, and `run`, the run the plans came from |
+| `assert-policy.json` | the canon's `slsa/assert-policy.json` at the release's pinned canon, carrying each class's `inventory` declaration |
 | `plans/<leg>/plan.json` | the plan artifacts, as `gh run download <run> -p 'sbom-plan-*'` lays them out |
 | `cargo/index.json` | a list of `{flags, file}`: each closure selection's cargo flags (`""`, `"--features pg16 --no-default-features"`) and the file holding its metadata |
 | `cargo/<file>.json` | `cargo metadata --format-version 1 --locked <flags>` in the released tree, per selection |

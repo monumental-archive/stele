@@ -12,21 +12,46 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/release"
 )
 
 const plansFixtures = "testdata/plans"
 
-func producer(t *testing.T, class string) *release.PlanClass {
+// producerPolicy carries the canon's two producing shapes and one a
+// stranger's org might declare — a class this org does not have, with
+// its own naming shape — which must pass with no code change.
+const producerPolicy = `{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json", "classes": {
+    "rust-crate": {"bundles": ["a.intoto.jsonl"],
+      "assetPrefixes": [{"prefix": "sbom-cargo-", "planned": true}],
+      "inventory": {"kind": "crates", "artifactSuffix": "-crate"}},
+    "pgrx-extension": {"bundles": ["b.intoto.jsonl"],
+      "assetPrefixes": [{"prefix": "sbom-pgrx-", "planned": true}],
+      "inventory": {"kind": "variants", "artifact": "{package}-pg{variant}", "features": ["pg{variant}"],
+        "noDefaultFeatures": true}},
+    "lua-module": {"bundles": ["c.intoto.jsonl"],
+      "assetPrefixes": [{"prefix": "inv-lua-", "planned": true}],
+      "inventory": {"kind": "variants", "artifact": "{package}_lua{variant}", "features": ["lua{variant}", "vendored"],
+        "noDefaultFeatures": false}},
+    "go-binary": {"bundles": ["d.intoto.jsonl"], "inventory": {"kind": "binaries"}},
+    "source-archive": {"bundles": ["e.intoto.jsonl"]}}}}`
+
+func producerClass(t *testing.T, class string) *assert.ClassPolicy {
 	t.Helper()
 
-	c, ok := release.PlanClassNamed(class)
-	if !ok {
-		t.Fatalf("no plan producer for %q", class)
+	pol, err := assert.LoadPolicy(strings.NewReader(producerPolicy))
+	if err != nil {
+		t.Fatalf("LoadPolicy = %v", err)
 	}
 
-	return c
+	cp, ok := pol.Evidence.Classes[class]
+	if !ok {
+		t.Fatalf("the fixture declares no %q", class)
+	}
+
+	return &cp
 }
 
 func render(t *testing.T, entries []release.PlanEntry) string {
@@ -40,28 +65,34 @@ func render(t *testing.T, entries []release.PlanEntry) string {
 	return b.String()
 }
 
+// TestPlanGoldens: the canon's two shapes, byte-identical to the
+// bytes the canon's own blocks wrote.
 func TestPlanGoldens(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name   string
 		class  string
-		in     release.PlanInputs
+		in     func(t *testing.T) release.PlanInputs
 		golden string
 	}{
 		{
 			name:  "packaged crates",
 			class: "rust-crate",
-			in: release.PlanInputs{
-				Prefix: "sbom-cargo-", Dir: filepath.Join(plansFixtures, "crates", "package"), Version: "0.4.2",
+			in: func(t *testing.T) release.PlanInputs {
+				t.Helper()
+
+				return release.PlanInputs{Dir: filepath.Join(plansFixtures, "crates", "package"), Version: "0.4.2"}
 			},
 			golden: filepath.Join(plansFixtures, "crates", "plan.golden"),
 		},
 		{
 			name:  "one extension cell",
 			class: "pgrx-extension",
-			in: release.PlanInputs{
-				Prefix: "sbom-pgrx-", CrateDir: fixtureCrate(t), Major: "16",
+			in: func(t *testing.T) release.PlanInputs {
+				t.Helper()
+
+				return release.PlanInputs{CrateDir: fixtureCrate(t), Variant: "16"}
 			},
 			golden: filepath.Join(plansFixtures, "extension", "plan.golden"),
 		},
@@ -71,9 +102,11 @@ func TestPlanGoldens(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			entries, err := producer(t, tt.class).Plan(&tt.in)
+			in := tt.in(t)
+
+			entries, err := release.InventoryPlan(tt.class, producerClass(t, tt.class), &in)
 			if err != nil {
-				t.Fatalf("Plan = %v", err)
+				t.Fatalf("InventoryPlan = %v", err)
 			}
 
 			want, err := os.ReadFile(tt.golden)
@@ -85,6 +118,38 @@ func TestPlanGoldens(t *testing.T) {
 				t.Errorf("plan differs from the shell's\ngot:\n%s\nwant:\n%s", got, want)
 			}
 		})
+	}
+}
+
+// TestPlanForAStranger: a class this org does not have, naming its
+// artifacts its own way, planned with no code change.
+func TestPlanForAStranger(t *testing.T) {
+	t.Parallel()
+
+	in := release.PlanInputs{CrateDir: fixtureCrate(t), Variant: "54"}
+
+	entries, err := release.InventoryPlan("lua-module", producerClass(t, "lua-module"), &in)
+	if err != nil {
+		t.Fatalf("InventoryPlan = %v", err)
+	}
+
+	want := `[
+  {
+    "class": "lua-module",
+    "doc": "inv-lua-pg_edtf_lua54",
+    "artifact": "pg_edtf_lua54",
+    "params": {
+      "cargoPackage": "pg_edtf",
+      "features": [
+        "lua54",
+        "vendored"
+      ]
+    }
+  }
+]
+`
+	if got := render(t, entries); got != want {
+		t.Errorf("plan =\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -116,8 +181,8 @@ func writeCrates(t *testing.T, names ...string) string {
 	return dir
 }
 
-// writeCrate lays out an extension crate with the given manifest;
-// manifest "" writes none.
+// writeCrate lays out a crate with the given manifest; manifest ""
+// writes none.
 func writeCrate(t *testing.T, manifest string) string {
 	t.Helper()
 
@@ -137,6 +202,14 @@ func writeCrate(t *testing.T, manifest string) string {
 func TestPlanRefusals(t *testing.T) {
 	t.Parallel()
 
+	crate := func(manifest string) func(t *testing.T) release.PlanInputs {
+		return func(t *testing.T) release.PlanInputs {
+			t.Helper()
+
+			return release.PlanInputs{CrateDir: writeCrate(t, manifest), Variant: "16"}
+		}
+	}
+
 	tests := []struct {
 		name  string
 		class string
@@ -144,14 +217,16 @@ func TestPlanRefusals(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "no prefix",
-			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
-				t.Helper()
-
-				return release.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate"), Version: "1.0.0"}
-			},
-			want: "rust-crate: no planned prefix — the policy names the documents, the leg does not",
+			name:  "a class declaring no inventory",
+			class: "source-archive",
+			in:    func(*testing.T) release.PlanInputs { return release.PlanInputs{} },
+			want:  `class "source-archive" declares no inventory — its leg has no plan to write`,
+		},
+		{
+			name:  "a kind stele writes no plan for",
+			class: "go-binary",
+			in:    func(*testing.T) release.PlanInputs { return release.PlanInputs{} },
+			want:  `class "go-binary" declares inventory kind "binaries", which stele writes no plan for`,
 		},
 		{
 			name:  "a crates leg with no version",
@@ -159,7 +234,7 @@ func TestPlanRefusals(t *testing.T) {
 			in: func(t *testing.T) release.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Prefix: "sbom-cargo-", Dir: writeCrates(t, "a-1.0.0.crate")}
+				return release.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate")}
 			},
 			want: "rust-crate plans from packaged crates: the directory and the version are required",
 		},
@@ -169,9 +244,7 @@ func TestPlanRefusals(t *testing.T) {
 			in: func(t *testing.T) release.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{
-					Prefix: "sbom-cargo-", Dir: writeCrates(t, "a-1.0.0.crate", "b-0.9.0.crate"), Version: "1.0.0",
-				}
+				return release.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate", "b-0.9.0.crate"), Version: "1.0.0"}
 			},
 			want: "packaged crate b-0.9.0.crate is not named for version 1.0.0",
 		},
@@ -181,7 +254,7 @@ func TestPlanRefusals(t *testing.T) {
 			in: func(t *testing.T) release.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Prefix: "sbom-cargo-", Dir: writeCrates(t, "-1.0.0.crate"), Version: "1.0.0"}
+				return release.PlanInputs{Dir: writeCrates(t, "-1.0.0.crate"), Version: "1.0.0"}
 			},
 			want: "packaged crate -1.0.0.crate is not named for version 1.0.0",
 		},
@@ -191,83 +264,59 @@ func TestPlanRefusals(t *testing.T) {
 			in: func(t *testing.T) release.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Prefix: "sbom-cargo-", Dir: writeCrates(t, "notes.txt"), Version: "1.0.0"}
+				return release.PlanInputs{Dir: writeCrates(t, "notes.txt"), Version: "1.0.0"}
 			},
 			want: "cargo package produced no crates — a class that ships nothing plans nothing",
 		},
 		{
 			name:  "a malformed crate directory pattern",
 			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
-				t.Helper()
-
-				return release.PlanInputs{Prefix: "sbom-cargo-", Dir: "[", Version: "1.0.0"}
-			},
-			want: "rust-crate: syntax error in pattern",
+			in:    func(*testing.T) release.PlanInputs { return release.PlanInputs{Dir: "[", Version: "1.0.0"} },
+			want:  "rust-crate: syntax error in pattern",
 		},
 		{
-			name:  "an extension cell with no major",
+			name:  "a variants cell with no variant",
 			class: "pgrx-extension",
 			in: func(t *testing.T) release.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Prefix: "sbom-pgrx-", CrateDir: writeCrate(t, "[package]\nname = \"x\"\n")}
+				return release.PlanInputs{CrateDir: writeCrate(t, "[package]\nname = \"x\"\n")}
 			},
-			want: `pgrx-extension plans one cell: the crate directory and a numeric Postgres major are required (major "")`,
+			want: `pgrx-extension plans one cell: the crate directory and a plain variant are required (variant "")`,
 		},
 		{
-			name:  "a major that is not a number",
+			name:  "a variant that is not one plain segment",
 			class: "pgrx-extension",
 			in: func(t *testing.T) release.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{
-					Prefix: "sbom-pgrx-", CrateDir: writeCrate(t, "[package]\nname = \"x\"\n"), Major: "pg16",
-				}
+				return release.PlanInputs{CrateDir: writeCrate(t, "[package]\nname = \"x\"\n"), Variant: "16/amd64"}
 			},
-			want: `a numeric Postgres major are required (major "pg16")`,
+			want: `a plain variant are required (variant "16/amd64")`,
 		},
 		{
 			name:  "no crate manifest",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
-				t.Helper()
-
-				return release.PlanInputs{Prefix: "sbom-pgrx-", CrateDir: writeCrate(t, ""), Major: "16"}
-			},
-			want: "reading the crate manifest:",
+			in:    crate(""),
+			want:  "reading the crate manifest:",
 		},
 		{
 			name:  "a manifest that is not TOML",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
-				t.Helper()
-
-				return release.PlanInputs{Prefix: "sbom-pgrx-", CrateDir: writeCrate(t, "[package\n"), Major: "16"}
-			},
-			want: "Cargo.toml:",
+			in:    crate("[package\n"),
+			want:  "Cargo.toml:",
 		},
 		{
 			name:  "a manifest with no package",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
-				t.Helper()
-
-				return release.PlanInputs{Prefix: "sbom-pgrx-", CrateDir: writeCrate(t, "[workspace]\n"), Major: "16"}
-			},
-			want: "names no package — a cell plans the crate it built",
+			in:    crate("[workspace]\n"),
+			want:  "names no package — a cell plans the crate it built",
 		},
 		{
 			name:  "a package with no name",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
-				t.Helper()
-
-				return release.PlanInputs{
-					Prefix: "sbom-pgrx-", CrateDir: writeCrate(t, "[package]\nversion = \"1.0.0\"\n"), Major: "16",
-				}
-			},
-			want: "names no package — a cell plans the crate it built",
+			in:    crate("[package]\nversion = \"1.0.0\"\n"),
+			want:  "names no package — a cell plans the crate it built",
 		},
 	}
 
@@ -277,32 +326,10 @@ func TestPlanRefusals(t *testing.T) {
 
 			in := tt.in(t)
 
-			_, err := producer(t, tt.class).Plan(&in)
+			_, err := release.InventoryPlan(tt.class, producerClass(t, tt.class), &in)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Plan error = %v\nwant it to carry %q", err, tt.want)
+				t.Fatalf("InventoryPlan error = %v\nwant it to carry %q", err, tt.want)
 			}
 		})
-	}
-}
-
-// TestPlanClasses: the rows, their lookup, and the one artifact name
-// the producer writes and the coverage check reads.
-func TestPlanClasses(t *testing.T) {
-	t.Parallel()
-
-	if got := strings.Join(release.PlanClasses(), ","); got != "pgrx-extension,rust-crate" {
-		t.Errorf("PlanClasses = %q", got)
-	}
-
-	if _, ok := release.PlanClassNamed("go-binary"); ok {
-		t.Error("go-binary has no plan producer: its binaries carry their inventory")
-	}
-
-	if !producer(t, "rust-crate").Crates() || producer(t, "pgrx-extension").Crates() {
-		t.Error("Crates() does not match the rows' shapes")
-	}
-
-	if got := release.ExtensionArtifact("pg_edtf", "16"); got != "pg_edtf-pg16" {
-		t.Errorf("ExtensionArtifact = %q", got)
 	}
 }

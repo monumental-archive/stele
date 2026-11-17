@@ -1,9 +1,9 @@
-// `derive inventory-plan`: the inventory plan a build leg states about what it
-// built (stele#396). The class definitions — how a class's leg plans
-// — are the release contract's own (internal/release); the prefix the
-// documents are named under is the class's planned prefix in the
-// assert policy, so the producer and `assert plans` read one name.
-// This file is the argument surface and the placement, nothing else.
+// `derive inventory-plan`: the inventory plan a build leg states
+// about what it built (stele#396). How a class's leg plans is the
+// class's own declaration in the assert policy — its inventory kind
+// and that kind's parameters — and its documents are named under its
+// planned prefix there, so the producer and `assert plans` read one
+// declaration. This file is the argument surface and the placement.
 
 package cli
 
@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/release"
@@ -24,11 +23,10 @@ const deriveInventoryPlan = "inventory-plan"
 
 // inventoryPlanArgs is the mode's whole argument surface.
 type inventoryPlanArgs struct {
-	class    string
-	policy   string
-	out      string
-	in       release.PlanInputs
-	producer *release.PlanClass
+	class  string
+	policy string
+	out    string
+	in     release.PlanInputs
 }
 
 // parseInventoryPlanArgs parses and validates the flags.
@@ -41,12 +39,12 @@ func parseInventoryPlanArgs(args []string, stderr io.Writer) (*inventoryPlanArgs
 	flags.SetOutput(stderr)
 	flags.StringVar(&pa.class, "class", "", "the evidence class whose build leg this is (required)")
 	flags.StringVar(&pa.policy, "policy", "",
-		"the assert policy: the class's planned prefix names the documents (required)")
+		"the assert policy: the class's inventory declaration and planned prefix (required)")
 	flags.StringVar(&pa.out, "out", "", "file to write the plan to; empty prints to stdout")
 	flags.StringVar(&pa.in.Dir, "dir", "", "directory holding the packaged crates (a crates leg)")
 	flags.StringVar(&pa.in.Version, "version", "", "the version every packaged crate is named for (a crates leg)")
-	flags.StringVar(&pa.in.CrateDir, "crate-dir", "", "the extension crate's directory (an extension leg)")
-	flags.StringVar(&pa.in.Major, "major", "", "the Postgres major this cell built (an extension leg)")
+	flags.StringVar(&pa.in.CrateDir, "crate-dir", "", "the crate this cell built (a variants leg)")
+	flags.StringVar(&pa.in.Variant, "variant", "", "the variant this cell built (a variants leg)")
 
 	if err := flags.Parse(args); err != nil {
 		return pa, exitUsage
@@ -69,28 +67,23 @@ func parseInventoryPlanArgs(args []string, stderr io.Writer) (*inventoryPlanArgs
 		return pa, usageFail("--policy is required")
 	}
 
-	producer, ok := release.PlanClassNamed(pa.class)
-	if !ok {
-		return pa, usageFail(fmt.Sprintf("unknown class %q: plans are produced for %s",
-			pa.class, strings.Join(release.PlanClasses(), ", ")))
-	}
-
-	pa.producer = producer
-
 	return pa, exitOK
 }
 
-// runDeriveInventoryPlan reads the class's planned prefix, writes the plan,
-// and names every document it planned.
+// runDeriveInventoryPlan reads the class's declaration, writes the
+// plan, and names every document it planned.
 func runDeriveInventoryPlan(pa *inventoryPlanArgs, doc io.Writer, out *latch) error {
-	prefix, err := plannedPrefix(pa.policy, pa.class)
+	pol, err := loadAssertPolicy(pa.policy)
 	if err != nil {
-		return err
+		return fmt.Errorf("derive inventory-plan: %w", err)
 	}
 
-	pa.in.Prefix = prefix
+	cp, ok := pol.Evidence.Classes[pa.class]
+	if !ok {
+		return fmt.Errorf("derive inventory-plan: class %q is not declared in the assert policy", pa.class)
+	}
 
-	entries, err := pa.producer.Plan(&pa.in)
+	entries, err := release.InventoryPlan(pa.class, &cp, &pa.in)
 	if err != nil {
 		return fmt.Errorf("derive inventory-plan: %w", err)
 	}
@@ -113,34 +106,4 @@ func runDeriveInventoryPlan(pa *inventoryPlanArgs, doc io.Writer, out *latch) er
 	}
 
 	return nil
-}
-
-// plannedPrefix is the one prefix the assert policy declares this
-// class's plans under. A class declaring none owes no planned
-// inventory, and one declaring several leaves the leg no way to
-// choose: both are refused rather than guessed.
-func plannedPrefix(path, class string) (string, error) {
-	pol, err := loadAssertPolicy(path)
-	if err != nil {
-		return "", fmt.Errorf("derive inventory-plan: %w", err)
-	}
-
-	cp, ok := pol.Evidence.Classes[class]
-	if !ok {
-		return "", fmt.Errorf("derive inventory-plan: class %q is not declared in the assert policy", class)
-	}
-
-	prefixes := cp.PlannedPrefixes()
-
-	switch len(prefixes) {
-	case 0:
-		return "", fmt.Errorf(
-			"derive inventory-plan: class %q declares no planned prefix — it owes no planned inventory", class,
-		)
-	case 1:
-		return prefixes[0], nil
-	default:
-		return "", fmt.Errorf("derive inventory-plan: class %q declares %d planned prefixes (%s) — a leg plans under one",
-			class, len(prefixes), strings.Join(prefixes, ", "))
-	}
 }

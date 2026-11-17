@@ -168,8 +168,7 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 
-		return runDeriveMode(va.out, stdout, stderr,
-			func(doc io.Writer, log *latch) error { return runDeriveVEXSubjects(va, doc, log) })
+		return runVEXSubjectsCmd(va, stdout, stderr)
 	}
 
 	// vex scans inventories and renders a document.

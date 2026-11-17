@@ -1032,6 +1032,11 @@ type ClassPolicy struct {
 	// refuses a demand that steps outside it, because this file
 	// cannot see the other document.
 	Enrichment []string `json:"enrichment,omitempty"`
+	// Inventory declares what a release of this class owes as
+	// inventory (stele#396): an engine-owned kind and that kind's
+	// parameters. Absent, the class declares no inventory role, and a
+	// derivation that needs one refuses by name.
+	Inventory *InventoryPolicy `json:"inventory,omitempty"`
 }
 
 // validateClasses holds the per-class guards: a class must require
@@ -1069,6 +1074,12 @@ func validateClasses(classes map[string]ClassPolicy) error {
 				if _, err := semver.NewVersion(*ob.OwedFrom); err != nil {
 					return fmt.Errorf("evidence.classes.%s.assetPrefixes[%s].owedFrom: %w", name, *ob.Prefix, err)
 				}
+			}
+		}
+
+		if c.Inventory != nil {
+			if err := c.Inventory.validate(name, &c); err != nil {
+				return err
 			}
 		}
 
@@ -1338,12 +1349,6 @@ func (e *EvidencePolicy) sourceVerdict(machineryVersion string) bool {
 func (e *EvidencePolicy) manifestSchema(machineryVersion string) bool {
 	return owedFrom(e.ManifestSchemaFromVersion, machineryVersion)
 }
-
-// PlannedPrefixes is the class's plan vocabulary for a producer
-// outside this package: the build leg that writes a plan names its
-// documents under the prefix the class declares, never one it spells
-// itself (stele#396).
-func (c *ClassPolicy) PlannedPrefixes() []string { return c.plannedPrefixes() }
 
 // owedPlannedPrefixes returns the plan-fulfilled prefix obligations a
 // release under the given machinery version owes from this class —

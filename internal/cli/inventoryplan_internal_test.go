@@ -21,9 +21,10 @@ import (
 	"testing"
 )
 
-// inventoryPlanPolicy declares the crate class's one planned prefix,
-// an extension class with an unplanned asset beside its planned one,
-// a class owing none, and one declaring two.
+// inventoryPlanPolicy declares the canon's two producing shapes (the
+// extension class with an unplanned asset beside its planned one), a
+// class whose binaries carry their own inventory, and a class with no
+// inventory declared.
 const inventoryPlanPolicy = `{
   "schema": 9,
   "evidence": {
@@ -34,23 +35,20 @@ const inventoryPlanPolicy = `{
     "classes": {
       "rust-crate": {
         "bundles": ["attestations-crates.intoto.jsonl"],
-        "assetPrefixes": [{"prefix": "sbom-cargo-", "owedFrom": "1.42.0", "planned": true}]
+        "assetPrefixes": [{"prefix": "sbom-cargo-", "owedFrom": "1.42.0", "planned": true}],
+        "inventory": {"kind": "crates", "artifactSuffix": "-crate"}
       },
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
         "assetPrefixes": [
           {"prefix": "attestations-extimg-pg"},
           {"prefix": "sbom-pgrx-", "owedFrom": "1.42.0", "planned": true}
-        ]
+        ],
+        "inventory": {"kind": "variants", "artifact": "{package}-pg{variant}", "features": ["pg{variant}"],
+          "noDefaultFeatures": true}
       },
-      "source-archive": {"bundles": ["attestations-source.intoto.jsonl"]},
-      "two-prefixes": {
-        "bundles": ["attestations-two.intoto.jsonl"],
-        "assetPrefixes": [
-          {"prefix": "sbom-a-", "planned": true},
-          {"prefix": "sbom-b-", "planned": true}
-        ]
-      }
+      "go-binary": {"bundles": ["attestations-binaries.intoto.jsonl"], "inventory": {"kind": "binaries"}},
+      "source-archive": {"bundles": ["attestations-source.intoto.jsonl"]}
     }
   }
 }`
@@ -121,7 +119,7 @@ func TestDeriveInventoryPlanWritesTheShellsBytes(t *testing.T) {
 			name: "one extension cell",
 			args: []string{
 				"inventory-plan", "--class", "pgrx-extension", "--policy", policy,
-				"--crate-dir", fixtureCrateDir(t), "--major", "16",
+				"--crate-dir", fixtureCrateDir(t), "--variant", "16",
 			},
 			golden: filepath.Join(planFixtures, "extension", "plan.golden"),
 			logs:   []string{"plans inventory sbom-pgrx-pg_edtf-pg16 for package pg_edtf"},
@@ -243,10 +241,17 @@ func TestDeriveInventoryPlanRefusals(t *testing.T) {
 			want: "flag provided but not defined: -nope",
 		},
 		{
-			name: "a class with no producer",
+			name: "a class whose kind stele writes no plan for",
 			args: []string{"inventory-plan", "--class", "go-binary", "--policy", policy},
-			code: exitUsage,
-			want: `stele derive inventory-plan: unknown class "go-binary": plans are produced for pgrx-extension, rust-crate`,
+			code: exitRefused,
+			want: `derive inventory-plan: class "go-binary" declares inventory kind "binaries", which stele writes no` +
+				` plan for`,
+		},
+		{
+			name: "a class declaring no inventory",
+			args: []string{"inventory-plan", "--class", "source-archive", "--policy", policy},
+			code: exitRefused,
+			want: `derive inventory-plan: class "source-archive" declares no inventory — its leg has no plan to write`,
 		},
 		{
 			name: "a policy that is not there",
@@ -272,17 +277,7 @@ func TestDeriveInventoryPlanRefusals(t *testing.T) {
 			want: `derive inventory-plan: class "rust-crate" is not declared in the assert policy`,
 		},
 		{
-			name: "a class owing no planned inventory",
-			args: []string{
-				"inventory-plan", "--class", "rust-crate",
-				"--policy", writeInventoryPlanPolicy(t, strings.Replace(inventoryPlanPolicy,
-					`"owedFrom": "1.42.0", "planned": true}]`, `"owedFrom": "1.42.0"}]`, 1)),
-			},
-			code: exitRefused,
-			want: `derive inventory-plan: class "rust-crate" declares no planned prefix — it owes no planned inventory`,
-		},
-		{
-			name: "a class declaring two planned prefixes",
+			name: "a class declaring two planned prefixes refuses at load",
 			args: []string{
 				"inventory-plan", "--class", "rust-crate",
 				"--policy", writeInventoryPlanPolicy(t, strings.Replace(inventoryPlanPolicy,
@@ -290,8 +285,8 @@ func TestDeriveInventoryPlanRefusals(t *testing.T) {
 					`[{"prefix": "sbom-cargo-", "planned": true}, {"prefix": "sbom-crates-", "planned": true}]`, 1)),
 			},
 			code: exitRefused,
-			want: `derive inventory-plan: class "rust-crate" declares 2 planned prefixes (sbom-cargo-, sbom-crates-)` +
-				` — a leg plans under one`,
+			want: `evidence.classes.rust-crate.inventory.kind "crates" writes the plan under the class's one planned` +
+				` prefix, and the class declares 2`,
 		},
 		{
 			name: "the producer's own refusal",

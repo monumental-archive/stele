@@ -10,16 +10,48 @@
         "bundles": ["attestations-crates.intoto.jsonl"],
         "assetPrefixes": [
           { "prefix": "sbom-cargo-", "owedFrom": "1.0.0", "planned": true }
-        ]
+        ],
+        "inventory": { "kind": "crates", "artifactSuffix": "-crate" }
       },
       "pgrx-extension": {
         "bundles": ["attestations-extensions.intoto.jsonl"],
         "assetPrefixes": [
           { "prefix": "sbom-pgrx-", "owedFrom": "1.0.0", "planned": true }
-        ]
+        ],
+        "inventory": {
+          "kind": "variants",
+          "artifact": "{package}-pg{variant}",
+          "features": ["pg{variant}"],
+          "noDefaultFeatures": true
+        }
       },
-      "go-binary": { "bundles": ["attestations-binaries.intoto.jsonl"] },
-      "oci-image": { "bundles": ["attestations-image.intoto.jsonl"] }
+      "go-binary": {
+        "bundles": ["attestations-binaries.intoto.jsonl"],
+        "inventory": { "kind": "binaries" }
+      },
+      "oci-image": {
+        "bundles": ["attestations-image.intoto.jsonl"],
+        "inventory": { "kind": "none" }
+      },
+      "source-archive": {
+        "bundles": ["attestations-source.intoto.jsonl"],
+        "inventory": { "kind": "planned" }
+      },
+      "wasm-npm": { "bundles": ["attestations-npm.intoto.jsonl"] },
+      "lua-module": {
+        "bundles": ["attestations-lua.intoto.jsonl"],
+        "assetPrefixes": [{ "prefix": "inv-lua-", "planned": true }],
+        "inventory": {
+          "kind": "variants",
+          "artifact": "{package}_lua{variant}",
+          "features": ["lua{variant}"],
+          "noDefaultFeatures": false
+        }
+      },
+      "firmware": {
+        "bundles": ["attestations-fw.intoto.jsonl"],
+        "inventory": { "kind": "binaries" }
+      }
     }
   }
 }

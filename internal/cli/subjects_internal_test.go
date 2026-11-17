@@ -164,18 +164,6 @@ func TestDeriveSubjectsUsage(t *testing.T) {
 				` pgrx-extension-image, rust-binary`,
 		},
 		{
-			"a class whose row defines no subjects: rust-crate",
-			[]string{"--class", "rust-crate", "--expected", goPlan, "--dir", goDir},
-			`class "rust-crate" has no file or registry subjects defined: subjects are defined for go-binary,` +
-				` pgrx-extension, pgrx-extension-image, rust-binary`,
-		},
-		{
-			"a class whose row defines no subjects: oci-image",
-			[]string{"--class", "oci-image", "--expected", goPlan, "--dir", goDir},
-			`class "oci-image" has no file or registry subjects defined: subjects are defined for go-binary,` +
-				` pgrx-extension, pgrx-extension-image, rust-binary`,
-		},
-		{
 			"registry lines asked of a file class",
 			[]string{"--class", "go-binary", "--expected", goPlan, "--dir", goDir, "--registry-subjects-out", "x"},
 			"--registry-subjects-out: go-binary ships files, not registry subjects",
