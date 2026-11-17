@@ -273,6 +273,10 @@ usage:
               --machinery-digest --repo --tag --source-revision
               [--file --rows --rows-tables --rows-prefix --rows-file
               --rows-keys --out])
+    decision  the release decision a commit point signs: every
+              required proof judged by name, the covered documents
+              hashed into subject lines, read back through the
+              verifier's decision reader before it is written
 
 derive sbom flags: [--out --expect-version] <binary>..., or
 --cargo-package --tree --created [--target --features
@@ -331,7 +335,9 @@ emit vsa adds --tag --subjects --sboms --signer-digest
 [--out --assert-policy --git-dir --source-out]; emit manifest takes --classes --store-vsa
 --machinery-version --assets --assert-policy --leg-subjects
 [--registry-subjects --out]
-and none of the above.
+and none of the above; emit decision takes --policy --classes --proof
+--covered --predicate-out --subjects-out and --tag or --stream
+[--inventory --also], and none of the above either.
 GITHUB_TOKEN/GH_TOKEN authenticates store reads and the notes push.
 `
 

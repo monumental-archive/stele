@@ -813,15 +813,8 @@ func (dp *decisionPass) accept(s Subject, d decision, planned map[string]bool) e
 		return nil
 	}
 
-	want := *dp.p.Trust.Decision.RequiredConclusion
-	if d.pred.Conclusion == nil || *d.pred.Conclusion != want {
-		return fmt.Errorf("verify: %s: the release decision does not name conclusion %s — refusing the verdict",
-			s.Name, want)
-	}
-
-	if d.pred.Tag == nil || *d.pred.Tag != dp.c.Tag {
-		return fmt.Errorf("verify: %s: the release decision does not name tag %s — refusing the verdict",
-			s.Name, dp.c.Tag)
+	if herr := decisionHolds(d.pred, dp.p, dp.c.Tag); herr != nil {
+		return fmt.Errorf("verify: %s: %w — refusing the verdict", s.Name, herr)
 	}
 
 	if planned != nil {
@@ -936,22 +929,9 @@ func (dp *decisionPass) verified(s Subject, sb StoredBundle, bsha string) (*deci
 		return nil, fmt.Errorf("verify: %s: decision signed at %q, pin is %q", s.Name, got, dp.pin)
 	}
 
-	stmt, serr := jsonx.DecodeBytes[intoto.Statement](v.Payload)
-	if serr != nil {
-		return nil, fmt.Errorf("verify: %s: verified payload is not a statement: %w", s.Name, serr)
-	}
-
-	if verr := stmt.Validate(); verr != nil {
-		return nil, fmt.Errorf("verify: %s: %w", s.Name, verr)
-	}
-
-	if *stmt.PredicateType != *dp.p.Trust.Decision.PredicateType {
-		return nil, fmt.Errorf("verify: %s: verified payload is not a release decision", s.Name)
-	}
-
-	pred, perr := jsonx.DecodeBytes[decisionPredicate](stmt.Predicate)
-	if perr != nil {
-		return nil, fmt.Errorf("verify: %s: decision predicate: %w", s.Name, perr)
+	stmt, pred, derr := decodeDecision(v.Payload, dp.p)
+	if derr != nil {
+		return nil, fmt.Errorf("verify: %s: %w", s.Name, derr)
 	}
 
 	return &decision{ref: Ref{URI: sb.URI, SHA256: bsha}, pred: pred, subjects: stmt.Subject}, nil

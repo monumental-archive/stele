@@ -274,6 +274,16 @@ declaration — "this release planned no inventories" — not a default
 that softens the gate: the whole-release invariant then applies in
 full.
 
+`stele emit decision` produces the record this section judges, and
+reads the same two fields: the predicate it writes carries
+`conclusion` = `requiredConclusion` (with `tag`, `classes`,
+`decidedAt` and every proof by `name` and `result`; a stream's
+decision carries no `tag`), and it prints `predicateType` for the
+signer. It refuses unless every required proof succeeded, and it
+reads its own record back through the reader `verify release` uses
+before writing it, so a decision the verdict would refuse cannot be
+emitted. The section adds no key for it.
+
 **The whole section is optional**: a release decision is an
 obligation an org declares, not a precondition of using the
 verifier. A fresh adopter — or a single repository — with no such
