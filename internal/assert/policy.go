@@ -21,6 +21,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
+	"github.com/monumental-archive/stele/internal/release"
 )
 
 // PolicySchema is the document epoch this implementation reads — any
@@ -1032,6 +1033,11 @@ type ClassPolicy struct {
 	// refuses a demand that steps outside it, because this file
 	// cannot see the other document.
 	Enrichment []string `json:"enrichment,omitempty"`
+	// Subjects declares what one planned build leg of this class
+	// leaves behind — the shape `stele derive subjects` judges
+	// (stele#442). The kinds are the engine's and their parameters
+	// the policy's; absent, the class has no subject manifest.
+	Subjects *release.SubjectShape `json:"subjects,omitempty"`
 }
 
 // validateClasses holds the per-class guards: a class must require
@@ -1086,6 +1092,14 @@ func validateClasses(classes map[string]ClassPolicy) error {
 			}
 
 			seen[n] = true
+		}
+
+		// Compiled at load, so a shape the derive leg could not run is
+		// refused with the rest of the policy, never mid-release.
+		if c.Subjects != nil {
+			if _, err := c.Subjects.Compile(name); err != nil {
+				return err
+			}
 		}
 	}
 

@@ -15,6 +15,10 @@ import (
 
 const subjectsFixtures = "../release/testdata/subjects"
 
+// subjectsPolicy declares every fixture class's subject shape: the
+// classes are the policy's, never the CLI's (stele#442).
+var subjectsPolicy = filepath.Join(subjectsFixtures, "policy.json")
+
 // plannedFile writes a planned-legs document and returns its path.
 func plannedFile(t *testing.T, body string) string {
 	t.Helper()
@@ -48,7 +52,7 @@ func TestDeriveSubjectsFileClass(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := deriveCmd([]string{
-		"subjects", "--class", "go-binary",
+		"subjects", "--policy", subjectsPolicy, "--class", "go-binary",
 		"--expected", filepath.Join(subjectsFixtures, "go", "expected.json"),
 		"--dir", filepath.Join(subjectsFixtures, "go", "assets"),
 		"--subjects-out", subjects, "--leg-subjects-out", legs,
@@ -82,7 +86,7 @@ func TestDeriveSubjectsPgrxClass(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := deriveCmd([]string{
-		"subjects", "--class", "pgrx-extension",
+		"subjects", "--policy", subjectsPolicy, "--class", "pgrx-extension",
 		"--expected", filepath.Join(subjectsFixtures, "pgrx", "expected.json"),
 		"--dir", filepath.Join(subjectsFixtures, "pgrx", "assets"),
 		"--leg-subjects-out", legs,
@@ -113,7 +117,7 @@ func TestDeriveSubjectsRegistryClass(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := deriveCmd([]string{
-		"subjects", "--class", "pgrx-extension-image",
+		"subjects", "--policy", subjectsPolicy, "--class", "pgrx-extension-image",
 		"--expected", filepath.Join(subjectsFixtures, "images", "expected.json"),
 		"--dir", filepath.Join(subjectsFixtures, "images", "digests"),
 		"--registry-subjects-out", registry,
@@ -148,29 +152,59 @@ func TestDeriveSubjectsUsage(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"no class", []string{"--expected", goPlan, "--dir", goDir}, "--class is required"},
-		{"no planned legs", []string{"--class", "go-binary", "--dir", goDir}, "--expected is required"},
-		{"no directory", []string{"--class", "go-binary", "--expected", goPlan}, "--dir is required"},
+		{"no policy", []string{"--class", "go-binary", "--expected", goPlan, "--dir", goDir}, "--policy is required"},
+		{"no class", []string{"--policy", subjectsPolicy, "--expected", goPlan, "--dir", goDir}, "--class is required"},
+		{
+			"no planned legs",
+			[]string{"--policy", subjectsPolicy, "--class", "go-binary", "--dir", goDir},
+			"--expected is required",
+		},
+		{
+			"no directory",
+			[]string{"--policy", subjectsPolicy, "--class", "go-binary", "--expected", goPlan},
+			"--dir is required",
+		},
 		{
 			"a stray argument",
-			[]string{"--class", "go-binary", "--expected", goPlan, "--dir", goDir, "extra"},
+			[]string{"--policy", subjectsPolicy, "--class", "go-binary", "--expected", goPlan, "--dir", goDir, "extra"},
 			`unexpected argument "extra"`,
 		},
 		{"an unknown flag", []string{"--pattern", "*.tar.gz"}, "flag provided but not defined: -pattern"},
 		{
-			"an unknown class",
-			[]string{"--class", "wasm-npm", "--expected", goPlan, "--dir", goDir},
-			`unknown class "wasm-npm": subjects are defined for go-binary, pgrx-extension,` +
-				` pgrx-extension-image, rust-binary`,
+			"an undeclared class",
+			[]string{"--policy", subjectsPolicy, "--class", "wasm-npm", "--expected", goPlan, "--dir", goDir},
+			`class "wasm-npm" is not declared in ` + subjectsPolicy + `'s evidence.classes`,
+		},
+		{
+			"a class declared with no subjects",
+			[]string{"--policy", subjectsPolicy, "--class", "oci-image", "--expected", goPlan, "--dir", goDir},
+			"evidence.classes.oci-image in " + subjectsPolicy + " declares no subjects — " +
+				"what its build leaves behind is declared, never assumed",
+		},
+		{
+			"a policy that cannot be read",
+			[]string{"--policy", "absent.json", "--class", "go-binary", "--expected", goPlan, "--dir", goDir},
+			"open absent.json: no such file or directory",
+		},
+		{
+			"a policy that does not load",
+			[]string{"--policy", goPlan, "--class", "go-binary", "--expected", goPlan, "--dir", goDir},
+			"assert: policy: jsonx: decode:",
 		},
 		{
 			"registry lines asked of a file class",
-			[]string{"--class", "go-binary", "--expected", goPlan, "--dir", goDir, "--registry-subjects-out", "x"},
+			[]string{
+				"--policy", subjectsPolicy, "--class", "go-binary", "--expected", goPlan, "--dir", goDir,
+				"--registry-subjects-out", "x",
+			},
 			"--registry-subjects-out: go-binary ships files, not registry subjects",
 		},
 		{
 			"file lines asked of a registry class",
-			[]string{"--class", "pgrx-extension-image", "--expected", goPlan, "--dir", goDir, "--leg-subjects-out", "x"},
+			[]string{
+				"--policy", subjectsPolicy, "--class", "pgrx-extension-image", "--expected", goPlan, "--dir", goDir,
+				"--leg-subjects-out", "x",
+			},
 			"pgrx-extension-image publishes to a registry; its lines are --registry-subjects-out",
 		},
 	} {
@@ -226,7 +260,7 @@ func TestDeriveSubjectsRefusals(t *testing.T) {
 		},
 		{
 			"a pgrx cell not shaped for its class", "pgrx-extension", `["16"]`, pgrxDir,
-			`planned cell "16" is not <major>-<arch>`,
+			`planned cell "16" does not match ^(?P<major>\d+)-(?P<arch>[a-z0-9_]+)$`,
 		},
 		{
 			"a leg the directory does not hold", "go-binary", `["linux-amd64","windows-amd64"]`, goDir,
@@ -248,7 +282,7 @@ func TestDeriveSubjectsRefusals(t *testing.T) {
 			outDir := t.TempDir()
 			subjectsOut := filepath.Join(outDir, "subjects")
 
-			args := []string{"subjects", "--class", tc.class, "--expected", planned, "--dir", tc.dir}
+			args := []string{"subjects", "--policy", subjectsPolicy, "--class", tc.class, "--expected", planned, "--dir", tc.dir}
 			if tc.class == "pgrx-extension-image" {
 				args = append(args, "--registry-subjects-out", subjectsOut)
 			} else {
@@ -280,7 +314,7 @@ func TestDeriveSubjectsPlacementFailures(t *testing.T) {
 	t.Parallel()
 
 	goArgs := []string{
-		"subjects", "--class", "go-binary",
+		"subjects", "--policy", subjectsPolicy, "--class", "go-binary",
 		"--expected", filepath.Join(subjectsFixtures, "go", "expected.json"),
 		"--dir", filepath.Join(subjectsFixtures, "go", "assets"),
 	}

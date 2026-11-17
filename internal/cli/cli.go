@@ -294,8 +294,8 @@ takes --policy --subjects|--inventories --vex --released [--out --id
 --repo --version|--run --release-view --verify-policy];
 derive vex-subjects takes --policy --decision... --org|--repo
 [--snapshot --out --unsigned-only --store]; derive signer-digest takes --policy
---workflows|--workflow [--repo]; derive subjects takes --class
---expected --dir [--subjects-out --leg-subjects-out
+--workflows|--workflow [--repo]; derive subjects takes --policy
+--class --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; derive population takes --policy
 --org|--repo [--tracks --out]; the other
 derive modes take --git-dir [--ref
