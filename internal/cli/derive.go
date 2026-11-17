@@ -126,7 +126,7 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects or signer-digest"); err != nil {
+				" vex-subjects, signer-digest or subjects"); err != nil {
 			return exitIO
 		}
 
@@ -136,11 +136,11 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	mode := args[0]
 	switch mode {
 	case deriveVersion, deriveNotes, deriveBump, deriveReleasePlan, deriveSBOM, deriveClaims, deriveFacts,
-		deriveVEX, deriveVEXSubjects, deriveSignerDigest:
+		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects:
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele derive: unknown mode %q (version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest)\n", mode); err != nil {
+				" vex-subjects, signer-digest, subjects)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -207,6 +207,19 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 
 		return runDeriveMode(ca.out, stdout, stderr,
 			func(doc io.Writer, log *latch) error { return runDeriveClaims(ca, doc, log) })
+	}
+
+	// subjects reads a directory of built assets against the planned
+	// legs; no history, no forge, no document — lines.
+	if mode == deriveSubjects {
+		sa, code := parseSubjectsArgs(args[1:], stderr)
+		if code != exitOK {
+			return code
+		}
+
+		out := &latch{w: stdout}
+
+		return finishDerive(runDeriveSubjects(sa, out), out, stderr)
 	}
 
 	// sbom reads binaries, not a git history; it shares nothing with

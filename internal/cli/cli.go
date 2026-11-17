@@ -150,6 +150,10 @@ usage:
               signer at, read from the job-level uses: lines the
               platform runs; the signer is the policy's, a tree
               pinning none or two refuses
+    subjects  the digests a build's provenance names: every asset
+              the class's planned legs must produce, present exactly
+              once and nothing unplanned, as sha256 lines flat and
+              grouped by leg — or a registry class's image digests
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -246,7 +250,9 @@ takes --policy --repo --branch [--canon-root --canon-digest --out
 takes --subjects --vex --author --id --released [--base-ecosystems
 --out]; derive vex-subjects takes --policy --decision --org|--repo
 [--snapshot --out]; derive signer-digest takes --policy
---workflows|--workflow [--repo]; the other
+--workflows|--workflow [--repo]; derive subjects takes --class
+--expected --dir [--subjects-out --leg-subjects-out
+--registry-subjects-out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
