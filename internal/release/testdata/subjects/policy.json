@@ -38,7 +38,11 @@
           "extension": ".tar.gz",
           "label": "${major}",
           "assets": [
-            { "noun": "tarball", "of": "pg${major}/${arch}", "suffix": "-pg${major}-linux-${arch}.tar.gz" },
+            {
+              "noun": "tarball",
+              "of": "pg${major}/${arch}",
+              "suffix": "-pg${major}-linux-${arch}.tar.gz"
+            },
             {
               "noun": "debug tarball",
               "of": "pg${major}/${arch}",
@@ -67,8 +71,16 @@
           "extension": ".bin",
           "label": "${board}.${rev}",
           "assets": [
-            { "noun": "image", "of": "${board} ${rev}", "suffix": "_${board}_${rev}.bin" },
-            { "noun": "recovery image", "of": "${board} ${rev}", "suffix": "_${board}_${rev}.rescue.bin" }
+            {
+              "noun": "image",
+              "of": "${board} ${rev}",
+              "suffix": "_${board}_${rev}.bin"
+            },
+            {
+              "noun": "recovery image",
+              "of": "${board} ${rev}",
+              "suffix": "_${board}_${rev}.rescue.bin"
+            }
           ]
         }
       },
