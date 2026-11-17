@@ -160,6 +160,12 @@ usage:
               the class's planned legs must produce, present exactly
               once and nothing unplanned, as sha256 lines flat and
               grouped by leg — or a registry class's image digests
+    inventories  a release's every inventory in one call: the plans
+              judged as assert plans judges them, one document per
+              judged entry and the release view folded from them, or
+              the shipped binaries' own, or the forge's dependency
+              graph for a tree tracking no manifest — and the list of
+              documents the release decision covers on stdout
     inventory-plan  a build leg's inventory plan, the document
               assert plans judges: one entry per packaged crate or
               one per extension cell, named under the class's
@@ -294,7 +300,10 @@ derive vex-subjects takes --policy --decision --org|--repo
 --workflows|--workflow [--repo]; derive subjects takes --class
 --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; derive inventory-plan takes --class --policy
-[--dir --version | --crate-dir --major] [--out]; the other
+[--dir --version | --crate-dir --major] [--out]; derive inventories
+takes --policy --classes --repo --version --created --out-dir
+[--evidence-classes --machinery-version --name --tree --binaries-dir
+--expect-revision --pg-majors] [<plan>...]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups

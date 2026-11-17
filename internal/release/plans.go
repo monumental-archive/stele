@@ -38,7 +38,8 @@ const (
 )
 
 // PlanClass is one class's statement of how its build leg plans its
-// inventories.
+// inventories: a view of the class's row in the release contract's one
+// list (subjects.go).
 type PlanClass struct {
 	// Name is the evidence class, as the manifest and the policy
 	// spell it, and as the plan entry carries it.
@@ -46,32 +47,40 @@ type PlanClass struct {
 	shape string
 }
 
-// planClasses are the release contract's plan-producer rows. Adding a
-// class whose leg plans in an existing shape is adding a row.
-func planClasses() []*PlanClass {
-	return []*PlanClass{
-		{Name: "rust-crate", shape: shapeCrates},
-		{Name: "pgrx-extension", shape: shapeExtension},
+// PlanClassNamed returns the plan producer for name: the class's row,
+// when the row names a plan shape.
+func PlanClassNamed(name string) (*PlanClass, bool) {
+	c, ok := classRow(name)
+	if !ok || c.plan == "" {
+		return nil, false
 	}
+
+	return &PlanClass{Name: c.Name, shape: c.plan}, true
 }
 
-// PlanClassNamed returns the plan-producer definition for name.
-func PlanClassNamed(name string) (*PlanClass, bool) {
-	for _, c := range planClasses() {
-		if c.Name == name {
-			return c, true
+// PlanClasses lists the classes with a plan producer, in row order,
+// for a usage line.
+func PlanClasses() []string {
+	var out []string
+
+	for _, c := range assetClasses() {
+		if c.plan != "" {
+			out = append(out, c.Name)
 		}
 	}
 
-	return nil, false
+	return out
 }
 
-// PlanClasses lists the classes with a plan producer, for a usage
-// line.
-func PlanClasses() []string {
-	out := make([]string, 0, len(planClasses()))
-	for _, c := range planClasses() {
-		out = append(out, c.Name)
+// ExtensionClasses names the classes that plan per Postgres major: the
+// classes whose documents the per-major coverage check reads.
+func ExtensionClasses() map[string]bool {
+	out := map[string]bool{}
+
+	for _, c := range assetClasses() {
+		if c.plan == shapeExtension {
+			out[c.Name] = true
+		}
 	}
 
 	return out

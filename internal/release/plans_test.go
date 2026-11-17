@@ -275,7 +275,7 @@ func TestPlanRefusals(t *testing.T) {
 func TestPlanClasses(t *testing.T) {
 	t.Parallel()
 
-	if got := strings.Join(release.PlanClasses(), ","); got != "rust-crate,pgrx-extension" {
+	if got := strings.Join(release.PlanClasses(), ","); got != "pgrx-extension,rust-crate" {
 		t.Errorf("PlanClasses = %q", got)
 	}
 

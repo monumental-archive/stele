@@ -175,12 +175,35 @@ var releasedCommitRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 // runDeriveBinarySBOM reads every leg, unions the platform legs, and
 // writes the document where asked.
 func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	document, legs, err := binaryDocument(sa)
+	if err != nil {
+		return err
+	}
+
+	root := document.Packages[0]
+
+	if err := writeInventory(sa.out, document, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(document.Packages), legs)
+
+	return nil
+}
+
+// binaryDocument reads every leg's embedded module list into one
+// document, checking the stamp against the released commit and the
+// version against the release's belief when the caller states them —
+// the one derivation `derive sbom` and `derive inventories` both run
+// over shipped binaries. It returns the document and how many legs
+// it read.
+func binaryDocument(sa *sbomArgs) (*sbom.Document, int, error) {
 	bins := make([]sbom.Binary, 0, len(sa.binaries))
 
 	for _, path := range sa.binaries {
 		info, err := readBinary(path)
 		if err != nil {
-			return fmt.Errorf("derive sbom: %s: %w", path, err)
+			return nil, 0, fmt.Errorf("derive sbom: %s: %w", path, err)
 		}
 
 		bins = append(bins, sbom.Binary{Name: path, Info: info})
@@ -188,17 +211,17 @@ func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 
 	if sa.expectRevision != "" {
 		if !releasedCommitRE.MatchString(sa.expectRevision) {
-			return fmt.Errorf("derive sbom: --expect-revision %q is not a full commit identifier", sa.expectRevision)
+			return nil, 0, fmt.Errorf("derive sbom: --expect-revision %q is not a full commit identifier", sa.expectRevision)
 		}
 
 		if err := sbom.RequireRevision(bins, sa.expectRevision); err != nil {
-			return err
+			return nil, 0, err
 		}
 	}
 
 	document, err := sbom.Derive(bins, "stele-"+selfVersion())
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 
 	root := document.Packages[0]
@@ -213,18 +236,12 @@ func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 		}
 
 		if root.VersionInfo != want {
-			return fmt.Errorf("derive sbom: the binaries are %s@%s but the release believes it is cutting %s — "+
+			return nil, 0, fmt.Errorf("derive sbom: the binaries are %s@%s but the release believes it is cutting %s — "+
 				"the build did not check out the tag it is publishing", root.Name, root.VersionInfo, want)
 		}
 	}
 
-	if err := writeInventory(sa.out, document, doc, out); err != nil {
-		return err
-	}
-
-	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(document.Packages), len(bins))
-
-	return nil
+	return document, len(bins), nil
 }
 
 // selfVersion names this binary in the document's creator field, read
@@ -256,28 +273,7 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 			" artifact, never by the run that described it")
 	}
 
-	selection, err := cargo.Select(sa.target, splitTypes(sa.features), sa.noDefaultFeatures, sa.allFeatures)
-	if err != nil {
-		return err
-	}
-
-	metadata, err := newCargoResolver().Metadata(sa.tree, selection)
-	if err != nil {
-		return err
-	}
-
-	root, closure, err := cargo.Closure(metadata, sa.cargoRoot)
-	if err != nil {
-		return err
-	}
-
-	deps := make([]sbom.Package, 0, len(closure))
-	for _, pkg := range closure {
-		deps = append(deps, sbom.CargoPackage(pkg.Name, pkg.Version))
-	}
-
-	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
-		displayAs(sbom.CargoPackage(root.Name, root.Version), sa.artifact), deps)
+	document, err := cargoDocument(sa)
 	if err != nil {
 		return err
 	}
@@ -289,6 +285,34 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	out.logf("%s: %d packages", document.Name, len(document.Packages))
 
 	return nil
+}
+
+// cargoDocument derives one Cargo artifact's inventory from its own
+// resolved closure: the one derivation `derive sbom --cargo-package`
+// and `derive inventories` both run per artifact.
+func cargoDocument(sa *sbomArgs) (*sbom.Document, error) {
+	selection, err := cargo.Select(sa.target, splitTypes(sa.features), sa.noDefaultFeatures, sa.allFeatures)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata, err := newCargoResolver().Metadata(sa.tree, selection)
+	if err != nil {
+		return nil, err
+	}
+
+	root, closure, err := cargo.Closure(metadata, sa.cargoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	deps := make([]sbom.Package, 0, len(closure))
+	for _, pkg := range closure {
+		deps = append(deps, sbom.CargoPackage(pkg.Name, pkg.Version))
+	}
+
+	return sbom.FromPackages(sa.created, "stele-"+selfVersion(),
+		displayAs(sbom.CargoPackage(root.Name, root.Version), sa.artifact), deps)
 }
 
 // The npm resolver seam, swapped only by tests, for the reason the

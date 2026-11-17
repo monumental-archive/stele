@@ -15,7 +15,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/release"
 )
@@ -121,13 +120,7 @@ func runDeriveInventoryPlan(pa *inventoryPlanArgs, doc io.Writer, out *latch) er
 // inventory, and one declaring several leaves the leg no way to
 // choose: both are refused rather than guessed.
 func plannedPrefix(path, class string) (string, error) {
-	f, err := os.Open(path) //nolint:gosec // the policy path is operator-supplied by design
-	if err != nil {
-		return "", fmt.Errorf("derive inventory-plan: %w", err)
-	}
-	defer f.Close() //nolint:errcheck // read-only close
-
-	pol, err := assert.LoadPolicy(f)
+	pol, err := loadAssertPolicy(path)
 	if err != nil {
 		return "", fmt.Errorf("derive inventory-plan: %w", err)
 	}

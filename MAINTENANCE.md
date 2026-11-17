@@ -45,6 +45,7 @@ the same statement as this one and tested against it.
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
 | `stele derive vex-subjects` | which published releases one VEX decision reaches, and the subjects a claim about it is signed over |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
+| `stele derive inventories` | a release's every inventory in one call — per-artifact documents from the judged plans and the view folded from them, the shipped binaries' own, or the forge's dependency graph — and the decision's inventory list |
 | `stele derive inventory-plan` | a build leg's inventory plan: one entry per packaged crate, or one per extension cell, named under the class's planned prefix in the assert policy |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
@@ -95,6 +96,9 @@ humans go to stderr precisely so they are not part of this promise.
 - `key=value` lines from the derive modes — `release=`, `version=`,
   `tag=`, `bump=`, `declared=`, `kind=`, `files=`, `check=` — which the
   canon's release scripts read with `awk -F=`.
+- The decision's inventory list from `derive inventories`: one JSON
+  array on stdout, the names of the per-artifact documents the release
+  decision covers, or `[""]` for a release that decides as one.
 - The subject lines from `derive subjects` — `sha256sum`'s
   `<hex>  <name>`, the same prefixed with the leg's label, and a
   registry class's `<label> <hex>  <image>` — which the canon's

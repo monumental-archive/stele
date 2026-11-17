@@ -46,6 +46,13 @@ type AssetClass struct {
 	// file with it that no leg claims is unplanned.
 	Extension string
 	leg       func(entry string) (Leg, error)
+
+	// inventory is what the class's release owes as inventory
+	// (stele#396), and plan the shape its build leg plans in, if it
+	// plans at all (internal/release/plans.go). A row with no leg
+	// defines no subjects: it carries the inventory facts alone.
+	inventory InventoryRole
+	plan      string
 }
 
 // Leg is one planned entry and the assets it must produce.
@@ -77,13 +84,19 @@ const tarGz = ".tar.gz"
 // assetClasses are the release contract's class definitions for the
 // classes whose subjects are files. Adding a class is adding a row.
 func assetClasses() []*AssetClass {
+	goBinary := binaryClass("go-binary")
+	goBinary.inventory = InventoryCarriedByBinaries
+
 	return []*AssetClass{
-		binaryClass("go-binary"),
+		goBinary,
 		binaryClass("rust-binary"),
 		{
 			Name: "pgrx-extension", Unit: "cell", Kind: "tarball", Extension: tarGz,
-			leg: pgrxCell,
+			leg: pgrxCell, plan: shapeExtension,
 		},
+		// Inventory facts alone: no subject definition yet.
+		{Name: "rust-crate", plan: shapeCrates},
+		{Name: "oci-image", inventory: InventoryNone},
 	}
 }
 
@@ -139,8 +152,19 @@ func plainEntry(entry string) error {
 	return nil
 }
 
-// AssetClassNamed returns the class definition for name.
+// AssetClassNamed returns the subject definition for name. A row that
+// carries inventory facts alone defines no subjects, and is not one.
 func AssetClassNamed(name string) (*AssetClass, bool) {
+	c, ok := classRow(name)
+	if !ok || c.leg == nil {
+		return nil, false
+	}
+
+	return c, true
+}
+
+// classRow returns the row for name, whatever it defines.
+func classRow(name string) (*AssetClass, bool) {
 	for _, c := range assetClasses() {
 		if c.Name == name {
 			return c, true
@@ -155,7 +179,9 @@ func AssetClassNamed(name string) (*AssetClass, bool) {
 func SubjectClasses() []string {
 	var names []string
 	for _, c := range assetClasses() {
-		names = append(names, c.Name)
+		if c.leg != nil {
+			names = append(names, c.Name)
+		}
 	}
 
 	for _, c := range registryClasses() {

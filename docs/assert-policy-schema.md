@@ -1147,6 +1147,41 @@ deliberately ask two different questions (stele#143):
   release does not declare is drift (a leg ran for an undeclared
   class).
 
+### Deriving a release's inventories
+
+`stele derive inventories --policy <assert-policy> --classes <ran>
+--repo <owner/repo> --version <v> --created <instant> --out-dir <dir>
+[--evidence-classes --machinery-version] [--name --tree --binaries-dir
+--expect-revision --pg-majors] [<plan files...>]` writes every
+inventory a release ships and prints, as one JSON array on stdout, the
+documents the release decision covers (stele#396). Which inventory a
+class owes is the release contract's (`internal/release`): a class
+whose shipped binaries carry their module list (`go-binary`), a class
+that adds no inventory of its own (`oci-image`), and every other
+class, which plans. The sequence:
+
+- a binaries-carry class beside a planning class is refused
+  (.github#784): the plan path has no plan for the binaries, and the
+  release would publish an inventory omitting them;
+- with `--binaries-dir` and no planning class, the binaries speak for
+  the release: a plan beside them is refused (#775), an empty
+  directory is refused, and the one document is read out of the
+  shipped bytes (`--expect-revision` checks every stamp). The list is
+  `[""]`: the release decides as one;
+- with plans, the plans are judged exactly as `assert plans` judges
+  them, and nothing derives from plans that did not pass. One
+  document per judged entry (`<doc>-<version><sbomSuffix>`), every
+  `--pg-majors` major covered by an extension entry, and the view
+  (`<name>-<version><sbomSuffix>`) folded from the documents. The list
+  names the per-artifact documents; the view bears no decision;
+- with neither, a tree whose index tracks a `Cargo.lock` or `go.mod`
+  is refused (#492, #537), and otherwise the forge's dependency-graph
+  export is the view. The list is `[""]`.
+
+Every document written passes the admissibility rule above, the
+dependency graph included. `--name` defaults to the repository's name;
+a leading dot is stripped, because release-asset globs skip dotfiles.
+
 ### The judged set is what consumers iterate
 
 The judgment emits the entry set it judged: collapsed, validated,

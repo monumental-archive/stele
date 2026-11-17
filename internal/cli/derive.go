@@ -126,7 +126,7 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele derive: a mode is required: version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest, subjects or inventory-plan"); err != nil {
+				" vex-subjects, signer-digest, subjects, inventory-plan or inventories"); err != nil {
 			return exitIO
 		}
 
@@ -136,11 +136,11 @@ func deriveCmd(args []string, stdout, stderr io.Writer) int {
 	mode := args[0]
 	switch mode {
 	case deriveVersion, deriveNotes, deriveBump, deriveReleasePlan, deriveSBOM, deriveClaims, deriveFacts,
-		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects, deriveInventoryPlan:
+		deriveVEX, deriveVEXSubjects, deriveSignerDigest, deriveSubjects, deriveInventoryPlan, deriveInventories:
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele derive: unknown mode %q (version, notes, bump, release-plan, sbom, claims, facts, vex,"+
-				" vex-subjects, signer-digest, subjects, inventory-plan)\n", mode); err != nil {
+				" vex-subjects, signer-digest, subjects, inventory-plan, inventories)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -259,6 +259,17 @@ func deriveBuildMode(mode string, args []string, stdout, stderr io.Writer) (int,
 
 		return runDeriveMode(pa.out, stdout, stderr,
 			func(doc io.Writer, log *latch) error { return runDeriveInventoryPlan(pa, doc, log) }), true
+	}
+
+	// inventories derives a release's every inventory in one call.
+	if mode == deriveInventories {
+		ia, code := parseInventoriesArgs(args[1:], stderr)
+		if code != exitOK {
+			return code, true
+		}
+
+		return runDeriveMode("", stdout, stderr,
+			func(doc io.Writer, log *latch) error { return runDeriveInventories(ia, doc, log) }), true
 	}
 
 	// sbom reads binaries, not a git history; it shares nothing with

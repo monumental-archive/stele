@@ -226,7 +226,7 @@ func TestDeriveInventoryPlanRefusals(t *testing.T) {
 			name: "a class with no producer",
 			args: []string{"inventory-plan", "--class", "go-binary", "--policy", policy},
 			code: exitUsage,
-			want: `stele derive inventory-plan: unknown class "go-binary": plans are produced for rust-crate, pgrx-extension`,
+			want: `stele derive inventory-plan: unknown class "go-binary": plans are produced for pgrx-extension, rust-crate`,
 		},
 		{
 			name: "a policy that is not there",
