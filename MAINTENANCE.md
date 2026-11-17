@@ -48,6 +48,7 @@ the same statement as this one and tested against it.
 | `stele derive inventories` | a release's every inventory in one call — per-artifact documents from the judged plans and the view folded from them, the shipped binaries' own, or the forge's dependency graph — and the decision's inventory list |
 | `stele derive inventory-plan` | a build leg's inventory plan, by the inventory kind its class declares in the assert policy: one entry per packaged crate, or one per variant cell, named under the class's planned prefix |
 | `stele derive population` | the population every assert target enumerates, printed per member with its resolved tracks and the reconciliation by name; with `--repo --tracks`, one repository's membership and track agreement |
+| `stele derive classes` | the evidence classes a release request declares, each validated against the assert policy's declared `evidence.classes` and expanded as its `declares` say |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |

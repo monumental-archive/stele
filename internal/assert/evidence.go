@@ -260,20 +260,12 @@ func (w *evidenceWalk) requiredAssets(
 		c.Diverged("the checksum manifest is absent")
 	}
 
-	var required []string
-
 	for _, class := range contract.Classes {
 		cp, ok := w.pol.Classes[class]
 		if c := w.check(subject, "class:"+class); !ok {
 			c.Diverged("the contract names a class the policy does not define")
 
 			continue
-		}
-
-		required = append(required, cp.Bundles...)
-
-		if !contract.StoreVSA {
-			required = append(required, cp.LegacyVSABundles...)
 		}
 
 		for _, prefix := range cp.owedPrefixes(contract.MachineryVersion) {
@@ -283,26 +275,65 @@ func (w *evidenceWalk) requiredAssets(
 		}
 	}
 
-	// One bundle covering the whole release truthfully takes the
-	// umbrella name — the single-bundle case.
-	umbrella := len(required) == 1 && have[*w.pol.UmbrellaBundle]
-
-	var present []string
+	required := w.pol.owedBundles(contract)
+	present, absent := w.pol.presentBundles(required, have)
 
 	for _, b := range required {
-		c := w.check(subject, b)
-
-		switch {
-		case have[b]:
-			present = append(present, b)
-		case umbrella:
-			present = append(present, *w.pol.UmbrellaBundle)
-		default:
+		if c := w.check(subject, b); absent[b] {
 			c.Diverged("the class bundle is absent")
 		}
 	}
 
 	return present
+}
+
+// owedBundles names the class bundles the contract owes, in class
+// order: each declared class's bundles, and its legacy verdict bundles
+// where verdicts predate the store. A class the policy does not define
+// owes nothing here — the walk records it as its own finding.
+func (e *EvidencePolicy) owedBundles(contract *Contract) []string {
+	var required []string
+
+	for _, class := range contract.Classes {
+		cp, ok := e.Classes[class]
+		if !ok {
+			continue
+		}
+
+		required = append(required, cp.Bundles...)
+
+		if !contract.StoreVSA {
+			required = append(required, cp.LegacyVSABundles...)
+		}
+	}
+
+	return required
+}
+
+// presentBundles answers which owed bundles the release carries, and
+// which it does not. One bundle covering the whole release truthfully
+// takes the umbrella name — the single-bundle case.
+//
+//nolint:gocritic // unnamedResult: the present bundles, then the absent ones by name
+func (e *EvidencePolicy) presentBundles(required []string, have map[string]bool) ([]string, map[string]bool) {
+	umbrella := len(required) == 1 && have[*e.UmbrellaBundle]
+
+	var present []string
+
+	absent := map[string]bool{}
+
+	for _, b := range required {
+		switch {
+		case have[b]:
+			present = append(present, b)
+		case umbrella:
+			present = append(present, *e.UmbrellaBundle)
+		default:
+			absent[b] = true
+		}
+	}
+
+	return present, absent
 }
 
 // bundleLine is one line of a bundle asset — a Sigstore bundle whose

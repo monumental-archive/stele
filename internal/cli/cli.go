@@ -178,6 +178,10 @@ usage:
               by name; exit 1 when roster and listing disagree, 4
               when the listing cannot be read. With --repo and
               --tracks: is it a member, and do the tracks match
+    classes   the evidence classes a release request declares: each
+              requested class validated against the assert policy's
+              evidence.classes and expanded as its declares say,
+              printed as classes=<list> and each declared output
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -316,7 +320,8 @@ derive vex-subjects takes --policy --decision... --org|--repo
 takes --policy --classes --repo --version --created --out-dir
 [--evidence-classes --machinery-version --name --tree --binaries-dir
 --expect-revision --variants] [<plan>...]; derive population takes --policy
---org|--repo [--tracks --out]; the other
+--org|--repo [--tracks --out]; derive classes takes --policy --classes
+[--given name=value...]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
@@ -335,8 +340,14 @@ offline document, or [--tuf-root --tuf-mirror] for a private Sigstore
 instance; naming none resolves one through TUF from the anchor pinned
 in this binary.
 
-verify flags: --policy --repo; release/vsa add
---tag --subjects --signer-digest --machinery-digest; chain adds
+verify flags: --policy --repo; release/vsa add --tag [--subjects
+--signer-digest --machinery-digest --assert-policy], and release adds
+[--sboms --inventories]. An absent digest is derived from the trees
+at the tag, the walk's own resolution; absent --subjects, --sboms and
+their plan are read from the release's own evidence, which the
+publisher's --assert-policy locates — one of --subjects or
+--assert-policy is required. Every derived value is printed; a flag
+that is given is used as given. chain adds
 --git-dir [--ref]; source-vsa adds --tag --git-dir --assert-policy
 --machinery-digest; repro takes --repo --tag --released --rebuilt
 [--class --targets --assert-policy --json] and no trust material — a

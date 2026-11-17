@@ -43,15 +43,9 @@ func (va *verifyArgs) loadSourceVSA() error {
 		return errors.New("--assert-policy is required: it names the asset the verdict is published as")
 	}
 
-	f, err := os.Open(va.assertPolicy)
+	ap, err := loadAssertPolicyFile(va.assertPolicy)
 	if err != nil {
-		return err //nolint:wrapcheck // the refusal names the path already
-	}
-	defer f.Close() //nolint:errcheck // read-only close
-
-	ap, err := assert.LoadPolicy(f)
-	if err != nil {
-		return fmt.Errorf("assert policy: %w", err)
+		return err
 	}
 
 	if ap.Evidence.SourceVerdictBundle == nil {
@@ -62,6 +56,23 @@ func (va *verifyArgs) loadSourceVSA() error {
 	va.sourceAsset = *ap.Evidence.SourceVerdictBundle
 
 	return nil
+}
+
+// loadAssertPolicyFile reads one committed assert policy — the load the
+// verify modes that read the publisher's assert policy share.
+func loadAssertPolicyFile(path string) (*assert.Policy, error) {
+	f, err := os.Open(path) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the refusal names the path already
+	}
+	defer f.Close() //nolint:errcheck // read-only close
+
+	ap, err := assert.LoadPolicy(f)
+	if err != nil {
+		return nil, fmt.Errorf("assert policy: %w", err)
+	}
+
+	return ap, nil
 }
 
 // runSourceVSA fetches the verdict asset and runs the one read.

@@ -355,10 +355,7 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		forge = gh.Capture{Live: forge, Dir: captureDir}
 	}
 
-	src := assert.Sources{
-		assert.ManifestSource{Forge: forge, Policy: pol.Evidence, Asset: *pol.Evidence.ManifestAsset},
-		assert.WorkflowSource{Forge: forge, Policy: pol.Evidence},
-	}
+	src := contractSources(pol.Evidence, forge)
 
 	// One run, one root of trust: both halves that verify are handed
 	// the same document, resolved once. Re-resolving per half could

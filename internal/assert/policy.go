@@ -1043,6 +1043,16 @@ type ClassPolicy struct {
 	// (stele#442). The kinds are the engine's and their parameters
 	// the policy's; absent, the class has no subject manifest.
 	Subjects *release.SubjectShape `json:"subjects,omitempty"`
+	// Declares is what requesting this class declares beyond itself
+	// (stele#403): another class in its place when an input is given,
+	// or another class right after it. The kinds are the engine's and
+	// their parameters the policy's; absent, the class declares itself
+	// and nothing else.
+	Declares []ClassExpansion `json:"declares,omitempty"`
+	// Requestable false is a class a release never requests by name:
+	// only another class's expansion declares it. Absent is
+	// requestable.
+	Requestable *bool `json:"requestable,omitempty"`
 }
 
 // validateClasses holds the per-class guards: a class must require
@@ -1054,7 +1064,8 @@ func validateClasses(classes map[string]ClassPolicy) error {
 		return errors.New("evidence.classes is empty — a walk with no classes asserts nothing")
 	}
 
-	for name, c := range classes {
+	for name := range classes {
+		c := classes[name]
 		if len(c.Bundles) == 0 && len(c.AssetPrefixes) == 0 {
 			return fmt.Errorf("evidence.classes.%s requires nothing — an empty class asserts nothing", name)
 		}
@@ -1104,7 +1115,7 @@ func validateClasses(classes map[string]ClassPolicy) error {
 		}
 	}
 
-	return nil
+	return validateExpansions(classes)
 }
 
 // validateClassShapes holds a class's two optional derive-leg
