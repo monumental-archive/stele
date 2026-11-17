@@ -10,18 +10,12 @@ package ghstore
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/gh"
-	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/verify"
 )
-
-// maxBody bounds one API response read: the endpoint serves bundle
-// lists, and a response past this size is a fault, not evidence.
-const maxBody = 64 << 20
 
 // DefaultAttempts and the growing backoff mirror the original
 // workflow stance: the store is often read moments after the signer
@@ -59,17 +53,16 @@ func New(token string) *Client {
 	}
 }
 
-// response is the API envelope — foreign schema, lenient decode.
-type response struct {
-	Attestations []struct {
-		Bundle jsonx.Raw `json:"bundle"`
-	} `json:"attestations"`
-}
-
 // Bundles fetches every attestation bundle stored for one artifact
 // digest, retrying while a just-published attestation propagates.
 // An empty store after all retries is an error: this API is where
 // the evidence must live, and nothing there is a finding.
+//
+// Every page is read (stele#439): the listing is internal/gh's one
+// page walk, which follows the forge's own next link and fails the
+// whole read when any page after the first fails. The verdict reader
+// downstream is specified to walk the store WHOLE, and a store read one
+// page deep reads a verdict on page two as absent.
 //
 // A throttled read is the one refusal that is NOT such a finding: the
 // budget ran out on the host's pace, not on this digest's evidence, so
@@ -80,7 +73,12 @@ type response struct {
 // is not its answer: a 403 or a 401 returns gh.ErrForbidden after one
 // attempt (stele#216). Only the 404 is the propagation signal.
 func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) {
-	url := fmt.Sprintf("%s/repos/%s/attestations/sha256:%s?per_page=100", c.Base, slug, sha256Hex)
+	path := fmt.Sprintf("/repos/%s/attestations/sha256:%s", slug, sha256Hex)
+
+	// This ladder is the one that waits: the forge client below makes one
+	// attempt per read, so a transient failure lands here once and the
+	// two never multiply.
+	forge := &gh.Client{Base: c.Base, Token: c.Token, HTTP: c.HTTP, Sleep: c.Sleep, Attempts: 1}
 
 	// A zero value means the caller never chose: the default ladder,
 	// so a hand-built client keeps the documented stance.
@@ -99,7 +97,7 @@ func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) 
 			c.Sleep(gh.RetryWait(lastErr, time.Duration(attempt)*backoffStep))
 		}
 
-		bundles, err := c.fetch(url)
+		bundles, err := read(forge, path)
 		if err == nil && len(bundles) > 0 {
 			return bundles, nil
 		}
@@ -109,7 +107,7 @@ func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) 
 		// refused credential into a permitted one. Leave at once, in the
 		// refusal's own vocabulary (stele#216).
 		if errors.Is(err, gh.ErrForbidden) {
-			return nil, fmt.Errorf("ghstore: %s: %w", url, err)
+			return nil, fmt.Errorf("ghstore: %s: %w", c.Base+path, err)
 		}
 
 		if err == nil {
@@ -119,65 +117,29 @@ func (c *Client) Bundles(slug, sha256Hex string) ([]verify.StoredBundle, error) 
 		lastErr = err
 	}
 
-	return nil, fmt.Errorf("ghstore: %s after %d attempt(s): %w", url, budget, lastErr)
+	return nil, fmt.Errorf("ghstore: %s after %d attempt(s): %w", c.Base+path, budget, lastErr)
 }
 
-func (c *Client) fetch(url string) ([]verify.StoredBundle, error) {
-	//nolint:noctx // the CLI has no cancellation surface; the client carries the timeout
-	req, err := http.NewRequest(http.MethodGet, url, http.NoBody)
+// errNotYet is the first page answering 404: the propagation signal a
+// just-published attestation gives, which the ladder waits on.
+var errNotYet = errors.New("HTTP 404: the store does not list this digest yet")
+
+// read walks every page of the listing once. A first page that answers
+// 404 is an empty store — the propagation signal the ladder waits on —
+// and each bundle carries the page that served it.
+func read(forge *gh.Client, path string) ([]verify.StoredBundle, error) {
+	listed, found, err := forge.AttestationPages(path)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, err
 	}
 
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-Github-Api-Version", "2022-11-28")
-
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+	if !found {
+		return nil, errNotYet
 	}
 
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck // a read-only body close has nothing to report
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// The one non-200 that is not about this digest at all: the host
-		// throttling THIS caller. Classified through internal/gh's one
-		// function rather than a second reading of the same headers
-		// (stele#209) — two GitHub readers that disagreed about what a
-		// throttle looks like would report the same outage two ways, and
-		// this leg's way would be "the evidence is not there".
-		if t, ok := gh.Throttled(resp.StatusCode, resp.Header, body); ok {
-			return nil, gh.ThrottleRefusal(fmt.Sprintf("HTTP %d", resp.StatusCode), &t)
-		}
-
-		// A credential that cannot read this store is not an absence of
-		// evidence, and it is not this caller's pace either: it is the
-		// third fact internal/gh already has a word for, so this leg says
-		// it in that word rather than inventing a second one (stele#216).
-		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("HTTP %d: %w", resp.StatusCode, gh.ErrForbidden)
-		}
-
-		// The status alone: the body is server-controlled prose.
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	decoded, err := jsonx.DecodeForeign[response](body)
-	if err != nil {
-		return nil, fmt.Errorf("decode envelope: %w", err)
-	}
-
-	out := make([]verify.StoredBundle, 0, len(decoded.Attestations))
-	for _, a := range decoded.Attestations {
-		out = append(out, verify.StoredBundle{URI: url, Bundle: a.Bundle})
+	out := make([]verify.StoredBundle, 0, len(listed))
+	for _, a := range listed {
+		out = append(out, verify.StoredBundle{URI: a.Page, Bundle: a.Bundle})
 	}
 
 	return out, nil

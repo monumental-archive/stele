@@ -151,7 +151,7 @@ func TestBundlesRetries(t *testing.T) {
 		})
 
 		_, err := c.Bundles("acme/widget", digest)
-		if err == nil || !strings.Contains(err.Error(), "decode envelope") {
+		if err == nil || !strings.Contains(err.Error(), "page 1: jsonx: decode") {
 			t.Errorf("Bundles = %v, want the decode refusal", err)
 		}
 	})
@@ -263,7 +263,7 @@ func TestBundlesTransportFailures(t *testing.T) {
 		c := &ghstore.Client{Base: base, HTTP: cl, Sleep: func(time.Duration) {}}
 
 		_, err := c.Bundles("acme/widget", digest)
-		if err == nil || !strings.Contains(err.Error(), "fetch") {
+		if err == nil || !strings.Contains(err.Error(), "connection refused") {
 			t.Fatalf("Bundles = %v, want the fetch refusal", err)
 		}
 	})
@@ -564,5 +564,77 @@ func TestThrottleIsNotAFactAboutTheDigest(t *testing.T) {
 				t.Fatalf("err = %v, must not say %q — that is the other refusal", err, tc.never)
 			}
 		})
+	}
+}
+
+// provenancePage is a page holding one provenance bundle.
+const provenancePage = `{"attestations": [{"bundle": {"kind": "provenance"}}]}`
+
+// TestBundlesReadsEveryPage (stele#439): the verdict reader walks the
+// store WHOLE, so a verdict that sits only on page two must reach it.
+// Read one page deep, it was absent and a valid release was refused.
+func TestBundlesReadsEveryPage(t *testing.T) {
+	t.Parallel()
+
+	var base string
+
+	c, calls := client(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("after") == "" {
+			w.Header().Set("Link", "<"+base+"/repositories/9/attestations/sha256:"+digest+
+				`?per_page=100&after=cursor>; rel="next"`)
+			w.Write([]byte(provenancePage)) //nolint:errcheck,gosec // test server write
+
+			return
+		}
+
+		w.Write([]byte(`{"attestations": [{"bundle": {"kind": "verdict"}}]}`)) //nolint:errcheck,gosec // test server write
+	})
+	base = c.Base
+
+	got, err := c.Bundles("acme/widget", digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != 2 || string(got[1].Bundle) != `{"kind": "verdict"}` {
+		t.Fatalf("Bundles = %d bundle(s), want the page-two verdict too: %+v", len(got), got)
+	}
+
+	if !strings.Contains(got[1].URI, "after=cursor") {
+		t.Errorf("page-two bundle cites %s, want the page that served it", got[1].URI)
+	}
+
+	if calls.Load() != 2 {
+		t.Errorf("requests = %d, want one per page", calls.Load())
+	}
+}
+
+// When page two fails, the whole read fails, through every rung of
+// the ladder: page one alone is never returned as the store.
+func TestBundlesNeverReturnsAPartialStore(t *testing.T) {
+	t.Parallel()
+
+	var base string
+
+	c, _ := client(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("after") == "" {
+			w.Header().Set("Link", "<"+base+"/repositories/9/attestations?after=cursor>; rel=\"next\"")
+			w.Write([]byte(provenancePage)) //nolint:errcheck,gosec // test server write
+
+			return
+		}
+
+		http.Error(w, "server prose", http.StatusInternalServerError)
+	})
+	base = c.Base
+	c.Attempts = 2
+
+	got, err := c.Bundles("acme/widget", digest)
+	if err == nil || !strings.Contains(err.Error(), "after 2 attempt(s)") || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("Bundles = %v, want the failed page through the ladder", err)
+	}
+
+	if got != nil {
+		t.Errorf("a failed read returned %d bundle(s)", len(got))
 	}
 }
