@@ -57,8 +57,10 @@ func (s *BaseImageScope) JudgeFirstParty(ref string, att Attestor, diverge func(
 		Runner:   FirstPartyRunner,
 	}}
 
-	verr := att.Verify(publisherOwner(*s.RegistryPrefix), publisherRepo(ref, *s.RegistryPrefix),
-		pin.Digest, []Candidate{candidate}, *s.PredicateType)
+	// The owner's whole store: an image is not named after the
+	// repository that built it, and the candidate anchors the owner
+	// and the ref rather than trusting a name to say whose it is.
+	verr := att.Verify(publisherOwner(*s.RegistryPrefix), "", pin.Digest, []Candidate{candidate}, *s.PredicateType)
 
 	switch {
 	case verr == nil:

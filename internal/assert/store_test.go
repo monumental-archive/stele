@@ -503,10 +503,11 @@ func TestProvenanceVerifiedScope(t *testing.T) {
 			t.Fatalf("candidates = %+v, want the workflow candidate %+v", att.candidates, wantCandidate)
 		}
 
-		// The publishing repository is read off the reference path
-		// after the prefix — the one derivation this mechanism keeps.
-		if len(att.asked) != 1 || att.asked[0] != "acme/edtf-postgres" {
-			t.Fatalf("asked = %v, want the publisher derived from the reference", att.asked)
+		// The owner's whole store is asked, never a repository read
+		// off the image name: an image is not named after the
+		// repository that built it (edtf-postgres is edtf's).
+		if len(att.asked) != 1 || att.asked[0] != "acme/" {
+			t.Fatalf("asked = %v, want the owner's store", att.asked)
 		}
 	})
 

@@ -420,6 +420,14 @@ type Forge interface {
 	// walk judges history, not a just-published artifact), so no
 	// propagation ladder waits for one to appear. Transport failures
 	// are still retried, like every read here.
+	//
+	// An empty repo reads the OWNER's store instead: every attestation
+	// any of the owner's repositories holds for the digest. That is the
+	// read for an artifact whose publishing repository its name does
+	// not give — an image is not named after the repository that built
+	// it (measured: edtf-postgres is published by edtf, lab-pg by
+	// release-lab) — and the identity checked on what it returns
+	// anchors the owner and the source ref (stele#402).
 	Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error)
 	// PackageVersionDigest returns the container digest carrying the
 	// given tag for one org package, or "" when the package has no
@@ -739,9 +747,12 @@ type Attestation struct {
 
 // Attestations implements Forge.
 func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
-	listed, found, err := c.AttestationPages(
-		"/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/attestations/sha256:" + sha256Hex,
-	)
+	store := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
+	if repo == "" {
+		store = "/orgs/" + url.PathEscape(owner)
+	}
+
+	listed, found, err := c.AttestationPages(store + "/attestations/sha256:" + sha256Hex)
 	if err != nil {
 		return nil, err
 	}

@@ -250,3 +250,37 @@ func TestCommitSHA(t *testing.T) {
 		t.Fatalf("a body that is no commit = %v", err)
 	}
 }
+
+// TestOwnerAttestations holds the owner-level read: an empty repository
+// asks the owner's whole store, the endpoint an image's attestations are
+// found at when its name is not its repository's.
+func TestOwnerAttestations(t *testing.T) {
+	t.Parallel()
+
+	const digest = "1111111111111111111111111111111111111111111111111111111111111111"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/orgs/acme/attestations/sha256:"+digest, func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`{"attestations": [{"bundle": {"owner": true}}]}`))
+	})
+	mux.HandleFunc("/repos/acme/widget/attestations/sha256:"+digest, func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, []byte(`{"attestations": [{"bundle": {"repo": true}}]}`))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := gh.New("")
+	c.Base = srv.URL
+	ownTransport(c, srv)
+
+	owner, err := c.Attestations("acme", "", digest)
+	if err != nil || len(owner) != 1 || string(owner[0]) != `{"owner": true}` {
+		t.Fatalf("owner store = %s, %v", owner, err)
+	}
+
+	repo, err := c.Attestations("acme", "widget", digest)
+	if err != nil || len(repo) != 1 || string(repo[0]) != `{"repo": true}` {
+		t.Fatalf("repository store = %s, %v", repo, err)
+	}
+}

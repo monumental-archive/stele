@@ -485,26 +485,15 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 	return nil
 }
 
-// publisherOwner and publisherRepo split the publishing repository
-// out of a reference: the prefix is validated to stop at the owner
-// boundary (`<host>/<owner>/`), so the owner is its last segment and
-// the repository is the first segment of whatever follows. That
-// precondition is checked at policy load, never assumed here.
+// publisherOwner reads the owner out of a prefix validated at policy
+// load to stop at the owner boundary (`<host>/<owner>/`): its last
+// segment.
 func publisherOwner(prefix string) string {
 	trimmed := strings.TrimSuffix(prefix, "/")
 
 	_, owner, _ := strings.Cut(trimmed, "/")
 
 	return owner
-}
-
-func publisherRepo(ref, prefix string) string {
-	rest := strings.TrimPrefix(ref, prefix)
-	if end := strings.IndexAny(rest, "/:@"); end >= 0 {
-		return rest[:end]
-	}
-
-	return rest
 }
 
 // refDigest is the digest half of a digest-pinned reference — the

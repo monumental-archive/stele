@@ -168,6 +168,28 @@ func TestCaptureThenReplay(t *testing.T) {
 	}
 }
 
+// TestCaptureThenReplayOwnerStore holds the owner's store (an empty
+// repo): it replays from its own file, beside the repositories'
+// directories rather than inside one.
+func TestCaptureThenReplayOwnerStore(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	if _, err := (gh.Capture{Live: scriptedForge{}, Dir: dir}).Attestations("acme", "", "aa"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "acme", "attestations", "aa.json")); err != nil {
+		t.Fatalf("the owner's store was not recorded at acme/attestations/aa.json: %v", err)
+	}
+
+	owned, err := gh.Snapshot{Dir: dir}.Attestations("acme", "", "aa")
+	if err != nil || len(owned) != 1 {
+		t.Fatalf("owner Attestations aa = %v, %v", owned, err)
+	}
+}
+
 // TestSnapshotMissingListing pins the difference between a recorded
 // absence and an uncaptured listing: a listing the capture never
 // wrote is an error, not an empty population.
