@@ -56,8 +56,8 @@ func basePolicy(signer string) string {
 	        "source": "https://github.com/docker-library/postgres.git", "path": "${major}/${suite}"}]}}}`
 }
 
-// writeFile writes content to a fresh temp file and returns its path.
-func writeFile(t *testing.T, name, content string) string {
+// tempFile writes content to a fresh temp file and returns its path.
+func tempFile(t *testing.T, name, content string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), name)
@@ -73,7 +73,7 @@ func writeFile(t *testing.T, name, content string) string {
 func publicGood(t *testing.T) string {
 	t.Helper()
 
-	return writeFile(t, "root.json", string(upstreamRoot(t, "public-good.json")))
+	return tempFile(t, "root.json", string(upstreamRoot(t, "public-good.json")))
 }
 
 // swapBaseForge serves the attestation store from forge.
@@ -104,7 +104,7 @@ func runBase(t *testing.T, policyDoc string, args ...string) (int, string, strin
 
 	var stdout, stderr bytes.Buffer
 
-	argv := append([]string{"verify", "base", "--assert-policy", writeFile(t, "assert-policy.json", policyDoc)},
+	argv := append([]string{"verify", "base", "--assert-policy", tempFile(t, "assert-policy.json", policyDoc)},
 		args...)
 	code := Run(argv, &stdout, &stderr)
 
@@ -482,7 +482,7 @@ func TestVerifyBaseTrustGuards(t *testing.T) {
 	}
 
 	code, _, stderr = runBase(t, basePolicy(orgSigner),
-		append(refArgs(latestRef), "--trusted-root", writeFile(t, "root.json", "not a root"))...)
+		append(refArgs(latestRef), "--trusted-root", tempFile(t, "root.json", "not a root"))...)
 	if code != exitUsage || !strings.Contains(stderr, "stele verify base: trusted root:") {
 		t.Fatalf("a root that builds no verifier: code %d, stderr %q", code, stderr)
 	}
@@ -508,7 +508,7 @@ func TestVerifyBaseBlind(t *testing.T) {
 
 	t.Cleanup(func() { newBundleVerifier = orig })
 
-	root := writeFile(t, "root.json", `{"any": "bytes — the seam swallows them"}`)
+	root := tempFile(t, "root.json", `{"any": "bytes — the seam swallows them"}`)
 
 	code, stdout, stderr := runBase(t, basePolicy(orgSigner), append(refArgs(latestRef), "--trusted-root", root)...)
 	if code != exitBlind || !strings.Contains(stdout, "the credential cannot read "+latestRef) ||
@@ -630,7 +630,7 @@ func TestVerifyBaseWriteFailures(t *testing.T) {
 	swapBaseForge(t, gh.Snapshot{Dir: "testdata/base-images"})
 	swapStatements(t, statementsFor(upstreamPlatforms(pgUpstreamURI)))
 
-	policy := writeFile(t, "assert-policy.json", basePolicy(orgSigner))
+	policy := tempFile(t, "assert-policy.json", basePolicy(orgSigner))
 	root := publicGood(t)
 
 	for _, args := range [][]string{
