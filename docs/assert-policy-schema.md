@@ -1251,7 +1251,11 @@ never silently absent. The one obligation that can be unjudgeable is
 the chain link, and the bound there is the LEDGER's rather than the
 declaration's: a source ledger witnesses from its founded genesis —
 the oldest link-noted revision whose first parent carries no link,
-among those a branch or a tag reaches — and says nothing before it. A
+among those a branch or a tag reaches — and says nothing before it.
+Where two such revisions share the oldest commit time (two branches
+founded in one second), the genesis is all of them, and a tag is
+witnessed when any one reaches it; the horizon names them in id
+order, so a run's report is the same bytes every time (stele#414). A
 link on a commit no branch and no tag reaches (a deleted branch,
 rewritten history) is an ancestor of no tag's target, so it witnesses
 nothing: it stays linked, is never the genesis, and is named in the

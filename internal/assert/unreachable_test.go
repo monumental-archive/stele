@@ -127,10 +127,8 @@ func TestTagsGitFailingStillCannotJudge(t *testing.T) {
 		{
 			name:   "the presence read fails",
 			tamper: func(f *fakeTags) { f.torn = map[string]error{"Reachable": failing} },
-			want: []string{
-				"assert: commit " + genesisRev + " of acme/widget: " + failing.Error(),
-				"assert: commit " + linkedRev + " of acme/widget: " + failing.Error(),
-			},
+			// The first revision in id order, on every run (stele#414).
+			want: []string{"assert: commit " + genesisRev + " of acme/widget: " + failing.Error()},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
