@@ -180,6 +180,35 @@ counts targets and a reader must not have to infer the artifacts. A
 target nobody declared reaches none of these: no finding, no count, no
 cell.
 
+A run with `--targets` given and blank is refused rather than read as
+no declaration: omitting the flag claims the rebuild covered every
+target, and an empty value would make that claim by accident.
+
+### The pre-release form
+
+`--classes` selects the pre-release form (stele#401): the FIRST build
+against the rebuild, before anything is published. Each requested
+class arrives as `--first <class>=<path>` and `--rebuild
+<class>=<path>`, and what each is comes from the class's declared
+`subjects` in the assert policy `--assert-policy` names: a sha256sum
+manifest for a `files` class, and for a `registry` class the
+directory of digest files its legs wrote, read in its declared `form`
+(`document` or `bare-digest`). A class the policy does not declare, or
+declares with no `subjects`, is refused by name. The same
+comparison engine judges it: the first build is the population, and
+each artifact is one typed finding in the same `repro/…` vocabulary,
+where `repro/extra-in-rebuild` reads as "absent from the first build".
+A registry subject is named `<class>/<leg>`, so a finding says which
+architecture or major it is about.
+
+The population is the first build's subjects across the compared
+classes, and the facts are `form` = `pre-release`, `classesCompared`,
+`judgedArtifacts`, and `rehearsalNotCompared` when `--rehearsal`
+declared that the run pushed no image and its registry classes were
+not compared. A requested class one build produced nothing for, and a
+run that compared nothing, are refused by name (exit 1) before any
+comparison runs: an empty proof is not a proof.
+
 The rebuild itself is orchestration and stays with the caller; SLSA
 v1.2 names verified reproducibility only as a future-directions
 candidate, so this verdict is information — it claims no level and
