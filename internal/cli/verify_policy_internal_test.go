@@ -78,8 +78,8 @@ const (
 	        "mechanism": "provenance-verified",
 	        "fromFile": "Dockerfile",
 	        "registryPrefix": "ghcr.io/acme/",
-	        "pinPattern": "^ghcr\\.io/acme/(?P<repo>[a-z-]+):(?P<version>[0-9.]+)[^@]*@sha256:[0-9a-f]{64}$",
-	        "identity": "https://github.com/acme/${repo}/.github/workflows/publish.yml@refs/tags/v${version}",
+	        "signerWorkflow": "acme/signer/.github/workflows/sign.yml",
+	        "refs": [{"tag": "^latest$", "ref": "refs/heads/main"}],
 	        "predicateType": "https://slsa.dev/provenance/v1"
 	      }
 	    ]}
