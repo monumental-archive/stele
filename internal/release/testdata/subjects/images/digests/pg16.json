@@ -1,0 +1,6 @@
+{
+  "pg": "16",
+  "image": "ghcr.io/example/ext-pg16-artifact",
+  "tag": "0.3.0-pg16-artifact",
+  "digest": "sha256:a000000000000000000000000000000000000000000000000000000000000001"
+}

@@ -1,0 +1,6 @@
+{
+  "pg": "18",
+  "image": "ghcr.io/example/ext-pg18-artifact",
+  "tag": "0.3.0-pg18-artifact",
+  "digest": "sha256:a000000000000000000000000000000000000000000000000000000000000003"
+}
