@@ -12,6 +12,13 @@
 // epoch moved to today's), and each class's lines in the
 // `<target> <sha256>  <name>` shape its build legs emit, in the order
 // the canon's step passed them.
+//
+// Those lines are RECONSTRUCTED from the published manifest's (class,
+// target) entries, because the raw job outputs were not kept: the
+// golden proves the split, join and encoding reproduce the release,
+// not that its build legs emitted these exact lines. The real proof
+// of the swap is the lab release monumental-archive/.github#1375
+// names.
 
 package cli
 
