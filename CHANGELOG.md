@@ -10,6 +10,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.24.0](https://github.com/monumental-archive/stele/compare/v0.23.0...v0.24.0) - 2026-11-17
+
+### Breaking
+
+- reconcile signer certificates from the CT log ([#404](https://github.com/monumental-archive/stele/pull/404))
+
 ## [0.23.0](https://github.com/monumental-archive/stele/compare/v0.22.3...v0.23.0) - 2026-11-17
 
 ### Breaking
