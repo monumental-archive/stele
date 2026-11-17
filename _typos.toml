@@ -8,8 +8,15 @@ intoto = "intoto"
 # go.sum is nothing but hashes. Fuzz seed corpora are real foreign
 # artifacts (bundles, certificates, trusted roots) recorded byte-for-
 # byte — base64 blobs are not prose, and editing a seed to appease a
-# spellchecker would falsify the evidence.
-extend-exclude = ["go.sum", "internal/*/testdata/*-seed.*"]
+# spellchecker would falsify the evidence. The signer-certificates
+# capture is the same kind of record: the CT log's answers and the
+# forge's file contents a reconciliation read, moved here byte-for-byte
+# from the canon's rekor-monitor testdata (stele#387).
+extend-exclude = [
+  "go.sum",
+  "internal/*/testdata/*-seed.*",
+  "internal/assert/testdata/signer-certificates/",
+]
 
 [default]
 # Go module pseudo-versions (v0.0.0-<stamp>-<hex12>) land in go.mod:

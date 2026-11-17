@@ -1,0 +1,127 @@
+# Release phase 2, source-archive class: the artifact IS the tagged tree.
+# For a repository whose deliverable is its own content — the org canon
+# above all — `git archive` of the release tag is the built artifact, and
+# it walks the same path as every other class: build here, sign in the
+# signer, attach with the evidence, publish on proof.
+#
+# The archive is deterministic by construction: `git archive` writes
+# tree-object bytes with the commit date as mtime, so the same tag always
+# produces the same tarball. The job proves that rather than assuming it —
+# it builds twice and refuses a digest mismatch, the repro-check property
+# at build time.
+---
+name: build-source-archive
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): build and hash the same
+          bytes, upload NO release-* artifact (the gate needs only the
+          subjects), skip the smoke tests (the gate proves bytes; the
+          first build already proved behaviour), and publish nothing.
+          Intermediate artifacts carry a repro- prefix so the two builds
+          of one run cannot collide or cross-contaminate a glob.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      subjects:
+        description: sha256 manifest of the archive, for the signer.
+        value: ${{ jobs.build.outputs.subjects }}
+      leg-subjects:
+        # The same digest, carrying the target whose leg produced it
+        # (schema 4, stele#223). This class has one leg and builds no
+        # platform, so its target is `source` — a name, declared here
+        # by the publisher, for the one thing this class ever
+        # produces. Naming it costs nothing and refusing to name it
+        # would leave the artifact untyped, which is what the schema
+        # exists to stop.
+        description: >
+          sha256 manifest of the archive, prefixed with the target
+          whose leg produced it.
+        value: ${{ jobs.build.outputs.leg-subjects }}
+      artifact-name:
+        description: Name of the uploaded release artifact.
+        value: release-source
+
+permissions: {}
+
+jobs:
+  build:
+    name: Archive the tagged tree
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read # checkout of the caller at the tag
+    outputs:
+      subjects: ${{ steps.manifest.outputs.subjects }}
+      leg-subjects: ${{ steps.manifest.outputs.leg-subjects }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the archive twice and prove determinism
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          name="${GITHUB_REPOSITORY#*/}"
+          # The .github repo would produce a hidden-file basename; strip
+          # the dot so the asset is visible and predictable.
+          name="${name#.}"
+          base="${name}-${VERSION}"
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="${base}/" \
+            -o "dist/${base}.tar.gz" "v${VERSION}"
+          git archive --format=tar.gz --prefix="${base}/" \
+            -o "/tmp/${base}.check.tar.gz" "v${VERSION}"
+          a=$(sha256sum "dist/${base}.tar.gz" | cut -d' ' -f1)
+          b=$(sha256sum "/tmp/${base}.check.tar.gz" | cut -d' ' -f1)
+          if [[ ${a} != "${b}" ]]; then
+            echo "::error::source archive is not deterministic (${a} vs ${b})"
+            exit 1
+          fi
+          # Smoke test: the archive must actually contain the tagged tree,
+          # not an empty or truncated stream.
+          count=$(tar -tzf "dist/${base}.tar.gz" | wc -l)
+          tracked=$(git ls-files | wc -l)
+          if ((count <= tracked / 2)); then
+            echo "::error::archive lists ${count} entries for ${tracked} tracked files"
+            exit 1
+          fi
+          echo "::notice::${base}.tar.gz: ${count} entries, digest ${a}"
+      - name: Compute the subject manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          cd dist
+          manifest=$(sha256sum ./*.tar.gz | sed 's| \./| |')
+          # One leg, one target: `source`. The prefix is the publisher's
+          # name for what this class builds, not a platform parsed out
+          # of anything.
+          legs="source ${manifest//$'\n'/$'\n'source }"
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            printf '%s\n' "${manifest}"
+            echo "SUBJECTS_EOF"
+            echo "leg-subjects<<LEGS_EOF"
+            printf '%s\n' "${legs}"
+            echo "LEGS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "${manifest}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: release-source
+          path: dist/*.tar.gz
+          if-no-files-found: error
+...

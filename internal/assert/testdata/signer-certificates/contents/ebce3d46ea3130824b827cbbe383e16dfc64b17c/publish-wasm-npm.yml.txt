@@ -1,0 +1,182 @@
+# The wasm-npm registry publish, extracted from build-wasm-npm.yml
+# (#118) so the repro gate can sit between build and upload: npm's
+# unpublish window closes after 72 hours, so this is the class's
+# irreversible step and it must run downstream of the bit-for-bit
+# proof.
+#
+# Trusted publishing survives the extraction by construction: npm pins
+# the CALLER's entry filename (`workflow_ref`, never
+# `job_workflow_ref`), and `environment: publish` resolves against the
+# caller — both facts measured before the original split
+# (docs/slsa-reference.md).
+---
+name: publish-wasm-npm
+
+"on":
+  workflow_call:
+    inputs:
+      package:
+        # forwarding: universal
+        description: >
+          The npm package as name@version, from the build's output — the
+          resumability probe needs the real name.
+        required: true
+        type: string
+      artifact-name:
+        # forwarding: universal
+        description: Actions artifact holding the packed tarball.
+        required: false
+        type: string
+        default: npm-package
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    # Resolves against the CALLER's repository — measured. Sets the OIDC
+    # `environment` claim npm can pin beside the caller's entry filename.
+    environment: publish
+    # capability-boundary: this job holds `id-token: write` and runs no
+    # user-defined build step. It publishes a tarball packed and hashed in
+    # the build job — `npm publish <tarball>` runs no lifecycle script of
+    # the published package — and it checks out only enough to read the
+    # caller's pinned npm from mise. The identity it can mint is a registry
+    # token scoped to packages the caller already owns; the org's Sigstore
+    # identity lives in `signer` under a different job_workflow_ref and is
+    # unreachable from this job.
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing, no token secret
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      # No belt: a build-class job needs exactly the caller's pinned build
+      # inputs (rust, wasm-pack, node), never the org's linters — see the
+      # matching note in build-rust-binary.yml.
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise and the caller's pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin — the
+          # v0.18.2 darwin leg pulled same-day mise 2026.8.4 while every
+          # pinned site ran 2026.8.3 (#117: nothing unpinned on an attested
+          # path, the installer included).
+          version: 2026.11.4
+          cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist
+
+      - name: Publish
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          # Trusted publishing needs npm >= 11.5.1, which detects the OIDC
+          # environment itself — no token is exchanged by hand and none is
+          # ever printed. The pinned npm comes from the caller's mise
+          # config; if it is too old the answer is to bump the pin, never
+          # to mutate the runner with an unpinned global install.
+          need="11.5.1"
+          have=$(npm --version)
+          lowest=$(printf '%s\n' "${need}" "${have}" | sort -V | sed -n 1p)
+          if [[ ${lowest} != "${need}" ]]; then
+            emsg="npm ${have} < ${need}; trusted publishing needs ${need}+ — bump the pin in this repository's mise"
+            emsg+=" config"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          # THE SECOND HALF OF THE SAME QUESTION (#907). The guard above
+          # proves npm CAN do trusted publishing; this proves the runner
+          # OFFERED it. Neither implies the other, and the failure mode
+          # of the missing half is what cost edtf v1.3.2 three release
+          # runs: npm detects the OIDC environment itself, and when it
+          # is absent it does not say so — it falls back to looking for
+          # a stored credential and dies
+          #
+          #   npm error code ENEEDAUTH
+          #   npm error need auth This command requires you to be logged in
+          #
+          # which reads as a missing token secret, sending the reader to
+          # the registry's publisher config, which was correct all along.
+          # Measured while diagnosing that run: the pins on both sides of
+          # the comparison bundle npm 11.17.0, so the version guard was
+          # never the thing failing.
+          if [[ -z ${ACTIONS_ID_TOKEN_REQUEST_URL:-} || -z ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-} ]]; then
+            emsg="the OIDC token endpoint is absent from this job's environment, so npm cannot use trusted"
+            emsg+=" publishing — every job in the call chain must grant id-token: write, including the"
+            emsg+=" caller's own job in its repository"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          echo "trusted publishing: npm ${have}, OIDC endpoint present"
+          # Resumable: a version already on the registry is a completed
+          # step, not a failure. The unpublish window makes re-runs real.
+          if npm view "${PACKAGE}" version > /dev/null 2>&1; then
+            echo "::notice::${PACKAGE} already on the registry; publish is complete"
+            exit 0
+          fi
+          tarball=$(compgen -G "dist/*.tgz")
+          count=$(wc -l <<< "${tarball}")
+          if [[ ${count} -ne 1 ]]; then
+            echo "::error::expected exactly one tarball, found ${count}"
+            exit 1
+          fi
+          # npm generates provenance automatically under trusted
+          # publishing; --provenance is asserted anyway so a silent fallback
+          # to a weaker auth path fails instead of publishing unattested.
+          # ./ prefix, load-bearing: an argument with one slash and no
+          # leading ./ is a GitHub SHORTHAND to npm (owner/repo) — it
+          # tried to git-clone dist/<name>.tgz as a repository. Found by
+          # the v0.14.0 run.
+          #
+          # ON FAILURE ONLY, surface npm's own debug log (#907). npm
+          # writes the line naming the step it failed at to a file on
+          # the runner and prints only a path — so three consecutive
+          # re-runs of edtf v1.3.2 were blind by construction, each
+          # ending in the same unexplained ENEEDAUTH. This costs nothing
+          # on a green path: it runs solely when publish has already
+          # failed and the job is going red regardless.
+          #
+          # MASKED, because it is a third-party CLI's log from an
+          # authenticated path landing in a public job log. Lines naming
+          # a credential are dropped outright rather than rewritten —
+          # dropping cannot half-work — and any long opaque token-shaped
+          # run of characters left elsewhere is redacted. The step names
+          # this exists to read (`npm verb publish`, the OIDC calls)
+          # carry no credentials, so the masking cannot eat the evidence.
+          # `rc=$?` inside `if ! cmd` would read the NEGATION's status,
+          # which is 0 — a failed publish would then exit green. Capture
+          # npm's own status instead.
+          rc=0
+          npm publish "./${tarball}" --provenance --access public || rc=$?
+          if [[ ${rc} -ne 0 ]]; then
+            logdir=$(npm config get logs-dir 2> /dev/null || true)
+            [[ -d ${logdir} ]] || logdir="${HOME}/.npm/_logs"
+            log=""
+            if [[ -d ${logdir} ]]; then
+              log=$(find "${logdir}" -name '*-debug-0.log' -type f 2> /dev/null | sort | sed -n '$p')
+            fi
+            if [[ -n ${log} ]]; then
+              echo "::group::npm debug log (masked) — ${log}"
+              sed -E \
+                -e '/[Aa]uthorization|[Bb]earer|_authToken|[Ss]et-[Cc]ookie|npm-otp/d' \
+                -e 's/[A-Za-z0-9_-]{32,}/<redacted>/g' \
+                "${log}" | tail -300
+              echo "::endgroup::"
+            else
+              echo "::warning::npm left no debug log under ${logdir}"
+            fi
+            exit "${rc}"
+          fi
+...

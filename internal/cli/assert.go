@@ -57,6 +57,8 @@ const (
 	targetPlans       = "plans"
 	targetPermissions = "permissions"
 	targetAdvisories  = "advisories"
+
+	targetSignerCertificates = "signer-certificates"
 )
 
 // The effect seams, swapped only by tests.
@@ -107,7 +109,7 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains, plans, "+
-				"permissions or advisories"); err != nil {
+				"permissions, advisories or signer-certificates"); err != nil {
 			return exitIO
 		}
 
@@ -131,10 +133,12 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertPermissions(args[1:], stdout, stderr)
 	case targetAdvisories:
 		return assertAdvisories(args[1:], stdout, stderr)
+	case targetSignerCertificates:
+		return assertSignerCertificates(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele assert: unknown target %q "+
-				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories)\n",
+				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories, signer-certificates)\n",
 			args[0]); err != nil {
 			return exitIO
 		}

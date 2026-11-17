@@ -1,0 +1,237 @@
+# Artifact class: rust-crate. Two jobs, split on the only line that
+# matters — whether the job runs caller-supplied code. The capability split
+# is per job, not per file (docs/release.md).
+#
+#   build   runs cargo, so it runs caller code (build.rs, proc macros).
+#           It gets `contents: read` and nothing else.
+#   The registry publish lives in publish-rust-crate.yml (#118): the
+#   repro gate sits between build and upload, so the irreversible step
+#   cannot share a workflow with the build it gates.
+---
+name: build-rust-crate
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      exclude:
+        # forwarding: universal
+        description: >
+          Comma-separated workspace members this class must not touch —
+          the pgrx-extension crate above all, which builds only inside
+          its Postgres container. Declared by the caller once, applied to
+          every cargo invocation here.
+        required: false
+        type: string
+        default: ""
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): build and hash the same
+          bytes, upload NO release-* artifact (the gate needs only the
+          subjects), skip the smoke tests (the gate proves bytes; the
+          first build already proved behaviour), and publish nothing.
+          Intermediate artifacts carry a repro- prefix so the two builds
+          of one run cannot collide or cross-contaminate a glob.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      subjects:
+        description: sha256sum manifest of the packaged crates.
+        value: ${{ jobs.build.outputs.subjects }}
+      leg-subjects:
+        # The same digests, carrying the target whose leg produced them
+        # (schema 4, stele#223). This class has one leg and packages
+        # source crates for no platform, so its target is `crate` — a
+        # name the publisher declares for the one thing this class ever
+        # produces, so no artifact ships untyped.
+        description: >
+          sha256sum manifest of the packaged crates, each line prefixed
+          with the target whose leg produced it.
+        value: ${{ jobs.build.outputs.leg-subjects }}
+      artifact-name:
+        description: Actions artifact holding the packaged crates.
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions: {}
+
+jobs:
+  build:
+    name: Package and prove the crates build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+    outputs:
+      subjects: ${{ steps.hash.outputs.subjects }}
+      leg-subjects: ${{ steps.hash.outputs.leg-subjects }}
+      artifact-name: release-crates
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin — the
+          # v0.18.2 darwin leg pulled same-day mise 2026.8.4 while every
+          # pinned site ran 2026.8.3 (#117: nothing unpinned on an attested
+          # path, the installer included).
+          version: 2026.11.4
+          # No tool cache anywhere downstream of a signature: a poisoned
+          # cache would be signed along with everything else.
+          cache: false
+
+      - name: Resolve the exclusion flags
+        env:
+          UNTRUSTED_EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          set -euo pipefail
+          flags=""
+          IFS=',' read -ra members <<< "${UNTRUSTED_EXCLUDE// /}"
+          for m in "${members[@]}"; do
+            if [[ -n ${m} ]]; then flags="${flags} --exclude ${m}"; fi
+          done
+          echo "EXCLUDE_FLAGS=${flags}" >> "${GITHUB_ENV}"
+      - name: Refuse a tag whose version disagrees with the manifest
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          meta=$(cargo metadata --no-deps --format-version 1)
+          manifest=$(jq -r '[.packages[].version] | unique | .[]' <<< "${meta}")
+          versions=$(wc -l <<< "${manifest}")
+          if [[ ${versions} -ne 1 ]]; then
+            echo "::error::workspace members disagree on version; canon is [workspace.package] inheritance"
+            exit 1
+          fi
+          if [[ ${manifest} != "${UNTRUSTED_VERSION}" ]]; then
+            echo "::error::tag says ${UNTRUSTED_VERSION}, manifest says ${manifest}"
+            exit 1
+          fi
+      - name: Test
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # the flags are flag-shaped on purpose
+          cargo test --workspace --locked ${EXCLUDE_FLAGS}
+      - name: Package
+        # Verification is ON here, deliberately: this is the job that is
+        # allowed to build. `cargo package` extracts the tarball and
+        # compiles it, which catches the crate that builds in-workspace and
+        # fails from its packaged form.
+        # No --allow-dirty: it is a flag, not a boolean option, and
+        # omitting it is what refuses a dirty tree. `--allow-dirty=false`
+        # is rejected outright by cargo.
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # the flags are flag-shaped on purpose
+          cargo package --workspace --locked ${EXCLUDE_FLAGS}
+      - name: Compute the subject manifest
+        id: hash
+        run: |
+          set -euo pipefail
+          cd target/package
+          manifest=$(sha256sum ./*.crate | sed 's| \./| |')
+          # One leg, one target: `crate`. The prefix is the publisher's
+          # name for what this class builds, not a platform parsed out
+          # of anything.
+          legs="crate ${manifest//$'\n'/$'\n'crate }"
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            printf '%s\n' "${manifest}"
+            echo "SUBJECTS_EOF"
+            echo "leg-subjects<<LEGS_EOF"
+            printf '%s\n' "${legs}"
+            echo "LEGS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "${manifest}"
+      - name: Emit the inventory plan (which packages these crates ship)
+        # The artifact-to-package mapping exists with certainty exactly
+        # once — here, over the very tarballs `cargo package` just wrote
+        # and the publisher will upload (#537). Read from those files
+        # rather than from cargo metadata a second time: the packaged set
+        # is the class's scope after the caller's excludes and cargo's own
+        # `publish = false`, and the manifest hashed above is computed
+        # from the same listing, so the planned set and the signed set
+        # cannot differ. Not on the repro leg: the comparator proves
+        # bytes, not inventories.
+        #
+        # plan-producer: rust-crate sbom-cargo-
+        #
+        # The DOCUMENT carries `-crate` and the prefix does not (#833).
+        # `sbom-cargo-` is this class's owed prefix in
+        # slsa/assert-policy.json and it is also `rust-binary`'s, because
+        # both classes ship a cargo closure — so a repository releasing
+        # both (edtf declares rust-crate, rust-binary, pgrx-extension and
+        # wasm-npm) would have one package planned twice under one
+        # document name. Measured against the pinned stele v0.19.1, both
+        # directions: two entries on `sbom-cargo-edtf-cli` refuse
+        # pre-publish with `plan-conflict: document
+        # "sbom-cargo-edtf-cli" is claimed by two different plans`, and
+        # two inventories describing the artifact `edtf-cli` refuse again
+        # at the union with `two documents describe edtf-cli — one
+        # artifact, one inventory`. So the source crate names itself
+        # apart from the binary built out of it, exactly as the pgrx
+        # cells name theirs `<crate>-pg<major>` inside one prefix: the
+        # prefix says what the artifact is MADE OF, the suffix says which
+        # artifact it IS.
+        if: ${{ !inputs.repro }}
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          names=()
+          for c in target/package/*.crate; do
+            [[ -e ${c} ]] || break
+            base="${c##*/}"
+            # The version is cargo's own suffix on every packaged crate,
+            # and the step above already refused a tag that disagrees
+            # with the manifest — so what remains is the package name.
+            name="${base%-"${UNTRUSTED_VERSION}".crate}"
+            if [[ ${name} == "${base}" ]]; then
+              echo "::error::packaged crate ${base} is not named for version ${UNTRUSTED_VERSION}"
+              exit 1
+            fi
+            names+=("${name}")
+          done
+          ((${#names[@]} > 0)) || {
+            echo "::error::cargo package produced no crates — a class that ships nothing plans nothing"
+            exit 1
+          }
+          mkdir -p plan
+          jq -n --args '$ARGS.positional
+             | unique
+             | map({class: "rust-crate",
+                    doc: ("sbom-cargo-" + . + "-crate"),
+                    artifact: (. + "-crate"),
+                    params: {cargoPackage: .}})' \
+            "${names[@]}" > plan/plan.json
+          jq -r '.[] | "::notice::plans inventory \(.doc) for package \(.params.cargoPackage)"' plan/plan.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: release-crates
+          path: target/package/*.crate
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: sbom-plan-crate
+          path: plan/plan.json
+          if-no-files-found: error
+          retention-days: 1
+...

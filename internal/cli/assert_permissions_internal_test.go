@@ -18,7 +18,7 @@ import (
 )
 
 const permissionsCLIPolicy = `{
-  "schema": 7,
+  "schema": 8,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -38,7 +38,7 @@ const permissionsCLIPolicy = `{
 // are two spellings of the same exclusion and the join must read past
 // both.
 const permissionsCLIExcludedPolicy = `{
-  "schema": 7,
+  "schema": 8,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",
@@ -511,7 +511,7 @@ func TestAssertPermissionsUnreadableInputs(t *testing.T) {
 				root := t.TempDir()
 				path := filepath.Join(root, "policy.json")
 
-				if err := os.WriteFile(path, []byte(`{"schema": 7}`), 0o600); err != nil {
+				if err := os.WriteFile(path, []byte(`{"schema": 8}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
 

@@ -1,0 +1,63 @@
+# Release phase 2 for the canon itself: on its own v* tag, the canon walks
+# the same pipeline as every other versioned repository — build the
+# source-archive class, sign it through the one signer, attach the
+# evidence bundle, publish the release on proof. Local `uses:`, like
+# self-release.yml: the canon tree arrives via `$/.github/actions/canon`,
+# which for a local call resolves to the very commit running — for a tag
+# push, the released commit — so the orchestrator, the build workflow and
+# the toolbelt are pinned by the tag itself (#165).
+#
+# This file is NOT named publish.yml because in this repository that name
+# belongs to the orchestrator. The publish.yml-filename rule exists for
+# registry trusted publishing (crates.io/npm pin the caller's
+# workflow_ref), and the source-archive class touches no registry — the
+# only consumer of this run's identity is the signer, which pins the
+# reusable workflow path, not the caller filename.
+---
+name: self-publish
+
+"on":
+  push:
+    tags:
+      - v*
+  # Resume path. ALWAYS dispatch with --ref <tag>: the shared guard refuses
+  # anything that is not a tag, because a branch ref would attest a moving
+  # pointer and Sigstore is append-only.
+  workflow_dispatch: {}
+
+permissions: {}
+
+# Never cancel a publish mid-flight; queue instead.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    uses: ./.github/workflows/publish.yml # zizmor: ignore[self-repository]
+    with:
+      classes: source-archive
+      # The canon cites itself (#316): a versioned, tagged, SBOM'd,
+      # signed release, and the only repo in the org that would
+      # otherwise not carry a DOI. Licence and creators come from the
+      # derived CITATION.cff; ZENODO_TOKEN is an org secret readable by
+      # every org repository (#751), so this needs no grant — the mint
+      # job's remaining failure mode is a dead or rotated token.
+      mint-doi: true
+    permissions:
+      # The FULL union the orchestrator's jobs declare, not just the jobs
+      # this class runs: GitHub validates the called workflow's grants at
+      # startup, before any `if:` skips a class, so a caller that grants
+      # less than the whole file demands dies as startup_failure with no
+      # jobs and no log. Measured on v1.2.0, this repo's first
+      # self-publish. The template stub's "harmless if unused" comment
+      # exists for exactly this.
+      contents: read # the build checks out this repository at the tag
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+      packages: write # oci-image class jobs declare it; unused here
+    secrets:
+      app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
+      zenodo-token: ${{ secrets.ZENODO_TOKEN }}
+...

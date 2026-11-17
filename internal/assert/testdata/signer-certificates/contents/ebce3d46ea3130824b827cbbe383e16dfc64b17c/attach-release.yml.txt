@@ -1,0 +1,563 @@
+# The last step, and the first moment anything becomes public. Attaches the
+# evidence bundle to the draft release and publishes it.
+#
+# Runs no caller code, which is the whole reason it is a separate job: the
+# canon's "attestation happens last, and only on proof" is enforceable only
+# while the job that publishes cannot be reached from a build step.
+#
+# The bundle shape is dictated by what the scoring checks actually match,
+# read from Scorecard's source rather than its documentation:
+#
+#   <name>.spdx.json   Scorecard's SBOM check matches
+#                      `.+\.(cdx.json|…|spdx.json|…)`, and awards the full
+#                      10 only for an SBOM that is a RELEASE ASSET — 5 if
+#                      it exists solely in the repo or the pipeline. Only
+#                      the five most recent releases are examined, so this
+#                      is a standing obligation, not a one-off.
+#   <artifact>.intoto.jsonl
+#                      Signed-Releases awards 8 for a signature and 10 only
+#                      when provenance is present; `*.intoto.jsonl` is one
+#                      of the recognised patterns, and it is also the
+#                      filename SLSA's distributing-provenance SHOULD asks
+#                      for. One convention satisfies both.
+#   checksums.txt      so a consumer can check bytes without tooling.
+---
+name: attach-release
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      classes:
+        # forwarding: universal
+        description: >
+          Comma-separated evidence classes this release ships. The
+          evidence manifest declares them, and the manifest is written
+          here because here is where every asset exists.
+        required: true
+        type: string
+      # The per-LEG split of the build subjects, which only the
+      # publisher holds. `stele emit manifest` requires every build
+      # subject in `--assets` to be claimed by exactly one build leg —
+      # one class and one target (stele#223, manifest schema 4;
+      # stele#185 asked the same of the class alone) — and the fan-in
+      # below flattens `release-*` with
+      # `merge-multiple: true` — so by the time the assets exist here
+      # the artifact name that carried the class is gone.
+      #
+      # The split arrives as inputs rather than being re-derived from
+      # un-merged artifact directory names, for three measured reasons.
+      # The class of a subject is the BUILD LEG's fact and the
+      # orchestrator already holds the leg-to-class map — its attach
+      # `if:` names both halves of every pair — so inputs put the fact
+      # where the mapping already lives instead of starting a second
+      # artifact-name-to-class map here. Each leg computes this string
+      # from the same digests, in the same step, that its flat
+      # `subjects` output carries — the string that leg's signer signs —
+      # so the manifest's typing and the provenance's subject set are
+      # derived from ONE source rather than two that must agree. And
+      # deriving class from a directory name would rest on
+      # download-artifact's layout, which this file already records as
+      # inconsistent below: with exactly one artifact matched the
+      # download arrives FLAT and the name is gone.
+      #
+      # Each value is that class's ordinary sha256sum manifest with ONE
+      # column added in front: the target whose matrix leg produced the
+      # line. The target is likewise a fact of the leg and of nobody
+      # else — what a target IS (a platform triple, a runtime major, a
+      # publisher's name for a class that varies nothing) is declared
+      # by the build workflow that varies it, never inferred here from
+      # an asset filename. A class whose matrix runs several legs
+      # therefore arrives as one string that the step below splits back
+      # into one flag per target; this workflow no longer concatenates
+      # anything.
+      #
+      # oci-image and wasm-npm have no input HERE: those classes publish
+      # to a registry and attach no release asset, so they own no build
+      # subject and passing their build outputs as one REFUSES. What
+      # they published is stated below, as registry subjects.
+      #
+      # Empty is the ordinary value for a class this release did not
+      # build — a skipped job's output is the empty string, and the
+      # manifest step writes no flag for an empty one.
+      rust-crate-leg-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum manifest of the crates the
+          rust-crate class built, one line per crate.
+        required: false
+        type: string
+        default: ""
+      rust-binary-leg-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum manifest of the archives the
+          rust-binary class built, one line per archive.
+        required: false
+        type: string
+        default: ""
+      go-binary-leg-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum manifest of the archives the
+          go-binary class built, one line per archive.
+        required: false
+        type: string
+        default: ""
+      source-archive-leg-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum manifest of the archive the
+          source-archive class built.
+        required: false
+        type: string
+        default: ""
+      pgrx-extension-leg-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum manifest of the tarballs the
+          pgrx-extension class built, one line per tarball.
+        required: false
+        type: string
+        default: ""
+      # What a class published to a REGISTRY instead of beside the
+      # release (#1168). An image or a registry package has no file in
+      # dist/, so no asset list and no checksum manifest can name it —
+      # and a manifest that listed only assets left an image-only
+      # release naming no artifact at all, while a mixed one had its
+      # registry half skipped by the deep audit in silence. These are
+      # where the release says what it shipped there; `stele emit
+      # manifest` writes each as a `registry-subject` entry (manifest
+      # schema 5), and the audit reads them.
+      #
+      # Same shape as the leg subjects above and for the same reason:
+      # one target-prefixed sha256sum line per subject, computed by the
+      # leg from the digests its signer signs. The name is the one the
+      # provenance attests — an image reference, a tarball name — never
+      # a filename this job could look for.
+      #
+      # Empty is the ordinary value twice over: for a class this
+      # release did not build, and for a rehearsal, which publishes to
+      # no registry and must not claim it did.
+      oci-image-registry-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum line of the image index the
+          oci-image class published: `image <hex>  <image>`.
+        required: false
+        type: string
+        default: ""
+      oci-image-class:
+        # forwarding: universal
+        description: >
+          The class that built the image, as the evidence declares it.
+          The guard derives it (#843) and it is spelled nowhere else, so
+          it arrives rather than being matched out of `classes` here.
+        required: false
+        type: string
+        default: oci-image
+      wasm-npm-registry-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum line of the tarball the wasm-npm
+          class published to the npm registry.
+        required: false
+        type: string
+        default: ""
+      pgrx-extension-image-registry-subjects:
+        # forwarding: universal
+        description: >
+          Target-prefixed sha256sum manifest of the per-major image
+          indexes a pgrx release published, one line per major.
+        required: false
+        type: string
+        default: ""
+      pgrx-extension-image-class:
+        # forwarding: universal
+        description: >
+          The class those images are attributed to, as the evidence
+          declares it. Derived by the guard beside the image class and
+          spelled nowhere else; empty when no extension was declared,
+          which is also when there are no images to attribute.
+        required: false
+        type: string
+        default: ""
+      dry-run:
+        # forwarding: universal
+        description: Rehearsal — attach the bundle, leave the release a draft.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      app-private-key:
+        # forwarding: universal
+        description: Tag-mint App private key
+        required: true
+
+permissions: {}
+
+jobs:
+  attach:
+    name: Attach the evidence bundle and publish
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions: {}
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+    steps:
+      # The checkout comes FIRST and cannot move: actions/checkout cleans
+      # the workspace, so a checkout placed after the downloads deletes
+      # the very dist/ this job assembled. Measured on v1.45.1, whose
+      # attach died on `cd: dist: No such file or directory`.
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.4
+          cache: false
+
+      # By pattern, not by name: every build class uploads its assets as
+      # `release-*` and every sign job its bundle as `attestation-bundle-*`,
+      # so any subset of classes fans in here without this step knowing
+      # which. A class that pushed only to a registry (oci-image)
+      # contributes a bundle and no files, which is why an empty dist is
+      # legal below while an empty bundle set is not.
+      #
+      # The merge is what erases class from the assets, and the manifest
+      # needs class back — which is what the per-class subjects inputs
+      # above carry. The BYTES still arrive here and only here; the
+      # inputs say which class each of them belongs to, and nothing is
+      # trusted from them but that split.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: attestation-bundle-*
+          path: bundle
+
+      - name: Name each provenance after the class it describes
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          # SLSA distributing-provenance: provenance "SHOULD have a
+          # filename that is directly related to the build artifact
+          # filename". One bundle covers one class's subjects, so each is
+          # named for its class — attestations-<class>.intoto.jsonl, still
+          # inside the `*.intoto.jsonl` pattern Scorecard's Signed-Releases
+          # check recognises.
+          mkdir -p dist
+          found=0
+          for dir in bundle/attestation-bundle-*/; do
+            [[ -d ${dir} ]] || continue
+            class=$(basename "${dir}")
+            class="${class#attestation-bundle-}"
+            # -print -quit, never `| head -1`: find's own first-match stop, so
+            # there is no pipe to break and no walk to finish (#682).
+            src=$(find "${dir}" -type f -print -quit)
+            [[ -n ${src} ]] || {
+              echo "::error::empty bundle for ${class}"
+              exit 1
+            }
+            mv "${src}" "dist/attestations-${class}.intoto.jsonl"
+            found=$((found + 1))
+          done
+          if ((found == 0)); then
+            # download-artifact is layout-inconsistent, measured across two
+            # releases: two matched artifacts arrive in per-name
+            # subdirectories, exactly one arrives FLAT in the target path.
+            # The flat case carries no artifact name, so the class cannot
+            # be recovered — and with a single bundle it need not be: one
+            # bundle covering the whole release truthfully takes the
+            # umbrella name, which is the same `*.intoto.jsonl` pattern
+            # Scorecard recognises and SLSA's naming SHOULD asks for.
+            # -print -quit, never `| head -1`: find's own first-match stop, so
+            # there is no pipe to break and no walk to finish (#682).
+            flat=$(find bundle -maxdepth 1 -type f -print -quit 2> /dev/null)
+            if [[ -n ${flat} ]]; then
+              mv "${flat}" "dist/attestations.intoto.jsonl"
+              found=1
+            fi
+          fi
+          if ((found == 0)); then
+            if [[ ${DRY_RUN} == "true" ]]; then
+              # An oci-only rehearsal signs nothing: its signer runs only
+              # against a really-pushed digest. Loud, never silent.
+              echo "::warning::rehearsal: no Sigstore bundle to attach"
+            else
+              echo "::error::no Sigstore bundle — a release without evidence does not publish"
+              exit 1
+            fi
+          fi
+          echo "::notice::${found} attestation bundle(s) attached"
+      - name: Assert the SBOM arrived
+        run: |
+          set -euo pipefail
+          # Generation moved to the publish orchestrator's sbom job (and,
+          # for images, the build's pull-back step) — class-shaped, derived
+          # from what actually ships (docs/dependency-track.md). This job
+          # runs no tooling, so it only asserts the inventory is present:
+          # a release without one blinds audit:blast-radius and caps
+          # Scorecard's SBOM check, silently.
+          #
+          # -name over a glob: the dist/* glob skips dotfiles, which is
+          # how every canon release (.github -> .github-x.y.z.spdx.json)
+          # shipped SBOM-less with everything green. Names are dot-proofed
+          # at generation now; this assertion is the backstop.
+          n=$(find dist -maxdepth 1 -name "*.spdx.json" | wc -l | tr -d " ")
+          if [[ ${n} -eq 0 ]]; then
+            echo "::error::no SBOM in dist — the sbom job should have delivered one"
+            exit 1
+          fi
+          hidden=$(find dist -maxdepth 1 -name ".*" -type f | wc -l | tr -d " ")
+          if [[ ${hidden} -ne 0 ]]; then
+            echo "::error::dotfile in dist — dist/* globs and the checksum loop would silently skip it"
+            exit 1
+          fi
+          echo "::notice::${n} SBOM(s) in the bundle"
+      # The declared contract, attested at the tag (stele#40, from
+      # #109): which classes shipped, the verdict layout, the machinery
+      # version obligations are derived from, and every asset pinned and
+      # TYPED as a build subject or an evidence document — written by
+      # `stele emit manifest` through the same definition the assert
+      # reader decodes, and proven readable on its own rendered bytes
+      # before anything ships it.
+      #
+      # It is written HERE, in the fan-in, because here is the first
+      # moment the release's assets all exist. Written in the sbom job
+      # it saw only the inventory that job had just derived, and typed
+      # one entry where the release published five — the build subject
+      # among them, so the repro walk's population was empty and its
+      # verdict CANNOT_JUDGE. Measured on v1.45.0.
+      - name: Write the evidence manifest
+        env:
+          CLASSES: ${{ inputs.classes }}
+          SUBJECTS_RUST_CRATE: ${{ inputs.rust-crate-leg-subjects }}
+          SUBJECTS_RUST_BINARY: ${{ inputs.rust-binary-leg-subjects }}
+          SUBJECTS_GO_BINARY: ${{ inputs.go-binary-leg-subjects }}
+          SUBJECTS_SOURCE_ARCHIVE: ${{ inputs.source-archive-leg-subjects }}
+          SUBJECTS_PGRX_EXTENSION: ${{ inputs.pgrx-extension-leg-subjects }}
+          REGISTRY_OCI_IMAGE: ${{ inputs.oci-image-registry-subjects }}
+          OCI_IMAGE_CLASS: ${{ inputs.oci-image-class }}
+          REGISTRY_WASM_NPM: ${{ inputs.wasm-npm-registry-subjects }}
+          REGISTRY_PGRX_EXTENSION_IMAGE: ${{ inputs.pgrx-extension-image-registry-subjects }}
+          PGRX_EXTENSION_IMAGE_CLASS: ${{ inputs.pgrx-extension-image-class }}
+        run: |
+          set -euo pipefail
+          # The machinery version is the canon tree's own, read from the
+          # version mirror the pinned tree carries — the caller's `uses:`
+          # ref is a commit SHA (the tag-pin rule), so the version is a
+          # fact about the TREE, not about the ref's spelling. For the
+          # canon's own releases the mirror already carries the version
+          # being cut, so one read covers both cases.
+          machinery=$(awk '/^version:/{print $2; exit}' .org-canon/CITATION.cff)
+          [[ -n ${machinery} ]] || {
+            echo "::error::the pinned canon tree's CITATION.cff names no version — the manifest cannot state its machinery"
+            exit 1
+          }
+          # Pass one of two: everything the release ships BEFORE the
+          # manifest exists, because a manifest cannot pin itself and
+          # the format says so. The checksum step below is pass two and
+          # covers everything including it.
+          (cd dist && sha256sum ./* | sed 's| \./| |') > "${RUNNER_TEMP}/assets.sha256"
+          # The leg split, one --leg-subjects per (class, target) that
+          # built something. stele demands every build subject in
+          # --assets be claimed by exactly one leg, so a class whose
+          # matrix ran contributes one flag per target it built and a
+          # class that did not run contributes nothing. An unset input
+          # is the empty string, so this loop is also what makes a
+          # single-class release pass exactly the flags its one class
+          # earned.
+          # Named once each, class beside its input: no name mangling
+          # between the two, so a class that is added or renamed is one
+          # line here and grep finds it.
+          #
+          # The target column is READ, never invented: the leg that
+          # built the artifact wrote it. A line without one refuses
+          # rather than defaulting, because a build subject with no
+          # target goes unjudged by every scoped rebuild — silently,
+          # which is the failure #637 exists to end.
+          #
+          # The registry subjects ride the same function under their own
+          # flag: the grammar is one, and what differs is only which
+          # population stele places the line in. The flag is part of the
+          # file name so a class that one day has both cannot have one
+          # leg's file overwrite the other's.
+          #
+          # A class NAME that arrives empty beside subjects that do not
+          # is the orchestrator contradicting itself, and is refused
+          # here rather than handed to stele as a leg with no class.
+          subject_flags=()
+          claim() {
+            local flag="$1" class="$2" legs="$3" line target path
+            local -a targets=()
+            [[ -n ${legs//[[:space:]]/} ]] || return 0
+            if [[ -z ${class} ]]; then
+              echo "::error::${flag}: subjects arrived with no class to attribute them to"
+              exit 1
+            fi
+            while IFS= read -r line; do
+              [[ -n ${line//[[:space:]]/} ]] || continue
+              target="${line%% *}"
+              line="${line#* }"
+              if [[ -z ${target} || ${line} == "${target}" ]]; then
+                echo "::error::${class}: subject line names no target — an untargeted artifact no scoped rebuild judges"
+                exit 1
+              fi
+              if [[ ${target} =~ [^A-Za-z0-9._-] ]]; then
+                echo "::error::${class}: target ${target} is not a plain name — it becomes a file this step writes"
+                exit 1
+              fi
+              path="${RUNNER_TEMP}/${flag}-${class}-${target}.sha256"
+              if [[ " ${targets[*]-} " != *" ${target} "* ]]; then
+                targets+=("${target}")
+                : > "${path}"
+                subject_flags+=("--${flag}" "${class}:${target}=${path}")
+              fi
+              printf '%s\n' "${line}" >> "${path}"
+            done <<< "${legs}"
+            echo "::notice::${class} claims ${#targets[@]} ${flag} leg(s): ${targets[*]}"
+          }
+          claim leg-subjects rust-crate "${SUBJECTS_RUST_CRATE}"
+          claim leg-subjects rust-binary "${SUBJECTS_RUST_BINARY}"
+          claim leg-subjects go-binary "${SUBJECTS_GO_BINARY}"
+          claim leg-subjects source-archive "${SUBJECTS_SOURCE_ARCHIVE}"
+          claim leg-subjects pgrx-extension "${SUBJECTS_PGRX_EXTENSION}"
+          claim registry-subjects "${OCI_IMAGE_CLASS}" "${REGISTRY_OCI_IMAGE}"
+          claim registry-subjects wasm-npm "${REGISTRY_WASM_NPM}"
+          claim registry-subjects "${PGRX_EXTENSION_IMAGE_CLASS}" "${REGISTRY_PGRX_EXTENSION_IMAGE}"
+          stele emit manifest \
+            --classes "${CLASSES}" \
+            --store-vsa true \
+            --machinery-version "${machinery}" \
+            --assets "${RUNNER_TEMP}/assets.sha256" \
+            "${subject_flags[@]}" \
+            --assert-policy .org-canon/slsa/assert-policy.json \
+            --out dist/evidence-manifest.json
+      - name: Checksum everything that ships
+        run: |
+          set -euo pipefail
+          cd dist
+          # Never written into the directory it hashes (#1196): the
+          # redirect belongs to sed, both halves start together, and a
+          # checksums.txt created before the glob expands was listed at
+          # the empty-file digest (release-lab v0.28.1).
+          [[ ! -e checksums.txt ]] || {
+            echo "::error::dist/checksums.txt exists before it is written"
+            exit 1
+          }
+          sha256sum ./* | sed 's| \./| |' > "${RUNNER_TEMP}/checksums.txt"
+          mv "${RUNNER_TEMP}/checksums.txt" checksums.txt
+      - name: Mint the publishing token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TAG_MINT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+
+      - name: Attach and publish
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          # Post-publish resume converges, never clobbers (#316, found on
+          # v1.20.0's first mint): the DOI job runs AFTER publish, so a
+          # mint-only failure (the issuer down) is re-dispatched into a
+          # release that is already published and immutable — where
+          # --clobber's delete is refused with a 422 and the resume dies
+          # before reaching the one job that actually failed. If the
+          # release is out, prove the rebuilt bytes equal the published
+          # bytes and pass through; a mismatch is a real failure, not a
+          # resume.
+          draft=$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)
+          if [[ ${draft} == "false" ]]; then
+            gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern checksums.txt --output published-checksums.txt
+            # What must be identical is the BUILD SUBJECTS, and which
+            # assets those are is the published manifest's own typing to
+            # say (stele#156) — not this step's guess. Comparing the
+            # whole manifest made a resume impossible whenever an
+            # evidence document legitimately differed: a Sigstore
+            # signature embeds a fresh timestamp and certificate on
+            # every signing, so a re-signed bundle changes bytes by
+            # design, and an SBOM exported live from the forge's
+            # dependency graph can too. Measured on v1.44.1's duplicate
+            # tag push, where the resume could never converge.
+            gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern evidence-manifest.json --output published-manifest.json 2> /dev/null || true
+            subjects=""
+            if [[ -s published-manifest.json ]]; then
+              subjects=$(jq -r '(.entries // [])[] | select(.type == "build-subject") | .name' \
+                published-manifest.json)
+            fi
+            if [[ -z ${subjects} ]]; then
+              # A release published before entries were typed (schema 1
+              # carries no `entries`) has no answer to give, so the
+              # whole-set comparison stands for it. Pre-epoch releases
+              # keep the guard they shipped under; nothing is rewritten
+              # to make them look newer than they are.
+              if ! diff -u published-checksums.txt dist/checksums.txt; then
+                emsg="${TAG} is published and immutable but the rebuilt assets differ from the published set — this is"
+                emsg+=" not a resume"
+                echo "::error::${emsg}"
+                exit 1
+              fi
+            else
+              differing=""
+              while IFS= read -r name; do
+                [[ -n ${name} ]] || continue
+                was=$(awk -v n="${name}" '$2 == n {print $1}' published-checksums.txt)
+                now=$(awk -v n="${name}" '$2 == n {print $1}' dist/checksums.txt)
+                if [[ -z ${was} || -z ${now} || ${was} != "${now}" ]]; then
+                  differing="${differing} ${name}"
+                fi
+              done <<< "${subjects}"
+              if [[ -n ${differing} ]]; then
+                emsg="${TAG} is published and immutable but these build subjects differ from the published bytes:"
+                emsg+="${differing} — this is not a resume"
+                echo "::error::${emsg}"
+                exit 1
+              fi
+            fi
+            echo "::notice::${TAG} already published; build subjects verified identical, converging"
+            exit 0
+          fi
+          gh release upload "${TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+          if [[ ${DRY_RUN} == "true" ]]; then
+            # The draft stays on purpose here — and to anyone reading the
+            # releases page that is indistinguishable from a burn, which
+            # is how the org accumulated thirty-two drafts nobody could
+            # classify by looking (#597). The reason is known HERE and
+            # nowhere later, so it is written down here.
+            REPO="${GITHUB_REPOSITORY}" TAG="${TAG}" KIND=rehearsal \
+              RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              .org-canon/release/record-draft.sh
+            echo "::warning::rehearsal: ${TAG} left as a draft, nothing published"
+            exit 0
+          fi
+          # Publishing is the commitment point. Immutable releases apply at
+          # publish, and GitHub mints its own release attestation binding
+          # tag, commit and asset digests at the same moment.
+          gh release edit "${TAG}" --draft=false --repo "${GITHUB_REPOSITORY}"
+          echo "::notice::published ${TAG}"
+...

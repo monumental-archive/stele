@@ -1,0 +1,255 @@
+# The oci-image index assembly, extracted from build-oci-image.yml
+# (#118): the index is assembled and TAGGED exactly once, HERE,
+# downstream of the repro gate — the per-arch digest pushes are the
+# build's last act, the gate compares them bit for bit, and only then
+# does a public reference come into existence. The rebuild never tags
+# anything, and there is no index-level compare because the index is
+# built exactly once (the same single-byte-path argument that covers
+# the pgrx artifact images assembling from attested tarballs).
+#
+# Everything downstream of the tag is unchanged from the original
+# manifest job: pull-back smoke by digest, facts equality, the
+# report-only scan, and the image SBOM from the published bytes.
+---
+name: assemble-oci-index
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      smoke-test:
+        # forwarding: universal
+        description: >
+          Script proving the image does its one job, run on the bytes
+          pulled back from the registry by digest. Empty skips it.
+        required: false
+        type: string
+        default: ""
+      facts:
+        # forwarding: universal
+        description: >
+          The resolved facts map (JSON, org.opencontainers.image.* keys)
+          from the orchestrator's facts job — annotations for the index,
+          and the equality target for the published-metadata assertion.
+        required: true
+        type: string
+    outputs:
+      image:
+        description: Fully-qualified image name, lowercased.
+        value: ${{ jobs.manifest.outputs.image }}
+      digest:
+        description: >
+          Index digest of the manifest list. This is the attestation
+          subject: measured in the lab, `gh attestation verify
+          oci://<image>:<tag>` resolves the index.
+        value: ${{ jobs.manifest.outputs.digest }}
+      registry-subjects:
+        description: >
+          The same index as one target-prefixed sha256sum line —
+          `image <hex>  <image>` — the shape attach-release takes for
+          what a class published to a registry instead of beside the
+          release (#1168). Digest and name are the pair the signer
+          attests, so the manifest's claim and the provenance's subject
+          come from one step.
+        value: ${{ jobs.manifest.outputs.registry-subjects }}
+
+permissions: {}
+
+jobs:
+  manifest:
+    name: Assemble and prove the manifest list
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # create the manifest list
+    outputs:
+      image: ${{ steps.assemble.outputs.image }}
+      digest: ${{ steps.assemble.outputs.digest }}
+      registry-subjects: ${{ steps.assemble.outputs.registry-subjects }}
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        # trivy comes from the belt. Without this the scan step dies as
+        # `trivy: command not found` — exit 127, after the image is already
+        # pushed and the manifest assembled, which is the worst place to
+        # discover a missing tool.
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin — the
+          # v0.18.2 darwin leg pulled same-day mise 2026.8.4 while every
+          # pinned site ran 2026.8.3 (#117: nothing unpinned on an attested
+          # path, the installer included).
+          version: 2026.11.4
+          cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: oci-digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Assemble the manifest list
+        id: assemble
+        env:
+          FACTS: ${{ inputs.facts }}
+          GH_TOKEN: ${{ github.token }}
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # imagetools create silently ignored --annotation before buildx
+          # 0.12 (docker/buildx#1965) — assert the floor rather than trust
+          # the runner image.
+          buildx_version=$(docker buildx version)
+          v=$(sed -nE '1s/^.*v?([0-9]+)\.([0-9]+)\.[0-9]+.*$/\1.\2/p' <<< "${buildx_version}")
+          pair=$(printf '%s\n%s' "0.12" "${v}")
+          ordered=$(sort -V <<< "${pair}")
+          floor=$(head -1 <<< "${ordered}")
+          if [[ -z ${v} ]] || [[ ${floor} != "0.12" ]]; then
+            echo "::error::buildx ${v:-unknown} < 0.12: index annotations would be dropped silently"
+            exit 1
+          fi
+          image="ghcr.io/$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          AMD=$(cat digests/amd64 2> /dev/null || echo "")
+          ARM=$(cat digests/arm64 2> /dev/null || echo "")
+          for d in "${AMD}" "${ARM}"; do
+            if [[ ! ${d} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::a per-architecture digest is missing; refusing to tag a partial image"
+              exit 1
+            fi
+          done
+          # The index gets the same map as annotations. The key set exists
+          # once, in the resolver: this step never names a key.
+          pairs=$(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "${FACTS}")
+          ANNOS=()
+          while IFS= read -r kv; do ANNOS+=(--annotation "index:${kv}"); done <<< "${pairs}"
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker buildx imagetools create \
+            "${ANNOS[@]}" \
+            --tag "${image}:${UNTRUSTED_VERSION}" \
+            "${image}@${AMD}" "${image}@${ARM}"
+          index=$(docker buildx imagetools inspect "${image}:${UNTRUSTED_VERSION}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')
+          if [[ ! ${index} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no index digest"
+            exit 1
+          fi
+          # registry-subjects — one index, one leg: the class varies
+          # nothing above the per-architecture builds this step just
+          # folded together, so the target is the publisher's name for
+          # the whole of it.
+          {
+            echo "image=${image}"
+            echo "digest=${index}"
+            echo "registry-subjects=image ${index#sha256:}  ${image}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "::notice::index ${index}"
+      - name: Pull the published bytes back and smoke them
+        if: inputs.smoke-test != ''
+        env:
+          IMAGE: ${{ steps.assemble.outputs.image }}
+          INDEX: ${{ steps.assemble.outputs.digest }}
+          UNTRUSTED_SMOKE: ${{ inputs.smoke-test }}
+        run: |
+          set -euo pipefail
+          # By digest, never by tag: a tag is a moving pointer, and the
+          # point is to prove the exact bytes that were published.
+          docker pull "${IMAGE}@${INDEX}"
+          "${UNTRUSTED_SMOKE}" "${IMAGE}@${INDEX}"
+      - name: Assert the published metadata equals the facts
+        env:
+          IMAGE: ${{ steps.assemble.outputs.image }}
+          DIGEST: ${{ steps.assemble.outputs.digest }}
+          FACTS: ${{ inputs.facts }}
+        # At the pull-back point, like every other proof: the index media
+        # type is OCI, its annotations EQUAL the map, and every per-arch
+        # config's labels equal it too — equality, not presence, because
+        # presence lets a wrong revision through. The mechanism is
+        # stele's (registry read by digest, no daemon); the env contract
+        # is unchanged from the bash it replaced (stele#39).
+        run: stele assert image-facts
+
+      - name: Scan the published image, report-only
+        env:
+          IMAGE: ${{ steps.assemble.outputs.image }}
+          INDEX: ${{ steps.assemble.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Report-only, deliberately: the CVE gate lives on pull requests,
+          # where it blocks a change that introduces something new. A
+          # publish — above all a scheduled remediation rebuild — must not
+          # die because a scanner had a bad day, because blocking a rebuild
+          # leaves the older and at-least-as-vulnerable image live.
+          #
+          # But it goes to the job summary, not only to the log. A scan
+          # whose output lands in a green scheduled run is write-only, and
+          # a check nobody reads is worse than no check.
+          {
+            echo "### Vulnerability scan (report-only)"
+            echo
+            echo "\`${IMAGE}@${INDEX}\`"
+            echo
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          trivy image --config /dev/null --scanners vuln --exit-code 0 \
+            --severity HIGH,CRITICAL --format table "${IMAGE}@${INDEX}" \
+            | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+      - name: Generate the image SBOM from the published bytes
+        env:
+          IMAGE: ${{ steps.assemble.outputs.image }}
+          INDEX: ${{ steps.assemble.outputs.digest }}
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Class-shaped SBOM (docs/dependency-track.md): derived from the
+          # published bytes at the pull-back point, like every other proof —
+          # OS packages plus, via cargo-auditable's .dep-v0 section, the
+          # Rust dependencies of the binaries actually inside. In the
+          # versioned flow this artifact fans into the release via the
+          # release-* pattern; in the continuous flow it stays a run
+          # artifact until #108 annotates it onto the image.
+          base="${GITHUB_REPOSITORY##*/}"
+          # The canon's own name starts with a dot, and `dist/*` globs and
+          # checksum loops silently skip dotfiles — measured: every canon
+          # release before this change shipped without its SBOM, green.
+          base="${base#.}"
+          v="${UNTRUSTED_VERSION:-continuous}"
+          mkdir -p /tmp/sbom
+          out="/tmp/sbom/${base}-${v}-image.spdx.json"
+          trivy image --config /dev/null --format spdx-json \
+            --output "${out}" "${IMAGE}@${INDEX}"
+          [[ -s ${out} ]] || {
+            echo "::error::image SBOM export produced nothing"
+            exit 1
+          }
+          purls=$(jq '[.packages[].externalRefs[]? | select(.referenceType=="purl") | .referenceLocator] | length' "${out}")
+          bare=$(jq '[.packages[].externalRefs[]? | select(.referenceType=="purl")
+            | .referenceLocator | select(test("@") | not)] | length' "${out}")
+          if [[ ${purls} -eq 0 || ${bare} -ne 0 ]]; then
+            echo "::error::image SBOM has ${purls} PURLs, ${bare} versionless — a versionless PURL is invisible to every scanner"
+            exit 1
+          fi
+          echo "::notice::image SBOM: ${purls} versioned PURLs"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sbom-image
+          path: /tmp/sbom/
+          if-no-files-found: error
+          retention-days: 7
+...

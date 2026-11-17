@@ -23,7 +23,12 @@ universe — the vocabulary stays open, per the first Rule):
   #94, #384), the caller/callee `permissions:` join
   across a workflow tree (#148 — what a shared workflow's jobs ask
   for is what its callers must grant, computed through the one
-  workflow reader in `internal/workflow`).
+  workflow reader in `internal/workflow`), and signer certificates
+  (#387 — every certificate a transparency log holds for a declared
+  signing workflow, read in chunks from a checkpoint the caller keeps
+  and reconciled against a signing the population performed; the
+  reader in `internal/ctlog`, the seven conditions in
+  `internal/assert`).
   Every one of them enumerates its subjects through
   `internal/population` and NOWHERE else (#153): the population is a
   declared object — per repository and per SLSA track, with the

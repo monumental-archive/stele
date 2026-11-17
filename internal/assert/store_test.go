@@ -129,7 +129,7 @@ var (
 // sections a row is about.
 func storePolicy(sections ...string) string {
 	return `{
-  "schema": 7,
+  "schema": 8,
   "issuer": "https://token.actions.githubusercontent.com",
   "evidence": {
     "sbomSuffix": ".spdx.json",
@@ -936,10 +936,10 @@ func TestBaseImagesEpochBothDirections(t *testing.T) {
 	t.Run("the old block at the old epoch refuses as a version", func(t *testing.T) {
 		t.Parallel()
 
-		doc := strings.Replace(storePolicy(oldShape), `"schema": 7`, `"schema": 6`, 1)
+		doc := strings.Replace(storePolicy(oldShape), `"schema": 8`, `"schema": 6`, 1)
 
 		_, err := assert.LoadPolicy(strings.NewReader(doc))
-		if err == nil || !strings.Contains(err.Error(), "schema 6 is not the implemented schema 7") {
+		if err == nil || !strings.Contains(err.Error(), "schema 6 is not the implemented schema 8") {
 			t.Fatalf("LoadPolicy = %v, want the version gate to fire first", err)
 		}
 	})

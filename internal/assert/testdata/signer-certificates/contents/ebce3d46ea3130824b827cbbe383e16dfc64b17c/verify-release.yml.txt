@@ -1,0 +1,806 @@
+# The release verifier: one identity for every check the org's verdict
+# rests on. Two modes, two invocations per release, same file:
+#
+#   mode: bytes    — pull the published bytes back from the registry and
+#                    prove them against the built digests. Runs BEFORE the
+#                    signer, and its output manifest is what the signer
+#                    attests — so the attested subject is what shipped,
+#                    not what we hoped shipped.
+#   mode: verdict  — runs AFTER the signer. Re-proves the bytes, then
+#                    opens the provenance being summarised: fetches the
+#                    attestation bundles for every verified digest from
+#                    the same API a stranger would use, verifies each
+#                    against the org signer identity at the pinned commit
+#                    (derived from the canon tree's own sign.yml uses:
+#                    pin), checks the
+#                    provenance subjects equal the verified manifest,
+#                    asserts buildType and externalParameters against this
+#                    run's own identity (all four of verifying-artifacts'
+#                    comparisons, #210), and
+#                    only then assembles the VSA predicate
+#                    (slsa.dev/verification_summary/v1) and signs it
+#                    ITSELF (#264).
+#
+# Correct by construction (#208): every field of the predicate is an
+# output of a check performed in this job. `verificationResult: PASSED`
+# is only reachable after both the byte loop and the attestation loop
+# exit clean; `verifiedLevels` is emitted only after the builder identity
+# checks pass; `inputAttestations` is appended inside the same loop that
+# verifies each bundle, so it cannot list what was not read or omit what
+# was. The verdict is not asserted beside the verification — it is the
+# verification's return value.
+#
+# capability-boundary: this workflow holds `id-token: write` and runs NO
+# caller-supplied code — no checkout, typed inputs validated against
+# whitelist shapes, a body of curl/sha256sum/jq/gh api/imagetools. It is
+# sign.yml's category, not a build job's. It signs the verdict ITSELF
+# (#264) because a verdict routed through the org signer makes
+# `verifier.id` a string in a caller-supplied predicate: any workflow
+# able to call the signer could mint a syntactically perfect PASSED
+# naming this file without this file having run. Self-signing makes the
+# (signer, verifier) pair a tautology — `verifier.id` IS the certificate
+# subject. The org therefore carries TWO roots of trust: provenance and
+# producer evidence under monumental-archive/signer/sign.yml, verdicts
+# under this file (docs/runbook.md, two recipes; verdicts published
+# before canon v1.14.0 verify under the signer identity instead — the
+# version boundary is documented there).
+#
+# The one byte-handling residual, stated: this job pulls published
+# artifacts, so a steered fetch could at most influence a subject
+# digest — and a tenant-generated subject is the spec's explicit
+# carve-out, with forging one a declared non-threat (threats E2). The
+# signing material never shares a job with caller-defined build steps,
+# which is the actual L3 line. The only caller-controlled bytes touched
+# are the declared inputs, validated to the same whitelist shape
+# sign.yml enforces.
+#
+# Class coverage (#209): every class gets a verdict, because every class
+# has a public store to prove against — three shapes, one manifest:
+#
+#   registry files   — crates.io and npm serve published bytes by stable
+#                      URL; pulled back and hash-compared.
+#   release assets   — fetchable by public URL once the release is
+#                      published, and immutable from that moment, so the
+#                      proved bytes cannot drift under the verdict. Only
+#                      reachable AFTER attach publishes: verdicts for
+#                      these classes run post-publish, and their VSAs
+#                      live in the attestation store alone (the release
+#                      is sealed before the verdict exists).
+#   images           — content addressing already proves the bytes;
+#                      fetching a blob to re-hash it would prove nothing.
+#                      What is NOT self-proving is the tag: the binding
+#                      the release advertises is a mutable pointer, so
+#                      the proof asserted here is that the tag resolves
+#                      in the registry to the attested index digest. The
+#                      policy claims exactly that, nothing more.
+---
+name: verify-release
+
+"on":
+  # forwarding-default: discretionary — multi-mode verifier; each mode consumes its own input subset
+  workflow_call:
+    inputs:
+      subjects:
+        description: >
+          sha256sum manifest of file subjects. In bytes mode: produced by
+          the build, proven here. In verdict mode: the manifest the signer
+          attested — verify-release's own bytes-mode output for registry
+          classes, the build's own manifest for release-asset classes
+          (whose first pull-back is necessarily here, post-publish). A VSA
+          over unproven digests would be a verdict about nothing, which is
+          why this step re-proves everything regardless. Optional when
+          `images` carries the subjects instead; at least one of the two
+          must be non-empty.
+        required: false
+        type: string
+        default: ""
+      inventories:
+        description: >
+          The release's PLANNED inventory documents, as the JSON array
+          the publish workflow's sbom job emitted from the judged plan
+          set. Each one owes its own release decision and the verdict
+          aggregates over them (stele#158): the invariant is one
+          decision per planned inventory, with the plan as the
+          denominator, so ambiguity is unrepresentable rather than
+          refused. `[""]` or empty declares a release with no plan,
+          judged under the whole-release invariant every release before
+          per-artifact inventories shipped under. Never a filename
+          guess and never re-derived here — it is the same list the
+          decisions were minted over.
+        required: false
+        type: string
+        default: ""
+      images:
+        description: >
+          Image subjects as a JSON array of {image, tag, digest} — the
+          untagged lowercase registry reference, the tag this release
+          advertises, and the attested index digest (sha256:<hex>). Extra
+          keys are ignored, so a build's signing-matrix output passes
+          through unchanged. Proven by tag→digest binding, not pull-back:
+          see the header.
+        required: false
+        type: string
+        default: ""
+      base-majors:
+        description: >
+          Comma-separated PG majors whose digest-pinned base images this
+          class's build actually instantiated; the enrichment claims
+          exactly those rows of docker/pgrx-base-images.toml (build and
+          smoke both — every leg runs in each) as resolvedDependencies.
+          Empty (the default) claims nothing: a FROM scratch class has no
+          base, and a signed false dependency is worse than an omitted
+          one (#316 finding 3, which found the previous boolean
+          declaring the ENTIRE pinned set for classes with no base at
+          all). Declared by the caller, which knows the artifact class —
+          never inferred from subject shape: that proxy missed
+          pgrx-extension tarballs, file subjects built INSIDE the pinned
+          base (#310 finding 4). Consumed in verdict mode; ignored in
+          bytes mode.
+        required: false
+        type: string
+        default: ""
+      release-tag:
+        description: >
+          Declares that file subjects matched by no registry are assets of
+          this published release, fetched from its public download URL.
+          The declaration is proven, never inferred: with the tag set, a
+          missing asset is a failure; without it, an unclaimed subject is
+          a failure. There is no path on which a subject is skipped.
+        required: false
+        type: string
+        default: ""
+      mode:
+        description: bytes (default) or verdict — see the header.
+        required: false
+        type: string
+        default: bytes
+      version:
+        description: >
+          The version released, without the leading v. Required in verdict
+          mode (it names the resourceUri); ignored in bytes mode.
+        required: false
+        type: string
+        default: ""
+      npm-package:
+        description: >
+          For .tgz subjects: the npm package as name@version. Required
+          because a scoped package's tarball filename mangles the scope
+          (`@org/pkg` packs as `org-pkg-<v>.tgz`), so the registry path
+          cannot be reconstructed from the file. Empty is fine when no
+          subject is a tarball; a .tgz subject with no package name fails.
+        required: false
+        type: string
+        default: ""
+      dry-run:
+        description: >
+          Rehearsal. Nothing was published, so there are no registry bytes
+          to pull back. In bytes mode the manifest passes through unchanged
+          and the run says so loudly — a rehearsal must never be mistaken
+          for proof. Verdict mode REFUSES a dry-run outright: a rehearsal
+          must never assemble a PASSED.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      subjects:
+        description: The manifest, re-derived from the published bytes.
+        value: ${{ jobs.verify.outputs.subjects }}
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify the release (${{ inputs.mode }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      # contents: read scopes the token the verdict step uses to read the
+      # attestations API. The three write grants are the verdict's own
+      # signing identity (#264) — see the capability-boundary marker in
+      # the header for why a job that handles artifact bytes may hold
+      # them: it runs zero caller code, and the spec declares a forged
+      # tenant subject a non-threat (E2). Declared at the job
+      # unconditionally because a called workflow's permissions are
+      # checked statically; every caller inside publish.yml already
+      # grants this set for its signer legs.
+      contents: read
+      id-token: write # the verdict's Sigstore identity — verifier.id IS the certificate
+      attestations: write # persist the VSA where the runbook's consumer recipe reads
+      artifact-metadata: write # the attestation storage record
+    outputs:
+      subjects: ${{ steps.prove.outputs.subjects }}
+    steps:
+      - name: Prove each declared subject against the registry
+        id: prove
+        env:
+          UNTRUSTED_SUBJECTS: ${{ inputs.subjects }}
+          UNTRUSTED_IMAGES: ${{ inputs.images }}
+          UNTRUSTED_NPM_PACKAGE: ${{ inputs.npm-package }}
+          UNTRUSTED_RELEASE_TAG: ${{ inputs.release-tag }}
+          UNTRUSTED_MODE: ${{ inputs.mode }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          # Who is calling, for registries whose access policy asks
+          # (#907). This leg pulls published bytes from static.crates.io
+          # and registry.npmjs.org; measured 2026-08-24, neither refuses
+          # an unidentified request today — only the crates.io API host
+          # does, which is what broke the token exchange. Sent anyway,
+          # because identifying the caller is the documented contract
+          # and the alternative is discovering the next tightening the
+          # way this one was discovered: as an unattributed 403 in the
+          # middle of a release.
+          ORG_USER_AGENT: >-
+            monumental-archive-publish
+            (https://github.com/monumental-archive/.github)
+        run: |
+          set -euo pipefail
+          case "${UNTRUSTED_MODE}" in
+            bytes | verdict) ;;
+            *)
+              echo "::error::mode must be bytes or verdict"
+              exit 1
+              ;;
+          esac
+          if [[ ${UNTRUSTED_MODE} == "verdict" && ${DRY_RUN} == "true" ]]; then
+            echo "::error::a rehearsal must never assemble a PASSED verdict"
+            exit 1
+          fi
+          if [[ -n ${UNTRUSTED_RELEASE_TAG} && ! ${UNTRUSTED_RELEASE_TAG} =~ ^v[0-9A-Za-z.+-]+$ ]]; then
+            echo "::error::release-tag is not a plausible release tag"
+            exit 1
+          fi
+          record='^[0-9a-f]{64}  [^[:space:]]'
+          # Pull one published file, telling "not served yet" from
+          # "failed" (#1204). A registry answers 404 for a while after
+          # it accepted a publish: release-lab v0.28.2's tarball was
+          # still a 404 nine seconds after npm's own timestamp for the
+          # version, past the old 75-second budget, and the release
+          # stopped after npm had the package. So a 404 is waited on,
+          # sleeping min(attempt * 10, 60) seconds, for ten minutes in
+          # all. Anything else (a 5xx, a refused connection, a bad
+          # status) gets three tries and fails naming the status: a
+          # registry that is down is not waited on for ten minutes.
+          # curl's own --retry is gone on purpose; it retried a 503
+          # inside every try, so "three tries" would have been eighteen.
+          # The only registry fetch with a propagation window in this
+          # workflow: the lockfile fetch in the verdict leg reads the
+          # source at a commit, where absence is an answer. The test
+          # (release/test_verify_fetch.py) lifts this function out of
+          # this file by its first and last lines; keep both.
+          fetch_published() {
+            local name="$1" url="$2" dest="$3"
+            local attempt=0 waited=0 failures=0 nap status rc
+            local budget=600
+            while true; do
+              attempt=$((attempt + 1))
+              rc=0
+              status=$(curl -sSL -o "${dest}" -w '%{http_code}' \
+                -H "User-Agent: ${ORG_USER_AGENT}" "${url}") || rc=$?
+              if ((rc == 0)) && [[ ${status} == 2?? ]]; then
+                return 0
+              fi
+              if ((rc == 0)) && [[ ${status} == 404 ]]; then
+                if ((waited >= budget)); then
+                  echo "::error::${name}: not served after 10 minutes"
+                  return 1
+                fi
+                nap=$((attempt * 10))
+                ((nap <= 60)) || nap=60
+                ((nap <= budget - waited)) || nap=$((budget - waited))
+                echo "${name}: not served yet (404, attempt ${attempt}), retrying in ${nap}s"
+              else
+                ((rc == 0)) || status="no HTTP status (curl exit ${rc})"
+                failures=$((failures + 1))
+                if ((failures >= 3)); then
+                  echo "::error::${name}: failed with ${status}"
+                  return 1
+                fi
+                nap=$((failures * 10))
+                echo "${name}: failed with ${status} (try ${failures} of 3), retrying in ${nap}s"
+              fi
+              sleep "${nap}"
+              waited=$((waited + nap))
+            done
+          }
+          # The pulled bytes outlive this step on purpose: the verdict
+          # step verifies the attestation bundles against these exact
+          # files, so both checks open the same evidence.
+          workdir="${RUNNER_TEMP}/verified-subjects"
+          mkdir -p "${workdir}"
+          out="${workdir}/verified.sha256"
+          : > "${out}"
+          count=0
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            [[ -n ${line} ]] || continue
+            count=$((count + 1))
+            if [[ ! ${line} =~ ${record} ]]; then
+              # Not echoed: the line is caller-controlled.
+              echo "::error::subject line ${count} is not a sha256sum record"
+              exit 1
+            fi
+            digest="${line%% *}"
+            name="${line##*  }"
+            if [[ ${DRY_RUN} == "true" ]]; then
+              echo "${digest}  ${name}" >> "${out}"
+              echo "::warning::rehearsal: ${name} was NOT proved against a registry"
+              continue
+            fi
+            # Each registry serves the exact bytes it stored, under a
+            # stable path. Anything else here would be proving the
+            # artifact against itself. The registry is dispatched on the
+            # subject's extension; an extension nothing claims is a
+            # failure, never a skip.
+            case "${name}" in
+              *.crate)
+                crate="${name%-*}"
+                ver="${name##*-}"
+                ver="${ver%.crate}"
+                url="https://static.crates.io/crates/${crate}/${crate}-${ver}.crate"
+                ;;
+              *.tgz)
+                if [[ -z ${UNTRUSTED_NPM_PACKAGE} ]]; then
+                  echo "::error::${name} is an npm tarball but no npm-package was declared"
+                  exit 1
+                fi
+                # name@version, scope included; the version splits off the
+                # LAST @ so scoped names survive.
+                pkg="${UNTRUSTED_NPM_PACKAGE%@*}"
+                ver="${UNTRUSTED_NPM_PACKAGE##*@}"
+                if [[ -z ${pkg} || -z ${ver} || ${pkg} == "${UNTRUSTED_NPM_PACKAGE}" ]]; then
+                  echo "::error::npm-package must be name@version, got ${UNTRUSTED_NPM_PACKAGE}"
+                  exit 1
+                fi
+                # The tarball path always uses the unscoped basename.
+                url="https://registry.npmjs.org/${pkg}/-/${pkg##*/}-${ver}.tgz"
+                ;;
+              *)
+                # Declared a release asset (see the release-tag input) or
+                # refused — never guessed from the filename. Publishing is
+                # what makes this URL exist AND what makes it immutable,
+                # so this leg only runs post-publish.
+                if [[ -z ${UNTRUSTED_RELEASE_TAG} ]]; then
+                  echo "::error::${name}: no registry claims this subject type and no release-tag was declared"
+                  exit 1
+                fi
+                url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${UNTRUSTED_RELEASE_TAG}/${name}"
+                ;;
+            esac
+            echo "::group::${name}"
+            fetch_published "${name}" "${url}" "${workdir}/${name}"
+            actual=$(sha256sum "${workdir}/${name}" | cut -d' ' -f1)
+            if [[ ${actual} != "${digest}" ]]; then
+              echo "::error::${name}: built ${digest}, registry served ${actual}"
+              exit 1
+            fi
+            echo "${actual}  ${name}" >> "${out}"
+            echo "verified ${name}"
+            echo "::endgroup::"
+          done <<< "${UNTRUSTED_SUBJECTS}"
+          # Image subjects: the proof is the tag→digest binding — the one
+          # claim content addressing does not make (see the header). The
+          # manifest line carries the UNTAGGED reference, because that is
+          # the subject name the signer attested (sign.yml, image mode)
+          # and the coverage equality below compares names exactly.
+          imgcount=0
+          if [[ -n ${UNTRUSTED_IMAGES//[[:space:]]/} ]]; then
+            if ! jq -e 'type == "array" and length > 0 and all(.[];
+                (.image | type == "string") and (.tag | type == "string")
+                and (.digest | type == "string"))' \
+              <<< "${UNTRUSTED_IMAGES}" > /dev/null 2>&1; then
+              echo "::error::images is not a JSON array of {image, tag, digest}"
+              exit 1
+            fi
+            # jq runs as its own statement so a parse failure surfaces as
+            # itself rather than as an empty loop (SC2312).
+            jq -r '.[] | [.image, .tag, .digest] | @tsv' \
+              <<< "${UNTRUSTED_IMAGES}" > "${workdir}/images.tsv"
+            while IFS=$'\t' read -r image tag idigest; do
+              imgcount=$((imgcount + 1))
+              if [[ ! ${image} =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]; then
+                echo "::error::image ${imgcount} is not a lowercase ghcr.io reference"
+                exit 1
+              fi
+              if [[ ! ${tag} =~ ^[A-Za-z0-9._-]+$ ]]; then
+                echo "::error::image ${imgcount} has an implausible tag"
+                exit 1
+              fi
+              if [[ ! ${idigest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::image ${imgcount} digest is not sha256:<64 lowercase hex>"
+                exit 1
+              fi
+              if [[ ${DRY_RUN} == "true" ]]; then
+                echo "${idigest#sha256:}  ${image}" >> "${out}"
+                echo "::warning::rehearsal: ${image}:${tag} was NOT resolved against the registry"
+                continue
+              fi
+              # The registry is asked what the tag serves; the answer must
+              # be the attested index. Anonymous read: the package is
+              # public by the time this runs. Inspect as its own statement
+              # so a failed resolution surfaces as itself, never masked by
+              # the pipe into jq (SC2312).
+              docker buildx imagetools inspect "${image}:${tag}" \
+                --format '{{json .Manifest}}' > "${workdir}/tag-manifest.json"
+              resolved=$(jq -r '.digest' "${workdir}/tag-manifest.json")
+              if [[ ${resolved} != "${idigest}" ]]; then
+                echo "::error::${image}:${tag} resolves to ${resolved}, attested ${idigest}"
+                exit 1
+              fi
+              echo "${idigest#sha256:}  ${image}" >> "${out}"
+              echo "verified tag binding for ${image}:${tag}"
+            done < "${workdir}/images.tsv"
+          fi
+          if ((count + imgcount == 0)); then
+            echo "::error::nothing to verify — an empty proof is not a proof"
+            exit 1
+          fi
+          echo "WORKDIR=${workdir}" >> "${GITHUB_ENV}"
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            cat "${out}"
+            echo "SUBJECTS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+          echo "::notice::${count} file subject(s) and ${imgcount} image subject(s) proved"
+      # The ref the caller pinned, read from the same $/ resolution that
+      # fetched this workflow — it names the exact canon tree (workflows,
+      # scripts, toolbelt, signer identity) that rendered this verdict, which
+      # is what a VSA's policy URI is for. Never re-derived: the two prior
+      # carriers disagreed with the resolution or could not be written at
+      # all (#158, #165).
+      - name: Resolve the canon tree (the ref the caller pinned)
+        id: canon
+        if: inputs.mode == 'verdict'
+        uses: $/.github/actions/canon
+
+      # stele is a belt tool now (pinned, locked, provenance verified at
+      # lock time) — the `go run <module>@<commit>` bootstrap this job
+      # used to carry is retired, so the verdict needs the belt rather
+      # than the runner's preinstalled Go. install: false plus one
+      # explicit install keeps the job cold: only the tool it runs.
+      - name: Install mise
+        if: inputs.mode == 'verdict'
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.4
+          cache: false
+          install: false
+
+      - name: Install the belt's stele
+        if: inputs.mode == 'verdict'
+        env:
+          MISE_GLOBAL_CONFIG_FILE: ${{ steps.canon.outputs.path }}/mise/config.toml
+          MISE_TRUSTED_CONFIG_PATHS: ${{ steps.canon.outputs.path }}
+          MISE_LOCKED: "1"
+        run: mise install "github:monumental-archive/stele"
+
+      - name: Verify the release and render the verdict (stele emit vsa)
+        id: verdict
+        if: inputs.mode == 'verdict'
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+          UNTRUSTED_INVENTORIES: ${{ inputs.inventories }}
+          POLICY_REF: ${{ steps.canon.outputs.ref }}
+          CANON_PATH: ${{ steps.canon.outputs.path }}
+          GH_TOKEN: ${{ github.token }}
+          # The shim resolves a version from the config, not from the
+          # install: without these the step dies "No version is set for
+          # shim: stele" even though the tool is installed. Measured on
+          # v1.34.0, whose verdict job failed exactly there.
+          MISE_GLOBAL_CONFIG_FILE: ${{ steps.canon.outputs.path }}/mise/config.toml
+          MISE_TRUSTED_CONFIG_PATHS: ${{ steps.canon.outputs.path }}
+          MISE_LOCKED: "1"
+        run: |
+          set -euo pipefail
+
+          if [[ ! ${UNTRUSTED_VERSION} =~ ^[0-9A-Za-z.+-]+$ ]]; then
+            echo "::error::version is not a plausible version string"
+            exit 1
+          fi
+          # The v0.16.3 VSA shipped a bare .../tree/ because the ref
+          # expression came back empty (#158). The carrier is the $/
+          # resolution now, but a signed verdict naming no policy must
+          # never recur — refuse rather than render.
+          if [[ -z ${POLICY_REF} ]]; then
+            echo "::error::POLICY_REF is empty — refusing a verdict with no policy"
+            exit 1
+          fi
+          command -v stele > /dev/null || {
+            echo "::error::stele is not on the runner — it is a belt tool"
+            exit 1
+          }
+
+          # The signer identity this verdict verifies against is derived
+          # from the canon tree the SAME resolution delivered — the
+          # sign.yml@<sha> uses: lines are the tree's only statement of
+          # the trusted signer (#314's verify-signed pattern).
+          # lint:signer-pin keeps every uses: line equal, so the
+          # derivation is single-valued; a tree that disagrees with
+          # itself fails here rather than guessing. Tree-shaped, so it
+          # stays in the workflow; everything verb-shaped moved to stele.
+          refs=$(grep -rhoE 'monumental-archive/signer/.github/workflows/sign\.yml@[0-9a-f]{40}' \
+            "${CANON_PATH}/.github/workflows/" || true)
+          pin=$(cut -d@ -f2 <<< "${refs}" | sort -u || true)
+          if [[ -z ${pin} ]]; then
+            echo "::error::the canon tree pins no sign.yml uses: — nothing to derive the signer identity from"
+            exit 1
+          fi
+          pin_count=$(wc -l <<< "${pin}" || true)
+          if [[ ${pin_count// /} != "1" ]]; then
+            emsg="the canon tree pins sign.yml at more than one digest — a tree states the trusted signer once:"
+            emsg+=" ${pin//$'\n'/ }"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+
+          # policy.digest pins WHICH canon tree rendered this verdict. The
+          # ref may be a tag; the commit is the digest the spec wants.
+          if [[ ${POLICY_REF} =~ ^[0-9a-f]{40}$ ]]; then
+            policy_sha="${POLICY_REF}"
+          else
+            policy_sha=$(gh api "repos/monumental-archive/.github/commits/${POLICY_REF}" --jq '.sha')
+          fi
+          if [[ ! ${policy_sha} =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::could not resolve the policy ref to a commit"
+            exit 1
+          fi
+
+          # The decision candidates: the release's SBOM assets, hashed
+          # into a manifest. WHICH one carries the decision is stele's
+          # by-attestation selection, not a filename guess (#354).
+          mkdir -p "${WORKDIR}/sbom-assets"
+          gh release download "v${UNTRUSTED_VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern "*.spdx.json" --dir "${WORKDIR}/sbom-assets"
+          (cd "${WORKDIR}/sbom-assets" && sha256sum ./*.spdx.json | sed 's|\./||' > "${WORKDIR}/sboms.sha256")
+          if [[ ! -s "${WORKDIR}/sboms.sha256" ]]; then
+            echo "::error::the release has no SBOM asset — the decision has no subject to verify against"
+            exit 1
+          fi
+          # The planned subset, filtered from the candidates by the list
+          # the decisions were minted over — the plan reaches the engine
+          # as DATA, never as policy, and is not re-derived from
+          # filenames here. A release with no plan passes no flag and
+          # keeps the whole-release invariant.
+          inv_flag=()
+          if [[ -n ${UNTRUSTED_INVENTORIES} ]]; then
+            planned=$(jq -r '.[] | select(. != "")' <<< "${UNTRUSTED_INVENTORIES}")
+            if [[ -n ${planned} ]]; then
+              : > "${WORKDIR}/inventories.sha256"
+              while IFS= read -r want; do
+                [[ -n ${want} ]] || continue
+                line=$(grep -F "  ${want}" "${WORKDIR}/sboms.sha256" || true)
+                [[ -n ${line} ]] || {
+                  echo "::error::the plan names ${want} but the release publishes no such inventory"
+                  exit 1
+                }
+                printf '%s\n' "${line}" >> "${WORKDIR}/inventories.sha256"
+              done <<< "${planned}"
+              inv_flag=(--inventories "${WORKDIR}/inventories.sha256")
+              n_inv=$(wc -l < "${WORKDIR}/inventories.sha256")
+              echo "::notice::planned inventories: ${n_inv// /}"
+            fi
+          fi
+
+          # Everything verb-shaped — the store fetch, the four
+          # verifying-artifacts comparisons, subject coverage equality,
+          # the source-revision fold, the release decision, and the
+          # predicate render — is `stele emit vsa` (stele#21): the
+          # predicate is a method on the verdict type, so a PASSED
+          # predicate cannot exist unearned (#208 as a compile-time
+          # fact). stele arrives as a released binary through the belt,
+          # per-platform checksums and attestation held in
+          # mise/mise.lock (stele#7). The verdict job therefore
+          # needs no Go toolchain to render a verdict.
+          # Naming no --trusted-root resolves one through TUF from the
+          # anchor pinned in the binary (stele#85, #516) — the
+          # SIGPIPE-prone `gh attestation trusted-root | head -1` dance
+          # and its head-is-the-root guess are retired.
+          stele emit vsa \
+            --policy "${CANON_PATH}/slsa/verify-policy.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "v${UNTRUSTED_VERSION}" \
+            --subjects "${WORKDIR}/verified.sha256" \
+            --sboms "${WORKDIR}/sboms.sha256" \
+            "${inv_flag[@]}" \
+            --signer-digest "${pin}" \
+            --machinery-digest "${policy_sha}" \
+            --policy-uri "https://github.com/monumental-archive/.github/blob/${policy_sha}/slsa/verify-policy.json" \
+            --out "${RUNNER_TEMP}/vsa-predicate.json" | tee "${WORKDIR}/emit-vsa.log"
+
+          # The fold's single answer, stated by stele for the enrichment
+          # step — never re-derived from whichever bundle survived a
+          # loop (#349 finding 7).
+          src=$(sed -n 's/^emit: source revision //p' "${WORKDIR}/emit-vsa.log")
+          if [[ ! ${src} =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::stele did not state the folded source revision"
+            exit 1
+          fi
+          echo "src=${src}" >> "${GITHUB_OUTPUT}"
+          # The resolved policy pin, for the enrichment predicate's
+          # policy descriptor — the same {uri, digest} the VSA carries,
+          # stated once here rather than re-resolved there. The sha256
+          # is of the policy document's bytes: stele's enrichment judge
+          # requires it (a consumer checks the bytes it fetched, not
+          # the forge's addressing), and the commit rides beside it.
+          echo "policy-sha=${policy_sha}" >> "${GITHUB_OUTPUT}"
+          policy_file_sha=$(sha256sum "${CANON_PATH}/slsa/verify-policy.json" | cut -d" " -f1)
+          echo "policy-file-sha=${policy_file_sha}" >> "${GITHUB_OUTPUT}"
+
+          # The subjects the verdict covers are exactly the manifest this
+          # run just re-proved — the same lines, no re-derivation.
+          cp "${WORKDIR}/verified.sha256" "${RUNNER_TEMP}/vsa-subjects.sha256"
+          echo "::notice::verdict rendered by stele emit vsa"
+      # The verdict signs ITSELF (#264): the predicate above is an output
+      # of the checks this job just ran, and the certificate this step
+      # mints names this file — so "who computed this verdict" is a
+      # cryptographic fact, not a field a caller could have supplied. The
+      # verdict lives in the attestation store alone (#209); consumers
+      # verify with --signer-workflow .../verify-release.yml
+      # (docs/runbook.md).
+      - name: Sign the verdict under this workflow's own identity
+        if: inputs.mode == 'verdict'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/vsa-subjects.sha256
+          predicate-type: https://slsa.dev/verification_summary/v1
+          predicate-path: ${{ runner.temp }}/vsa-predicate.json
+
+      # Enrichment (#200): the implicit build facts become verifiable
+      # claims — the toolbelt lock (from which every tool version and
+      # checksum is derivable), the pgrx base-image digests, and the
+      # released repository's own lockfiles at the attested source
+      # revision. SLSA makes resolvedDependencies completeness a SHOULD
+      # at every level and demands that at L3 provenance fields be
+      # generated or verified by the control plane — which is why these
+      # facts live in a COMPANION predicate computed entirely HERE, in
+      # the verification control plane, rather than as tenant-generated
+      # fields inside the platform's provenance: the stock provenance
+      # stays unforgeable, and the enrichment is signed by the identity
+      # that computed every byte of it. The source revision is read from
+      # the provenance this job just verified; repo lockfiles are
+      # fetched at exactly that commit; canon facts are read from the
+      # same pinned tree that rendered the verdict.
+      - name: Compute the enrichment facts (control plane only)
+        id: enrich
+        if: inputs.mode == 'verdict'
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+          UNTRUSTED_BASE_MAJORS: ${{ inputs.base-majors }}
+          POLICY_REF: ${{ steps.canon.outputs.ref }}
+          POLICY_SHA: ${{ steps.verdict.outputs.policy-sha }}
+          POLICY_FILE_SHA: ${{ steps.verdict.outputs.policy-file-sha }}
+          CANON_PATH: ${{ steps.canon.outputs.path }}
+          SRC: ${{ steps.verdict.outputs.src }}
+        run: |
+          set -euo pipefail
+          # The attested source revision, as the FOLD of every provenance
+          # the verdict verified — stated by stele emit vsa, whose
+          # verdict refuses any disagreement between bundles, never the
+          # survivor of a loop (#349 finding 7).
+          src="${SRC}"
+          if [[ ! ${src} =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the verdict step stated no source revision — enrichment would claim nothing"
+            exit 1
+          fi
+
+          deps='[]'
+          adddep() { # name, uri, sha256 (empty = digestless oci entry)
+            local entry
+            if [[ -n ${3} ]]; then
+              entry=$(jq -cn --arg n "${1}" --arg u "${2}" --arg d "${3}" \
+                '{name: $n, uri: $u, digest: {sha256: $d}}')
+            else
+              entry=$(jq -cn --arg n "${1}" --arg u "${2}" '{name: $n, uri: $u}')
+            fi
+            deps=$(jq -c --argjson e "${entry}" '. + [$e]' <<< "${deps}")
+          }
+
+          # Canon facts: the toolbelt lock and the base-image mapping,
+          # hashed from the pinned tree this verdict was rendered from.
+          lock_sha=$(sha256sum "${CANON_PATH}/mise/mise.lock" | cut -d" " -f1)
+          adddep "toolbelt-lock" \
+            "https://github.com/monumental-archive/.github/blob/${POLICY_REF}/mise/mise.lock" \
+            "${lock_sha}"
+          # Base-image facts are claimed exactly for the majors the
+          # CALLER DECLARES its build instantiated — the same rows of the
+          # pinned mapping the build matrix resolved, build and smoke
+          # both, since every leg runs in each. The history of getting
+          # this wrong is three proxies deep: #290 finding 5 fixed
+          # file-only releases claiming ten postgres containers by gating
+          # on image subjects; that under-claimed pgrx-extension tarballs
+          # built INSIDE the base (#310 finding 4); the boolean that
+          # replaced it emitted the ENTIRE pinned set for every declaring
+          # class, including FROM scratch images with no base at all
+          # (#316 finding 3). Subject shape cannot decide this and
+          # neither can a class-wide boolean — only the per-major
+          # declaration from the call site that ran the matrix (the #306
+          # pattern). A declaration the pinned tree cannot honour is a
+          # failure, not a silent skip.
+          if [[ -n ${UNTRUSTED_BASE_MAJORS// /} ]]; then
+            if [[ ! ${UNTRUSTED_BASE_MAJORS// /} =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+              echo "::error::base-majors must be comma-separated majors, got: ${UNTRUSTED_BASE_MAJORS}"
+              exit 1
+            fi
+            if [[ ! -f "${CANON_PATH}/docker/pgrx-base-images.toml" ]]; then
+              emsg="the caller declares base-image consumption but the pinned canon tree carries no"
+              emsg+=" docker/pgrx-base-images.toml"
+              echo "::error::${emsg}"
+              exit 1
+            fi
+            map_sha=$(sha256sum "${CANON_PATH}/docker/pgrx-base-images.toml" | cut -d" " -f1)
+            adddep "pgrx-base-images" \
+              "https://github.com/monumental-archive/.github/blob/${POLICY_REF}/docker/pgrx-base-images.toml" \
+              "${map_sha}"
+            mapping=$(python3 -c '
+          import json, tomllib
+          with open("'"${CANON_PATH}"'/docker/pgrx-base-images.toml", "rb") as f:
+              print(json.dumps(tomllib.load(f)))
+          ')
+            IFS=',' read -ra majors <<< "${UNTRUSTED_BASE_MAJORS// /}"
+            for pg in "${majors[@]}"; do
+              for role in build smoke; do
+                img=$(jq -r --arg pg "${pg}" --arg r "${role}" '.[$r][$pg] // empty' <<< "${mapping}")
+                if [[ -z ${img} ]]; then
+                  emsg="declared base major pg${pg} has no ${role} row in the pinned docker/pgrx-base-images.toml — the"
+                  emsg+=" declaration cannot be honoured"
+                  echo "::error::${emsg}"
+                  exit 1
+                fi
+                adddep "pgrx-base" "oci://docker.io/library/${img}" ""
+              done
+            done
+          fi
+
+          # The released repository's own lockfiles, at the attested
+          # revision — fetched from the commit the provenance names, so
+          # the claim is bound to the source that built, not to a branch
+          # that may have moved. Absence is normal (not every repo has
+          # every ecosystem); an absent file is simply not claimed.
+          for lf in Cargo.lock package-lock.json mise.toml; do
+            url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${src}/${lf}"
+            if curl -sSfL --retry 5 --retry-connrefused -o "${RUNNER_TEMP}/${lf}" "${url}" 2> /dev/null; then
+              lf_sha=$(sha256sum "${RUNNER_TEMP}/${lf}" | cut -d" " -f1)
+              adddep "${lf}" "${url}" "${lf_sha}"
+              echo "enriched: ${lf} at ${src}"
+            fi
+          done
+
+          # The neutral shape (#517): every identified thing is an
+          # in-toto ResourceDescriptor, so one digest rule judges all of
+          # them. `canon` was an org name inside a format that must be
+          # neutral and a bare ref moves — the policy travels as
+          # {uri, digest}, the same descriptor the VSA signed in this
+          # run already carries; `sourceRevision.repository` was a
+          # second spelling of `uri`.
+          if [[ ! ${POLICY_SHA} =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the verdict step stated no resolved policy pin — enrichment cannot name its policy"
+            exit 1
+          fi
+          if [[ ! ${POLICY_FILE_SHA} =~ ^[0-9a-f]{64}$ ]]; then
+            emsg="the verdict step stated no policy document digest — the judge"
+            emsg+=" requires the bytes pinned, not just the address"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          jq -cn \
+            --arg resource "pkg:github/${GITHUB_REPOSITORY}@v${UNTRUSTED_VERSION}" \
+            --arg repo "https://github.com/${GITHUB_REPOSITORY}" \
+            --arg src "${src}" \
+            --arg puri "https://github.com/monumental-archive/.github/blob/${POLICY_SHA}/slsa/verify-policy.json" \
+            --arg psha "${POLICY_SHA}" \
+            --arg pfsha "${POLICY_FILE_SHA}" \
+            --argjson deps "${deps}" \
+            '{
+              resourceUri: $resource,
+              sourceRevision: {uri: $repo, digest: {gitCommit: $src}},
+              policy: {uri: $puri, digest: {sha256: $pfsha, gitCommit: $psha}},
+              resolvedDependencies: $deps
+            }' > "${RUNNER_TEMP}/enrichment-predicate.json"
+          depcount=$(jq length <<< "${deps}")
+          echo "::notice::enrichment assembled: ${depcount} resolved dependencies"
+      - name: Sign the enrichment under this workflow's own identity
+        if: inputs.mode == 'verdict'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/vsa-subjects.sha256
+          predicate-type: https://monumental-archive.github.io/attestations/build-enrichment/v2
+          predicate-path: ${{ runner.temp }}/enrichment-predicate.json
+...

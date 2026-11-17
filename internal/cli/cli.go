@@ -191,6 +191,13 @@ usage:
                  advisory applies excuses it — one that admits,
                  withholds or claims a fix is reported on the finding
                  (--scan --vex --subject [--json])
+    signer-certificates  every certificate a transparency log holds
+                 for a declared signing workflow reconciles against
+                 a signing the population performed; read in chunks
+                 from a checkpoint the caller keeps, each done chunk
+                 written back, the rest reported outstanding
+                 (--policy --checkpoint --org|--repo [--start-at
+                 --budget --debt --json])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,

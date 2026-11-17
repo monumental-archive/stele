@@ -1,0 +1,139 @@
+# VEX statements become signed claims the moment they land on main. The
+# changed document in security/vex/ is signed through the org's one signer
+# (the OpenVEX predicate type is on its allowlist) over the digests of the
+# release artifacts its products name — so a consumer queries the verdict
+# from the attestation store (`gh attestation verify --predicate-type
+# https://openvex.dev/ns/v0.2.0`) without waiting for a release to carry
+# the raw document.
+#
+# ONE statement per merge, enforced: a VEX statement is a reviewed
+# decision, and a push that changes several has bundled decisions the way
+# the release flow refuses to bundle releases. The plan job fails loudly
+# on more than one changed document.
+#
+# The predicate-content contract sign.yml states: predicates must be
+# assembled in a job that runs no caller-supplied code. This workflow runs
+# in the canon on merged main — the document was reviewed into the tree,
+# and the assembly below reads it and the published checksums, nothing
+# else. Published releases are immutable, so the raw document rides the
+# NEXT release of each affected repository as an asset
+# (release/collect-vex.sh); this workflow is what makes the decision
+# public and verifiable now rather than at the next release.
+name: vex-attest
+
+on:
+  push:
+    branches: [main]
+    paths: [security/vex/*.openvex.json]
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Resolve the statement and its subjects
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      subjects: ${{ steps.collect.outputs.subjects }}
+      predicate: ${{ steps.collect.outputs.predicate }}
+      any: ${{ steps.collect.outputs.any }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The push range diff needs the before commit.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve subjects from the products the statement names
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # Changed documents only: re-signing every statement on every
+          # merge would pile duplicate attestations onto old digests. On
+          # dispatch (or an unusable before-sha) the most recently
+          # committed statement is the recovery target.
+          if [[ -n "${BEFORE:-}" ]] && git cat-file -e "${BEFORE}^{commit}" 2> /dev/null; then
+            files=$(git diff --name-only --diff-filter=AM "${BEFORE}..HEAD" \
+              -- "security/vex/*.openvex.json")
+          else
+            files=$(git log -1 --name-only --diff-filter=AM --format="" \
+              -- "security/vex/*.openvex.json")
+          fi
+          files=$(grep -v "^$" <<< "${files}" || true)
+          if [[ -z "${files}" ]]; then
+            echo "any=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::no changed statements"
+            exit 0
+          fi
+          n=$(wc -l <<< "${files}")
+          n="${n//[[:space:]]/}"
+          if [[ "${n}" -ne 1 ]]; then
+            echo "::error::more than one VEX document changed — one decision per merge, like one release per PR"
+            exit 1
+          fi
+          f="${files}"
+          jq -e '.["@context"] and .statements' "${f}" > /dev/null || {
+            echo "::error::${f} is not an OpenVEX document"
+            exit 1
+          }
+          # Products are the org contract from security/vex/README.md:
+          # pkg:github/monumental-archive/<repo>@<tag>. Every named
+          # release must exist and yield its checksums — a statement
+          # about artifacts we cannot resolve is refused, not skipped.
+          subjects=""
+          while IFS= read -r purl; do
+            [[ -n "${purl}" ]] || continue
+            if [[ ! "${purl}" =~ ^pkg:github/monumental-archive/([^@/]+)@(.+)$ ]]; then
+              echo "::error::${f}: product is not pkg:github/monumental-archive/<repo>@<tag>"
+              exit 1
+            fi
+            repo="${BASH_REMATCH[1]}"
+            tag="${BASH_REMATCH[2]}"
+            sums=$(gh release download "${tag}" --repo "monumental-archive/${repo}" \
+              --pattern checksums.txt --output - 2> /dev/null) || {
+              echo "::error::${f}: no checksums.txt on ${repo}@${tag}"
+              exit 1
+            }
+            subjects="${subjects}${sums}"$'\n'
+          # A jq failure here yields zero products, which the refusal
+          # below turns into a loud error — nothing is masked silently.
+          done < <(jq -r '.statements[].products[]?["@id"] // empty' "${f}" || true)
+          if [[ -z "${subjects//[[:space:]]/}" ]]; then
+            echo "::error::${f}: no resolvable products — a claim bound to nothing is not signed"
+            exit 1
+          fi
+          predicate=$(jq -c . "${f}")
+          count=$(grep -c . <<< "${subjects}") || true
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            printf "%s" "${subjects}"
+            echo "SUBJECTS_EOF"
+            echo "predicate=${predicate}"
+            echo "any=true"
+          } >> "${GITHUB_OUTPUT}"
+          echo "::notice::signing ${f} over ${count} subject(s)"
+
+  sign-vex:
+    name: Sign the statement
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    uses: monumental-archive/signer/.github/workflows/sign.yml@e50552beb52c8220c470e15702310561d7a3cfb1 # main
+    with:
+      subjects: ${{ needs.plan.outputs.subjects }}
+      predicate-type: https://openvex.dev/ns/v0.2.0
+      predicate: ${{ needs.plan.outputs.predicate }}
+      bundle-artifact: attestation-bundle-vex
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the claim
+      artifact-metadata: write # the signer creates the storage record

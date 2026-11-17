@@ -13,7 +13,7 @@ Four formats are defined here: the policy file, the release
 evidence manifest, the debt file, and the inventory plan. A change to any is a reviewed
 edit to this document first.
 
-`schema` is the refusal boundary: current **6**, the one epoch shared
+`schema` is the refusal boundary: current **8**, the one epoch shared
 by this policy, the verify policy and the report, so a bump cannot
 land on one document and miss another ([docs/versioning.md](versioning.md)).
 The gate fires before strict decoding, so another schema refuses as a
@@ -23,7 +23,7 @@ version mismatch, never as an unknown-field error.
 
 ```json
 {
-  "schema": 7,
+  "schema": 8,
   "debtFile": "security/attestation-debt.txt",
   "population": {
     "repositories": [
@@ -365,10 +365,14 @@ a finding.
 A target measuring something every repository has whatever it
 publishes asks **no track question at all**, and reads the roster:
 every entry in this section, in listing order. `assert permissions`
-is that target today. The caller/callee join reads workflow files,
-computes a requirement and compares it against a grant; it makes no
-claim about any release and consumes no attestation, so no track
-scopes it.
+and `assert signer-certificates` are those targets today. The
+caller/callee join reads workflow files, computes a requirement and
+compares it against a grant; it makes no claim about any release and
+consumes no attestation, so no track scopes it. A signer certificate
+is reconciled against the run that minted it, and a signing workflow
+signs for every track — a build's provenance, a source record, a VEX
+document — so the question is whether the run's repository is the
+population's at all.
 
 **Listing a repository here therefore means its workflow grants are
 audited, even when the same entry excludes it from every evidence
@@ -1398,3 +1402,162 @@ reusable checkout and either `--callers` for a checkout or
   identical from inside, and none of them may exit like a pass. A
   declared reusable tree the run holds no file from is refused for the
   same reason.
+
+## The signerCertificates section
+
+The signer-certificate watch (stele#387). A signing workflow's
+identity is the subject a certificate authority puts in every
+certificate it issues to that workflow, and a certificate
+transparency log records every one of them. A certificate minted
+by a push nobody reviewed looks, in the log, exactly like one minted
+by a release: so every certificate the log holds for a declared
+signer is reconciled against a signing the declared population
+performed, and one that does not reconcile is a finding. Declaring
+the section declares the obligation.
+
+```json
+"signerCertificates": {
+  "log": "https://ctfe.sigstore.dev/2022",
+  "signers": [
+    {
+      "workflow": "example-org/signer/.github/workflows/sign.yml",
+      "callers": ["example-org/.github"]
+    },
+    {
+      "workflow": "example-org/signer/.github/workflows/sign-source.yml",
+      "callers": ["example-org/.github", "example-org/tools"]
+    }
+  ]
+}
+```
+
+- `log` — the certificate transparency log's base URL, spelled
+  exactly as the trusted root spells it ([trusted-root.md](trusted-root.md)):
+  the root is what holds the log's key, so a URL it does not name is
+  refused, never read unverified. https only, and nothing past the
+  path — entries are not proven one by one against the tree head, so
+  the transport is what keeps one from being dropped in flight.
+- `signers` — the signing workflows watched, at least one. Each
+  `workflow` is `owner/repo/path` as a caller names it in `uses:`,
+  without the ref; the subject a certificate must carry to be this
+  signer's is the forge's web origin, the workflow, then `@`. A list
+  because how many signing workflows an organisation runs is policy,
+  and each has its own callers: every certificate is matched to
+  exactly one entry by its subject, and judged against that entry's
+  `callers` alone. A workflow named twice is refused.
+- `signers[].callers` — the `owner/name` repositories whose workflows
+  may call that signer, at least one: a signer nobody may call
+  reconciles no certificate.
+
+The identity is the subject AND the issuer: the policy's top-level
+`issuer` is required beside this section, and a certificate for the
+subject from another issuer is not the declared identity. The
+population is the root `population`, opened at the roster door (see
+[Which door a target opens](#which-door-a-target-opens)).
+
+### The reconciliation
+
+Only the run id and the Build Signer Digest D are taken from the
+certificate; everything else is read from the forge. A certificate
+reconciles only when all seven hold, each a finding by its own name
+when it does not:
+
+| condition | holds when |
+| --- | --- |
+| `run` | the run in the certificate exists, in a repository of the population |
+| `foreign` | every reusable workflow the run called belongs to a `callers` repository or is the signer workflow |
+| `signer-in-run` | the run called the signer workflow at exactly D |
+| `caller-branch` | every candidate caller file is at a commit on its repository's default branch |
+| `chain` | at least one candidate, read at that commit, has a `uses:` of the signer workflow pinned to D |
+| `direct` | outside `callers`, the run's top-level workflow does not call the signer itself |
+| `signer-branch` | D is on the signer repository's default branch |
+
+The candidates are the `callers` workflows the run called and — when
+the run is in a `callers` repository — its own top-level workflow at
+the run's head commit. "On the default branch" is decided from the
+repository's default branch as the forge names it and the fetched
+history of every branch at full depth: a commit that history does not
+hold is on no branch — a branch pushed, a certificate minted, the
+branch deleted — and fails `signer-branch` or `caller-branch` like any
+commit off the branch. Workflow files are read through the one
+workflow reader, by the platform's grammar: a candidate that is
+absent or does not parse pins nothing, and a top-level workflow that
+is absent or does not parse cannot be shown not to call the signer,
+so it fails `direct`. A certificate whose claims cannot be read at
+all is still a match and fails `signer-in-run` naming why.
+
+A run the forge answers 404 for is a finding on `run`: deleted cannot
+be told from never existed. Any other read that cannot be completed
+is not a finding. Each finding's subject is `CT index <n>`, its
+assertion the condition, and its detail the reason, the log, and the
+claims the certificate carried.
+
+### The reader and its checkpoint
+
+`stele assert signer-certificates --policy <file> --checkpoint <file>
+--org|--repo [--start-at <tree size>] [--budget <duration>]`, with
+the trusted-root flags every verifying verb takes.
+
+- The log's signed tree head is verified against the trusted root's
+  key for the log, and proven consistent with the head the checkpoint
+  recorded (get-sth-consistency) before any entry is read. A head
+  that does not extend the checkpoint's — a smaller tree, the same
+  size with another root, a proof that does not verify — is refused
+  by name and the checkpoint is left as it was.
+- Entries are read a page at a time, advancing by the number each
+  answer actually carried, and the last index read is `tree_size - 1`.
+  A log caps its answers and the cap is not the request
+  (`ctfe.sigstore.dev` served at most a thousand, aligned to multiples
+  of a thousand, on 2026-11-17). An answer with no entries before the
+  end is an error, never a loop.
+- The range is judged in chunks of at most 10,000 entries. A chunk is
+  done when every entry in it has been scanned and every match in it
+  reconciled; then the checkpoint is rewritten whole and atomically,
+  and only then are its findings recorded. Memory is bounded by one
+  chunk, never by the range.
+- The checkpoint is stele's own document, carrying its own version
+  ([versioning.md](versioning.md)):
+
+  ```json
+  {"schema": 1, "log": "https://ctfe.sigstore.dev/2022",
+   "treeHead": {"treeSize": 447703932, "timestamp": 1794921660000,
+     "rootHash": "<base64>", "signature": "<base64>"},
+   "next": 445241315}
+  ```
+
+  `treeHead` is the last head this reader verified, `next` the first
+  index not yet judged — everything below it was. Where the file is
+  kept between runs, and who is told about a finding, are the
+  caller's.
+- **No checkpoint and no `--start-at` is a refusal by name.**
+  `--start-at` founds a new checkpoint at that tree size and is
+  refused when the checkpoint file exists: starting is a decision a
+  person makes, never one a missing file makes.
+- A 429 is the log's pace and never a judgment — classified by the
+  one definition of a throttle every reader in stele shares, its
+  evidence printed with the refusal. A 5xx is the log failing, retried
+  on the same ladder and counted apart. Either way a wait the log
+  names (`Retry-After`) is honoured, else the reader backs off from
+  five seconds, doubling to a minute. `--budget` (default 20m) bounds
+  the run; when the next wait would reach it, the run stops at its
+  last done chunk.
+
+### Outcomes
+
+The existing report and exit codes. The population is the range: the
+entries between the checkpoint the run started from and the head it
+verified, which the log declared in a signed statement.
+
+- **0 PASS** — judged to the head it read, every match reconciled.
+- **1 FAIL** — at least one certificate does not reconcile. The
+  checkpoint still advances: a finding is a judgment.
+- **4 CANNOT_JUDGE** — a range is outstanding: the budget ended, the
+  log or the forge throttled, a read did not complete. The report's
+  facts name the outstanding range, why the run stopped, and the tree
+  head the checkpoint now records; everything before the checkpoint's
+  `next` was judged. A backlog is a normal state — it costs runs,
+  never memory, and is reported outstanding, never as a failure of
+  what was read. A run that stops partway still carries the findings
+  of every chunk it finished, under CANNOT_JUDGE: a caller acting on
+  findings reads the report's findings, whatever its verdict, because
+  the next run starts past them.

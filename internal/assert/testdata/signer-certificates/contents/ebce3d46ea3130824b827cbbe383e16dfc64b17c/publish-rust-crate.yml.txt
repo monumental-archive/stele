@@ -1,0 +1,256 @@
+# The rust-crate registry publish, extracted from build-rust-crate.yml
+# (#118) so the repro gate can sit between build and upload: crates.io
+# is yank-only, so this is the class's irreversible step and it must run
+# downstream of the bit-for-bit proof, not inside the build workflow
+# where nothing could be gated between them.
+#
+# Trusted publishing survives the extraction by construction: crates.io
+# pins the CALLER's entry filename (`workflow_ref`, never
+# `job_workflow_ref`), and `environment: publish` resolves against the
+# caller — both facts measured before the original split
+# (docs/slsa-reference.md).
+---
+name: publish-rust-crate
+
+"on":
+  workflow_call:
+    inputs:
+      exclude:
+        # forwarding: universal
+        description: >
+          Comma-separated workspace members this class must not touch —
+          the same list the build declared.
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    # Resolves against the CALLER's repository — measured. That is what
+    # sets the OIDC `environment` claim, which crates.io can pin in the
+    # trusted-publisher configuration alongside owner, repo and the
+    # caller's entry filename.
+    environment: publish
+    # capability-boundary: this job holds `id-token: write` and runs no
+    # user-defined build step. It checks out caller source because
+    # `cargo publish` packages from a directory and cannot upload a
+    # pre-built .crate, but `--no-verify` skips the build — "Don't verify
+    # the contents by building them" — so no build.rs, proc macro or test
+    # executes here. The identity it can mint is a registry token scoped to
+    # crates the caller already owns; the org's Sigstore identity lives in
+    # `signer` under a different job_workflow_ref and is unreachable from
+    # this job.
+    permissions:
+      contents: read
+      id-token: write # crates.io trusted publishing, no token secret
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+      # Who is calling, for registries whose access policy asks (#907).
+      # Named here rather than inline so the string is one definition
+      # per workflow, and so `set -u` fails loudly if a curl is moved
+      # out from under it rather than silently sending nothing.
+      ORG_USER_AGENT: >-
+        monumental-archive-publish
+        (https://github.com/monumental-archive/.github)
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin — the
+          # v0.18.2 darwin leg pulled same-day mise 2026.8.4 while every
+          # pinned site ran 2026.8.3 (#117: nothing unpinned on an attested
+          # path, the installer included).
+          version: 2026.11.4
+          cache: false
+
+      - name: Resolve the exclusion flags
+        env:
+          UNTRUSTED_EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          set -euo pipefail
+          flags=""
+          IFS=',' read -ra members <<< "${UNTRUSTED_EXCLUDE// /}"
+          for m in "${members[@]}"; do
+            if [[ -n ${m} ]]; then flags="${flags} --exclude ${m}"; fi
+          done
+          echo "EXCLUDE_FLAGS=${flags}" >> "${GITHUB_ENV}"
+      - name: Publish
+        # Resumable: a crate already at this version is a completed step,
+        # not a failure. crates.io is yank-only, so re-running a partly
+        # finished release must converge rather than abort.
+        #
+        # `cargo publish --workspace` does not do that by itself: it
+        # refuses the whole workspace when any member already exists —
+        # edtf v1.3.3's crates leg died that way on every re-run (#1218).
+        # So the step asks the index first, and excludes what is there.
+        #
+        # The exchanged token is single-use — crates.io records the JWT's
+        # jti and rejects a replay — so each invocation mints its own.
+        run: |
+          set -euo pipefail
+          # Bash 3.2-clean (no mapfile, no ${x,,}, no empty-array
+          # expansion under -u): release/test_publish_rust_crate.py runs
+          # these exact bytes on a Mac, where /bin/bash is 3.2.
+          #
+          # 1. The members this run would publish: workspace members with
+          # crates.io among their registries (`publish` null means any),
+          # less the caller's exclusions, with their versions.
+          excluded=" "
+          for word in ${EXCLUDE_FLAGS}; do
+            if [[ ${word} != --exclude ]]; then excluded="${excluded}${word} "; fi
+          done
+          metadata=$(cargo metadata --format-version 1 --no-deps --locked)
+          members=$(jq -r '
+            .workspace_members as $ws
+            | .packages[]
+            | select(.id as $id | $ws | index($id))
+            | select(.publish == null or (.publish | index("crates-io")))
+            | "\(.name)\t\(.version)"' <<< "${metadata}")
+          target_dir=$(jq -r '.target_directory' <<< "${metadata}")
+
+          # 2. Ask the sparse index, the static host, for each exact
+          # name and version. Layout from cargo's index format: 1/<n>,
+          # 2/<n>, 3/<first char>/<n>, else <n[0:2]>/<n[2:4]>/<n>, name
+          # lowercased; the file is one JSON object per published
+          # version. A 404 or a file without the version is "not
+          # published"; any other answer fails the step by status and is
+          # never read as "not published". The org's User-Agent rides
+          # anyway — the API host's policy is the reason it exists (#907).
+          index_file=$(mktemp)
+          held="" # name<TAB>version<TAB>index checksum, one per line
+          pending=0
+          while IFS=$'\t' read -r name version; do
+            [[ -n ${name} ]] || continue
+            if [[ ${excluded} == *" ${name} "* ]]; then continue; fi
+            lower=$(tr '[:upper:]' '[:lower:]' <<< "${name}")
+            case ${#lower} in
+              1) path="1/${lower}" ;;
+              2) path="2/${lower}" ;;
+              3) path="3/${lower:0:1}/${lower}" ;;
+              *) path="${lower:0:2}/${lower:2:2}/${lower}" ;;
+            esac
+            url="https://index.crates.io/${path}"
+            status=$(curl -sS -o "${index_file}" -w '%{http_code}' \
+              -H "User-Agent: ${ORG_USER_AGENT}" "${url}") || true
+            case ${status} in
+              200)
+                cksum=$(jq -r --arg v "${version}" \
+                  'select(.vers == $v) | .cksum' "${index_file}")
+                ;;
+              404) cksum="" ;;
+              *)
+                echo "::error::the crates.io index answered ${status:-nothing}" \
+                  "for ${name} (${url}); an unread index is not \"not published\""
+                exit 1
+                ;;
+            esac
+            if [[ -n ${cksum} ]]; then
+              held="${held}${name}"$'\t'"${version}"$'\t'"${cksum}"$'\n'
+            else
+              pending=$((pending + 1))
+            fi
+          done <<< "${members}"
+
+          # 3 and 5. A member on the index at this version is skipped only
+          # if it is the same bytes: package it here (`--no-verify`, so no
+          # build runs, as for the publish) and compare the .crate's
+          # sha256 with the index's `cksum`. A resumed release must be
+          # resuming the release that was cut, not a different one.
+          skip_flags=""
+          if [[ -n ${held} ]]; then
+            package_flags=""
+            while IFS=$'\t' read -r name version cksum; do
+              if [[ -n ${name} ]]; then package_flags="${package_flags} -p ${name}"; fi
+            done <<< "${held}"
+            # shellcheck disable=SC2086  # the flags are flag-shaped on purpose
+            cargo package --locked --no-verify ${package_flags}
+            mismatched=0
+            while IFS=$'\t' read -r name version cksum; do
+              [[ -n ${name} ]] || continue
+              crate="${target_dir}/package/${name}-${version}.crate"
+              local_sum=$(sha256sum "${crate}" | cut -d' ' -f1)
+              if [[ ${local_sum} != "${cksum}" ]]; then
+                echo "::error::${name} ${version} is on crates.io with" \
+                  "checksum ${cksum}, but this tree packages ${local_sum}"
+                mismatched=1
+                continue
+              fi
+              echo "${name}: already on crates.io at ${version}, skipped"
+              skip_flags="${skip_flags} --exclude ${name}"
+            done <<< "${held}"
+            if [[ ${mismatched} -ne 0 ]]; then exit 1; fi
+          fi
+
+          # 4. Nothing left is a finished leg, not a failure — and it
+          # mints no token it would not use.
+          if [[ ${pending} -eq 0 ]]; then
+            echo "every crate this release publishes is already on" \
+              "crates.io at its version; nothing to publish"
+            exit 0
+          fi
+
+          # Trusted publishing, by hand rather than through an action.
+          # This is the one job in the organisation holding `id-token:
+          # write` beside a checkout of caller source, and third-party
+          # code belongs there least of all — the same reasoning that
+          # kept the runner-hardening agent out of `signer`.
+          #
+          # Contract read from crates.io's own exchange handler:
+          #   POST /api/v1/trusted_publishing/tokens  {"jwt": "<oidc>"}
+          #   -> {"token": "<short-lived crates.io token>"}
+          # The audience is `crates.io`. Neither token is ever printed,
+          # and the exchanged one is masked before it can reach a log.
+          oidc=$(curl -sSf \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=crates.io" | jq -r '.value')
+          body=$(jq -nc --arg jwt "${oidc}" '{jwt: $jwt}')
+          # THE USER-AGENT IS LOAD-BEARING (#907). crates.io's data
+          # access policy requires a request to identify who is making
+          # it, and its protection layer refuses an unidentified one
+          # BEFORE any trusted-publishing validation happens. Without
+          # this header the exchange dies as HTTP 403 carrying only:
+          #
+          #   "We are unable to process your request at this time. This
+          #    usually means that you are in violation of our API data
+          #    access policy (https://crates.io/data-access). Please
+          #    email help@crates.io and provide the request id <uuid>"
+          #
+          # which names neither the header nor the endpoint, and reads
+          # like a trust-configuration mismatch — three of edtf v1.3.2's
+          # release runs were spent looking at its publisher config,
+          # which was correct the whole time. Measured 2026-08-24 with a
+          # deliberately invalid JWT, so the ONLY difference between the
+          # two requests is this line: UA-less answers 403 with the
+          # boilerplate above, and with it the same request reaches real
+          # validation and answers 400 "Failed to decode JWT".
+          #
+          # If this 403 ever returns, the policy has tightened again —
+          # look at the header before looking at the publisher config.
+          token=$(curl -sSf -X POST \
+            https://crates.io/api/v1/trusted_publishing/tokens \
+            -H 'content-type: application/json' \
+            -H "User-Agent: ${ORG_USER_AGENT}" \
+            --data "${body}" | jq -r '.token')
+          echo "::add-mask::${token}"
+          # The exchanged token is single-use: crates.io records the JWT's
+          # jti and rejects a replay, so a resumed release mints its own
+          # rather than reusing one.
+          # shellcheck disable=SC2086  # the flags are flag-shaped on purpose
+          CARGO_REGISTRY_TOKEN="${token}" \
+            cargo publish --workspace --locked --no-verify ${EXCLUDE_FLAGS} ${skip_flags}
+...

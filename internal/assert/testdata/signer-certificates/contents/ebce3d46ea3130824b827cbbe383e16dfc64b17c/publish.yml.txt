@@ -1,0 +1,2179 @@
+# Release phase 2, org canon: the orchestrator. A versioned repository's
+# entire phase-2 obligation is one file holding one `uses:` line:
+#
+#   # .github/workflows/publish.yml — the filename is canon, see below
+#   jobs:
+#     publish:
+#       uses: monumental-archive/.github/.github/workflows/publish.yml@<sha> # vX.Y.Z
+#       with:
+#         classes: rust-crate
+#
+# THE FILENAME IS LOAD-BEARING. Both crates.io and npm pin the *caller's*
+# entry workflow filename, taken from the `workflow_ref` claim — never
+# `job_workflow_ref`. Renaming a caller's publish.yml breaks trusted
+# publishing with nothing local going red. See docs/slsa-reference.md.
+#
+# The step order below is not rearrangeable, and it lives here rather than
+# in each caller precisely so that it cannot be rearranged:
+#
+#   build (twice, independently) -> smoke test -> repro gate (every
+#   irreversible step blocks on the bit-for-bit proof, #118) -> registry
+#   publish / index tag -> pull the published bytes back and prove
+#   them -> attest -> verify as a stranger would -> publish the release ->
+#   verdict (every class: re-prove the now-immutable public artifacts,
+#   open their evidence, sign the VSA into the attestation store)
+#
+# The reusable workflows below are referenced relatively (`./`). Measured
+# in the lab: a relative reference resolves against THIS repository, at the
+# SAME COMMIT the caller pinned — not against the caller, and not against
+# this repository's default branch. So one caller SHA pins the orchestrator,
+# every build workflow, the verifier and the attach step atomically. That
+# property is why there is no self-referential SHA to bootstrap.
+#
+# capability-boundary: several jobs here declare `id-token: write` — the
+# `sign*` jobs, the `verify*`/`vsa*` jobs, and `commit-point`. None of
+# them runs caller-supplied code. The sign and verdict jobs are `uses:`
+# of canon workflows (the grant is passed down to `signer`, which is
+# where it is spent); `commit-point` is defined here with steps that
+# judge other jobs' results and carries its own marker at the job. The
+# jobs that DO run caller-supplied build steps are every `build*` and
+# `repro-build*` job, and they are granted `contents: read` (plus
+# `packages: write` for the image classes) and never `id-token: write`.
+# The belt lint is file-scoped rather than job-scoped, so this exception
+# is written down rather than assumed.
+#
+# `uses:` accepts no expressions — GitHub's context-availability table lists
+# no contexts for `jobs.<job_id>.uses` — so classes are dispatched by an
+# `if:` per job rather than by interpolating the input into a path.
+#
+# PHASES (#349 finding 1). Every job carries a `# phase:` marker on the
+# line above its id — admit, build, prove, commit-point, publish,
+# attest or record — in the same marker idiom as `capability-boundary:`
+# and `unattested-path:`. `record` is the one phase that is not on the
+# way to shipping anything: it runs after the graph settles, writes down
+# what happened and reaches nothing irreversible, so it is terminal by
+# lint (nothing may need it) and holds no `id-token: write` — a phase
+# outside the barrier must not be a route around it.
+#
+# The `commit-point` job is the single barrier
+# between proof and consequence: every proof the release requires fans
+# into it, it FAILS (visibly, not skips) if any proof is not `success`,
+# and every `publish` and `attest` job reaches the irreversible world
+# only through it. `needs` cannot express a barrier across a workflow
+# boundary, which is one more reason this stays one workflow.
+# `lint:release-phases` enforces the shape: exactly one marker per job,
+# one commit-point whose needs equal `guard` plus every prove job —
+# equality, so a proof added without wiring reddens instead of silently
+# not gating — and no publish or attest job whose needs bypass it. The shape exists because it was
+# violated: on lab v0.20.0 the SBOM/triage gate failed at 18:26:58 and
+# npm publish started eleven seconds later, because nothing publish-side
+# depended on it — the graph raced and the org had merely been winning.
+---
+name: publish
+
+"on":
+  # forwarding-default: discretionary — consumer surface; the defaults are the API, callers state only what they use
+  workflow_call:
+    inputs:
+      classes:
+        description: >
+          Artifact classes, comma-separated. One shared build workflow per
+          class; callers declare inputs, not steps.
+
+          A repository may need several in one release and most do:
+          iiif-server ships an OCI image AND musl/macOS binaries while
+          publishing no crates at all, and edtf publishes crates, a
+          binary, an image and a wasm package. A scalar here would have
+          forced such a repository back into writing its own steps, which
+          is the thing this design exists to prevent.
+
+          `workflow_call` inputs are only string, boolean or number — there
+          is no list type — so this is a string and the jobs below gate on
+          `contains()`. A class that is not implemented fails the guard
+          rather than silently publishing nothing.
+        required: true
+        type: string
+      dry-run:
+        description: >
+          Rehearsal. Build, package, sign and attach, but exchange no
+          registry token, upload nothing to a registry, and leave the
+          release a draft. The verifier proves the packaged bytes against
+          themselves rather than against the registry, so the shape of the
+          run is identical and only the irreversible steps are absent.
+          This is how the release lab exercises the chain, and how a
+          production repository rehearses before its first real release.
+        required: false
+        type: boolean
+        default: false
+      dockerfile:
+        description: Dockerfile path, for the oci-image class.
+        required: false
+        type: string
+        default: Dockerfile
+      context:
+        description: Build context, for the oci-image class.
+        required: false
+        type: string
+        default: .
+      smoke-test:
+        description: >
+          Executable proving the image does its one job, for the oci-image
+          class. Run on the loaded image before anything is published, and
+          again on the bytes pulled back from the registry.
+        required: false
+        type: string
+        default: ""
+      prepare:
+        description: >
+          Executable materialising build artifacts into the context before
+          the image build, for the oci-image class — the compile belongs
+          here, in the caller's mise-pinned toolchain, never inside the
+          Dockerfile (#295). Receives the architecture as $1. Runs
+          identically on both repro-gate legs. For a Rust binary prefer
+          `binary-crate` below and delete the script; `prepare` is for
+          materialisation a declaration cannot express, and the two are
+          refused together.
+        required: false
+        type: string
+        default: ""
+      binary-crate:
+        description: >
+          Directory of the crate whose binary the image ships, for the
+          oci-image class (#775). The class builds it through the
+          rust-binary class's own definition — same pinned toolchain,
+          same reproducibility flags, same inventory plan — and installs
+          the binaries at `<context>/dist/`, so a Rust-backed image needs
+          no prepare script at all. Requires `rust` and
+          `cargo:cargo-auditable` in the caller's mise config, like every
+          other class that compiles Rust.
+        required: false
+        type: string
+        default: ""
+      image-title:
+        description: >
+          org.opencontainers.image.title, for the image classes. Editorial
+          only — registry UI garnish. Defaults to the repository name.
+          Provenance facts (source, revision, version, created, licenses)
+          are never inputs: they are resolved and validated by the facts
+          job before anything builds.
+        required: false
+        type: string
+        default: ""
+      image-description:
+        description: >
+          org.opencontainers.image.description, for the image classes.
+          Editorial only; defaults to the repository description, and is
+          omitted when neither exists.
+        required: false
+        type: string
+        default: ""
+      binary-targets:
+        description: >
+          Target subset for the rust-binary class; defaults to the canon
+          four. The build's plan job refuses anything outside canon.
+        required: false
+        type: string
+        default: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin
+      binary-smoke-test:
+        description: >
+          Executable proving a built binary does its one job, for the
+          rust-binary class. Receives the staged-binaries directory and the
+          target triple; runs on every leg, on that leg's own hardware.
+        required: false
+        type: string
+        default: ""
+      go-targets:
+        description: >
+          Target subset for the go-binary class, named <goos>-<goarch>;
+          defaults to the canon four. The build's plan job refuses
+          anything outside canon.
+        required: false
+        type: string
+        default: linux-amd64,linux-arm64,darwin-amd64,darwin-arm64
+      go-smoke-test:
+        description: >
+          Executable proving a built binary does its one job, for the
+          go-binary class. Receives the staged-binaries directory and the
+          target; runs on every leg, on that leg's own hardware.
+        required: false
+        type: string
+        default: ""
+      crate-dir:
+        description: Directory of the wasm crate, for the wasm-npm class.
+        required: false
+        type: string
+        default: .
+      exclude:
+        description: >
+          Comma-separated workspace members the rust-crate and rust-binary
+          classes must not touch — the pgrx-extension crate above all.
+        required: false
+        type: string
+        default: ""
+      npm-scope:
+        description: npm scope (without the @), for the wasm-npm class.
+        required: false
+        type: string
+        default: ""
+      extension-crate-dir:
+        description: >
+          Directory of the extension crate, for the pgrx-extension class.
+          Required when the class is requested (its build refuses to guess
+          which crate is the extension).
+        required: false
+        type: string
+        default: ""
+      pg-majors:
+        description: PG majors for the pgrx-extension class.
+        required: false
+        type: string
+        default: 14,15,16,17,18
+      extension-smoke-test:
+        description: >
+          Executable proving the packaged extension does its one job, for
+          the pgrx-extension class. Runs inside stock postgres containers
+          of both supported distros, per cell.
+        required: false
+        type: string
+        default: ""
+      sbom-basename:
+        description: >
+          Basename for the SPDX SBOM release asset. The asset must be named
+          `<something>.spdx.json`: Scorecard's SBOM check matches
+          `.+\.(…|spdx.json|…)`, so a bare `spdx.json` scores nothing and
+          an SBOM that never reaches a release asset caps the check at 5.
+          Defaults to the caller's repository name.
+        required: false
+        type: string
+        default: ""
+      mint-doi:
+        description: >
+          Mint a Zenodo version DOI after the release publishes. Needs the
+          zenodo-token secret. The DOI comes last of all — after proof,
+          after publish — like everything else.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      app-private-key:
+        description: Tag-mint App private key, for publishing the release
+        required: true
+      zenodo-token:
+        description: Zenodo token (deposit:write + deposit:actions); only with mint-doi
+        required: false
+    outputs:
+      version:
+        description: The version published, without the leading v.
+        value: ${{ jobs.guard.outputs.version }}
+
+permissions: {}
+
+jobs:
+  # Nothing runs until the ref is proven to be a tag. A publish dispatched
+  # from a branch would attest a moving pointer, and Sigstore is
+  # append-only: that mistake is permanent, and it has already happened
+  # once in this organisation's history.
+  # phase: admit
+  guard:
+    name: Refuse anything that is not a release tag
+    runs-on: ubuntu-26.04
+    permissions: {}
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      # The class list the EVIDENCE declares, which is not always the
+      # list the caller requested (#843). See the derivation below.
+      classes: ${{ steps.check.outputs.classes }}
+      # The class an image leg's inventory plan names, empty when no
+      # crate is declared. Derived here so the name exists once.
+      image-class: ${{ steps.check.outputs.image-class }}
+      # The class the per-major extension images are attributed to
+      # (#1168), empty when no extension is declared. Same reason.
+      extension-image-class: ${{ steps.check.outputs.extension-image-class }}
+    steps:
+      - name: Check the ref and the class
+        id: check
+        env:
+          UNTRUSTED_CLASSES: ${{ inputs.classes }}
+          UNTRUSTED_BINARY_CRATE: ${{ inputs.binary-crate }}
+        run: |
+          set -euo pipefail
+          if [[ ${GITHUB_REF} != refs/tags/v* ]]; then
+            echo "::error::publish runs on v* tags only, got ${GITHUB_REF}"
+            echo "::error::dispatching from a branch would attest a moving pointer"
+            exit 1
+          fi
+          IFS=',' read -ra requested <<< "${UNTRUSTED_CLASSES// /}"
+          if ((${#requested[@]} == 0)); then
+            echo "::error::no classes requested — a release that builds nothing is not a release"
+            exit 1
+          fi
+          # The one spelling of the crate-built image class (#843). It is
+          # written here and nowhere else in the machinery — so the
+          # declaration/producer marker `lint:plan-producers` joins to
+          # the policy is written here too, beside the name, rather than
+          # in the image leg that is GIVEN the class and must not state
+          # it a second time (#833).
+          #
+          # plan-producer: oci-image-crate sbom-image-
+          #
+          # The job hands
+          # it to the image leg as the class its inventory plan names, and
+          # to the fan-in as the class the evidence manifest declares, so
+          # the plan and the manifest cannot disagree about which class
+          # built the image.
+          image_class="oci-image-crate"
+          # The class list the EVIDENCE declares, derived from the same
+          # `binary-crate` fact that decides whether the image leg emits
+          # an inventory plan at all (#843). The oci-image class carried
+          # two obligation shapes under one name — a Dockerfile-only
+          # image owes no inventory and a crate-built one owes an
+          # `sbom-image-*` document — and the class is the unit of
+          # obligation, so the two shapes are two classes. The caller
+          # still declares `oci-image` and declares its crate; which
+          # class that IS is machinery's answer, never a second caller
+          # declaration to drift against the first.
+          #
+          # The extension images are the same ruling one class over
+          # (#1168). A pgrx release ships tarballs AND per-major images,
+          # built by different legs, signed separately, judged by
+          # separate verdicts — and owing different things: the tarball
+          # leg consumes the pinned base images and claims them, while
+          # the image leg is FROM scratch plus a COPY and claims none.
+          # Under one class name the evidence manifest could only
+          # attribute an image to the class that owes the base claims,
+          # and the audit would then demand them of an artifact whose
+          # verdict correctly makes none. Two shapes, two classes; the
+          # caller still declares `pgrx-extension` alone.
+          extension_image_class=""
+          declared=()
+          for c in "${requested[@]}"; do
+            case "${c}" in
+              rust-crate | oci-image | rust-binary | go-binary | wasm-npm | pgrx-extension | source-archive) ;;
+              *)
+                echo "::error::unknown class requested"
+                exit 1
+                ;;
+            esac
+            if [[ ${c} == oci-image && -n ${UNTRUSTED_BINARY_CRATE} ]]; then
+              declared+=("${image_class}")
+            else
+              declared+=("${c}")
+            fi
+            if [[ ${c} == pgrx-extension ]]; then
+              extension_image_class="pgrx-extension-image"
+              declared+=("${extension_image_class}")
+            fi
+          done
+          # A class input naming no requested class is a declaration
+          # that does nothing — which is how a caller comes to believe a
+          # binary is being built for an image nobody declared (#775).
+          # Judged here, in the five-second job, rather than as a puzzle
+          # in a green release that shipped a Dockerfile's stale COPY.
+          if [[ -n ${UNTRUSTED_BINARY_CRATE} ]] && [[ ,${UNTRUSTED_CLASSES// /}, != *,oci-image,* ]]; then
+            echo "::error::binary-crate is declared but oci-image is not among the classes — it would build nothing"
+            exit 1
+          fi
+          # Past that refusal, a declared crate means oci-image was
+          # requested, so the image leg has a class to plan under. Stated
+          # as its own output rather than re-derived at the call site:
+          # the leg writes the name it is given.
+          if [[ -z ${UNTRUSTED_BINARY_CRATE} ]]; then
+            image_class=""
+          fi
+          version="${GITHUB_REF#refs/tags/v}"
+          classes_out=$(printf '%s,' "${declared[@]}")
+          classes_out="${classes_out%,}"
+          {
+            echo "version=${version}"
+            echo "classes=${classes_out}"
+            echo "image-class=${image_class}"
+            echo "extension-image-class=${extension_image_class}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "::notice::publishing ${#requested[@]} class(es) at version ${version}"
+          echo "::notice::the evidence declares ${classes_out}"
+  # Every fact the image classes will assert — OCI annotations and config
+  # labels — is resolved HERE, once, before anything is built, and the
+  # builds consume the map without deriving anything. One resolution per
+  # release also means a repository shipping several image classes cannot
+  # disagree with itself about revision, licence or created. The guard
+  # stays `permissions: {}` and untouched: this is its own job precisely
+  # so that resolving facts (which needs a checkout and a token) never
+  # contaminates the job whose identity is "nothing runs until it passes".
+  # It executes no caller code — it reads the caller's tree, and failing
+  # here costs five seconds instead of forty minutes of built images.
+  # phase: admit
+  facts:
+    name: Resolve the image facts
+    needs: guard
+    if: contains(inputs.classes, 'oci-image') || contains(inputs.classes, 'pgrx-extension')
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    outputs:
+      facts: ${{ steps.resolve.outputs.facts }}
+      epoch: ${{ steps.resolve.outputs.epoch }}
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+    steps:
+      - name: Check out caller repository at the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        # taplo comes from the belt: the licence and repository fields are
+        # read with a TOML parser, never grep. No tool cache in a job
+        # whose output every image build consumes.
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.4
+          cache: false
+
+      # `stele derive facts` (stele#40): the whole fact set from a NAMED
+      # checkout — the instant comes from the released commit, the
+      # licence from the manifest with the forge's detection as the
+      # fallback, the source URL held against the manifest's own
+      # repository field, and hygiene enforced at construction. The
+      # licence grammar is somebody else's spec, and stele adopts it
+      # as a library instead of reimplementing it.
+      - name: Resolve and validate the facts
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          IMAGE_TITLE: ${{ inputs.image-title }}
+          IMAGE_DESCRIPTION: ${{ inputs.image-description }}
+        run: |
+          set -euo pipefail
+          command -v stele > /dev/null || {
+            echo "::error::stele is not on the runner — it is a belt tool"
+            exit 1
+          }
+          out=$(stele derive facts \
+            --archetype versioned \
+            --version "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --server-url "${GITHUB_SERVER_URL}" \
+            --git-dir . \
+            --title "${IMAGE_TITLE}" \
+            --description "${IMAGE_DESCRIPTION}")
+          grep -E '^(facts|epoch)=' <<< "${out}" >> "${GITHUB_OUTPUT}"
+          grep -Ev '^(facts|epoch)=' <<< "${out}" || true
+  # The release SBOM, class-shaped: binary-derived for go-binary (read
+  # out of the shipped bytes by stele, docs in stele's binary-sbom.md),
+  # lock-derived where a Cargo.lock or go.mod is tracked, GitHub's
+  # dependency-graph export for manifest-less repos
+  # (docs/dependency-track.md). Its own job, like facts: it reads the
+  # caller's tree and the build's artifacts and runs belt tooling, never
+  # caller code, and the artifact fans into attach via the release-*
+  # pattern. Runs for every class — a release without an inventory caps
+  # Scorecard's SBOM check and blinds audit:blast-radius.
+  # phase: prove
+  sbom:
+    name: Generate the release SBOM
+    outputs:
+      # The planned inventories, as the decision leg's matrix. Derived
+      # from the JUDGED plan set and nowhere else (stele#151), so what
+      # is decided over is exactly what was planned and judged. `[""]`
+      # is the no-plan release: one decision over the whole release,
+      # which is the invariant every release before per-artifact
+      # inventories shipped under (stele#158).
+      inventories: ${{ steps.inventories.outputs.list }}
+    needs:
+      - guard
+      - build
+      - build-go
+      - build-binary
+      - build-wasm
+      - build-extension
+      - build-oci
+    # The go-binary class reads its SBOM out of the shipped binaries
+    # (stele#46), and the manifest-tracking classes hand this job their
+    # inventory plans (#537) — the oci-image class among them since it
+    # took a declared binary-crate (#775, closing #773), and the
+    # rust-crate class since #833 — the artifact-to-package mapping each
+    # build leg holds as its own inputs, consumed at the only moment it
+    # is certain. So this job sits downstream of those builds; for a
+    # class not requested the edge is vacuous — a skipped build admits,
+    # a failed one refuses. The barrier still holds: this stays a prove
+    # job, and the commit point refuses every publish on its failure.
+    if: >-
+      ${{ !cancelled() && needs.guard.result == 'success' &&
+          (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+          (needs.build-go.result == 'success' || needs.build-go.result == 'skipped') &&
+          (needs.build-binary.result == 'success' || needs.build-binary.result == 'skipped') &&
+          (needs.build-wasm.result == 'success' || needs.build-wasm.result == 'skipped') &&
+          (needs.build-extension.result == 'success' || needs.build-extension.result == 'skipped') &&
+          (needs.build-oci.result == 'success' || needs.build-oci.result == 'skipped') }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+    steps:
+      - name: Check out caller repository at the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        # trivy comes from the belt. No tool cache in a job whose output
+        # ships with the release.
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.4
+          cache: false
+
+      - name: Fetch the shipped binaries (go-binary)
+        if: contains(inputs.classes, 'go-binary')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build-go.outputs.artifact-name }}
+          path: shipped-archives
+
+      - name: Unpack the legs the SBOM will describe
+        if: contains(inputs.classes, 'go-binary')
+        # One directory per archive: two legs both ship the same command
+        # basename, and a flat extraction would silently overwrite one
+        # leg with another.
+        run: |
+          set -euo pipefail
+          found=0
+          for a in shipped-archives/*.tar.gz; do
+            [[ -e ${a} ]] || break
+            leg="${a##*/}"
+            leg="${leg%.tar.gz}"
+            mkdir -p "shipped/${leg}"
+            tar -xzf "${a}" -C "shipped/${leg}"
+            found=1
+          done
+          if [[ ${found} -ne 1 ]]; then
+            echo "::error::the go-binary build artifact holds no archives"
+            exit 1
+          fi
+          echo "BINARIES_DIR=${PWD}/shipped" >> "${GITHUB_ENV}"
+      - name: Fetch the inventory plans the build legs emitted
+        if: >-
+          ${{ contains(inputs.classes, 'rust-crate') ||
+              contains(inputs.classes, 'rust-binary') ||
+              contains(inputs.classes, 'wasm-npm') ||
+              contains(inputs.classes, 'pgrx-extension') ||
+              (contains(inputs.classes, 'oci-image') && inputs.binary-crate != '') }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: sbom-plan-*
+          path: plans
+
+      # Per-artifact inventories, aggregated into the release view
+      # (#492, stele#40): the unit of description is the artifact,
+      # because the artifact is the unit of consumption. go-binary
+      # inventories are read out of the shipped bytes; every other
+      # shipped artifact's closure is derived from the PLAN its build
+      # leg emitted (#537) — the artifact-to-package mapping exists with
+      # certainty exactly once, in the job that produced the artifact,
+      # because those are its own build inputs. No declaration exists to
+      # drift: the mapping is consumed at the only moment it is certain
+      # and never restated. Derivation stays HERE, on the prove leg that
+      # runs belt tooling and never caller code — the plan is data, and
+      # it is validated before a byte of it reaches a command line. The
+      # release SBOM is then FOLDED from the per-artifact documents (one
+      # derivation, N views), so it cannot disagree with them. A
+      # repository with no manifest and
+      # no binaries (the canon: its dependencies are actions) exports
+      # the forge's dependency graph, the one inventory that exists for
+      # it.
+      - name: Derive the per-artifact inventories and the release view
+        id: inventories
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          SBOM_BASENAME: ${{ inputs.sbom-basename }}
+          CLASSES: ${{ inputs.classes }}
+          # What the evidence declares, which the plans judgment reads
+          # and the branch below deliberately does not (#843): which
+          # legs RAN is the caller's list, and which classes OWE is the
+          # derived one. Two questions, two readings, neither guessing
+          # at the other.
+          EVIDENCE_CLASSES: ${{ needs.guard.outputs.classes }}
+          PG_MAJORS: ${{ inputs.pg-majors }}
+        run: |
+          set -euo pipefail
+          command -v stele > /dev/null || {
+            echo "::error::stele is not on the runner — it is a belt tool"
+            exit 1
+          }
+          base="${SBOM_BASENAME:-${GITHUB_REPOSITORY##*/}}"
+          base="${base#.}"
+          mkdir -p dist
+          out="dist/${base}-${VERSION}.spdx.json"
+          # The released commit's own instant — every derived document
+          # is dated by the artifact, never by the run describing it.
+          epoch=$(git log -1 --pretty=%ct)
+          created=$(date -u -d "@${epoch}" +%Y-%m-%dT%H:%M:%SZ)
+          echo "SBOM_CREATED=${created}" >> "${GITHUB_ENV}"
+          # A release with no inventory plan decides as one release; a
+          # planned one decides per planned document. Set before the
+          # branch so no path can leave it unstated.
+          inventories='[""]'
+          binaries_speak=1
+          go_binary=0
+          planned=()
+          for class in ${CLASSES//,/ }; do
+            case "${class}" in
+              go-binary) go_binary=1 ;;
+              oci-image) ;;
+              *)
+                binaries_speak=0
+                planned+=("${class}")
+                ;;
+            esac
+          done
+          # The reverse of #775's shape, refused the same way and before
+          # either branch is taken: go-binary beside a plan-emitting class
+          # would send the run down the plan branch, where the go-binary
+          # leg has no plan to offer, and the release would publish green
+          # with an inventory that omits the Go binaries (.github#784).
+          # Deleted in the change that gives the go-binary leg a plan.
+          if ((go_binary == 1 && binaries_speak == 0)); then
+            beside=$(
+              IFS=','
+              echo "${planned[*]}"
+            )
+            emsg="go-binary cannot yet ship beside ${beside}: the inventory would omit the Go binaries'"
+            emsg+=" packages (.github#784)"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          if [[ -n ${BINARIES_DIR:-} && ${binaries_speak} -eq 1 ]]; then
+            # The oci-image class is in the binaries-speak set because an
+            # image whose contents are the shipped Go binaries adds no
+            # inventory of its own. A DECLARED binary-crate does add one
+            # (#775), and this branch would derive from the binaries and
+            # drop it — an inventory silently narrower than the release.
+            # Refuse rather than choose: the two shapes disagree about
+            # what the release ships, and only the caller can say which
+            # it meant.
+            if compgen -G "plans/sbom-plan-*/plan.json" > /dev/null; then
+              emsg="a build leg emitted an inventory plan while the shipped binaries would speak for the whole"
+              emsg+=" release — the two describe different artifact sets; declare the classes that own the plan,"
+              emsg+=" or drop binary-crate from the image"
+              echo "::error::${emsg}"
+              exit 1
+            fi
+            listing=$(find "${BINARIES_DIR}" -type f | sort)
+            bins=()
+            while IFS= read -r b; do
+              [[ -n ${b} ]] && bins+=("${b}")
+            done <<< "${listing}"
+            ((${#bins[@]} > 0)) || {
+              echo "::error::BINARIES_DIR holds no binaries — an inventory of nothing asserts nothing"
+              exit 1
+            }
+            stele derive sbom --out "${out}" --expect-version "${VERSION}" "${bins[@]}"
+          elif compgen -G "plans/sbom-plan-*/plan.json" > /dev/null; then
+            # Pre-publish judgment of the plans (`stele assert plans`,
+            # stele#142) against the SAME policy the evidence walk
+            # reads — one obligation list, two moments of looking, so a
+            # release cannot publish green and red on the walk. The
+            # plans originate on build legs that execute caller code,
+            # so they are data: shape, charset, matrix collapse and
+            # divergent-claim refusal all live inside the engine, and
+            # nothing from a plan reaches a command line until it has
+            # judged. The spec is stele's docs/assert-policy-schema.md.
+            machinery=$(awk '/^version:/{print $2; exit}' .org-canon/CITATION.cff)
+            [[ -n ${machinery} ]] || {
+              echo "::error::the pinned canon tree's CITATION.cff names no version — the owed epochs cannot be judged"
+              exit 1
+            }
+            stele assert plans \
+              --policy .org-canon/slsa/assert-policy.json \
+              --classes "${EVIDENCE_CLASSES}" \
+              --machinery-version "${machinery}" \
+              --out "${RUNNER_TEMP}/judged-plans.json" \
+              plans/sbom-plan-*/plan.json
+            # The derivation iterates the set the JUDGMENT emitted, not
+            # a second reading of the same bytes: `jq -s 'add | unique'`
+            # over the raw plans was the engine's canonical collapse
+            # derived twice, agreeing by luck (stele#151). --out writes
+            # only on PASS, so there is nothing to iterate unless the
+            # plans were judged.
+            plan=$(cat "${RUNNER_TEMP}/judged-plans.json")
+            docs=()
+            count=$(jq 'length' <<< "${plan}")
+            for ((i = 0; i < count; i++)); do
+              entry=$(jq -c ".[${i}]" <<< "${plan}")
+              doc_name=$(jq -r '.doc' <<< "${entry}")
+              doc="dist/${doc_name}-${VERSION}.spdx.json"
+              pkg=$(jq -r '.params.cargoPackage' <<< "${entry}")
+              flags=(--cargo-package "${pkg}" --tree .)
+              feats=$(jq -r '(.params.features // []) | join(",")' <<< "${entry}")
+              if [[ -n ${feats} ]]; then flags+=(--features "${feats}"); fi
+              ndf=$(jq -r '.params.noDefaultFeatures // false' <<< "${entry}")
+              if [[ ${ndf} == "true" ]]; then
+                flags+=(--no-default-features)
+              fi
+              artifact=$(jq -r '.artifact // ""' <<< "${entry}")
+              if [[ -n ${artifact} ]]; then flags+=(--artifact "${artifact}"); fi
+              stele derive sbom "${flags[@]}" --created "${created}" --out "${doc}"
+              docs+=("${doc}")
+            done
+            # One crate built once per major is several artifacts with
+            # several digests (#492), so each owes its own inventory —
+            # and the set is structural now: every requested major must
+            # appear in some pgrx document, or nothing publishes.
+            if [[ ${CLASSES} == *pgrx-extension* ]]; then
+              for major in ${PG_MAJORS//,/ }; do
+                found=0
+                for d in "${docs[@]}"; do
+                  if [[ ${d} == dist/sbom-pgrx-*-pg${major}-"${VERSION}".spdx.json ]]; then found=1; fi
+                done
+                ((found == 1)) || {
+                  echo "::error::pg-majors names ${major} but no pgrx inventory covers it"
+                  exit 1
+                }
+              done
+            fi
+            union=$(
+              IFS=','
+              echo "${docs[*]}"
+            )
+            stele derive sbom --union "${union}" --union-name "${base}@v${VERSION}" \
+              --created "${created}" --out "${out}"
+            # The union is a VIEW over the planned documents and bears
+            # no decision of its own (#492), so it is not in this list.
+            inventories=$(jq -c --arg v "${VERSION}" \
+              '[.[] | .doc + "-" + $v + ".spdx.json"] | unique' \
+              "${RUNNER_TEMP}/judged-plans.json")
+          elif tracked=$(git ls-files 'Cargo.lock' '*/Cargo.lock' 'go.mod' '*/go.mod') && [[ -n ${tracked} ]]; then
+            emsg="this release tracks a manifest but no build leg emitted an inventory plan — the per-release"
+            emsg+=" inventory is aggregated from per-artifact documents (#492), and the artifact-to-package"
+            emsg+=" mapping lives in the build leg that holds it (#537); release through a class whose build"
+            emsg+=" emits plans"
+            echo "::error::${emsg}"
+            exit 1
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/sbom" --jq '.sbom' > "${out}"
+            purls=$(jq '[.packages[].externalRefs[]? | select(.referenceType=="purl") | .referenceLocator] | length' "${out}")
+            bare=$(jq '[.packages[].externalRefs[]? | select(.referenceType=="purl")
+              | .referenceLocator | select(test("@") | not)] | length' "${out}")
+            echo "::notice::dependency-graph SBOM: ${bare} of ${purls} PURLs versionless"
+          fi
+          [[ -s ${out} ]] || {
+            echo "::error::SBOM derivation produced nothing"
+            exit 1
+          }
+          packages=$(jq '.packages | length' "${out}")
+          echo "::notice::release inventory: ${packages} packages (${out##*/})"
+          echo "list=${inventories}" >> "${GITHUB_OUTPUT}"
+          echo "::notice::decision population: ${inventories}"
+      - name: Derive this release's VEX and gate on undecided advisories
+        # Decisions are keyed by package@version; coverage is derived from
+        # the SBOM just generated, so a release is born covered — and a
+        # gate-class advisory with no decision fails HERE, and the
+        # commit point refuses every publish job on that failure — the
+        # claim "before anything publishes" is a `needs` edge, not this
+        # comment (#349 finding 1): triage is a property of the release,
+        # not the calendar (docs/dependency-track.md).
+        # Network-bound (the OSV feed), which
+        # is fine on the release path — it is already network-bound by
+        # construction, like verify-release — and never in the ci gate.
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          SBOM_BASENAME: ${{ inputs.sbom-basename }}
+        run: |
+          set -euo pipefail
+          command -v stele > /dev/null || {
+            echo "::error::stele is not on the runner — it is a belt tool"
+            exit 1
+          }
+          base="${SBOM_BASENAME:-${GITHUB_REPOSITORY##*/}}"
+          base="${base#.}"
+          release_purl="pkg:github/${GITHUB_REPOSITORY}@v${VERSION}"
+          # Subjects: the release view under the release's own purl,
+          # plus every per-artifact inventory under its artifact's name
+          # — a statement then names the artifact a consumer actually
+          # holds, not just the release that contained it (#492).
+          subjects="${release_purl}=dist/${base}-${VERSION}.spdx.json"
+          for doc in dist/sbom-*-"${VERSION}".spdx.json; do
+            [[ -e ${doc} ]] || continue
+            artifact=$(jq -r '.name' "${doc}")
+            subjects="${subjects},${artifact}=${doc}"
+          done
+          out="dist/${base}-${VERSION}.vex.openvex.json"
+          stele derive vex \
+            --subjects "${subjects}" \
+            --vex .org-canon/security/vex \
+            --base-ecosystems "debian,alpine,ubuntu,rocky,redhat,rpm" \
+            --author monumental-archive \
+            --id "https://openvex.dev/docs/public/vex-${GITHUB_REPOSITORY//\//-}-v${VERSION}-derived" \
+            --released "${SBOM_CREATED}" \
+            --out "${out}"
+          if [[ -f ${out} ]]; then
+            statements=$(jq '.statements | length' "${out}")
+            echo "::notice::derived VEX shipped (${statements} statement(s))"
+          fi
+      - name: Triage the tagged lock against the advisory feed
+        # Dependency L2's own wording — triage all known vulnerabilities
+        # BEFORE release — enforced against the release rather than the
+        # Monday cron (#211). The same belt task the cron runs, at the
+        # tagged checkout: cargo-deny reads RustSec directly (no OSV
+        # import lag) and additionally refuses yanked crates, and every
+        # `ignore` in deny.toml carries a reason citing the VEX statement
+        # that records the decision — so the exit is a written decision,
+        # never an override, and only its timing moves. Red blocks the
+        # release; there is no warn path (a warning here converts the
+        # control into a log line, the #118 rule). The task guards its
+        # own applicability: no tracked Cargo.lock skips clean, a lock
+        # without cargo or deny.toml is a loud failure, never a vacuous
+        # green. The Monday cron stays: it sweeps advisories published
+        # BETWEEN releases, which no release-time gate can see.
+        run: mise run audit:deny
+
+      - name: Triage the tagged Go module graph against the advisory feed
+        # The same Dependency-L2 wording, Go leg: govulncheck at the
+        # tagged checkout, call-graph aware, red blocks the release with
+        # no warn path — the belt task guards its own applicability (no
+        # go.mod skips clean; go.mod without go or govulncheck is a loud
+        # failure, never a vacuous green). Network-bound (vuln.go.dev),
+        # fine on the release path, never in the ci gate.
+        run: mise run audit:go-vulns
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sbom
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # phase: build
+  build:
+    name: Build
+    needs: guard
+    if: contains(inputs.classes, 'rust-crate')
+    uses: ./.github/workflows/build-rust-crate.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited. A `uses:` job with no `permissions:` block
+      # takes the WORKFLOW-level default — which is `permissions: {}` above
+      # — and not the caller's grant. The callee then requests more than
+      # its calling job holds, which is an elevation, and the whole run
+      # dies as startup_failure with no jobs and no log. Measured; every
+      # `uses:` job below therefore restates exactly what its callee needs.
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      exclude: ${{ inputs.exclude }}
+
+  # The rebuild legs (#118): same workflow, repro: true — no release-*
+  # upload, no smoke, repro- prefixed intermediates. They run in
+  # parallel with the first builds; the gate below compares the two
+  # subject manifests bit for bit before anything irreversible.
+  # phase: build
+  repro-build:
+    name: Rebuild (repro)
+    needs: guard
+    if: contains(inputs.classes, 'rust-crate')
+    uses: ./.github/workflows/build-rust-crate.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      exclude: ${{ inputs.exclude }}
+      repro: true
+
+  # phase: publish
+  publish-crates:
+    name: Publish crates
+    needs:
+      - guard
+      - build
+      - commit-point
+    # Post-barrier, pre-verify: the registry upload is the class's
+    # irreversible step (crates.io is yank-only), so it waits on the
+    # commit point — which holds the bit-for-bit proof (#118) AND the
+    # SBOM/triage proof. It once waited on the repro gate alone, and lab
+    # v0.20.0 reached npm past a red triage gate (#349 finding 1).
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'rust-crate') && !inputs.dry-run }}
+    uses: ./.github/workflows/publish-rust-crate.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout for cargo publish
+      id-token: write # crates.io trusted publishing, no token secret
+    with:
+      exclude: ${{ inputs.exclude }}
+
+  # phase: build
+  build-oci:
+    name: Build image
+    needs:
+      - guard
+      - facts
+    if: contains(inputs.classes, 'oci-image')
+    uses: ./.github/workflows/build-oci-image.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of the caller
+      packages: write # push per-arch images and the manifest list
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      dockerfile: ${{ inputs.dockerfile }}
+      context: ${{ inputs.context }}
+      smoke-test: ${{ inputs.smoke-test }}
+      prepare: ${{ inputs.prepare }}
+      binary-crate: ${{ inputs.binary-crate }}
+      plan-class: ${{ needs.guard.outputs.image-class }}
+      facts: ${{ needs.facts.outputs.facts }}
+      source-epoch: ${{ needs.facts.outputs.epoch }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # phase: build
+  repro-build-oci:
+    name: Rebuild image (repro)
+    needs:
+      - guard
+      - facts
+    if: contains(inputs.classes, 'oci-image')
+    uses: ./.github/workflows/build-oci-image.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+      packages: write # push per-arch digests (idempotent when reproduced)
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      dockerfile: ${{ inputs.dockerfile }}
+      context: ${{ inputs.context }}
+      smoke-test: ${{ inputs.smoke-test }}
+      prepare: ${{ inputs.prepare }}
+      binary-crate: ${{ inputs.binary-crate }}
+      # Forwarded on the repro leg too, and ignored there by the leg's
+      # own `repro` guard: a rebuild plans nothing, and the class it
+      # would have planned under is still the same one string.
+      plan-class: ${{ needs.guard.outputs.image-class }}
+      facts: ${{ needs.facts.outputs.facts }}
+      source-epoch: ${{ needs.facts.outputs.epoch }}
+      dry-run: ${{ inputs.dry-run }}
+      repro: true
+
+  # The index is assembled and TAGGED exactly once, here, post-gate
+  # (#118): the builds pushed per-arch digests only, the gate compared
+  # them, and this is the first moment a public reference exists.
+  # phase: publish
+  assemble-oci:
+    name: Assemble the image index
+    needs:
+      - guard
+      - facts
+      - build-oci
+      - commit-point
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'oci-image') && !inputs.dry-run }}
+    uses: ./.github/workflows/assemble-oci-index.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+      packages: write # create and tag the manifest list
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      smoke-test: ${{ inputs.smoke-test }}
+      facts: ${{ needs.facts.outputs.facts }}
+
+  # An image subject is a different shape from a file one, and sign.yml
+  # takes exactly one — so a repository shipping both classes signs twice,
+  # under the same identity, rather than mixing unrelated subjects into one
+  # certificate.
+  # phase: attest
+  sign-image:
+    name: Sign image
+    needs: assemble-oci
+    if: ${{ !cancelled() && needs.assemble-oci.result == 'success' && contains(inputs.classes, 'oci-image') && !inputs.dry-run }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      image-name: ${{ needs.assemble-oci.outputs.image }}
+      image-digest: ${{ needs.assemble-oci.outputs.digest }}
+      bundle-artifact: attestation-bundle-image
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # Runs no caller code, so it can hold the writes the build job must not.
+  # It pulls the published bytes back and hashes them: the attested subject
+  # is what shipped, not what we hoped shipped.
+  # phase: attest
+  verify:
+    name: Verify published bytes
+    needs:
+      - guard
+      - build
+      - publish-crates
+    # Post-publish: the registry pull-back needs the bytes to be on the
+    # registry, which now happens downstream of the repro gate (#118). A
+    # dry-run excuses the skipped publish — the verifier passes the
+    # manifest through unchanged.
+    if: ${{
+        !cancelled() && needs.build.result == 'success'
+        && contains(inputs.classes, 'rust-crate')
+        && (needs.publish-crates.result == 'success' || inputs.dry-run)
+      }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      # The full verifier set: verify-release declares its verdict-mode
+      # signing identity at the job, and a called workflow's permissions
+      # are checked statically — a bytes-mode call must grant what the
+      # workflow declares, spent only in verdict mode (#264).
+      contents: read # pull-back reads
+      id-token: write # spent only in verdict mode (#264)
+      attestations: write # spent only in verdict mode (#264)
+      artifact-metadata: write # spent only in verdict mode (#264)
+    with:
+      subjects: ${{ needs.build.outputs.subjects }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # The signer never sees artifact bytes, only digests, and holds the only
+  # `id-token: write` in the release path.
+  # phase: attest
+  sign:
+    name: Sign
+    needs: verify
+    if: ${{ !cancelled() && needs.verify.result == 'success' && contains(inputs.classes, 'rust-crate') }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      subjects: ${{ needs.verify.outputs.subjects }}
+      bundle-artifact: attestation-bundle-crates
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # The verdict beside the evidence — AFTER the evidence is public. Every
+  # vsa job below runs downstream of attach, against the published,
+  # immutable release (#209): verify-release's verdict mode re-proves the
+  # public bytes, opens and verifies the signed provenance over them
+  # (signer identity to the pinned commit, buildType and
+  # externalParameters to this run, subjects to the manifest), and only
+  # then assembles the verification summary — every predicate field an
+  # output of a check it just ran (#208) — and signs it ITSELF (#264):
+  # verifier.id is the certificate subject, so "who computed this
+  # verdict" is a cryptographic fact rather than a predicate field the
+  # org signer would have signed on faith. Verdicts are the org's second
+  # root of trust (docs/runbook.md); provenance stays under the signer.
+  # The VSA lives in the attestation store alone: the release sealed at
+  # publish, before any verdict existed, and the store is where the
+  # runbook's consumer recipe reads. A stranger gates on it instead of
+  # re-deriving the whole verification; a stranger who distrusts verdicts
+  # still has the provenance bundle in the release. Skipped on dry-run —
+  # and verdict mode refuses a dry-run on its own: a rehearsal must never
+  # sign "PASSED". Every vsa job restates doi's !cancelled() pattern:
+  # the implicit success() looks THROUGH attach to its legitimately-
+  # skipped class ancestors and goes false (measured on v0.14.2).
+  # phase: attest
+  vsa:
+    name: Assemble and sign VSA
+    needs:
+      - sbom
+      - guard
+      - verify
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'rust-crate') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      subjects: ${{ needs.verify.outputs.subjects }}
+      version: ${{ needs.guard.outputs.version }}
+
+  # phase: build
+  build-binary:
+    name: Build binaries
+    needs: guard
+    if: contains(inputs.classes, 'rust-binary')
+    uses: ./.github/workflows/build-rust-binary.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of the caller; binaries touch no registry
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      targets: ${{ inputs.binary-targets }}
+      smoke-test: ${{ inputs.binary-smoke-test }}
+      exclude: ${{ inputs.exclude }}
+
+  # Binaries have no registry to pull back from: they become release
+  # assets, and GitHub's own release attestation binds tag, commit and
+  # asset digests at publish. The subjects signed are the archives the
+  # attach job uploads — the same bytes, proven by the collect job's
+  # refuse-a-partial-set guard.
+  # phase: build
+  repro-build-binary:
+    name: Rebuild binaries (repro)
+    needs: guard
+    if: contains(inputs.classes, 'rust-binary')
+    uses: ./.github/workflows/build-rust-binary.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      targets: ${{ inputs.binary-targets }}
+      smoke-test: ${{ inputs.binary-smoke-test }}
+      exclude: ${{ inputs.exclude }}
+      repro: true
+
+  # phase: attest
+  sign-binaries:
+    name: Sign binaries
+    needs:
+      - build-binary
+      - commit-point
+    # The Sigstore entry is append-only — an irreversible step, so it
+    # sits downstream of the bit-for-bit proof (#118).
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'rust-binary') }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      subjects: ${{ needs.build-binary.outputs.subjects }}
+      bundle-artifact: attestation-bundle-binaries
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # The go-binary class: same shape as rust-binary — release assets, no
+  # registry, GitHub's release attestation binds tag, commit and asset
+  # digests at publish — with the toolchain matrix gone by construction
+  # (CGO_ENABLED=0 and the caller's one pinned go cover every leg,
+  # stele#7). Repro-gated from its first release, not optional: a Go
+  # build under the class's hermetic env is bit-reproducible, so the
+  # gate extends the org's strongest claim to this class from day one.
+  # phase: build
+  build-go:
+    name: Build Go binaries
+    needs: guard
+    if: contains(inputs.classes, 'go-binary')
+    uses: ./.github/workflows/build-go-binary.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of the caller; binaries touch no registry
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      targets: ${{ inputs.go-targets }}
+      smoke-test: ${{ inputs.go-smoke-test }}
+
+  # phase: build
+  repro-build-go:
+    name: Rebuild Go binaries (repro)
+    needs: guard
+    if: contains(inputs.classes, 'go-binary')
+    uses: ./.github/workflows/build-go-binary.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      targets: ${{ inputs.go-targets }}
+      smoke-test: ${{ inputs.go-smoke-test }}
+      repro: true
+
+  # phase: attest
+  sign-go:
+    name: Sign Go binaries
+    needs:
+      - build-go
+      - commit-point
+    # The Sigstore entry is append-only — an irreversible step, so it
+    # sits downstream of the bit-for-bit proof (#118).
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'go-binary') }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      subjects: ${{ needs.build-go.outputs.subjects }}
+      bundle-artifact: attestation-bundle-go-binaries
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # The source-archive class: the artifact is the tagged tree itself, for
+  # repositories whose deliverable is their own content — the org canon
+  # above all. Like binaries it has no registry to pull back from: it
+  # becomes a release asset, GitHub's release attestation binds tag,
+  # commit and asset digests at publish, and the signed subjects are the
+  # same bytes the attach job uploads.
+  # phase: build
+  build-source:
+    name: Build source archive
+    needs: guard
+    if: contains(inputs.classes, 'source-archive')
+    uses: ./.github/workflows/build-source-archive.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of the caller at the tag
+    with:
+      version: ${{ needs.guard.outputs.version }}
+
+  # phase: build
+  repro-build-source:
+    name: Rebuild source archive (repro)
+    needs: guard
+    if: contains(inputs.classes, 'source-archive')
+    uses: ./.github/workflows/build-source-archive.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller at the tag
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      repro: true
+
+  # phase: attest
+  sign-source:
+    name: Sign source archive
+    needs:
+      - build-source
+      - commit-point
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'source-archive') }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      subjects: ${{ needs.build-source.outputs.subjects }}
+      bundle-artifact: attestation-bundle-source
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # phase: build
+  build-wasm:
+    name: Build wasm package
+    needs: guard
+    if: contains(inputs.classes, 'wasm-npm')
+    uses: ./.github/workflows/build-wasm-npm.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      crate-dir: ${{ inputs.crate-dir }}
+      npm-scope: ${{ inputs.npm-scope }}
+
+  # phase: build
+  repro-build-wasm:
+    name: Rebuild wasm package (repro)
+    needs: guard
+    if: contains(inputs.classes, 'wasm-npm')
+    uses: ./.github/workflows/build-wasm-npm.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      crate-dir: ${{ inputs.crate-dir }}
+      npm-scope: ${{ inputs.npm-scope }}
+      repro: true
+
+  # phase: publish
+  publish-wasm:
+    name: Publish wasm package
+    needs:
+      - guard
+      - build-wasm
+      - commit-point
+    # Post-gate: npm's unpublish window closes after 72 hours, so the
+    # upload waits on the bit-for-bit proof (#118).
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'wasm-npm') && !inputs.dry-run }}
+    uses: ./.github/workflows/publish-wasm-npm.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout for the pinned npm
+      id-token: write # npm trusted publishing, no token secret
+    with:
+      package: ${{ needs.build-wasm.outputs.package }}
+      artifact-name: ${{ needs.build-wasm.outputs.artifact-name }}
+
+  # phase: attest
+  verify-wasm:
+    name: Verify published wasm bytes
+    needs:
+      - build-wasm
+      - publish-wasm
+    if: ${{
+        !cancelled() && needs.build-wasm.result == 'success'
+        && contains(inputs.classes, 'wasm-npm')
+        && (needs.publish-wasm.result == 'success' || inputs.dry-run)
+      }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      # The full verifier set — see the note on `verify` above (#264).
+      contents: read # pull-back reads
+      id-token: write # spent only in verdict mode (#264)
+      attestations: write # spent only in verdict mode (#264)
+      artifact-metadata: write # spent only in verdict mode (#264)
+    with:
+      subjects: ${{ needs.build-wasm.outputs.subjects }}
+      npm-package: ${{ needs.build-wasm.outputs.package }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # phase: attest
+  sign-wasm:
+    name: Sign wasm package
+    needs: verify-wasm
+    if: ${{ !cancelled() && needs.verify-wasm.result == 'success' && contains(inputs.classes, 'wasm-npm') }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      subjects: ${{ needs.verify-wasm.outputs.subjects }}
+      bundle-artifact: attestation-bundle-npm
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # Same verdict, wasm leg — see the note on `vsa` above. build-wasm is
+  # in needs only for the package name the re-pull needs to reconstruct
+  # the registry path.
+  # phase: attest
+  vsa-wasm:
+    name: Assemble and sign wasm VSA
+    needs:
+      - sbom
+      - guard
+      - build-wasm
+      - verify-wasm
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'wasm-npm') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      subjects: ${{ needs.verify-wasm.outputs.subjects }}
+      npm-package: ${{ needs.build-wasm.outputs.package }}
+      version: ${{ needs.guard.outputs.version }}
+
+  # phase: build
+  build-extension:
+    name: Build extension
+    needs: guard
+    if: contains(inputs.classes, 'pgrx-extension')
+    uses: ./.github/workflows/build-pgrx-extension.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of the caller; tarballs touch no registry
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      crate-dir: ${{ inputs.extension-crate-dir }}
+      pg-majors: ${{ inputs.pg-majors }}
+      smoke-test: ${{ inputs.extension-smoke-test }}
+
+  # phase: build
+  repro-build-extension:
+    name: Rebuild extension (repro)
+    needs: guard
+    if: contains(inputs.classes, 'pgrx-extension')
+    uses: ./.github/workflows/build-pgrx-extension.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of the caller
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      crate-dir: ${{ inputs.extension-crate-dir }}
+      pg-majors: ${{ inputs.pg-majors }}
+      smoke-test: ${{ inputs.extension-smoke-test }}
+      repro: true
+
+  # phase: attest
+  sign-extensions:
+    name: Sign extension tarballs
+    needs:
+      - build-extension
+      - commit-point
+    if: ${{ !cancelled() && needs.commit-point.result == 'success' && contains(inputs.classes, 'pgrx-extension') }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      subjects: ${{ needs.build-extension.outputs.subjects }}
+      bundle-artifact: attestation-bundle-extensions
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # The artifact images assemble from the SAME tarballs the signer just
+  # attested — one byte path — and each per-major index gets its own
+  # signature under the same identity.
+  # phase: build
+  build-extension-images:
+    name: Build extension images
+    needs:
+      - guard
+      - build-extension
+      - facts
+    if: contains(inputs.classes, 'pgrx-extension')
+    uses: ./.github/workflows/build-pgrx-images.yml # zizmor: ignore[self-repository]
+    permissions:
+      # Restated, not inherited — see the note on `build` above.
+      contents: read # checkout of canon for the Dockerfile and mapping
+      packages: write # push the per-major indexes
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      crate-dir: ${{ inputs.extension-crate-dir }}
+      pg-majors: ${{ inputs.pg-majors }}
+      facts: ${{ needs.facts.outputs.facts }}
+      source-epoch: ${{ needs.facts.outputs.epoch }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # phase: build
+  repro-build-extension-images:
+    name: Rebuild extension images (repro)
+    # Both image builds stage from the SAME release-extensions artifact
+    # (the first build's), so the compare isolates image-layer
+    # nondeterminism; tarball equality is the gate's own extension leg.
+    needs:
+      - guard
+      - build-extension
+      - facts
+    if: contains(inputs.classes, 'pgrx-extension')
+    uses: ./.github/workflows/build-pgrx-images.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # checkout of canon for the Dockerfile and mapping
+      packages: write # push the per-major indexes (idempotent when reproduced)
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      crate-dir: ${{ inputs.extension-crate-dir }}
+      pg-majors: ${{ inputs.pg-majors }}
+      facts: ${{ needs.facts.outputs.facts }}
+      source-epoch: ${{ needs.facts.outputs.epoch }}
+      dry-run: ${{ inputs.dry-run }}
+      repro: true
+
+  # The per-major tags, applied post-gate by manifest PUT — the exact
+  # bytes the gate compared land under the advertised names, digests
+  # preserved by construction (#118).
+  # phase: publish
+  tag-extension-images:
+    name: Tag extension images
+    needs:
+      - build-extension-images
+      - commit-point
+    if: ${{
+        !cancelled() && needs.commit-point.result == 'success'
+        && contains(inputs.classes, 'pgrx-extension') && !inputs.dry-run
+      }}
+    uses: ./.github/workflows/tag-images.yml # zizmor: ignore[self-repository]
+    permissions:
+      packages: write # PUT each gated manifest under its tag
+    with:
+      images: ${{ needs.build-extension-images.outputs.images }}
+
+  # phase: attest
+  sign-extension-images:
+    name: Sign extension image pg${{ matrix.pg }}
+    needs:
+      - build-extension-images
+      - tag-extension-images
+    if: ${{
+        !cancelled() && needs.tag-extension-images.result == 'success'
+        && contains(inputs.classes, 'pgrx-extension') && !inputs.dry-run
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.build-extension-images.outputs.images) }}
+    uses: monumental-archive/signer/.github/workflows/sign.yml@cffec9441210d46f237099d8785098aacf5b8273 # main
+    with:
+      image-name: ${{ matrix.image }}
+      image-digest: ${{ matrix.digest }}
+      bundle-artifact: attestation-bundle-extimg-pg${{ matrix.pg }}
+    permissions:
+      id-token: write # the signer mints the Sigstore identity
+      attestations: write # the signer persists the provenance
+      artifact-metadata: write # the signer creates the storage record
+
+  # The repro gate (#118): every public or permanent effect — the
+  # crates.io/npm uploads, the ghcr tags, the Sigstore entries, the
+  # release itself — sits downstream of this job, which compares the
+  # first build's outputs against an independent rebuild's, full width:
+  # sha256 subject manifests for the file classes, per-arch (oci) and
+  # per-major-index (pgrx) digests for the image classes. Mismatch
+  # fails the release outright — no warn-and-ship path, because a warn
+  # path converts the control into a log line. Skew-proofing is free by
+  # construction here: both builds are relative `uses:` in this same
+  # run, resolved at the caller's pinned SHA, so a mismatch can only
+  # mean NONDETERMINISM, never version skew.
+  #
+  # Nothing here ever emits SLSA_BUILD_REPRODUCED: a same-platform
+  # rebuild can never earn it, by design (docs/tooling-verdicts.md).
+  # Fan-in mirrors attach: !cancelled() plus explicit result checks,
+  # because the implicit success() looks THROUGH to legitimately
+  # skipped class ancestors and goes false (measured on v0.14.2).
+  # phase: prove
+  repro-gate:
+    name: Repro gate
+    needs:
+      - guard
+      - build
+      - repro-build
+      - build-oci
+      - repro-build-oci
+      - build-binary
+      - repro-build-binary
+      - build-go
+      - repro-build-go
+      - build-source
+      - repro-build-source
+      - build-wasm
+      - repro-build-wasm
+      - build-extension
+      - repro-build-extension
+      - build-extension-images
+      - repro-build-extension-images
+    if: >-
+      ${{
+        !cancelled() && needs.guard.result == 'success'
+        && !contains(join(needs.*.result, ','), 'failure')
+        && (!contains(inputs.classes, 'rust-crate') || (needs.build.result == 'success' && needs.repro-build.result == 'success'))
+        && (!contains(inputs.classes, 'oci-image')
+          || (needs.build-oci.result == 'success' && needs.repro-build-oci.result == 'success'))
+        && (!contains(inputs.classes, 'rust-binary')
+          || (needs.build-binary.result == 'success' && needs.repro-build-binary.result == 'success'))
+        && (!contains(inputs.classes, 'go-binary')
+          || (needs.build-go.result == 'success' && needs.repro-build-go.result == 'success'))
+        && (!contains(inputs.classes, 'source-archive')
+          || (needs.build-source.result == 'success' && needs.repro-build-source.result == 'success'))
+        && (!contains(inputs.classes, 'wasm-npm')
+          || (needs.build-wasm.result == 'success' && needs.repro-build-wasm.result == 'success'))
+        && (!contains(inputs.classes, 'pgrx-extension')
+          || (needs.build-extension.result == 'success'
+            && needs.repro-build-extension.result == 'success'
+            && needs.build-extension-images.result == 'success'
+            && needs.repro-build-extension-images.result == 'success'))
+      }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions: {} # compares digests; no caller code, no checkout, no writes
+    steps:
+      - name: Compare the file-class subject manifests
+        env:
+          CLASSES: ${{ inputs.classes }}
+          CRATES_A: ${{ needs.build.outputs.subjects }}
+          CRATES_B: ${{ needs.repro-build.outputs.subjects }}
+          BIN_A: ${{ needs.build-binary.outputs.subjects }}
+          BIN_B: ${{ needs.repro-build-binary.outputs.subjects }}
+          GO_A: ${{ needs.build-go.outputs.subjects }}
+          GO_B: ${{ needs.repro-build-go.outputs.subjects }}
+          SRC_A: ${{ needs.build-source.outputs.subjects }}
+          SRC_B: ${{ needs.repro-build-source.outputs.subjects }}
+          WASM_A: ${{ needs.build-wasm.outputs.subjects }}
+          WASM_B: ${{ needs.repro-build-wasm.outputs.subjects }}
+          EXT_A: ${{ needs.build-extension.outputs.subjects }}
+          EXT_B: ${{ needs.repro-build-extension.outputs.subjects }}
+        run: |
+          set -euo pipefail
+          compared=0
+          check() { # class, first, rebuild
+            local class="${1}" a="${2}" b="${3}"
+            case ",${CLASSES// /}," in *",${class},"*) ;; *) return 0 ;; esac
+            if [[ -z ${a} || -z ${b} ]]; then
+              echo "::error::${class}: a build produced no subjects — an empty proof is not a proof"
+              exit 1
+            fi
+            if [[ ${a} != "${b}" ]]; then
+              echo "::error::${class}: the rebuild does not reproduce the first build bit for bit"
+              diff <(printf '%s\n' "${a}") <(printf '%s\n' "${b}") || true
+              exit 1
+            fi
+            lines=$(wc -l <<< "${a}" | tr -d ' ')
+            echo "::notice::${class}: ${lines} subject(s) reproduced bit for bit"
+            compared=$((compared + 1))
+          }
+          check rust-crate "${CRATES_A}" "${CRATES_B}"
+          check rust-binary "${BIN_A}" "${BIN_B}"
+          check go-binary "${GO_A}" "${GO_B}"
+          check source-archive "${SRC_A}" "${SRC_B}"
+          check wasm-npm "${WASM_A}" "${WASM_B}"
+          check pgrx-extension "${EXT_A}" "${EXT_B}"
+          echo "FILE_COMPARED=${compared}" >> "${GITHUB_ENV}"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ contains(inputs.classes, 'oci-image') && !inputs.dry-run }}
+        with:
+          pattern: oci-digest-*
+          merge-multiple: true
+          path: oci-a
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ contains(inputs.classes, 'oci-image') && !inputs.dry-run }}
+        with:
+          pattern: repro-oci-digest-*
+          merge-multiple: true
+          path: oci-b
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ contains(inputs.classes, 'pgrx-extension') && !inputs.dry-run }}
+        with:
+          pattern: pgrx-image-digest-pg*
+          merge-multiple: true
+          path: pgrx-a
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ contains(inputs.classes, 'pgrx-extension') && !inputs.dry-run }}
+        with:
+          pattern: repro-pgrx-image-digest-pg*
+          merge-multiple: true
+          path: pgrx-b
+
+      - name: Compare the image-class digests
+        env:
+          CLASSES: ${{ inputs.classes }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          compared="${FILE_COMPARED:-0}"
+          if [[ ${DRY_RUN} != "true" ]]; then
+            case ",${CLASSES// /}," in
+              *,oci-image,*)
+                for arch in oci-a/*; do
+                  [[ -f ${arch} ]] || {
+                    echo "::error::oci-image: no per-arch digests to compare"
+                    exit 1
+                  }
+                  b="oci-b/$(basename "${arch}")"
+                  [[ -f ${b} ]] || {
+                    echo "::error::oci-image: rebuild produced no $(basename "${arch}") digest"
+                    exit 1
+                  }
+                  if ! cmp -s "${arch}" "${b}"; then
+                    echo "::error::oci-image: $(basename "${arch}") digest differs — the rebuild does not reproduce the image"
+                    exit 1
+                  fi
+                done
+                echo "::notice::oci-image: per-arch digests reproduced bit for bit"
+                compared=$((compared + 1))
+                ;;
+              *) ;; # class not requested
+            esac
+            case ",${CLASSES// /}," in
+              *,pgrx-extension,*)
+                for f in pgrx-a/*.json; do
+                  [[ -f ${f} ]] || {
+                    echo "::error::pgrx images: no index digests to compare"
+                    exit 1
+                  }
+                  b="pgrx-b/$(basename "${f}")"
+                  [[ -f ${b} ]] || {
+                    echo "::error::pgrx images: rebuild produced no $(basename "${f}")"
+                    exit 1
+                  }
+                  da=$(jq -r .digest "${f}")
+                  db=$(jq -r .digest "${b}")
+                  if [[ ${da} != "${db}" ]]; then
+                    echo "::error::pgrx images: $(basename "${f}" .json) index differs (${da} vs ${db})"
+                    exit 1
+                  fi
+                done
+                echo "::notice::pgrx images: per-major index digests reproduced bit for bit"
+                compared=$((compared + 1))
+                ;;
+              *) ;; # class not requested
+            esac
+          fi
+          if ((compared == 0)); then
+            echo "::error::the gate compared nothing — an empty proof is not a proof"
+            exit 1
+          fi
+          echo "::notice::repro gate: ${compared} class comparison(s) reproduced"
+  # The commitment barrier (#349 finding 1). Both proofs are class-
+  # independent — the SBOM/triage job runs for every release, and the
+  # repro gate derives its own required build set from `inputs.classes` —
+  # so the required-proof derivation lives in those jobs, and this one
+  # asserts a single thing: every proof concluded `success`. It runs and
+  # FAILS rather than skipping, so a refused release shows one red job
+  # naming each refusal instead of a cloud of skips, and a re-dispatch
+  # re-proves before it can re-publish. Everything downstream that
+  # touches the irreversible world (registry uploads, index tags, signed
+  # attestations) reaches it only through this job's `success`.
+  # capability-boundary: this job holds `id-token: write` and runs NO
+  # caller-supplied code — its steps judge the results of other jobs,
+  # download an artifact this workflow's own sbom job produced, and
+  # hand actions/attest a predicate assembled from those results. The
+  # grant exists so the decision to publish is a SIGNED claim
+  # (release-decision/v1, #349 S1) rather than an internal property of
+  # a job graph nobody re-reads: verify-release verifies it and lists
+  # it in every VSA's inputAttestations, so a stranger checks that
+  # publication happened downstream of a decision that opened.
+  # phase: commit-point
+  commit-point:
+    name: Commit point — every proof, or nothing publishes
+    needs:
+      - guard
+      - sbom
+      - repro-gate
+    if: ${{ !cancelled() && needs.guard.result == 'success' }}
+    # One decision per PLANNED INVENTORY, with the plan as the
+    # denominator (stele#158). The invariant was never "exactly one
+    # decision per release": per-artifact inventories made N normal, and
+    # a verifier handed several could only refuse as ambiguous — which
+    # is what published release-lab v0.25.3 with provenance and no
+    # verdict. It is also the truer claim, since a CVE can affect the
+    # pgrx build and not the wasm package, which is why per-artifact
+    # inventories exist at all.
+    #
+    # A matrix rather than a loop because actions/attest is an action,
+    # and every leg must fail the barrier: a matrix job's result is
+    # success only when every leg succeeded, so `needs.commit-point`
+    # keeps meaning exactly what it meant. fail-fast is off so a release
+    # names every inventory whose decision could not be made, not the
+    # first.
+    #
+    # The matrix values are document NAMES from the judged plan set —
+    # charset-guarded and collapsed by the engine before they were
+    # emitted, never raw plan bytes — and they are read here as a
+    # matrix key, never interpolated into a command line.
+    strategy:
+      fail-fast: false
+      matrix:
+        inventory: ${{ fromJSON(needs.sbom.outputs.inventories) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write # the decision signature, nothing else
+      attestations: write # store the decision in the caller's attestation store
+    env:
+      SBOM_RESULT: ${{ needs.sbom.result }}
+      REPRO_RESULT: ${{ needs.repro-gate.result }}
+    steps:
+      - name: Refuse unless every required proof succeeded
+        env:
+          UNTRUSTED_CLASSES: ${{ inputs.classes }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          fail=0
+          proofs='[]'
+          for p in "sbom and advisory triage:${SBOM_RESULT}" "repro gate:${REPRO_RESULT}"; do
+            name="${p%:*}" result="${p##*:}"
+            proofs=$(jq -c --arg n "${name}" --arg r "${result}" \
+              '. + [{name: $n, result: $r}]' <<< "${proofs}")
+            if [[ ${result} != "success" ]]; then
+              echo "::error::${name} is '${result}' — absence of a proof is never a proof"
+              fail=1
+            fi
+          done
+          ((fail == 0)) || exit 1
+          # The decision predicate: every proof by name, its conclusion,
+          # the tag and the classes — assembled HERE, in the job that
+          # holds the results, so the claim is the check's return value.
+          decided_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n \
+            --arg tag "v${VERSION}" \
+            --arg classes "${UNTRUSTED_CLASSES}" \
+            --arg at "${decided_at}" \
+            --argjson proofs "${proofs}" \
+            '{tag: $tag, classes: $classes, conclusion: "OPEN",
+              decidedAt: $at, proofs: $proofs}' \
+            > "${RUNNER_TEMP}/decision-predicate.json"
+          echo "::notice::commit point open: every required proof succeeded"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-sbom
+          path: sbom-subject
+
+      - name: Stage the decision subjects (the inventory the decision covered)
+        env:
+          INVENTORY: ${{ matrix.inventory }}
+        run: |
+          set -euo pipefail
+          : > "${RUNNER_TEMP}/decision-subjects.sha256"
+          if [[ -n ${INVENTORY} ]]; then
+            # A planned inventory decides for itself and names nothing
+            # else. Resolved by listing, never by building a path out of
+            # the matrix value.
+            found=""
+            listing=$(find sbom-subject -type f | sort)
+            while IFS= read -r f; do
+              [[ -n ${f} ]] || continue
+              name=$(basename "${f}")
+              if [[ ${name} == "${INVENTORY}" ]]; then found="${f}"; fi
+            done <<< "${listing}"
+            [[ -n ${found} ]] || {
+              echo "::error::the plan names ${INVENTORY} but the sbom artifact does not carry it"
+              exit 1
+            }
+            files="${found}"
+          else
+            # No plan: one decision over the whole release, the
+            # invariant every pre-inventory release shipped under.
+            files=$(find sbom-subject -type f | sort)
+          fi
+          while IFS= read -r f; do
+            [[ -n ${f} ]] || continue
+            digest=$(sha256sum "${f}" | cut -d' ' -f1)
+            base=$(basename "${f}")
+            printf '%s  %s\n' "${digest}" "${base}" \
+              >> "${RUNNER_TEMP}/decision-subjects.sha256"
+          done <<< "${files}"
+          [[ -s "${RUNNER_TEMP}/decision-subjects.sha256" ]] || {
+            echo "::error::the sbom artifact is empty — a decision over nothing decides nothing"
+            exit 1
+          }
+      - name: Sign the decision under this workflow's identity
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/decision-subjects.sha256
+          predicate-type: https://monumental-archive.github.io/attestations/release-decision/v1
+          predicate-path: ${{ runner.temp }}/decision-predicate.json
+
+  # Last, and only on proof. Attaches the evidence bundle and publishes the
+  # draft — the first moment anything becomes public.
+  #
+  # Fan-in, by construction: `needs` names every PROVENANCE sign job, the
+  # `if` demands that nothing upstream failed AND that every REQUESTED
+  # class delivered its signature (dry-run excuses the classes whose
+  # signer legitimately skipped). A skipped class never blocks; a failed
+  # or missing one always does. The VSA jobs are deliberately absent:
+  # verdicts run AFTER this job, against the published immutable release
+  # (#209) — attach publishes on evidence, verdicts follow. Assets and
+  # bundles travel as `release-*` / `attestation-bundle-*` artifacts, so
+  # the BYTES need no per-class input.
+  #
+  # Their LEG does — its class since stele#185 and its target since
+  # stele#223: `stele emit manifest` requires every build subject to be
+  # claimed by exactly one (class, target), and the fan-in's
+  # `merge-multiple` erases the class the artifact name carried while
+  # nothing ever carried the target. So each build leg's own subject
+  # manifest — the same digests its signer signs, one target column
+  # wider — rides down as a per-class input. The leg-to-class
+  # map is already stated twice in this job (the `if` names both halves
+  # of every pair); this is the third use of the same map, in the file
+  # that holds it, rather than a second map derived from artifact names
+  # in the callee. A new class is one more job above, one `if` clause,
+  # and one forwarded input.
+  #
+  # oci-image and wasm-npm forward nothing: they publish to a registry
+  # and attach no release asset, so they own no build subject and
+  # passing their build outputs REFUSES.
+  # phase: attest
+  attach:
+    name: Attach evidence and publish
+    needs:
+      - guard
+      - sbom
+      - sign
+      - sign-image
+      - sign-binaries
+      - sign-go
+      - sign-source
+      - sign-wasm
+      - sign-extensions
+      - sign-extension-images
+      # The build legs join `needs` only to bring their subject
+      # manifests into scope. Each is already an ancestor through its
+      # sign job, so no ordering changes and no `if` clause moves: a
+      # failed build already failed its signer, and a skipped one
+      # contributes `skipped`, which the failure test below ignores.
+      - build
+      - build-binary
+      - build-go
+      - build-source
+      - build-extension
+      # And the three that publish to a registry, for the same reason
+      # and under the same argument: each is already an ancestor
+      # through its signer.
+      - assemble-oci
+      - build-wasm
+      - build-extension-images
+    if: >-
+      ${{
+        !cancelled() && needs.guard.result == 'success'
+        && needs.sbom.result == 'success'
+        && !contains(join(needs.*.result, ','), 'failure')
+        && (!contains(inputs.classes, 'rust-crate') || needs.sign.result == 'success')
+        && (!contains(inputs.classes, 'oci-image') || needs.sign-image.result == 'success' || inputs.dry-run)
+        && (!contains(inputs.classes, 'rust-binary') || needs.sign-binaries.result == 'success')
+        && (!contains(inputs.classes, 'go-binary') || needs.sign-go.result == 'success')
+        && (!contains(inputs.classes, 'source-archive') || needs.sign-source.result == 'success')
+        && (!contains(inputs.classes, 'wasm-npm') || needs.sign-wasm.result == 'success')
+        && (!contains(inputs.classes, 'pgrx-extension')
+          || (needs.sign-extensions.result == 'success'
+            && (needs.sign-extension-images.result == 'success' || inputs.dry-run)))
+      }}
+    uses: ./.github/workflows/attach-release.yml # zizmor: ignore[self-repository]
+    permissions: {} # it publishes with the App token, not GITHUB_TOKEN
+    with:
+      version: ${{ needs.guard.outputs.version }}
+      # The manifest is written where the release's assets ALL exist,
+      # which is this job and nowhere earlier (stele#156). The classes
+      # ride with it because the manifest declares them; it is one
+      # string, not the per-class inputs this fan-in deliberately has
+      # none of.
+      #
+      # The guard's derived list, not the caller's raw one (#843): the
+      # manifest declares what the release OWES, and a crate-built image
+      # owes an inventory a Dockerfile-only one does not. The same
+      # string reached the plans judgment before the commit point, so
+      # the pre-publish check and the evidence walk read one obligation
+      # list from one derivation.
+      classes: ${{ needs.guard.outputs.classes }}
+      # One line per artifact of every class that attaches release
+      # assets, each carrying the target its leg built, empty when that
+      # class did not run. The flat `subjects` output stays what the
+      # signers take; this is the same digests plus the one column only
+      # the leg holds.
+      rust-crate-leg-subjects: ${{ needs.build.outputs.leg-subjects }}
+      rust-binary-leg-subjects: ${{ needs.build-binary.outputs.leg-subjects }}
+      go-binary-leg-subjects: ${{ needs.build-go.outputs.leg-subjects }}
+      source-archive-leg-subjects: ${{ needs.build-source.outputs.leg-subjects }}
+      pgrx-extension-leg-subjects: ${{ needs.build-extension.outputs.leg-subjects }}
+      # What each registry class published there, which no asset can
+      # say (#1168). A rehearsal publishes to no registry, so it claims
+      # nothing: the image index is not assembled on a dry run and its
+      # output is already empty, while the tarball and the per-major
+      # indexes are BUILT on one and must be withheld here.
+      oci-image-registry-subjects: ${{ needs.assemble-oci.outputs.registry-subjects }}
+      oci-image-class: ${{ needs.guard.outputs.image-class || 'oci-image' }}
+      wasm-npm-registry-subjects: ${{ !inputs.dry-run && needs.build-wasm.outputs.registry-subjects || '' }}
+      pgrx-extension-image-registry-subjects: >-
+        ${{ !inputs.dry-run && needs.build-extension-images.outputs.registry-subjects || '' }}
+      pgrx-extension-image-class: ${{ needs.guard.outputs.extension-image-class }}
+      dry-run: ${{ inputs.dry-run }}
+    secrets:
+      app-private-key: ${{ secrets.app-private-key }}
+
+  # The release-asset verdicts: binaries, source archives and extension
+  # tarballs became public URLs the moment attach published, and immutable
+  # at the same moment — so their first pull-back is here, post-publish,
+  # against exactly the bytes a stranger fetches. Subjects come from the
+  # build (what the signer attested); the verdict job re-proves every one
+  # against the release before opening any evidence. See the note on
+  # `vsa` above for the pattern; the VSA is signed over the verdict job's
+  # own re-proved manifest.
+  # phase: attest
+  vsa-binaries:
+    name: Assemble and sign binaries VSA
+    needs:
+      - sbom
+      - guard
+      - build-binary
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'rust-binary') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      subjects: ${{ needs.build-binary.outputs.subjects }}
+      release-tag: ${{ format('v{0}', needs.guard.outputs.version) }}
+      version: ${{ needs.guard.outputs.version }}
+
+  # phase: attest
+  vsa-go:
+    name: Assemble and sign Go binaries VSA
+    needs:
+      - sbom
+      - guard
+      - build-go
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'go-binary') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      subjects: ${{ needs.build-go.outputs.subjects }}
+      release-tag: ${{ format('v{0}', needs.guard.outputs.version) }}
+      version: ${{ needs.guard.outputs.version }}
+
+  # phase: attest
+  vsa-source:
+    name: Assemble and sign source VSA
+    needs:
+      - sbom
+      - guard
+      - build-source
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'source-archive') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      subjects: ${{ needs.build-source.outputs.subjects }}
+      release-tag: ${{ format('v{0}', needs.guard.outputs.version) }}
+      version: ${{ needs.guard.outputs.version }}
+
+  # phase: attest
+  vsa-extensions:
+    name: Assemble and sign extensions VSA
+    needs:
+      - sbom
+      - guard
+      - build-extension
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'pgrx-extension') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      subjects: ${{ needs.build-extension.outputs.subjects }}
+      release-tag: ${{ format('v{0}', needs.guard.outputs.version) }}
+      version: ${{ needs.guard.outputs.version }}
+      # File subjects, but built INSIDE the pinned postgres base set —
+      # the one class where subject shape and base-image consumption
+      # disagree (#310 finding 4). The claim is per-major: exactly the
+      # mapping rows the build matrix instantiated (#316 finding 3).
+      base-majors: ${{ inputs.pg-majors }}
+
+  # The image verdicts. No pull-back — content addressing already proves
+  # the bytes; what the verdict job proves is the mutable half, that the
+  # tag the release advertises resolves in the registry to the attested
+  # index digest, and then opens the provenance oci:// at that digest.
+  # One verdict covers the class's whole image set (a subject line per
+  # index), signed over the verdict job's re-proved manifest exactly like
+  # the file classes — the subject names are the untagged references the
+  # signer attested.
+  # phase: attest
+  vsa-image:
+    name: Assemble and sign image VSA
+    needs:
+      - sbom
+      - guard
+      - assemble-oci
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'oci-image') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # pull-back plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      images: >-
+        ${{ format('[{{"image":"{0}","tag":"{1}","digest":"{2}"}}]',
+        needs.assemble-oci.outputs.image, needs.guard.outputs.version,
+        needs.assemble-oci.outputs.digest) }}
+      version: ${{ needs.guard.outputs.version }}
+      # No base-majors: the oci-image class is FROM scratch — a
+      # musl-static binary in an empty image has no base layer, and the
+      # enrichment claims nothing it did not consume (#316 finding 3).
+
+  # phase: attest
+  vsa-extension-images:
+    name: Assemble and sign extension images VSA
+    needs:
+      - sbom
+      - guard
+      - build-extension-images
+      - attach
+    if: ${{ !cancelled() && needs.attach.result == 'success' && contains(inputs.classes, 'pgrx-extension') && !inputs.dry-run }}
+    uses: ./.github/workflows/verify-release.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # registry resolution plus attestation reads
+      id-token: write # the verdict signs itself — verifier.id IS the certificate (#264)
+      attestations: write # persist the verdict in the store
+      artifact-metadata: write # the attestation storage record
+    with:
+      mode: verdict
+      inventories: ${{ needs.sbom.outputs.inventories }}
+      # The signing matrix as-is: {pg, image, tag, digest} — the verdict
+      # job reads image, tag and digest and ignores the rest.
+      images: ${{ needs.build-extension-images.outputs.images }}
+      version: ${{ needs.guard.outputs.version }}
+      # No base-majors: the extension images are FROM scratch + COPY of
+      # the already-built tarballs — the base consumption happened in the
+      # tarball build and is claimed on THAT class's verdict, not here
+      # (#316 finding 3).
+
+  # The DOI comes last of all: it cites a release that is already public,
+  # proven and signed. Skipped on dry-run (a rehearsal must cite nothing).
+  # phase: attest
+  doi:
+    name: Mint the version DOI
+    needs:
+      - guard
+      - attach
+    # !cancelled() + explicit attach check: the implicit success() looks
+    # THROUGH attach to its legitimately-skipped class ancestors and goes
+    # false — the same transitive quirk attach's own condition exists for.
+    # Measured on v0.14.2, where everything succeeded and doi skipped.
+    if: ${{ !cancelled() && needs.attach.result == 'success' && inputs.mint-doi && !inputs.dry-run }}
+    uses: ./.github/workflows/mint-doi.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # the minting job downloads the released source
+    with:
+      version: ${{ needs.guard.outputs.version }}
+    secrets:
+      zenodo-token: ${{ secrets.zenodo-token }}
+
+  # A tag is immutable, so a publish that dies spends its version number
+  # and leaves the draft `release/tag-release.sh` cut sitting there — the
+  # release correctly burned, the residue outside the taxonomy. Nothing
+  # cleaned it up and nothing noticed: the evidence walk, the tag walk
+  # and `derive vex-subjects` all enumerate NON-DRAFT releases and
+  # `gh release view` with no tag returns the latest PUBLISHED one, so a
+  # draft is invisible to every judgment in the org — by coincidence of
+  # how those enumerations are written, and now stated in
+  # docs/release.md rather than relied on unsaid. What a draft does
+  # reach is a human reading the releases page, and at thirty-two of
+  # them "burn or release in flight?" could not be answered by looking.
+  #
+  # So the draft becomes the record. Deleting it was the old instruction
+  # and is rejected: it destroys the only artifact of the failed attempt
+  # other than run logs, which expire at 90 days, and this org derives
+  # burns from run history (#597).
+  #
+  # `needs.attach.result != 'success'` covers every way the release
+  # failed to go public in ONE edge — attach failed, or attach never ran
+  # because something upstream did — so a class added above wires itself
+  # in rather than being silently unwatched. The `record` phase is
+  # terminal by construction (`lint:release-phases`): it signs nothing,
+  # publishes nothing, and nothing may depend on it, so it cannot become
+  # a route around the commit point.
+  # phase: record
+  burn-record:
+    name: Record the burn on the draft
+    needs:
+      - guard
+      - attach
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.attach.result != 'success' && !inputs.dry-run }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {} # it annotates with the App token, not GITHUB_TOKEN
+    steps:
+      # No checkout: the canon action links the tree this run already
+      # resolved, so the failure path costs one symlink and no network.
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Mint the annotating token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TAG_MINT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+
+      - name: Record the burn
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          KIND: burn
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .org-canon/release/record-draft.sh
+...

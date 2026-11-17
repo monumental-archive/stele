@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -61,6 +62,12 @@ type Policy struct {
 	Tags        *TagsPolicy             `json:"tags,omitempty"`
 	Chains      *ChainsPolicy           `json:"chains,omitempty"`
 	Permissions *PermissionsPolicy      `json:"permissions,omitempty"`
+	// SignerCertificates declares the signer-certificate watch
+	// (stele#387): the certificate transparency log to read, and the
+	// signing workflows whose every certificate must reconcile against
+	// a signing the population performed. Its presence is the declared
+	// obligation; the identity's issuer is the top-level Issuer.
+	SignerCertificates *SignerCertificatesPolicy `json:"signerCertificates,omitempty"`
 }
 
 // ChainsPolicy parameterises the chain-coverage audit (stele#94).
@@ -189,6 +196,121 @@ func (rt *ReusableTree) validate() error {
 
 	if err := relativeDir(*rt.Dir); err != nil {
 		return fmt.Errorf("permissions.reusable.dir: %w", err)
+	}
+
+	return nil
+}
+
+// SignerCertificatesPolicy parameterises the signer-certificate watch
+// (stele#387). Everything org-shaped about it is here: which log, which
+// signing workflows, and which repositories each lets call it. No
+// organisation, repository or log is named in code.
+type SignerCertificatesPolicy struct {
+	// Log is the certificate transparency log's base URL, spelled
+	// exactly as the trusted root spells it: the root is what vouches
+	// for the log's key, so a URL it does not name has no key.
+	Log *string `json:"log"`
+	// Signers are the signing workflows watched. A list from the start
+	// — how many signing workflows an organisation runs is policy, and
+	// each has its own callers (stele#387, amended in triage).
+	Signers []SignerPolicy `json:"signers"`
+}
+
+// SignerPolicy is one signing workflow and the repositories whose
+// workflows may call it.
+type SignerPolicy struct {
+	// Workflow is the signing workflow as a caller names it in `uses:`,
+	// without the ref: owner/repo/path.
+	Workflow *string `json:"workflow"`
+	// Callers are the owner/name repositories whose workflows may call
+	// the signer. A run outside them must reach the signer through one
+	// of their workflows, never directly.
+	Callers []string `json:"callers"`
+}
+
+// minWorkflowSegments is the least a workflow reference carries: an
+// owner, a repository and a path.
+const minWorkflowSegments = 3
+
+func (sp *SignerCertificatesPolicy) validate() error {
+	if err := validateLogURL(sp.Log); err != nil {
+		return err
+	}
+
+	if len(sp.Signers) == 0 {
+		return errors.New("signerCertificates.signers is absent or empty — a watch over no signer watches nothing")
+	}
+
+	seen := map[string]bool{}
+
+	for i, s := range sp.Signers {
+		where := fmt.Sprintf("signerCertificates.signers[%d]", i)
+
+		if s.Workflow == nil || *s.Workflow == "" {
+			return fmt.Errorf("%s.workflow is absent or empty", where)
+		}
+
+		parts := strings.Split(*s.Workflow, "/")
+		if len(parts) < minWorkflowSegments || slices.Contains(parts, "") || strings.Contains(*s.Workflow, "@") {
+			return fmt.Errorf("%s.workflow %q is not owner/repo/path without a ref", where, *s.Workflow)
+		}
+
+		if seen[*s.Workflow] {
+			return fmt.Errorf("%s names %s twice — a certificate must match exactly one signer", where, *s.Workflow)
+		}
+
+		seen[*s.Workflow] = true
+
+		if err := validateCallers(where, s.Callers); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateLogURL refuses a log address the reader could not use as
+// written: not https — get-entries content is not proven entry by
+// entry, so the transport is what keeps an entry from being dropped in
+// flight — or carrying anything past the path, which the trusted
+// root's spelling never does.
+func validateLogURL(log *string) error {
+	if log == nil || *log == "" {
+		return errors.New("signerCertificates.log is absent or empty")
+	}
+
+	u, err := url.Parse(*log)
+
+	switch {
+	case err != nil:
+		return fmt.Errorf("signerCertificates.log %q does not parse: %w", *log, err)
+	case u.Scheme != "https" || u.Host == "":
+		return fmt.Errorf("signerCertificates.log %q is not an https URL", *log)
+	case u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(*log, "/"):
+		return fmt.Errorf("signerCertificates.log %q carries more than a base URL — spell it as the trusted root does", *log)
+	}
+
+	return nil
+}
+
+func validateCallers(where string, callers []string) error {
+	if len(callers) == 0 {
+		return fmt.Errorf("%s.callers is absent or empty — a signer nobody may call reconciles no certificate", where)
+	}
+
+	seen := map[string]bool{}
+
+	for j, c := range callers {
+		owner, name, ok := strings.Cut(c, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return fmt.Errorf("%s.callers[%d] %q is not owner/name", where, j, c)
+		}
+
+		if seen[c] {
+			return fmt.Errorf("%s.callers[%d] names %s twice — the callers are a set", where, j, c)
+		}
+
+		seen[c] = true
 	}
 
 	return nil
@@ -1017,7 +1139,26 @@ func (p *Policy) validate() error {
 		}
 	}
 
+	if err := p.validateSignerCertificates(); err != nil {
+		return err
+	}
+
 	return p.validateTags()
+}
+
+// validateSignerCertificates validates the OPTIONAL signer-certificate
+// section; declared means the issuer beside it, because a signer
+// identity is a subject AND the issuer that vouched for it.
+func (p *Policy) validateSignerCertificates() error {
+	if p.SignerCertificates == nil {
+		return nil
+	}
+
+	if p.Issuer == nil || *p.Issuer == "" {
+		return errors.New("issuer is required when signerCertificates is declared")
+	}
+
+	return p.SignerCertificates.validate()
 }
 
 // validateTags validates the OPTIONAL tags section; declared means
