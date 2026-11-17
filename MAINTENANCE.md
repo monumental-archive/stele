@@ -41,7 +41,7 @@ the same statement as this one and tested against it.
 | `stele derive release-plan` | the release decisions as one document a forge executor runs: version, notes, commit contents, branch, tag; `--prepare` writes the tree it names |
 | `stele derive sbom` | an artifact's inventory (SPDX 2.3), or the release view folded from per-artifact documents |
 | `stele derive facts` | the OCI image metadata one release asserts on its images |
-| `stele derive vex` | this release's coverage document, findings joined to recorded decisions |
+| `stele derive vex` | this release's coverage document, findings joined to recorded decisions; the base-layer ecosystems and the author read from the assert policy, the inventories given as pairs or found in a directory |
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
 | `stele derive vex-subjects` | which published releases one VEX decision reaches, and the subjects a claim about it is signed over |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |

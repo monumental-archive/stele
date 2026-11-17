@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/chain"
+	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/trust"
 )
 
@@ -164,6 +165,18 @@ func expand(tmpl string, c Coords) string {
 		"{tag}", c.Tag,
 		"{version}", c.Version(),
 	).Replace(tmpl)
+}
+
+// ReleaseResource is the release's resource URI: the policy's
+// build.resourceUri expanded for the coordinates — the one definition
+// the release verdict names and any other document speaking for the
+// whole release names too (stele#397's release view).
+func ReleaseResource(p *policy.Policy, c Coords) (string, error) {
+	if p.Build == nil || p.Build.ResourceURI == nil {
+		return "", errors.New("verify: the policy declares no build.resourceUri — the release names no resource")
+	}
+
+	return expand(*p.Build.ResourceURI, c), nil
 }
 
 // expandWorkflow substitutes the identity-role placeholders (#82):

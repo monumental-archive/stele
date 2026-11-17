@@ -40,6 +40,7 @@ package assert
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -73,6 +74,81 @@ type BlastRadiusPolicy struct {
 	// by the upgrade wherever the newest release proves the upgrade
 	// remedies it.
 	Supported *string `json:"supported,omitempty"`
+	// VEXAuthor is who asserts the statements of a VEX document this
+	// org derives (`derive vex`, stele#397) — OpenVEX's `author`, an
+	// identity only the org can name. Optional: the walk reads nothing
+	// from it, and the derivation refuses without it by name.
+	VEXAuthor *string `json:"vexAuthor,omitempty"`
+	// VEXID templates the identifier of a derived VEX document — the
+	// namespace and shape are the org's convention, never code's.
+	// Optional; without it the caller names the id.
+	VEXID *VEXIDPolicy `json:"vexId,omitempty"`
+}
+
+// VEXIDPolicy holds the two id templates `derive vex` knows: one for
+// a release, named by its version, and one for a stream publish, named
+// by the run that made it. Each placeholder set is closed.
+type VEXIDPolicy struct {
+	// Release admits {owner}, {repo} and {version}.
+	Release *string `json:"release,omitempty"`
+	// Stream admits {owner}, {repo} and {run}.
+	Stream *string `json:"stream,omitempty"`
+}
+
+// vexPlaceholderRE finds a template's placeholders.
+var vexPlaceholderRE = regexp.MustCompile(`\{[^{}]*\}`)
+
+// ReleaseID renders a release's document id, or refuses by name when
+// the policy templates none.
+func (v *VEXIDPolicy) ReleaseID(owner, repo, version string) (string, error) {
+	if v == nil || v.Release == nil {
+		return "", errors.New("blastRadius.vexId.release is not declared — pass --id or declare the template")
+	}
+
+	return strings.NewReplacer("{owner}", owner, "{repo}", repo, "{version}", version).Replace(*v.Release), nil
+}
+
+// StreamID renders a stream publish's document id, or refuses by name
+// when the policy templates none.
+func (v *VEXIDPolicy) StreamID(owner, repo, run string) (string, error) {
+	if v == nil || v.Stream == nil {
+		return "", errors.New("blastRadius.vexId.stream is not declared — pass --id or declare the template")
+	}
+
+	return strings.NewReplacer("{owner}", owner, "{repo}", repo, "{run}", run).Replace(*v.Stream), nil
+}
+
+func (v *VEXIDPolicy) validate() error {
+	if v.Release == nil && v.Stream == nil {
+		return errors.New("blastRadius.vexId declares neither a release nor a stream template — " +
+			"an id policy that templates nothing")
+	}
+
+	for _, f := range []struct {
+		name  string
+		value *string
+		known []string
+	}{
+		{"blastRadius.vexId.release", v.Release, []string{"{owner}", "{repo}", "{version}"}},
+		{"blastRadius.vexId.stream", v.Stream, []string{"{owner}", "{repo}", "{run}"}},
+	} {
+		if f.value == nil {
+			continue
+		}
+
+		if *f.value == "" {
+			return fmt.Errorf("%s is empty", f.name)
+		}
+
+		for _, ph := range vexPlaceholderRE.FindAllString(*f.value, -1) {
+			if !slices.Contains(f.known, ph) {
+				return fmt.Errorf("%s carries placeholder %s — it admits only %s",
+					f.name, ph, strings.Join(f.known, " "))
+			}
+		}
+	}
+
+	return nil
 }
 
 // SupportedLatestRelease is the one support window this walk knows:
@@ -101,6 +177,16 @@ func (b *BlastRadiusPolicy) validate() error {
 			if f == nil || *f == "" {
 				return fmt.Errorf("blastRadius.canary.%s is absent or empty", name)
 			}
+		}
+	}
+
+	if b.VEXAuthor != nil && *b.VEXAuthor == "" {
+		return errors.New("blastRadius.vexAuthor is empty — a statement asserted by nobody asserts nothing")
+	}
+
+	if b.VEXID != nil {
+		if err := b.VEXID.validate(); err != nil {
+			return err
 		}
 	}
 
