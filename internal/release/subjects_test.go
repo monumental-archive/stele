@@ -7,15 +7,24 @@
 // transcription of it. Every refusal row asserts the message: a
 // refusal that names the wrong asset sends the reader to the wrong
 // leg.
+//
+// The classes are not the engine's (stele#442): every row reads its
+// class's shape from testdata/subjects/policy.json, the organisation's
+// four shapes and a stranger's, through the assert policy's own
+// loader — so a golden row is also proof that the declaration
+// reproduces #429's bytes.
 
 package release_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/release"
 )
 
@@ -119,15 +128,83 @@ func golden(t *testing.T, path string) string {
 	return string(b)
 }
 
+// fixturePolicy is the one policy every row's class is read from.
+var fixturePolicy = sync.OnceValues(func() (*assert.Policy, error) {
+	f, err := os.Open(filepath.Join(fixtures, "policy.json"))
+	if err != nil {
+		return nil, fmt.Errorf("the fixture policy: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only close
+
+	return assert.LoadPolicy(f)
+})
+
+// shape compiles the fixture policy's declaration for a class.
+func shape(t *testing.T, name string) *release.Compiled {
+	t.Helper()
+
+	pol, err := fixturePolicy()
+	if err != nil {
+		t.Fatalf("the fixture policy: %v", err)
+	}
+
+	c, ok := pol.Evidence.Classes[name]
+	if !ok || c.Subjects == nil {
+		t.Fatalf("the fixture policy declares no subjects for %q", name)
+	}
+
+	compiled, err := c.Subjects.Compile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return compiled
+}
+
 func class(t *testing.T, name string) *release.AssetClass {
 	t.Helper()
 
-	c, ok := release.AssetClassNamed(name)
-	if !ok {
-		t.Fatalf("no asset class %q", name)
+	c := shape(t, name).Files
+	if c == nil {
+		t.Fatalf("%q is not a files class", name)
 	}
 
 	return c
+}
+
+// TestSubjectsFromADeclaredShape is the stranger test: a class named
+// and shaped unlike any of this organisation's — boards and revisions,
+// two `.bin` images per leg, a dotted label — derives its manifest
+// from the fixture policy alone, with no code naming it.
+func TestSubjectsFromADeclaredShape(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(fixtures, "firmware")
+
+	m, err := class(t, "board-firmware").Subjects(filepath.Join(dir, "assets"), []string{"beta@r10", "alpha@r2"})
+	if err != nil {
+		t.Fatalf("Subjects: %v", err)
+	}
+
+	if got, want := string(m.SubjectLines()), golden(t, filepath.Join(dir, "subjects.golden")); got != want {
+		t.Errorf("subjects:\n%s\nwant:\n%s", got, want)
+	}
+
+	if got, want := string(m.LegLines()), golden(t, filepath.Join(dir, "leg-subjects.golden")); got != want {
+		t.Errorf("leg subjects:\n%s\nwant:\n%s", got, want)
+	}
+
+	_, err = class(t, "board-firmware").Subjects(filepath.Join(dir, "assets"), []string{"alpha@r2", "gamma-r1"})
+	refused(t, err, []string{
+		`release: board-firmware subjects: planned board "gamma-r1" is not <board>@r<rev>`,
+	})
+
+	_, err = class(t, "board-firmware").Subjects(filepath.Join(dir, "assets"), []string{"alpha@r2", "delta@r1"})
+	refused(t, err, []string{
+		"expected exactly one image for delta r1 (*_delta_r1.bin), found 0",
+		"expected exactly one recovery image for delta r1 (*_delta_r1.rescue.bin), found 0",
+		"unplanned image fw_beta_r10.bin: 4 images for 2 planned boards (2 each)",
+	})
 }
 
 func TestSubjectsGolden(t *testing.T) {
@@ -354,33 +431,12 @@ func TestSubjectsUnreadableDirectory(t *testing.T) {
 	}
 }
 
-func TestSubjectClasses(t *testing.T) {
-	t.Parallel()
-
-	got := strings.Join(release.SubjectClasses(), ",")
-	if want := "go-binary,pgrx-extension,pgrx-extension-image,rust-binary"; got != want {
-		t.Errorf("SubjectClasses() = %s, want %s", got, want)
-	}
-}
-
-func TestClassNamedUnknown(t *testing.T) {
-	t.Parallel()
-
-	if _, ok := release.AssetClassNamed("wasm-npm"); ok {
-		t.Error("AssetClassNamed answered for a class with no asset definition")
-	}
-
-	if _, ok := release.RegistryClassNamed("go-binary"); ok {
-		t.Error("RegistryClassNamed answered for a file class")
-	}
-}
-
 func registry(t *testing.T) *release.RegistryClass {
 	t.Helper()
 
-	c, ok := release.RegistryClassNamed("pgrx-extension-image")
-	if !ok {
-		t.Fatal("no registry class pgrx-extension-image")
+	c := shape(t, "pgrx-extension-image").Registry
+	if c == nil {
+		t.Fatal("pgrx-extension-image is not a registry class")
 	}
 
 	return c
@@ -476,7 +532,7 @@ func TestRegistrySubjectsRefusals(t *testing.T) {
 		{
 			name: "a field the document never had", plan: imgPlan,
 			mutate: write("pg16.json", doc(`"pg":"16","image":"i","tag":"t","digest":"`+digest+`","arch":"x"`)),
-			want:   []string{`pg16.json: jsonx: decode: json: unknown field "arch"`},
+			want:   []string{`pg16.json: unknown field "arch"`},
 		},
 		{
 			name: "an unreadable document", plan: imgPlan,

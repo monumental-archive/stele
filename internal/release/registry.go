@@ -9,9 +9,11 @@ package release
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
@@ -19,50 +21,20 @@ import (
 
 // RegistryClass is one registry class's statement of what a planned
 // leg leaves behind: one digest document naming the leg, the image
-// and the digest pushed.
+// and the digest pushed. It is compiled from the class's declared
+// shape (shape.go); no class is written here.
 type RegistryClass struct {
-	// Name is the evidence class, as the manifest spells it.
+	// Name is the evidence class, as the policy spells it.
 	Name string
 	// Unit is what one planned entry is called in a refusal.
 	Unit string
+	// Shape is what an entry failing the pattern is not, in a refusal.
+	Shape string
 	// Extension is the digest documents' suffix in the directory.
 	Extension string
-	entry     *regexp.Regexp
-}
-
-// registryClasses are the release contract's class definitions for
-// the classes whose subjects live in a registry.
-func registryClasses() []*RegistryClass {
-	return []*RegistryClass{
-		{
-			Name: "pgrx-extension-image", Unit: "major", Extension: ".json",
-			entry: majorRE,
-		},
-	}
-}
-
-// majorRE is a planned Postgres major.
-var majorRE = regexp.MustCompile(`^\d+$`)
-
-// RegistryClassNamed returns the registry class definition for name.
-func RegistryClassNamed(name string) (*RegistryClass, bool) {
-	for _, c := range registryClasses() {
-		if c.Name == name {
-			return c, true
-		}
-	}
-
-	return nil, false
-}
-
-// digestDoc is the document one leg writes. Every field is required:
-// the signer is given what these say, so an absent one is refused
-// rather than read as empty.
-type digestDoc struct {
-	PG     *string `json:"pg"`
-	Image  *string `json:"image"`
-	Tag    *string `json:"tag"`
-	Digest *string `json:"digest"`
+	// LegField is the digest document field naming its leg.
+	LegField string
+	entry    *regexp.Regexp
 }
 
 var sha256DigestRE = regexp.MustCompile(`^sha256:([0-9a-f]{64})$`)
@@ -141,7 +113,7 @@ func (c *RegistryClass) plan(planned []string) (map[string]bool, error) {
 
 	for _, entry := range planned {
 		if !c.entry.MatchString(entry) {
-			return nil, fmt.Errorf("release: %s subjects: planned %s %q is not a %s", c.Name, c.Unit, entry, c.Unit)
+			return nil, fmt.Errorf("release: %s subjects: planned %s %q is not %s", c.Name, c.Unit, entry, c.Shape)
 		}
 
 		if set[entry] {
@@ -154,7 +126,11 @@ func (c *RegistryClass) plan(planned []string) (map[string]bool, error) {
 	return set, nil
 }
 
-// read decodes one digest document into its leg and its line.
+// read decodes one digest document into its leg and its line. The
+// leg's field is the policy's to name, so the document is read as a
+// set of string fields and held to exactly the four it must carry:
+// the signer is given what these say, so an absent one is refused
+// rather than read as empty, and an extra one rather than ignored.
 //
 //nolint:gocritic // unnamedResult: the leg, then its subject line
 func (c *RegistryClass) read(path string) (string, string, error) {
@@ -164,30 +140,48 @@ func (c *RegistryClass) read(path string) (string, string, error) {
 	}
 	defer f.Close() //nolint:errcheck // read-only close
 
-	doc, err := jsonx.Decode[digestDoc](f)
+	doc, err := jsonx.Decode[map[string]*string](f)
 	if err != nil {
 		return "", "", err
 	}
 
+	fields := []string{c.LegField, docImage, docTag, docDigest}
+
+	for _, k := range slices.Sorted(maps.Keys(*doc)) {
+		if !slices.Contains(fields, k) {
+			return "", "", fmt.Errorf("unknown field %q", k)
+		}
+	}
+
+	get := func(k string) string {
+		if v := (*doc)[k]; v != nil {
+			return *v
+		}
+
+		return ""
+	}
+
+	leg, image, digest := get(c.LegField), get(docImage), (*doc)[docDigest]
+
 	switch {
-	case doc.PG == nil || *doc.PG == "":
-		return "", "", errors.New("no pg")
-	case doc.Image == nil || *doc.Image == "":
+	case leg == "":
+		return "", "", fmt.Errorf("no %s", c.LegField)
+	case image == "":
 		return "", "", errors.New("no image")
-	case strings.ContainsAny(*doc.Image, " \t\n\\"):
-		return "", "", fmt.Errorf("image %q carries a character a subject line cannot", *doc.Image)
-	case doc.Tag == nil || *doc.Tag == "":
+	case strings.ContainsAny(image, " \t\n\\"):
+		return "", "", fmt.Errorf("image %q carries a character a subject line cannot", image)
+	case get(docTag) == "":
 		return "", "", errors.New("no tag")
-	case doc.Digest == nil:
+	case digest == nil:
 		return "", "", errors.New("no digest")
 	}
 
-	m := sha256DigestRE.FindStringSubmatch(*doc.Digest)
+	m := sha256DigestRE.FindStringSubmatch(*digest)
 	if m == nil {
-		return "", "", fmt.Errorf("digest %q is not sha256:<64 hex>", *doc.Digest)
+		return "", "", fmt.Errorf("digest %q is not sha256:<64 hex>", *digest)
 	}
 
-	return *doc.PG, *doc.PG + " " + m[1] + "  " + *doc.Image, nil
+	return leg, leg + " " + m[1] + "  " + image, nil
 }
 
 // Registry is a release's registry subject lines, in digest-document

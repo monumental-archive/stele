@@ -6,9 +6,9 @@
 // It was three copies of one shell block in the canon's build
 // workflows plus a fourth for registry images, each deciding what gets
 // signed and none tested. What a planned leg PRODUCES is a release
-// contract fact, so it lives here, in the class definitions below, and
-// nowhere else: no caller passes a name pattern, and no other code
-// spells one.
+// contract fact, declared on the class's assert-policy entry
+// (stele#442, shape.go) and nowhere else: no caller passes a name
+// pattern, and no code spells one.
 //
 // The byte format is the one the canon's signing and attach steps
 // already read — `sha256sum`'s two-space line for a subject, the same
@@ -25,18 +25,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
 
 // AssetClass is one build class's statement of what a planned leg
 // produces. The planned entry is the matrix's own spelling of a leg —
-// a target, a major-and-arch cell — and leg turns it into the assets
-// that leg must have left behind.
+// whatever the class's declared entry pattern accepts — and leg turns
+// it into the assets that leg must have left behind.
 type AssetClass struct {
-	// Name is the evidence class, as the manifest and the policy
-	// spell it.
+	// Name is the evidence class, as the policy spells it.
 	Name string
 	// Unit is what one planned entry is called in a refusal.
 	Unit string
@@ -53,7 +51,7 @@ type Leg struct {
 	// Entry is the planned entry as the plan spelled it.
 	Entry string
 	// Label prefixes this leg's lines in the leg-grouped manifest:
-	// the target grain the manifest's `--leg-subjects` reads back.
+	// the grain the manifest's `--leg-subjects` reads back.
 	Label string
 	// Assets are the expected assets, in the order the leg's lines
 	// are written.
@@ -62,109 +60,12 @@ type Leg struct {
 
 // Expected is one asset a leg must produce exactly once.
 type Expected struct {
-	// Kind and Of name it in a refusal: "debug tarball" for
-	// "pg16/arm64".
+	// Kind and Of name it in a refusal: "expected exactly one <Kind>
+	// for <Of>".
 	Kind, Of string
 	// Suffix is what the asset's name ends with. Any non-empty,
 	// non-hidden stem before it is the release's own naming.
 	Suffix string
-}
-
-// The archive extension both binary classes and the extension class
-// ship.
-const tarGz = ".tar.gz"
-
-// assetClasses are the release contract's class definitions for the
-// classes whose subjects are files. Adding a class is adding a row.
-func assetClasses() []*AssetClass {
-	return []*AssetClass{
-		binaryClass("go-binary"),
-		binaryClass("rust-binary"),
-		{
-			Name: "pgrx-extension", Unit: "cell", Kind: "tarball", Extension: tarGz,
-			leg: pgrxCell,
-		},
-	}
-}
-
-// binaryClass is the one-archive-per-target shape: `<stem>-<target>.tar.gz`,
-// and the leg's label is the target.
-func binaryClass(name string) *AssetClass {
-	return &AssetClass{
-		Name: name, Unit: "target", Kind: "archive", Extension: tarGz,
-		leg: func(entry string) (Leg, error) {
-			if err := plainEntry(entry); err != nil {
-				return Leg{}, err
-			}
-
-			return Leg{Entry: entry, Label: entry, Assets: []Expected{
-				{Kind: "archive", Of: entry, Suffix: "-" + entry + tarGz},
-			}}, nil
-		},
-	}
-}
-
-// pgrxCellRE is a planned extension cell: the Postgres major, then
-// the architecture.
-var pgrxCellRE = regexp.MustCompile(`^(\d+)-([a-z0-9_]+)$`)
-
-// pgrxCell is the extension shape: an installable tarball and its
-// debug sibling per (major, arch) cell, both labelled with the major —
-// the class's target grain, so both architectures of one major are
-// one leg's subjects.
-func pgrxCell(entry string) (Leg, error) {
-	m := pgrxCellRE.FindStringSubmatch(entry)
-	if m == nil {
-		return Leg{}, fmt.Errorf("planned cell %q is not <major>-<arch>", entry)
-	}
-
-	pg, arch := m[1], m[2]
-	of := "pg" + pg + "/" + arch
-	stem := "-pg" + pg + "-linux-" + arch
-
-	return Leg{Entry: entry, Label: pg, Assets: []Expected{
-		{Kind: "tarball", Of: of, Suffix: stem + tarGz},
-		{Kind: "debug tarball", Of: of, Suffix: stem + "-debug" + tarGz},
-	}}, nil
-}
-
-// plainEntry refuses a planned entry that could not be one name
-// segment: it is spliced into a file name, so a separator or a space
-// would make the expectation match something the plan never meant.
-func plainEntry(entry string) error {
-	if entry == "" || strings.ContainsAny(entry, "/\\ \t\n*?[") {
-		return fmt.Errorf("planned target %q is not a plain name", entry)
-	}
-
-	return nil
-}
-
-// AssetClassNamed returns the class definition for name.
-func AssetClassNamed(name string) (*AssetClass, bool) {
-	for _, c := range assetClasses() {
-		if c.Name == name {
-			return c, true
-		}
-	}
-
-	return nil, false
-}
-
-// SubjectClasses names every class a subject manifest is defined
-// for, file and registry alike, in name order.
-func SubjectClasses() []string {
-	var names []string
-	for _, c := range assetClasses() {
-		names = append(names, c.Name)
-	}
-
-	for _, c := range registryClasses() {
-		names = append(names, c.Name)
-	}
-
-	sort.Strings(names)
-
-	return names
 }
 
 // Subject is one digest line: the asset's sha256 and its name.

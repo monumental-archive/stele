@@ -1,12 +1,12 @@
 // `derive subjects`: the digests a build's provenance names, computed
-// against the legs its matrix planned (stele#393). The class
-// definitions — what one planned leg leaves behind — are the release
-// contract's own (internal/release); this file is the argument surface
-// and the placement, nothing else.
+// against the legs its matrix planned (stele#393). What one planned
+// leg leaves behind is the class's subject shape, declared on its
+// assert-policy entry (stele#442) and judged by internal/release; this
+// file is the argument surface and the placement, nothing else.
 //
 // The planned legs arrive as DATA, the build workflow's own `expected`
 // list, never as a name pattern: which names a leg produces is the
-// class's definition, and a pattern on the command line would be a
+// class's declared shape, and a pattern on the command line would be a
 // second one. The lines are printed and, when asked, written to
 // files; writing them to GITHUB_OUTPUT stays the workflow's one line.
 
@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
+	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/release"
 )
@@ -28,6 +28,7 @@ const deriveSubjects = "subjects"
 
 // subjectsArgs is the mode's whole argument surface.
 type subjectsArgs struct {
+	policy         string
 	class          string
 	expected       string
 	dir            string
@@ -46,6 +47,8 @@ func parseSubjectsArgs(args []string, stderr io.Writer) (*subjectsArgs, int) {
 
 	flags := flag.NewFlagSet("stele derive subjects", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.StringVar(&sa.policy, "policy", "",
+		"path to the assert policy declaring the class's subject shape (required)")
 	flags.StringVar(&sa.class, "class", "", "the evidence class whose build this is (required)")
 	flags.StringVar(&sa.expected, "expected", "",
 		"path to the planned legs, the build matrix's JSON list of strings; /dev/stdin reads a pipe (required)")
@@ -71,6 +74,8 @@ func parseSubjectsArgs(args []string, stderr io.Writer) (*subjectsArgs, int) {
 	switch {
 	case flags.NArg() > 0:
 		return sa, usageFail(fmt.Sprintf("unexpected argument %q", flags.Arg(0)))
+	case sa.policy == "":
+		return sa, usageFail("--policy is required")
 	case sa.class == "":
 		return sa, usageFail("--class is required")
 	case sa.expected == "":
@@ -79,8 +84,13 @@ func parseSubjectsArgs(args []string, stderr io.Writer) (*subjectsArgs, int) {
 		return sa, usageFail("--dir is required")
 	}
 
-	if c, ok := release.AssetClassNamed(sa.class); ok {
-		sa.assetClass = c
+	shape, err := subjectShape(sa.policy, sa.class)
+	if err != nil {
+		return sa, usageFail(err.Error())
+	}
+
+	if shape.Files != nil {
+		sa.assetClass = shape.Files
 		if sa.registryOut != "" {
 			return sa, usageFail(fmt.Sprintf(
 				"--registry-subjects-out: %s ships files, not registry subjects", sa.class,
@@ -90,20 +100,46 @@ func parseSubjectsArgs(args []string, stderr io.Writer) (*subjectsArgs, int) {
 		return sa, exitOK
 	}
 
-	if c, ok := release.RegistryClassNamed(sa.class); ok {
-		sa.registryClass = c
-		if sa.subjectsOut != "" || sa.legSubjectsOut != "" {
-			return sa, usageFail(fmt.Sprintf(
-				"--subjects-out and --leg-subjects-out: %s publishes to a registry; its lines are"+
-					" --registry-subjects-out", sa.class,
-			))
-		}
-
-		return sa, exitOK
+	sa.registryClass = shape.Registry
+	if sa.subjectsOut != "" || sa.legSubjectsOut != "" {
+		return sa, usageFail(fmt.Sprintf(
+			"--subjects-out and --leg-subjects-out: %s publishes to a registry; its lines are"+
+				" --registry-subjects-out", sa.class,
+		))
 	}
 
-	return sa, usageFail(fmt.Sprintf("unknown class %q: subjects are defined for %s",
-		sa.class, strings.Join(release.SubjectClasses(), ", ")))
+	return sa, exitOK
+}
+
+// subjectShape loads the assert policy and compiles the class's
+// declared subject shape. A class the policy does not declare, and a
+// class declared with no shape, each refuse by name: the subjects of
+// a build are never assumed.
+func subjectShape(path, class string) (*release.Compiled, error) {
+	pf, err := os.Open(path) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return nil, fmt.Errorf("reading the policy: %w", err)
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return nil, err
+	}
+
+	c, ok := pol.Evidence.Classes[class]
+	if !ok {
+		return nil, fmt.Errorf("class %q is not declared in %s's evidence.classes", class, path)
+	}
+
+	if c.Subjects == nil {
+		return nil, fmt.Errorf(
+			"evidence.classes.%s in %s declares no subjects — what its build leaves behind is declared, never assumed",
+			class, path,
+		)
+	}
+
+	return c.Subjects.Compile(class)
 }
 
 // runDeriveSubjects computes the lines, then places them. Nothing is
