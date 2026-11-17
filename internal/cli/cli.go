@@ -146,6 +146,10 @@ usage:
               and the subjects a claim about it is signed over —
               the assert engine's own inventory walk and join, read
               from the other direction
+    signer-digest  the one commit a workflow tree pins its trusted
+              signer at, read from the job-level uses: lines the
+              platform runs; the signer is the policy's, a tree
+              pinning none or two refuses
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -241,7 +245,8 @@ takes --policy --repo --branch [--canon-root --canon-digest --out
 [--version --rev --tree --title --description]; derive vex
 takes --subjects --vex --author --id --released [--base-ecosystems
 --out]; derive vex-subjects takes --policy --decision --org|--repo
-[--snapshot --out]; the other
+[--snapshot --out]; derive signer-digest takes --policy
+--workflows|--workflow [--repo]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups

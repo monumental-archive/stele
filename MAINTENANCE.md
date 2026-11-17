@@ -43,6 +43,7 @@ the same statement as this one and tested against it.
 | `stele derive vex` | this release's coverage document, findings joined to recorded decisions |
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
 | `stele derive vex-subjects` | which published releases one VEX decision reaches, and the subjects a claim about it is signed over |
+| `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |
 | `stele assert evidence` | every release's declared evidence contract met, every covered subject carrying a store-resident verdict |
