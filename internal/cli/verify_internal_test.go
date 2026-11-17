@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 
@@ -21,7 +22,7 @@ import (
 )
 
 const testPolicy = `{
-  "schema": 8,
+  "schema": 9,
   "issuer": "https://token.actions.githubusercontent.com",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},
@@ -93,6 +94,10 @@ func (s scriptedBV) Attestation([]byte, trust.Identity, string) (*trust.Verified
 		Extensions: certificate.Extensions{BuildSignerDigest: strings.Repeat("b", 40)},
 	}, nil
 }
+
+// LoggedAt reads the verification's own observations; this fake
+// scripts none, so a dated rule finds no logged instant.
+func (scriptedBV) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }
 
 func (s scriptedBV) Blob([]byte, trust.Identity, string) (*trust.Verified, error) {
 	return &trust.Verified{}, nil

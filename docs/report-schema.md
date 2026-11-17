@@ -63,7 +63,7 @@ never null.
 
 ```json
 {
-  "schema": 8,
+  "schema": 9,
   "target": "verify vsa",
   "subject": "acme/widget@v1.2.3",
   "verdict": "PASS | FAIL | CANNOT_JUDGE",

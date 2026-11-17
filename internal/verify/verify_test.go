@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 
@@ -41,7 +42,7 @@ var (
 )
 
 const policyJSON = `{
-  "schema": 8,
+  "schema": 9,
   "issuer": "` + issuer + `",
   "trust": {
     "provenance": {"signerWorkflow": "` + signerWF + `"},
@@ -132,6 +133,9 @@ type fakeBundle struct {
 	Digests  []string               `json:"digests"`
 	Ext      certificate.Extensions `json:"ext"`
 	Broken   bool                   `json:"broken"`
+	// LoggedAt scripts the transparency log's observed instant
+	// (RFC 3339); empty means the log observed nothing.
+	LoggedAt string `json:"loggedAt,omitempty"`
 }
 
 func (fb *fakeBundle) bytes(t *testing.T) []byte {
@@ -189,7 +193,23 @@ func (f fakeBV) Blob(bundleJSON []byte, id trust.Identity, sha256Hex string) (*t
 		return nil, err
 	}
 
-	return &trust.Verified{SAN: fb.SAN, Extensions: fb.Ext}, nil
+	// A blob verification carries no payload, so the fake carries
+	// its scripted log instant there for LoggedAt to read back — the
+	// real instant is constructible only from a countersignature.
+	return &trust.Verified{SAN: fb.SAN, Extensions: fb.Ext, Payload: []byte(fb.LoggedAt)}, nil
+}
+
+func (fakeBV) LoggedAt(v *trust.Verified) (time.Time, error) {
+	if len(v.Payload) == 0 {
+		return time.Time{}, fakeError("no log instant scripted")
+	}
+
+	at, err := time.Parse(time.RFC3339, string(v.Payload))
+	if err != nil {
+		return time.Time{}, fakeError("scripted log instant is not RFC 3339")
+	}
+
+	return at, nil
 }
 
 func (f fakeBV) Peek(bundleJSON []byte) ([]byte, error) {

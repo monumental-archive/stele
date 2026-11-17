@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 
@@ -68,6 +69,10 @@ func (b truthfulBV) Attestation(raw []byte, id trust.Identity, sha256Hex string)
 
 	return &trust.Verified{Payload: p.stmt, SAN: p.san, Extensions: p.ext}, nil
 }
+
+// LoggedAt reads the verification's own observations; this fake
+// scripts none, so a dated rule finds no logged instant.
+func (truthfulBV) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }
 
 func (b truthfulBV) Blob(raw []byte, id trust.Identity, sha256Hex string) (*trust.Verified, error) {
 	v, err := b.Attestation(raw, id, sha256Hex)

@@ -23,6 +23,7 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/trust"
+	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vsa"
 )
 
@@ -88,7 +89,8 @@ func Chain(
 
 	e := &chainRun{
 		p: p, pb: pb, in: in, g: g, s: s, bv: bv, now: now, log: log,
-		id: trust.Identity{SAN: expand(*p.Source.Identity, in.Owner, in.Repo), Issuer: *p.Issuer},
+		id:   trust.Identity{SAN: expand(*p.Source.Identity, in.Owner, in.Repo), Issuer: *p.Issuer},
+		sign: verify.NewSourceSigning(p, verify.Coords{Owner: in.Owner, Repo: in.Repo}, bv),
 	}
 
 	if err := e.preflight(); err != nil {
@@ -180,6 +182,9 @@ type chainRun struct {
 	now func() time.Time
 	log Logf
 	id  trust.Identity
+	// sign is the chain verifier's source-signing rule: the link this
+	// run extends is judged by it, never by a copy (stele#389).
+	sign *verify.SourceSigning
 }
 
 // preflight proves the run can finish before anything irreversible
@@ -391,8 +396,9 @@ func linkIsGenesis(link *chain.Note) (bool, error) {
 }
 
 // verifyTail proves the pre-existing link this run signs on top of,
-// with exactly a stranger's inputs: the published identity over the
-// exact statement bytes, and a subject naming the revision the note
+// with exactly a stranger's inputs: a published source-signing
+// identity over the exact statement bytes, as the chain verifier's
+// rule classifies it, and a subject naming the revision the note
 // sits on. Extending a chain past a link that fails the published
 // contract is never a fallback.
 func (e *chainRun) verifyTail(rev string) error {
@@ -406,17 +412,13 @@ func (e *chainRun) verifyTail(rev string) error {
 		return fmt.Errorf("emit: the ledger tail at %s is not a chain link", rev)
 	}
 
-	stmtBytes, err := dsse.DecodeBase64(*link.Provenance.Statement)
+	signing, stmtBytes, err := e.classify(rev, link)
 	if err != nil {
-		return fmt.Errorf("emit: tail at %s: statement: %w", rev, err)
+		return err
 	}
 
-	if _, verr := e.bv.Blob(link.Provenance.Bundle, e.id,
-		chain.SHA256Hex(dsse.PAE(chain.StatementType, stmtBytes))); verr != nil {
-		return fmt.Errorf(
-			"emit: link at %s does not verify against %s — refusing to extend a chain that fails the published root"+
-				" of trust: %w", rev, e.id.SAN, verr,
-		)
+	if oerr := e.judgeOrder(rev, link, signing); oerr != nil {
+		return oerr
 	}
 
 	stmt, err := jsonx.DecodeBytes[intoto.Statement](stmtBytes)
@@ -429,6 +431,104 @@ func (e *chainRun) verifyTail(rev string) error {
 	}
 
 	return nil
+}
+
+// classify asks the chain verifier's rule which identity signed one
+// existing link's provenance half, and returns the exact statement
+// bytes that signature covers.
+func (e *chainRun) classify(rev string, link *chain.Note) (verify.Signing, []byte, error) {
+	stmtBytes, err := dsse.DecodeBase64(*link.Provenance.Statement)
+	if err != nil {
+		return verify.Signing{}, nil, fmt.Errorf("emit: link at %s: statement: %w", rev, err)
+	}
+
+	signing, err := e.sign.Classify(rev, link.Provenance.Bundle, chain.SHA256Hex(dsse.PAE(chain.StatementType, stmtBytes)))
+	if err != nil {
+		return verify.Signing{}, nil, fmt.Errorf(
+			"emit: link at %s does not verify against %s — refusing to extend a chain that fails the published root"+
+				" of trust: %w", rev, e.id.SAN, err,
+		)
+	}
+
+	return signing, stmtBytes, nil
+}
+
+// judgeOrder applies the rule's order to the chain this run extends.
+// With no legacy identity declared every link verifies under the one
+// identity and there is no order to judge: the tail alone is proven,
+// as before stele#389. With one declared, every link from the tail
+// back to genesis is classified and the rule judges them genesis
+// first — a legacy tail after a current link is the reversal the
+// rule refuses.
+func (e *chainRun) judgeOrder(tail string, tailLink *chain.Note, tailSigning verify.Signing) error {
+	if e.p.Source.LegacyIdentity == nil {
+		return nil
+	}
+
+	signings := []verify.Signing{tailSigning}
+
+	for rev, link := tail, tailLink; ; {
+		genesis, err := linkIsGenesis(link)
+		if err != nil {
+			return fmt.Errorf("emit: link at %s: %w", rev, err)
+		}
+
+		if genesis {
+			break
+		}
+
+		rev, link, err = e.olderLink(rev)
+		if err != nil {
+			return err
+		}
+
+		signing, _, err := e.classify(rev, link)
+		if err != nil {
+			return err
+		}
+
+		signings = append(signings, signing)
+	}
+
+	slices.Reverse(signings)
+
+	changedAt, err := e.sign.Order(signings)
+	if err != nil {
+		return fmt.Errorf("emit: refusing to extend the chain: %w", err)
+	}
+
+	if changedAt != "" {
+		e.log("emit: source signing identity changed at %s", changedAt)
+	}
+
+	return nil
+}
+
+// olderLink walks first-parent from rev to the nearest older revision
+// carrying a link. Revisions between are holes this run heals; they
+// are not links and carry no signer.
+func (e *chainRun) olderLink(rev string) (string, *chain.Note, error) {
+	for c := rev; ; {
+		next, err := e.g.Parent(c)
+		if err != nil {
+			return "", nil, fmt.Errorf("emit: parent of %s: %w", c, err)
+		}
+
+		if next == "" {
+			return "", nil, fmt.Errorf("emit: the walk from %s ended before a genesis link", rev)
+		}
+
+		note, err := e.g.Note(next)
+		if err != nil {
+			return "", nil, fmt.Errorf("emit: note for %s: %w", next, err)
+		}
+
+		if link, isLink := decodeLink(note); isLink {
+			return next, link, nil
+		}
+
+		c = next
+	}
 }
 
 // subjectNamesRevision requires the statement to attest exactly this

@@ -23,7 +23,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/claims"
 	"github.com/monumental-archive/stele/internal/policy"
-	"github.com/monumental-archive/stele/internal/trust"
+	"github.com/monumental-archive/stele/internal/verify"
 )
 
 // Git is the repository surface the chain leg reads and writes,
@@ -69,10 +69,11 @@ type Signer interface {
 
 // BlobVerifier is the self-check boundary: every bundle this engine
 // writes into a note is first verified with exactly a stranger's
-// inputs — the published identity and the statement digest.
-type BlobVerifier interface {
-	Blob(bundleJSON []byte, id trust.Identity, sha256Hex string) (*trust.Verified, error)
-}
+// inputs — the published identity and the statement digest. It is
+// the chain verifier's own seam (verify.Signatures), because the link
+// a run extends is judged by the verifier's source-signing rule,
+// never by a copy of it (stele#389).
+type BlobVerifier = verify.Signatures
 
 // Logf receives progress lines; the caller owns the stream.
 type Logf func(format string, args ...any)

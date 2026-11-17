@@ -48,7 +48,7 @@ func signersPolicyOver(t *testing.T, logURL, issuer, signers, pop string) *asser
 	t.Helper()
 
 	doc := fmt.Sprintf(`{
-  "schema": 8,
+  "schema": 9,
   "issuer": %q,
   "population": %s,
   "evidence": {

@@ -47,7 +47,7 @@ loader's error message rather than against the doc.
 
 ```json policy
 {
-  "schema": 8,
+  "schema": 9,
 
   "issuer": "https://token.actions.githubusercontent.com",
 
@@ -477,6 +477,63 @@ The per-repo reserved workflow SAN — the frozen root-of-trust
 contract for chain links. A template because the convention is
 structural across repos; the ref is pinned inside the template
 (`@refs/heads/main`) because the identity contract includes it.
+
+### `source.legacyIdentity` (optional)
+
+The one identity a chain's links were signed under BEFORE
+`source.identity` — a renamed emitter workflow, or a move from each
+repository's own workflow to a shared signing workflow. Absent, every
+link verifies under `source.identity` alone, exactly as before the key
+existed.
+
+```json policy-fragment source
+"legacyIdentity": {
+  "identity": "https://github.com/{owner}/{repo}/.github/workflows/source-emit.yml@refs/heads/main",
+  "until": "2026-11-17T12:00:00Z"
+}
+```
+
+- `identity` (required inside the block) is a template under the
+  same rules as `source.identity`, and must differ from it: a change
+  to the same signer changes nothing.
+- `until` (optional) is an RFC 3339 instant.
+
+**The rule**, applied walking a chain from its genesis: a link
+verifies under `source.identity`, or under `legacyIdentity.identity`
+when both hold —
+
+1. no earlier link in the chain verified under `source.identity`: the
+   change happens once and never goes back;
+2. `until` is absent, or the moment the transparency log observed the
+   link's signing (the latest such observation, when there are
+   several) is not after it.
+
+A link under neither identity is refused exactly as an unknown
+identity always was. A legacy link after a current one is refused
+naming both revisions; a legacy link logged after `until` is refused
+naming both instants. Both halves of a link, and its summary's
+`verifier.id`, carry the one identity its provenance half was signed
+under.
+
+No per-repository boundary is declared. The chain itself shows where
+the change happened, and the walk names the first link signed under
+`source.identity` — once per chain, and only when a legacy link
+precedes it — so a ledger can record it. Two shapes were rejected:
+a per-repository cut-over revision in policy needs an edit per
+repository at the moment each moves, and is wrong either way inside
+that window; an unordered list of accepted identities would keep the
+old identity verifying after the change, which is the weakness a move
+exists to remove. Old links are never re-emitted under the new
+identity: they are true records of who signed then.
+
+The rule lives once, in the chain verifier (`internal/verify`).
+Every reader of the source identity goes through it: the `verify`
+chain walk, `assert chains` (which runs that walk), and `emit chain`'s
+check of the link it extends — which, with a legacy identity
+declared, classifies every link back to genesis so the order is
+judged on the whole chain, not the tail alone. `level` reads no
+source identity at all: it measures who signed and takes no
+declaration.
 
 ### `source.notesRef`, `source.provenancePredicateType`, `source.propertyPrefix`
 

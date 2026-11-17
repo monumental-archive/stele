@@ -28,7 +28,7 @@ refusal share one definition.
 ## One epoch for live-read documents
 
 Every stele document that is **read live** carries the SAME number,
-`schema`, currently **8**:
+`schema`, currently **9**:
 
 | document | where |
 | --- | --- |
@@ -79,7 +79,7 @@ verbatim:
 
 ```console
 $ stele verify policy --verify-policy slsa/verify-policy.json
-policy: jsonx: schema 7 is not the implemented schema 8 — refusing, never best-efforting
+policy: jsonx: schema 8 is not the implemented schema 9 — refusing, never best-efforting
 ```
 
 The command is offline and side-effect-free: it opens one file, runs

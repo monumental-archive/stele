@@ -60,7 +60,7 @@ the floor, and the test suite loads it verbatim:
 
 ```json policy-floor
 {
-  "schema": 8,
+  "schema": 9,
   "issuer": "https://token.actions.githubusercontent.com",
   "trust": {
     "provenance": {
@@ -86,7 +86,7 @@ chain-emitting policy, also loaded by the suite:
 
 ```json policy-floor
 {
-  "schema": 8,
+  "schema": 9,
   "issuer": "https://token.actions.githubusercontent.com",
   "trust": {
     "provenance": {

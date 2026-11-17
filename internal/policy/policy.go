@@ -133,7 +133,11 @@ type BuildType struct {
 
 // Source carries the source-track policy.
 type Source struct {
-	Identity                *string           `json:"identity"`
+	Identity *string `json:"identity"`
+	// LegacyIdentity is the OPTIONAL earlier source-signing identity a
+	// chain may have been signed under before Identity (stele#389).
+	// Absent, Identity is the only identity a link verifies under.
+	LegacyIdentity          *LegacyIdentity   `json:"legacyIdentity,omitempty"`
 	NotesRef                *string           `json:"notesRef"`
 	ProvenancePredicateType *string           `json:"provenancePredicateType"`
 	PropertyPrefix          *string           `json:"propertyPrefix"`
@@ -147,6 +151,28 @@ type Source struct {
 	// org does not derive claims with this tool. Declared, it is
 	// cross-checked against RequiredProperties below.
 	Claims *claims.Table `json:"claims,omitempty"`
+}
+
+// LegacyIdentity is the one earlier source-signing identity and the
+// optional instant after which a link signed under it is refused. The
+// rule that reads it — once a link is signed under the current
+// identity no later link may go back — lives in the chain verifier
+// (internal/verify), the one place every reader of the source
+// identity goes through.
+type LegacyIdentity struct {
+	Identity *string `json:"identity"`
+	Until    *string `json:"until,omitempty"`
+
+	// until is Until as Load parsed it — one parse, at load.
+	until time.Time
+}
+
+// UntilTime is the until instant Load parsed; ok=false when none is
+// declared. A value that never passed Load carries the zero instant
+// for a declared until, so every legacy signing is after it: a rule
+// that skipped validation refuses, it never widens.
+func (l *LegacyIdentity) UntilTime() (time.Time, bool) {
+	return l.until, l.Until != nil
 }
 
 // ProtectedBranch is one branch's target level and the per-level
@@ -592,6 +618,10 @@ func (p *Policy) validateSource() error {
 		return err
 	}
 
+	if err := validateLegacyIdentity(s); err != nil {
+		return err
+	}
+
 	if s.NotesRef == nil || !strings.HasPrefix(*s.NotesRef, "refs/") {
 		return errors.New("source.notesRef must be present and fully qualified (refs/...)")
 	}
@@ -642,6 +672,39 @@ func (p *Policy) validateSource() error {
 		if l.Reason == nil || *l.Reason == "" {
 			return fmt.Errorf("source.legacyLeaves[%d].reason is absent or empty — a silent exception is silence", i)
 		}
+	}
+
+	return nil
+}
+
+// validateLegacyIdentity holds the optional earlier signing identity.
+// Absent is valid and changes nothing; declared, it must name a
+// different identity (one equal to the current identity would make
+// the change a no-op that reads as a migration) and an until, when
+// present, must be an RFC 3339 instant.
+func validateLegacyIdentity(s *Source) error {
+	l := s.LegacyIdentity
+	if l == nil {
+		return nil
+	}
+
+	if err := templateField("source.legacyIdentity.identity", l.Identity); err != nil {
+		return err
+	}
+
+	if *l.Identity == *s.Identity {
+		return errors.New(
+			"source.legacyIdentity.identity is source.identity — a change to the same signer changes nothing",
+		)
+	}
+
+	if l.Until != nil {
+		at, err := time.Parse(time.RFC3339, *l.Until)
+		if err != nil {
+			return fmt.Errorf("source.legacyIdentity.until %q is not an RFC 3339 instant", *l.Until)
+		}
+
+		l.until = at
 	}
 
 	return nil

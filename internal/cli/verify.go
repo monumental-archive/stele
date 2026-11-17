@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/evidence"
@@ -105,6 +106,10 @@ func (a trustAdapter) Attestation(bundleJSON []byte, id trust.Identity, sha256He
 
 	return v, nil
 }
+
+// LoggedAt is the transparency log's observed instant of a verified
+// signing — trust.Verified's own reading, unrepeated.
+func (trustAdapter) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }
 
 func (a trustAdapter) Blob(bundleJSON []byte, id trust.Identity, sha256Hex string) (*trust.Verified, error) {
 	b, err := trust.LoadBundle(bundleJSON)

@@ -23,7 +23,7 @@ version mismatch, never as an unknown-field error.
 
 ```json
 {
-  "schema": 8,
+  "schema": 9,
   "debtFile": "security/attestation-debt.txt",
   "population": {
     "repositories": [

@@ -315,7 +315,7 @@ func signerFillers(n int) [][]byte {
 func signerPolicyFile(t *testing.T, logURL string) string {
 	t.Helper()
 
-	doc := fmt.Sprintf(`{"schema": 8, "issuer": "https://token.actions.githubusercontent.com",
+	doc := fmt.Sprintf(`{"schema": 9, "issuer": "https://token.actions.githubusercontent.com",
   "population": {"repositories": [{"repo": ".github"}, {"repo": "signer"}]},
   "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt", "umbrellaBundle": "u.jsonl",
     "manifestAsset": "m.json", "classes": {"a": {"bundles": ["b"]}}},
@@ -501,7 +501,7 @@ func TestAssertSignerCertificatesRefusals(t *testing.T) {
 	}
 
 	noSection := filepath.Join(dir, "no-section.json")
-	if err := os.WriteFile(noSection, []byte(`{"schema": 8, "evidence": {"sbomSuffix": ".spdx.json",
+	if err := os.WriteFile(noSection, []byte(`{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json",
 	  "checksums": "c.txt", "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
 	  "classes": {"a": {"bundles": ["b"]}}}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -1045,7 +1045,7 @@ func signingWorld(t *testing.T, deleteSigner, deleteCaller, unreachable bool) (s
 	swapForge(t, signingForge(t, run, publish, release))
 
 	policy := filepath.Join(t.TempDir(), "assert-policy.json")
-	if err := os.WriteFile(policy, []byte(fmt.Sprintf(`{"schema": 8,
+	if err := os.WriteFile(policy, []byte(fmt.Sprintf(`{"schema": 9,
 	  "issuer": "https://token.actions.githubusercontent.com",
 	  "population": {"repositories": [{"repo": ".github"}, {"repo": "signer"}, {"repo": "widget"}]},
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt", "umbrellaBundle": "u.jsonl",

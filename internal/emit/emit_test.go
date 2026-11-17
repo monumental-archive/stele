@@ -38,7 +38,7 @@ const (
 )
 
 const policyJSON = `{
-  "schema": 8,
+  "schema": 9,
   "issuer": "` + issuer + `",
   "trust": {
     "provenance": {"signerWorkflow": "acme/signer/.github/workflows/sign.yml"},
@@ -289,17 +289,23 @@ type fakeBundle struct {
 	SAN     string   `json:"san"`
 	Issuer  string   `json:"issuer"`
 	Digests []string `json:"digests"`
+	// LoggedAt scripts the transparency log's observed instant
+	// (RFC 3339); empty means the log observed nothing.
+	LoggedAt string `json:"loggedAt,omitempty"`
 }
 
 type fakeSigner struct {
-	t   *testing.T
-	san string
+	t        *testing.T
+	san      string
+	loggedAt string
 }
 
 func (s fakeSigner) Check() error { return nil }
 
 func (s fakeSigner) Sign(payload []byte) ([]byte, error) {
-	return mustJSON(s.t, fakeBundle{SAN: s.san, Issuer: issuer, Digests: []string{chain.SHA256Hex(payload)}}), nil
+	return mustJSON(s.t, fakeBundle{
+		SAN: s.san, Issuer: issuer, Digests: []string{chain.SHA256Hex(payload)}, LoggedAt: s.loggedAt,
+	}), nil
 }
 
 type fakeBV struct{}
@@ -313,6 +319,19 @@ func (f fakeBV) Attestation(b []byte, id trust.Identity, d string) (*trust.Verif
 }
 
 func (fakeBV) Peek([]byte) ([]byte, error) { return nil, fakeError("peek is never judged here") }
+
+func (fakeBV) LoggedAt(v *trust.Verified) (time.Time, error) {
+	if len(v.Payload) == 0 {
+		return time.Time{}, fakeError("no log instant scripted")
+	}
+
+	at, err := time.Parse(time.RFC3339, string(v.Payload))
+	if err != nil {
+		return time.Time{}, fakeError("scripted log instant is not RFC 3339")
+	}
+
+	return at, nil
+}
 
 func (fakeBV) check(bundleJSON []byte, id trust.Identity, sha256Hex string) (*trust.Verified, error) {
 	fb, err := jsonx.DecodeForeign[fakeBundle](bundleJSON)
@@ -328,7 +347,10 @@ func (fakeBV) check(bundleJSON []byte, id trust.Identity, sha256Hex string) (*tr
 		return nil, fakeError("digest not covered")
 	}
 
-	return &trust.Verified{SAN: fb.SAN}, nil
+	// A blob verification carries no payload, so the fake carries its
+	// scripted log instant there for LoggedAt to read back — the real
+	// instant is constructible only from a countersignature.
+	return &trust.Verified{SAN: fb.SAN, Payload: []byte(fb.LoggedAt)}, nil
 }
 
 func discardLog(string, ...any) {}

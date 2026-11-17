@@ -632,7 +632,7 @@ func TestNoFallbackBetweenSurfaces(t *testing.T) {
 // names throughout. It must LOAD and it must JUDGE with no edit to
 // this engine — the stranger condition, executed rather than asserted.
 const strangerStreamPolicy = `{
-  "schema": 8,
+  "schema": 9,
   "population": {"repositories": [
     {"repo": "loom", "surfaces": [
       {"kind": "continuous-digest",
