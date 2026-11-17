@@ -229,15 +229,20 @@ func (r *Repo) Revisions(ref string, since time.Time) ([]Revision, error) {
 
 	const sep = "\x1f"
 
-	out, err := r.git("log", "--first-parent", "--format=%H"+sep+"%P"+sep+"%cI"+sep+"%s", ref)
+	// The whole message (%B), one NUL-terminated record per commit (-z),
+	// and its first line taken here: git's %s is the first PARAGRAPH
+	// joined into one line, which is not the subject a reader of the
+	// message sees, and not the one the forge's own reader served
+	// (stele#384).
+	out, err := r.git("log", "-z", "--first-parent", "--format=%H"+sep+"%P"+sep+"%cI"+sep+"%B", ref)
 	if err != nil {
 		return nil, fmt.Errorf("gitrepo: reading revisions of %s: %w", ref, err)
 	}
 
 	var revs []Revision
 
-	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
-		if line == "" {
+	for line := range strings.SplitSeq(string(out), "\x00") {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
@@ -273,7 +278,10 @@ func parseRevision(line, sep string) (Revision, error) {
 		return Revision{}, fmt.Errorf("gitrepo: revision %.12s commit time: %w", parts[0], err)
 	}
 
+	// The subject is the message's first line, whatever follows it.
+	subject, _, _ := strings.Cut(parts[3], "\n")
+
 	// A root commit has no parents, so the field is empty and Fields
 	// reports zero — which is the true count, not a parse failure.
-	return Revision{ID: parts[0], Subject: parts[3], Parents: len(strings.Fields(parts[1])), Time: when}, nil
+	return Revision{ID: parts[0], Subject: subject, Parents: len(strings.Fields(parts[1])), Time: when}, nil
 }

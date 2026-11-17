@@ -540,7 +540,7 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 	// commit: the certificate names the repo's own workflow at the
 	// tag, and its signer digest is the tag's commit.
 	if w.full.SelfSigned {
-		sha, err := w.forge.TagCommit(w.org, repo, tag)
+		sha, err := w.full.Tags.TagCommit(w.org, repo, tag)
 		if err != nil {
 			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
 		}
@@ -558,7 +558,7 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 	var machineryPin string
 
 	if w.org == machineryOwner && repo == machineryRepo {
-		sha, err := w.forge.TagCommit(w.org, repo, tag)
+		sha, err := w.full.Tags.TagCommit(w.org, repo, tag)
 		if err != nil {
 			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
 		}
@@ -614,7 +614,10 @@ func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
 // from the VERIFY policy — the machinery repository is the verifier
 // workflow's own, a fact of the identity, not a second declaration.
 type FullDepth struct {
-	Verifier                      DeepVerifier
+	Verifier DeepVerifier
+	// Tags resolves a release tag to its commit — read through git, by
+	// the same resolution the tag audit uses (stele#384).
+	Tags                          TagResolver
 	MachineryOwner, MachineryRepo string
 	SignerWorkflow                string
 	// SelfSigned marks the self-attesting topology: the signer
@@ -630,11 +633,16 @@ type FullDepth struct {
 // NewFullDepth derives the pin-resolution roots from the verify
 // policy's trust identities. verifierWorkflow is empty when the
 // policy declares no verdict obligation.
-func NewFullDepth(v DeepVerifier, verifierWorkflow, signerWorkflow string) (*FullDepth, error) {
+func NewFullDepth(v DeepVerifier, tags TagResolver, verifierWorkflow, signerWorkflow string) (*FullDepth, error) {
 	const ownerRepoPath = 3
+
+	if tags == nil {
+		return nil, errors.New("full depth needs a tag resolver: the pins are read through git")
+	}
 
 	fd := &FullDepth{
 		Verifier:        v,
+		Tags:            tags,
 		SignerWorkflow:  signerWorkflow,
 		SelfSigned:      strings.Contains(signerWorkflow, "{"),
 		VerdictDeclared: verifierWorkflow != "",

@@ -44,6 +44,8 @@ import (
 
 	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
+	"github.com/monumental-archive/stele/internal/gitrepo"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/level"
 	"github.com/monumental-archive/stele/internal/pkgtime"
@@ -104,6 +106,9 @@ type levelArgs struct {
 	// the same as a declared empty set and resolves to the opposite of
 	// it (surfaceSet). It says WHERE to look and reaches no verdict.
 	surfaces []population.Surface
+	// git reads the source track's history, fetched once per
+	// repository for the run; nil for the tracks that read none.
+	git *gitfetch.Session
 }
 
 // levelCmd dispatches `stele level <track>`.
@@ -143,6 +148,18 @@ func levelCmd(args []string, stdout, stderr io.Writer) int {
 	out := &latch{w: stdout}
 	if la.jsonOut {
 		out = &latch{w: stderr}
+	}
+
+	if la.track == trackSource {
+		la.git = newGitSession(la.sourceWant(), out.logf)
+		if err := la.git.Check(); err != nil {
+			if _, werr := fmt.Fprintf(stderr, "stele level %s: %v\n", la.track, err); werr != nil {
+				return exitIO
+			}
+
+			return exitUsage
+		}
+		defer closeSession(la.git, stderr)
 	}
 
 	assessment := la.assess(out)
@@ -383,26 +400,26 @@ func (la *levelArgs) trackValue() level.Track {
 	}
 }
 
-// gatherSource reads the branch and its chain from the forge — no
-// clone, and no declaration of who ought to have signed.
+// gatherSource reads the branch and its chain from the history it
+// fetches itself (stele#384) — no checkout, no source, and no
+// declaration of who ought to have signed.
+//
+// A history that could not be fetched is an absence, not a refusal:
+// the requirements that need no chain are still measured, and the
+// ones that do stay unevaluated with the fetch's own words logged.
 func (la *levelArgs) gatherSource(ev *level.Evidence, forge gh.Forge, out *latch) {
-	reader, ok := forge.(gh.TagReader)
-	if !ok {
-		out.logf("level: this forge cannot serve source history")
+	if la.git == nil {
+		out.logf("level: no git reader was bound, so the source history cannot be read")
 
 		return
 	}
 
-	hist := &gh.History{Reader: reader, Owner: la.owner, Repo: la.name, NotesRef: la.notesRef}
-
-	revs, err := hist.Revisions(la.ref, time.Time{})
-	if err != nil {
-		out.logf("level: %s: history unreadable: %v", la.ref, err)
-	}
-
-	for _, r := range revs {
-		ev.Revisions = append(ev.Revisions,
-			level.Revision{ID: r.ID, Subject: r.Subject, Parents: r.Parents, Time: r.Time})
+	hist, herr := la.git.Repo(la.owner, la.name)
+	if herr != nil {
+		out.logf("level: %s: history unreadable: %v", la.ref, herr)
+	} else {
+		ev.HistoryFetch = &level.HistoryFetch{FilterIgnored: la.git.IgnoredFilter(la.owner, la.name)}
+		la.gatherRevisions(ev, hist, out)
 	}
 
 	ev.Live = la.liveRules(forge, out)
@@ -412,6 +429,30 @@ func (la *levelArgs) gatherSource(ev *level.Evidence, forge gh.Forge, out *latch
 		return
 	}
 
+	if herr != nil {
+		out.logf("level: the source chain could not be measured: %v", herr)
+	} else {
+		la.measureChain(ev, hist, measurer, out)
+	}
+
+	la.gatherApprovals(ev, forge, out)
+}
+
+// gatherRevisions reads the measured branch's whole first-parent line.
+func (la *levelArgs) gatherRevisions(ev *level.Evidence, hist *gitrepo.Repo, out *latch) {
+	revs, err := hist.Revisions(la.ref, time.Time{})
+	if err != nil {
+		out.logf("level: %s: history unreadable: %v", la.ref, err)
+	}
+
+	for _, r := range revs {
+		ev.Revisions = append(ev.Revisions,
+			level.Revision{ID: r.ID, Subject: r.Subject, Parents: r.Parents, Time: r.Time})
+	}
+}
+
+// measureChain measures the branch's source chain from its tip.
+func (la *levelArgs) measureChain(ev *level.Evidence, hist *gitrepo.Repo, measurer verify.Measurer, out *latch) {
 	measured, err := verify.MeasureChain(
 		verify.Coords{Owner: la.owner, Repo: la.name}, la.ref, hist, measurer, out.logf,
 	)
@@ -425,8 +466,12 @@ func (la *levelArgs) gatherSource(ev *level.Evidence, forge gh.Forge, out *latch
 		ev.Measured = measured
 		out.logf("level: measured %d link(s), signed by %v", measured.Links(), measured.Signers())
 	}
+}
 
-	la.gatherApprovals(ev, forge, out)
+// sourceWant is what the source track fetches: the measured branch
+// commits-only and the ledger whole.
+func (la *levelArgs) sourceWant() gitfetch.Want {
+	return gitfetch.Want{Branches: []string{la.ref}, NotesRef: la.notesRef}
 }
 
 // maxApprovalReads bounds the review-history walk. Two API reads per

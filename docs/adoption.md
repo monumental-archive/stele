@@ -15,8 +15,10 @@ the validator refuses is a red build, not drift.
 stele level --repo you/yours
 ```
 
-No clone, no policy, no trusted root, no evidence-layout declaration.
-`stele level` measures the SLSA levels a repository's live, publicly
+No policy, no trusted root, no evidence-layout declaration, and nothing
+to set up: stele needs `git` (2.44 or newer) and fetches the history it
+reads itself — it makes no checkout, downloads no source and leaves
+nothing behind. `stele level` measures the SLSA levels a repository's live, publicly
 fetchable evidence actually supports and reports them as information
 — it takes no declaration and gates nothing. If you have never heard
 of this tool before today, this is the whole first step, and its

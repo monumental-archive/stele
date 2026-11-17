@@ -102,10 +102,6 @@ func (f *fakeForge) ReleaseDate(_, _, _ string) (time.Time, error) {
 	return time.Time{}, errors.New("this fixture serves no release date")
 }
 
-func (f *fakeForge) TagCommit(_, _, _ string) (string, error) {
-	return "", errors.New("this fixture serves no tag commit")
-}
-
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (f *fakeForge) FileAt(_, _, _, _ string) ([]byte, bool, error) { return nil, false, nil }
 

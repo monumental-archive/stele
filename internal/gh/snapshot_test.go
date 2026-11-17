@@ -22,10 +22,6 @@ import (
 // scriptedForge is the "live" side for capture tests.
 type scriptedForge struct{ noDigest bool }
 
-func (scriptedForge) TagCommit(_, _, _ string) (string, error) {
-	return strings.Repeat("c", 40), nil
-}
-
 func (scriptedForge) ListRepos(string) ([]gh.Repo, error) {
 	return []gh.Repo{{Name: "widget"}, {Name: "gadget"}}, nil
 }
@@ -108,7 +104,6 @@ func TestCaptureThenReplay(t *testing.T) {
 		func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err },
 		func() error { _, err := rec.PackageVersionDigest("acme", "widget", "latest"); return err },
 		func() error { _, err := rec.Workflows("acme", "widget"); return err },
-		func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err },
 	} {
 		if err := call(); err != nil {
 			t.Fatal(err)
@@ -176,28 +171,6 @@ func TestCaptureThenReplay(t *testing.T) {
 // TestSnapshotMissingListing pins the difference between a recorded
 // absence and an uncaptured listing: a listing the capture never
 // wrote is an error, not an empty population.
-func TestSnapshotTagCommitReplay(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	rec := gh.Capture{Live: scriptedForge{}, Dir: dir}
-
-	if _, err := rec.TagCommit("acme", "widget", "v1.0.0"); err != nil {
-		t.Fatal(err)
-	}
-
-	snap := gh.Snapshot{Dir: dir}
-
-	sha, err := snap.TagCommit("acme", "widget", "v1.0.0")
-	if err != nil || sha != strings.Repeat("c", 40) {
-		t.Fatalf("TagCommit replay = %q, %v", sha, err)
-	}
-
-	if _, terr := snap.TagCommit("acme", "widget", "v9.9.9"); terr == nil {
-		t.Fatal("an uncaptured tag commit replayed as an answer — it must refuse")
-	}
-}
-
 func TestSnapshotMissingListing(t *testing.T) {
 	t.Parallel()
 
@@ -312,132 +285,6 @@ func TestSnapshotCorruptFile(t *testing.T) {
 	}
 }
 
-// TestCaptureOverNonTagReader: a Capture wired over a Forge that
-// cannot read tags refuses every tag read by name instead of
-// panicking mid-walk.
-func TestCaptureOverNonTagReader(t *testing.T) {
-	t.Parallel()
-
-	rec := gh.Capture{Live: gh.Snapshot{Dir: t.TempDir()}, Dir: t.TempDir()}
-
-	// A Snapshot IS a TagReader; wrap it in a bare Forge shim to
-	// exercise the refusal path.
-	rec.Live = onlyForge{f: rec.Live}
-
-	if _, err := rec.TagRefs("a", "b"); err == nil {
-		t.Fatal("TagRefs did not refuse")
-	}
-
-	if _, err := rec.TagObject("a", "b", "c"); err == nil {
-		t.Fatal("TagObject did not refuse")
-	}
-
-	if _, err := rec.ChainNotes("a", "b", "refs/notes/commits"); err == nil {
-		t.Fatal("ChainNotes did not refuse")
-	}
-
-	if _, err := rec.CommitMeta("a", "b", "c"); err == nil {
-		t.Fatal("CommitMeta did not refuse")
-	}
-
-	if _, err := rec.IsAncestor("a", "b", "c", "d"); err == nil {
-		t.Fatal("IsAncestor did not refuse")
-	}
-}
-
-// onlyForge narrows a Forge to exactly the Forge interface.
-type onlyForge struct{ f gh.Forge }
-
-func (o onlyForge) ReleaseDate(a, b, c string) (time.Time, error) {
-	return o.f.ReleaseDate(a, b, c)
-}
-
-func (o onlyForge) ReleaseTags(a, b string) ([]string, error) {
-	return o.f.ReleaseTags(a, b)
-}
-
-func (o onlyForge) ReleaseAssets(a, b, c string) ([]string, error) {
-	return o.f.ReleaseAssets(a, b, c)
-}
-func (o onlyForge) Asset(a, b, c, d string) ([]byte, error) { return o.f.Asset(a, b, c, d) }
-
-func (o onlyForge) TagCommit(a, b, c string) (string, error) {
-	return o.f.TagCommit(a, b, c)
-}
-
-//nolint:gocritic // unnamedResult: the Forge interface documents the results
-func (o onlyForge) FileAt(a, b, c, d string) ([]byte, bool, error) { return o.f.FileAt(a, b, c, d) }
-
-func (o onlyForge) Attestations(a, b, c string) ([]jsonx.Raw, error) {
-	return o.f.Attestations(a, b, c)
-}
-
-func (o onlyForge) PackageVersionDigest(a, b, c string) (string, error) {
-	return o.f.PackageVersionDigest(a, b, c)
-}
-
-func (o onlyForge) Workflows(a, b string) ([]workflow.File, error) { return o.f.Workflows(a, b) }
-func (o onlyForge) FailedRuns(a, b, c string) ([]string, error)    { return o.f.FailedRuns(a, b, c) }
-
-// TestSnapshotTagReadsMissing: a tag read whose file the capture
-// never wrote refuses (the walk asked something the shadow run did
-// not), except the chain, whose absence is the recorded empty.
-func TestSnapshotTagReadsMissing(t *testing.T) {
-	t.Parallel()
-
-	snap := gh.Snapshot{Dir: t.TempDir()}
-
-	if _, err := snap.TagRefs("a", "b"); err == nil {
-		t.Fatal("TagRefs on an empty snapshot did not refuse")
-	}
-
-	if _, err := snap.TagObject("a", "b", "c"); err == nil {
-		t.Fatal("TagObject on an empty snapshot did not refuse")
-	}
-
-	if _, err := snap.CommitMeta("a", "b", "c"); err == nil {
-		t.Fatal("CommitMeta on an empty snapshot did not refuse")
-	}
-
-	if _, err := snap.IsAncestor("a", "b", "c", "d"); err == nil {
-		t.Fatal("IsAncestor on an empty snapshot did not refuse")
-	}
-
-	if notes, err := snap.ChainNotes("a", "b", "refs/notes/commits"); err != nil || notes != nil {
-		t.Fatalf("ChainNotes = %+v, %v — absence is the recorded empty chain", notes, err)
-	}
-}
-
-// scriptedTagReader is the tag half of the "live" side, so one
-// Capture can drive the WHOLE seam — Forge and TagReader — into one
-// directory.
-type scriptedTagReader struct{}
-
-func (scriptedTagReader) TagRefs(_, _ string) ([]gh.TagRef, error) {
-	return []gh.TagRef{{Name: "v1.0.0", ObjectSHA: tagObjID, Annotated: true}}, nil
-}
-
-func (scriptedTagReader) TagObject(_, _, _ string) (*gh.TagObject, error) {
-	return &gh.TagObject{Tagger: "release-mint[bot]", Target: noteRev}, nil
-}
-
-func (scriptedTagReader) ChainNotes(_, _, _ string) ([]gh.ChainNote, error) {
-	return []gh.ChainNote{{Rev: noteRev, Note: jsonx.Raw(`{"version": 3}`)}}, nil
-}
-
-func (scriptedTagReader) CommitMeta(_, _, _ string) (*gh.CommitMeta, error) {
-	return &gh.CommitMeta{Parents: []string{tagObjID}, CommitEpoch: 1}, nil
-}
-
-func (scriptedTagReader) IsAncestor(_, _, _, _ string) (bool, error) { return true, nil }
-
-// wholeSeam answers both halves at once: the two interfaces share no
-// method, so one value satisfies both.
-type wholeSeam struct {
-	scriptedForge
-	scriptedTagReader
-}
-
 // snapshotRead is one named read on a replayed snapshot, reduced to
 // its error.
 type snapshotRead struct {
@@ -456,26 +303,12 @@ func everySnapshotRead() []snapshotRead {
 			return err
 		}},
 		{"Attestations", func(s gh.Snapshot) error { _, err := s.Attestations("acme", "widget", "aa"); return err }},
-		{"TagCommit", func(s gh.Snapshot) error { _, err := s.TagCommit("acme", "widget", "v1.0.0"); return err }},
 		{"PackageVersionDigest", func(s gh.Snapshot) error {
 			_, err := s.PackageVersionDigest("acme", "widget", "latest")
 
 			return err
 		}},
 		{"FailedRuns", func(s gh.Snapshot) error { _, err := s.FailedRuns("acme", "widget", "v1.0.0"); return err }},
-		{"TagRefs", func(s gh.Snapshot) error { _, err := s.TagRefs("acme", "widget"); return err }},
-		{"TagObject", func(s gh.Snapshot) error { _, err := s.TagObject("acme", "widget", tagObjID); return err }},
-		{"ChainNotes", func(s gh.Snapshot) error {
-			_, err := s.ChainNotes("acme", "widget", "refs/notes/commits")
-
-			return err
-		}},
-		{"CommitMeta", func(s gh.Snapshot) error { _, err := s.CommitMeta("acme", "widget", noteRev); return err }},
-		{"IsAncestor", func(s gh.Snapshot) error {
-			_, err := s.IsAncestor("acme", "widget", tagObjID, noteRev)
-
-			return err
-		}},
 	}
 }
 
@@ -486,21 +319,15 @@ func captureWholeSeam(t *testing.T) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	rec := gh.Capture{Live: wholeSeam{}, Dir: dir}
+	rec := gh.Capture{Live: scriptedForge{}, Dir: dir}
 
 	for _, call := range []func() error{
 		func() error { _, err := rec.ListRepos("acme"); return err },
 		func() error { _, err := rec.ReleaseTags("acme", "widget"); return err },
 		func() error { _, err := rec.ReleaseAssets("acme", "widget", "v1.0.0"); return err },
 		func() error { _, err := rec.Attestations("acme", "widget", "aa"); return err },
-		func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err },
 		func() error { _, err := rec.PackageVersionDigest("acme", "widget", "latest"); return err },
 		func() error { _, err := rec.FailedRuns("acme", "widget", "v1.0.0"); return err },
-		func() error { _, err := rec.TagRefs("acme", "widget"); return err },
-		func() error { _, err := rec.TagObject("acme", "widget", tagObjID); return err },
-		func() error { _, err := rec.ChainNotes("acme", "widget", "refs/notes/commits"); return err },
-		func() error { _, err := rec.CommitMeta("acme", "widget", noteRev); return err },
-		func() error { _, err := rec.IsAncestor("acme", "widget", tagObjID, noteRev); return err },
 	} {
 		if err := call(); err != nil {
 			t.Fatalf("capturing: %v", err)
@@ -647,7 +474,6 @@ func (failingForge) Asset(_, _, _, _ string) ([]byte, error)        { return nil
 func (failingForge) ReleaseDate(_, _, _ string) (time.Time, error) {
 	return time.Time{}, errForgeDown
 }
-func (failingForge) TagCommit(_, _, _ string) (string, error) { return "", errForgeDown }
 
 //nolint:gocritic // unnamedResult: the Forge interface documents the results
 func (failingForge) FileAt(_, _, _, _ string) ([]byte, bool, error) { return nil, false, errForgeDown }
@@ -677,7 +503,6 @@ func TestCaptureRecordsNoFailures(t *testing.T) {
 		{"ReleaseTags", func() error { _, err := rec.ReleaseTags("acme", "widget"); return err }},
 		{"ReleaseAssets", func() error { _, err := rec.ReleaseAssets("acme", "widget", "v1.0.0"); return err }},
 		{"Asset", func() error { _, err := rec.Asset("acme", "widget", "v1.0.0", "checksums.txt"); return err }},
-		{"TagCommit", func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err }},
 		{"FileAt", func() error { _, _, err := rec.FileAt("acme", "widget", "ci.yml", "v1.0.0"); return err }},
 		{"Attestations", func() error { _, err := rec.Attestations("acme", "widget", "aa"); return err }},
 		{"PackageVersionDigest", func() error {
@@ -760,182 +585,5 @@ func TestCaptureFileInTheWayOfAFile(t *testing.T) {
 
 	if _, err := rec.ListRepos("acme"); err == nil {
 		t.Fatal("the capture wrote a file over a directory")
-	}
-}
-
-// TestCaptureTagWritesRefuse extends the unwritable-directory law to
-// the tag half: every tag read records, so every tag read must refuse
-// when it cannot.
-func TestCaptureTagWritesRefuse(t *testing.T) {
-	t.Parallel()
-
-	blocker := filepath.Join(t.TempDir(), "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := gh.Capture{Live: wholeSeam{}, Dir: filepath.Join(blocker, "nested")}
-
-	reads := []struct {
-		name string
-		call func() error
-	}{
-		{"TagCommit", func() error { _, err := rec.TagCommit("acme", "widget", "v1.0.0"); return err }},
-		{"TagRefs", func() error { _, err := rec.TagRefs("acme", "widget"); return err }},
-		{"TagObject", func() error { _, err := rec.TagObject("acme", "widget", tagObjID); return err }},
-		{"ChainNotes", func() error {
-			_, err := rec.ChainNotes("acme", "widget", "refs/notes/commits")
-
-			return err
-		}},
-		{"CommitMeta", func() error { _, err := rec.CommitMeta("acme", "widget", noteRev); return err }},
-		{"IsAncestor", func() error {
-			_, err := rec.IsAncestor("acme", "widget", tagObjID, noteRev)
-
-			return err
-		}},
-	}
-
-	for _, r := range reads {
-		if err := r.call(); err == nil {
-			t.Errorf("%s capture into an unwritable dir did not refuse", r.name)
-		}
-	}
-}
-
-// TestRefCaptureAndReplay: the ref resolve (stele#94's cloneless
-// walk) records through Capture and replays from Snapshot; a ref the
-// capture never resolved refuses on replay, and a Capture over a
-// Forge with no ref surface refuses by name.
-func TestRefCaptureAndReplay(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	source := t.TempDir()
-
-	// Seed a snapshot that can answer the resolve, then capture
-	// through it into dir.
-	seedPath := filepath.Join(source, "acme", "widget", "refs")
-	if err := os.MkdirAll(seedPath, 0o750); err != nil {
-		t.Fatal(err)
-	}
-
-	const tip = `"1111111111111111111111111111111111111111"`
-	if err := os.WriteFile(filepath.Join(seedPath, "refs%2Fheads%2Fmain.json"), []byte(tip), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := gh.Capture{Live: gh.Snapshot{Dir: source}, Dir: dir}
-
-	got, err := rec.Ref("acme", "widget", "refs/heads/main")
-	if err != nil {
-		t.Fatalf("Capture.Ref = %v", err)
-	}
-
-	replayed, err := gh.Snapshot{Dir: dir}.Ref("acme", "widget", "refs/heads/main")
-	if err != nil || replayed != got {
-		t.Fatalf("Snapshot.Ref = %q, %v; want %q recorded through", replayed, err, got)
-	}
-
-	if _, err := (gh.Snapshot{Dir: dir}).Ref("acme", "widget", "refs/heads/other"); err == nil {
-		t.Fatal("an uncaptured ref replayed — a resolve nobody recorded is not a fact")
-	}
-
-	noRefs := gh.Capture{Live: onlyForge{f: gh.Snapshot{Dir: source}}, Dir: dir}
-	if _, err := noRefs.Ref("acme", "widget", "refs/heads/main"); err == nil {
-		t.Fatal("Capture.Ref did not refuse a Forge with no ref surface")
-	}
-}
-
-// The two note shapes a real ledger holds (stele#193). The link is a
-// chain note; the scaffolding note is the LIVE bytes measured off
-// monumental-archive/.github and release-lab on 2026-08-20 — one per
-// ledger, plain text, and the byte that broke the capture is its
-// leading 's'.
-const (
-	scriptedLinkNote        = `{"version": 3, "provenance": {"bundle": {}}}`
-	scriptedScaffoldingNote = "seed: scaffolding note (#202 pattern) " +
-		"— the chain re-founds on v3 above this\n"
-)
-
-// scriptedTagForge is the scripted forge plus the tag surface, so the
-// capture's tag reads are driven at all — the ChainNotes leg had no
-// test, which is how a capture that could not record a real ledger
-// shipped.
-type scriptedTagForge struct{ scriptedForge }
-
-func (scriptedTagForge) TagRefs(_, _ string) ([]gh.TagRef, error) {
-	return []gh.TagRef{{Name: "v1.0.0", ObjectSHA: strings.Repeat("a", 40), Annotated: true}}, nil
-}
-
-func (scriptedTagForge) TagObject(_, _, _ string) (*gh.TagObject, error) {
-	return &gh.TagObject{
-		Tagger: "release-mint[bot]", Target: strings.Repeat("b", 40),
-		Payload: []byte("object x\n"), Signature: []byte("sig"),
-	}, nil
-}
-
-func (scriptedTagForge) ChainNotes(_, _, _ string) ([]gh.ChainNote, error) {
-	return []gh.ChainNote{
-		{Rev: strings.Repeat("b", 40), Note: []byte(scriptedLinkNote)},
-		{Rev: strings.Repeat("c", 40), Note: []byte(scriptedScaffoldingNote)},
-	}, nil
-}
-
-func (scriptedTagForge) CommitMeta(_, _, _ string) (*gh.CommitMeta, error) {
-	return &gh.CommitMeta{Parents: nil, CommitEpoch: 100, Subject: "seed"}, nil
-}
-
-func (scriptedTagForge) IsAncestor(_, _, _, _ string) (bool, error) { return true, nil }
-
-// TestCaptureThenReplayChainNotes: a note is BYTES, and both shapes a
-// ledger actually holds survive the round trip unchanged.
-//
-// The JSON row alone would pass under the old typing; the scaffolding
-// row is the one that refused to record at all, because a note that
-// is not JSON cannot be laundered through a JSON-typed field. The
-// capture holds no opinion about which it got.
-func TestCaptureThenReplayChainNotes(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	rec := gh.Capture{Live: scriptedTagForge{}, Dir: dir}
-
-	live, err := rec.ChainNotes("acme", "widget", "refs/notes/commits")
-	if err != nil {
-		t.Fatalf("capture ChainNotes = %v", err)
-	}
-
-	replayed, err := gh.Snapshot{Dir: dir}.ChainNotes("acme", "widget", "refs/notes/commits")
-	if err != nil {
-		t.Fatalf("replay ChainNotes = %v", err)
-	}
-
-	if !reflect.DeepEqual(live, replayed) {
-		t.Fatalf("replayed = %+v, want the captured %+v", replayed, live)
-	}
-
-	for i, want := range []string{scriptedLinkNote, scriptedScaffoldingNote} {
-		if string(replayed[i].Note) != want {
-			t.Errorf("note %d = %q, want %q", i, replayed[i].Note, want)
-		}
-	}
-}
-
-// TestCaptureChainNotesUnwritableDir: the write-failure branch on the
-// notes leg — a capture that cannot record refuses rather than
-// silently serving live-only.
-func TestCaptureChainNotesUnwritableDir(t *testing.T) {
-	t.Parallel()
-
-	blocker := filepath.Join(t.TempDir(), "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := gh.Capture{Live: scriptedTagForge{}, Dir: filepath.Join(blocker, "nested")}
-
-	if _, err := rec.ChainNotes("acme", "widget", "refs/notes/commits"); err == nil {
-		t.Fatal("ChainNotes capture into an unwritable dir did not refuse")
 	}
 }

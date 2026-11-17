@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
 )
 
 // Candidate is one identity the artifact may have been signed under.
@@ -60,17 +61,20 @@ const (
 	assertBaseImage  = "base-image-approval"
 )
 
-// unseen reports a forge read the walk could not complete: the host
+// unseen reports a read the walk could not complete: the host
 // throttled it, its transient ladder ran out on 5xx or 429 (stele#339),
-// or the credential was refused (stele#343). None of the three says
-// anything about the subject — the run learned nothing about it — so
-// none may be recorded as a divergence against it: it ends the walk
-// the way every other unreadable forge read does, and the run seals
-// CANNOT_JUDGE. gh.ErrForbidden's own rule: an unreadable population
-// is unchecked, never clean, and unchecked is not a finding either.
-// Which refusals are which is internal/gh's answer — this only asks.
+// the credential was refused (stele#343), or the git fetch behind it
+// did not complete (stele#384). None of them says anything about the
+// subject — the run learned nothing about it — so none may be recorded
+// as a divergence against it: it ends the walk the way every other
+// unreadable read does, and the run seals CANNOT_JUDGE.
+// gh.ErrForbidden's own rule: an unreadable population is unchecked,
+// never clean, and unchecked is not a finding either. Which refusals
+// are which is internal/gh's and internal/gitfetch's answer — this
+// only asks.
 func unseen(err error) bool {
-	return gh.Retryable(err) || errors.Is(err, gh.ErrForbidden)
+	return gh.Retryable(err) || errors.Is(err, gh.ErrForbidden) ||
+		errors.Is(err, gitfetch.ErrFetch) || errors.Is(err, gitfetch.ErrGit)
 }
 
 // blind ends the walk on an unseen read, naming the assertion and the

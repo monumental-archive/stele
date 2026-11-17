@@ -7,6 +7,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -51,13 +52,21 @@ func TestForgeStore(t *testing.T) {
 	})
 }
 
+// noPins is the tag resolver of a test whose walk resolves no pin:
+// reaching it is a test defect, said as one.
+type noPins struct{}
+
+func (noPins) TagCommit(_, _, _ string) (string, error) {
+	return "", errors.New("this test resolves no release pin")
+}
+
 func TestLoadFullDepth(t *testing.T) {
 	t.Parallel()
 
 	t.Run("an unreadable verify policy refuses", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}); err == nil {
+		if _, err := loadFullDepth("/no/such/verify-policy.json", nil, &storeForge{}, noPins{}); err == nil {
 			t.Fatal("loadFullDepth accepted a missing verify policy")
 		}
 	})
@@ -70,7 +79,7 @@ func TestLoadFullDepth(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if _, err := loadFullDepth(p, nil, &storeForge{}); err == nil {
+		if _, err := loadFullDepth(p, nil, &storeForge{}, noPins{}); err == nil {
 			t.Fatal("loadFullDepth accepted a policy with no trust section")
 		}
 	})
@@ -92,9 +101,13 @@ func TestLoadFullDepthHappyPath(t *testing.T) {
 
 	t.Cleanup(func() { newBundleVerifier = orig })
 
-	full, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{})
+	full, err := loadFullDepth(vp, []byte(`{"any": "bytes"}`), &storeForge{}, noPins{})
 	if err != nil {
 		t.Fatalf("loadFullDepth = %v", err)
+	}
+
+	if _, ok := full.Tags.(noPins); !ok {
+		t.Fatalf("Tags = %T, want the resolver the run handed in — pins are read through git", full.Tags)
 	}
 
 	if full.MachineryOwner != "acme" || full.MachineryRepo != "canon" {
@@ -113,12 +126,26 @@ func (passDeep) VSA(verify.Coords, []verify.Subject, verify.Pins, *verify.Enrich
 	return nil
 }
 
-// deepSnapshot stages the whole --depth full world: the evidence
-// snapshot plus what the deep branch reads — the checksum manifest and
-// the two pin trees — with the engine seam scripted to pass. It
-// returns the argument list one Run needs. rewrite, when set, shapes
-// the fixture files before they are written.
+// deepSnapshot stages the whole --depth full world and returns the
+// argument list one Run needs.
 func deepSnapshot(t *testing.T, rewrite func(files map[string]string)) []string {
+	t.Helper()
+
+	args, _ := deepWorld(t, rewrite)
+
+	return args
+}
+
+// deepWorld stages the whole --depth full world: the evidence snapshot
+// plus what the deep branch reads — the checksum manifest and the two
+// pin trees — with the engine seam scripted to pass. The forge reads
+// replay through the forge seam, never --snapshot, which full depth
+// refuses: its pins are git objects (stele#384). It returns the
+// argument list one Run needs and the snapshot directory. rewrite,
+// when set, shapes the fixture files before they are written.
+//
+//nolint:gocritic // unnamedResult: the arguments, then the snapshot directory
+func deepWorld(t *testing.T, rewrite func(files map[string]string)) ([]string, string) {
 	t.Helper()
 
 	snap, policyPath := evidenceSnapshotWith(t, rewrite)
@@ -157,16 +184,21 @@ func deepSnapshot(t *testing.T, rewrite func(files map[string]string)) []string 
 
 	origBV, origDeep := newBundleVerifier, newDeepVerifier
 	newBundleVerifier = func([]byte) (verify.BundleVerifier, error) { return attestorBV{}, nil }
-	newDeepVerifier = func(vp *policy.Policy, _ gh.Forge, _ verify.BundleVerifier) (*assert.FullDepth, error) {
-		return assert.NewFullDepth(passDeep{}, *vp.Trust.Verdict.VerifierWorkflow, *vp.Trust.Provenance.SignerWorkflow)
+	newDeepVerifier = func(
+		vp *policy.Policy, _ gh.Forge, tags assert.TagResolver, _ verify.BundleVerifier,
+	) (*assert.FullDepth, error) {
+		return assert.NewFullDepth(passDeep{}, tags, *vp.Trust.Verdict.VerifierWorkflow,
+			*vp.Trust.Provenance.SignerWorkflow)
 	}
 
 	t.Cleanup(func() { newBundleVerifier, newDeepVerifier = origBV, origDeep })
 
+	swapForgeSnapshot(t, snap)
+
 	return []string{
-		"assert", "evidence", "--org", "acme", "--policy", policyPath, "--snapshot", snap,
+		"assert", "evidence", "--org", "acme", "--policy", policyPath,
 		"--trusted-root", root, "--verify-policy", vp, "--depth", "full",
-	}
+	}, snap
 }
 
 // narrowDeepSnapshot is deepSnapshot with the release's manifest rolled
@@ -199,7 +231,7 @@ func narrowDeepSnapshot(t *testing.T) []string {
 }
 
 // TestAssertEvidenceFullDepth drives the whole CLI at --depth full
-// over a snapshot, with the engine seam scripted to pass — the flag
+// over a replayed forge, with the engine seam scripted to pass — the flag
 // path, the trust-authority load and the walk's deep branch in one
 // stroke.
 func TestAssertEvidenceFullDepth(t *testing.T) {
@@ -355,7 +387,7 @@ func blindBaseApproval(t *testing.T, respond http.HandlerFunc, says string) {
 	baseHex := strings.Repeat("8", 64)
 	ref := "docker.io/library/debian:trixie@sha256:" + baseHex
 
-	args := deepSnapshot(t, func(files map[string]string) {
+	args, snap := deepWorld(t, func(files map[string]string) {
 		scoped := strings.Replace(files["policy.json"],
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}, `+
@@ -373,19 +405,8 @@ func blindBaseApproval(t *testing.T, respond http.HandlerFunc, says string) {
 		files["policy.json"] = scoped
 	})
 
-	// Replay through the seam rather than --snapshot, so the one store
-	// read can be routed live.
-	snap := ""
-
-	for i := range args {
-		if args[i] == "--snapshot" {
-			snap = args[i+1]
-			args = append(args[:i:i], args[i+2:]...)
-
-			break
-		}
-	}
-
+	// The forge replays through the seam, so the one store read can be
+	// routed live.
 	pins := filepath.Join(t.TempDir(), "base-images.toml")
 	if err := os.WriteFile(pins, []byte("images = [\n  \""+ref+"\",\n]\n"), 0o600); err != nil {
 		t.Fatal(err)

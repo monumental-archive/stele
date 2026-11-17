@@ -34,7 +34,7 @@ type read struct {
 	decodes bool
 }
 
-// everyRead is the whole Forge plus TagReader surface, once each.
+// everyRead is the whole Forge surface, once each.
 //
 //nolint:funlen // one row per read is the point: a short list is an incomplete walk
 func everyRead() []read {
@@ -58,11 +58,6 @@ func everyRead() []read {
 			out, err := c.Asset("acme", "widget", "v1.0.0", "app.bin")
 
 			return len(out) > 0, err
-		}},
-		{name: "TagCommit", decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.TagCommit("acme", "widget", "v1.0.0")
-
-			return out != "", err
 		}},
 		{name: "FileAt", absentIsAnswer: true, call: func(c *gh.Client) (bool, error) {
 			_, ok, err := c.FileAt("acme", "widget", "ci.yml", "v1.0.0")
@@ -88,31 +83,6 @@ func everyRead() []read {
 			out, err := c.FailedRuns("acme", "widget", "v1.0.0")
 
 			return len(out) > 0, err
-		}},
-		{name: "TagRefs", decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.TagRefs("acme", "widget")
-
-			return len(out) > 0, err
-		}},
-		{name: "TagObject", decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.TagObject("acme", "widget", tagObjID)
-
-			return out != nil, err
-		}},
-		{name: "ChainNotes", absentIsAnswer: true, decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.ChainNotes("acme", "widget", "refs/notes/commits")
-
-			return len(out) > 0, err
-		}},
-		{name: "CommitMeta", decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.CommitMeta("acme", "widget", noteRev)
-
-			return out != nil, err
-		}},
-		{name: "IsAncestor", absentIsAnswer: true, decodes: true, call: func(c *gh.Client) (bool, error) {
-			out, err := c.IsAncestor("acme", "widget", tagObjID, noteRev)
-
-			return out, err
 		}},
 	}
 }
@@ -424,48 +394,11 @@ func crookedServer(t *testing.T) *gh.Client {
 	t.Helper()
 
 	bodies := map[string]string{
-		// An annotated tag whose tag OBJECT is gone, and one whose tag
-		// object will not parse: the ref resolved, the commit did not.
-		"/repos/acme/widget/git/ref/tags/orphan":  `{"object": {"type": "tag", "sha": "absent"}}`,
-		"/repos/acme/widget/git/ref/tags/mangled": `{"object": {"type": "tag", "sha": "mangled"}}`,
-		"/repos/acme/widget/git/tags/mangled":     `not json`,
-
 		// A contents envelope that declares base64 and is not.
 		"/repos/acme/widget/contents/badb64.yml": `{"content": "!! not base64 !!", "encoding": "base64"}`,
 
 		// A workflow directory listing whose one file cannot be read.
 		"/repos/acme/widget/contents/.github/workflows": `[{"name": "locked.yml", "type": "file"}]`,
-
-		// The notes chain is a four-hop read — ref, commit, tree, blob
-		// — and every hop can answer while the next one does not. One
-		// notes ref per broken hop, named for the hop it breaks.
-		"/repos/acme/notes/git/ref/notes/nocommit": `{"object": {"sha": "absentcommit"}}`,
-
-		"/repos/acme/notes/git/ref/notes/treeless": `{"object": {"sha": "treeless"}}`,
-		"/repos/acme/notes/git/commits/treeless":   `{"parents": []}`,
-
-		"/repos/acme/notes/git/ref/notes/notree": `{"object": {"sha": "notree"}}`,
-		"/repos/acme/notes/git/commits/notree":   `{"tree": {"sha": "absenttree"}}`,
-
-		"/repos/acme/notes/git/ref/notes/junktree": `{"object": {"sha": "junktree"}}`,
-		"/repos/acme/notes/git/commits/junktree":   `{"tree": {"sha": "junktree"}}`,
-		"/repos/acme/notes/git/trees/junktree":     `not json`,
-
-		"/repos/acme/notes/git/ref/notes/skipped": `{"object": {"sha": "skipped"}}`,
-		"/repos/acme/notes/git/commits/skipped":   `{"tree": {"sha": "skiptree"}}`,
-		"/repos/acme/notes/git/trees/skiptree": `{"truncated": false, "tree": [
-		  {"path": "sub", "type": "tree", "sha": "s"}, {"type": "blob", "sha": "z"}]}`,
-
-		"/repos/acme/notes/git/ref/notes/noblob": `{"object": {"sha": "noblob"}}`,
-		"/repos/acme/notes/git/commits/noblob":   `{"tree": {"sha": "noblobtree"}}`,
-		"/repos/acme/notes/git/trees/noblobtree": `{"truncated": false, "tree": [
-		  {"path": "22/` + noteRev[2:] + `", "type": "blob", "sha": "absentblob"}]}`,
-
-		"/repos/acme/notes/git/ref/notes/rawblob": `{"object": {"sha": "rawblob"}}`,
-		"/repos/acme/notes/git/commits/rawblob":   `{"tree": {"sha": "rawblobtree"}}`,
-		"/repos/acme/notes/git/trees/rawblobtree": `{"truncated": false, "tree": [
-		  {"path": "22/` + noteRev[2:] + `", "type": "blob", "sha": "rawblob"}]}`,
-		"/repos/acme/notes/git/blobs/rawblob": `{"encoding": "utf-8", "content": "x"}`,
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -502,24 +435,6 @@ func TestHalfAnsweredReads(t *testing.T) {
 
 	c := crookedServer(t)
 
-	t.Run("an annotated tag whose object is gone", func(t *testing.T) {
-		t.Parallel()
-
-		if _, err := c.TagCommit("acme", "widget", "orphan"); err == nil ||
-			!strings.Contains(err.Error(), "tag object absent") {
-			t.Fatalf("TagCommit = %v, want the dereference refusal", err)
-		}
-	})
-
-	t.Run("an annotated tag whose object will not parse", func(t *testing.T) {
-		t.Parallel()
-
-		if _, err := c.TagCommit("acme", "widget", "mangled"); err == nil ||
-			!strings.Contains(err.Error(), "tag object of") {
-			t.Fatalf("TagCommit = %v, want the decode refusal", err)
-		}
-	})
-
 	t.Run("an envelope that declares base64 and is not", func(t *testing.T) {
 		t.Parallel()
 
@@ -535,55 +450,6 @@ func TestHalfAnsweredReads(t *testing.T) {
 		out, err := c.Workflows("acme", "widget")
 		if !errors.Is(err, gh.ErrForbidden) {
 			t.Fatalf("Workflows = %v, %v — an unreadable member is not a shorter list", out, err)
-		}
-	})
-}
-
-// TestHalfAnsweredNotesChain walks the notes read hop by hop: ref,
-// commit, tree, blob. A chain read that stopped early must refuse —
-// a short chain and a broken chain look identical to every caller
-// downstream, and only one of them is a fact.
-func TestHalfAnsweredNotesChain(t *testing.T) {
-	t.Parallel()
-
-	c := crookedServer(t)
-
-	refusals := []struct {
-		ref  string
-		want string
-	}{
-		{"refs/notes/nocommit", "notes commit"},
-		{"refs/notes/treeless", "notes commit"},
-		{"refs/notes/notree", "notes tree"},
-		{"refs/notes/junktree", "notes tree"},
-		{"refs/notes/noblob", "blob absentblob"},
-		{"refs/notes/rawblob", "not base64 content"},
-	}
-
-	for _, tc := range refusals {
-		t.Run(tc.ref, func(t *testing.T) {
-			t.Parallel()
-
-			out, err := c.ChainNotes("acme", "notes", tc.ref)
-			if err == nil {
-				t.Fatalf("ChainNotes(%s) = %+v, want a refusal naming %q", tc.ref, out, tc.want)
-			}
-
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("ChainNotes(%s) = %v, want it to name %q", tc.ref, err, tc.want)
-			}
-		})
-	}
-
-	// The skip rules are not refusals: a tree holds git's own
-	// scaffolding beside the notes, and an entry that is not a blob on
-	// a revision-shaped path is not a note.
-	t.Run("non-note tree entries are skipped, not refused", func(t *testing.T) {
-		t.Parallel()
-
-		notes, err := c.ChainNotes("acme", "notes", "refs/notes/skipped")
-		if err != nil || len(notes) != 0 {
-			t.Fatalf("ChainNotes = %+v, %v — a tree of scaffolding is an empty chain", notes, err)
 		}
 	})
 }

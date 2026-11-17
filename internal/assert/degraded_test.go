@@ -818,7 +818,7 @@ func TestSelfSignedPinsTear(t *testing.T) {
 	walk := func(t *testing.T, f *fakeForge) *report.Report {
 		t.Helper()
 
-		full, err := assert.NewFullDepth(&fakeDeep{}, "", "acme/{repo}/.github/workflows/sign.yml")
+		full, err := assert.NewFullDepth(&fakeDeep{}, f, "", "acme/{repo}/.github/workflows/sign.yml")
 		if err != nil {
 			t.Fatal(err)
 		}

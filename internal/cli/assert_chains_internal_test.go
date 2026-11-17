@@ -1,7 +1,8 @@
 // Wiring tests for `stele assert chains` (stele#94): usage refusals,
-// the section and source-authority gates, and the end-to-end snapshot
-// paths that never need the crypto engine — an unactivated repo is
-// judged before verification, which is exactly the case the walk owns.
+// the section and source-authority gates, and the end-to-end paths
+// over a real repository the run fetches (stele#384) that never need
+// the crypto engine — an unactivated repo is judged before
+// verification, which is exactly the case the walk owns.
 
 package cli
 
@@ -12,20 +13,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/gittest"
 	"github.com/monumental-archive/stele/internal/verify"
 )
 
 // chainsWorld writes an assert policy (chains section with one
-// declared exception), a chains-only verify policy, and a snapshot
-// with an unactivated repository.
-func chainsWorld(t *testing.T) (string, string, string, string) { //nolint:gocritic // snap, policy, verify policy, root
+// declared exception) and a chains-only verify policy, replays the
+// org listing — one repository — from a forge snapshot, and builds
+// that repository for the run to fetch: one commit on main and no
+// ledger, so it is unactivated.
+//
+//nolint:gocritic // unnamedResult: the repository, policy, verify policy, root
+func chainsWorld(t *testing.T) (*gittest.Repo, string, string, string) {
 	t.Helper()
 
 	dir := t.TempDir()
 
 	files := map[string]string{
-		// The org listing: one repository, no notes captured for it —
-		// replay reads the absence as an empty chain.
+		// The org listing: the population is still the forge's to list.
 		"snap/acme/repos.json": `[{"name": "lab"}]`,
 		"policy.json": `{"schema": 7, ` +
 			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
@@ -58,7 +63,13 @@ func chainsWorld(t *testing.T) (string, string, string, string) { //nolint:gocri
 		}
 	}
 
-	return filepath.Join(dir, "snap"), filepath.Join(dir, "policy.json"),
+	swapForgeSnapshot(t, filepath.Join(dir, "snap"))
+
+	lab := gittest.New(t)
+	lab.Commit("feat: the lab")
+	swapGitRemotes(t, map[string]*gittest.Repo{"acme/lab": lab})
+
+	return lab, filepath.Join(dir, "policy.json"),
 		filepath.Join(dir, "verify-policy.json"), filepath.Join(dir, "root.json")
 }
 
@@ -76,14 +87,14 @@ func swapChainsBV(t *testing.T) {
 }
 
 func TestAssertChainsDeclaredExceptionPasses(t *testing.T) {
-	snap, policy, vpolicy, root := chainsWorld(t)
+	_, policy, vpolicy, root := chainsWorld(t)
 	swapChainsBV(t)
 
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{
 		"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", vpolicy,
-		"--trusted-root", root, "--snapshot", snap,
+		"--trusted-root", root,
 	}, &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
@@ -95,7 +106,7 @@ func TestAssertChainsDeclaredExceptionPasses(t *testing.T) {
 }
 
 func TestAssertChainsUnactivatedWithoutExceptionFails(t *testing.T) {
-	snap, policy, vpolicy, root := chainsWorld(t)
+	_, policy, vpolicy, root := chainsWorld(t)
 	swapChainsBV(t)
 
 	// Rewrite the policy with no exceptions: the same unactivated
@@ -117,7 +128,7 @@ func TestAssertChainsUnactivatedWithoutExceptionFails(t *testing.T) {
 
 	code := Run([]string{
 		"assert", "chains", "--org", "acme", "--policy", bare, "--verify-policy", vpolicy,
-		"--trusted-root", root, "--snapshot", snap, "--json",
+		"--trusted-root", root, "--json",
 	}, &stdout, &stderr)
 	if code != exitRefused {
 		t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s", code, exitRefused, stdout.String(), stderr.String())
@@ -131,42 +142,21 @@ func TestAssertChainsUnactivatedWithoutExceptionFails(t *testing.T) {
 
 // TestAssertChainsFoundedButRefusedFails drives the real chainWalker
 // binding: the repository IS founded (a link-shaped note exists), so
-// the walk reaches verify.Chain over the snapshot-backed history —
-// and the note fails the engine's stricter decode, leaving the tip
-// unlinked. The declared opt-out matches the subject and must not
-// excuse the defect.
+// the walk reaches verify.Chain over the fetched history — and the
+// note fails the engine's stricter decode, leaving the tip unlinked.
+// The declared opt-out matches the subject and must not excuse the
+// defect.
 func TestAssertChainsFoundedButRefusedFails(t *testing.T) {
-	snap, policy, vpolicy, root := chainsWorld(t)
+	lab, policy, vpolicy, root := chainsWorld(t)
 	swapChainsBV(t)
 
-	const tip = "5555555555555555555555555555555555555555"
-
-	files := map[string]string{
-		"acme/lab/refs/refs%2Fheads%2Fmain.json": `"` + tip + `"`,
-		// A note is BYTES in the snapshot, base64 like every other
-		// byte field beside it (stele#193) — a captured ledger holds
-		// scaffolding notes that are not JSON at all.
-		"acme/lab/notes/refs%2Fnotes%2Fcommits.json": `[{"Rev": "` + tip +
-			`", "Note": "` + snapshotNote(linkNoteJSON) + `"}]`,
-		"acme/lab/commits/" + tip + ".json": `{"Parents": [], "CommitEpoch": 100}`,
-	}
-
-	for path, content := range files {
-		full := filepath.Join(snap, path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	lab.Note("refs/notes/commits", lab.Git("rev-parse", "HEAD"), []byte(linkNoteJSON))
 
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{
 		"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", vpolicy,
-		"--trusted-root", root, "--snapshot", snap, "--json",
+		"--trusted-root", root, "--json",
 	}, &stdout, &stderr)
 	if code != exitRefused {
 		t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s", code, exitRefused, stdout.String(), stderr.String())
@@ -179,7 +169,7 @@ func TestAssertChainsFoundedButRefusedFails(t *testing.T) {
 }
 
 func TestAssertChainsUsageRefusals(t *testing.T) {
-	snap, policy, vpolicy, root := chainsWorld(t)
+	_, policy, vpolicy, root := chainsWorld(t)
 
 	rows := [][]string{
 		{"assert", "chains", "--policy", policy, "--verify-policy", vpolicy, "--trusted-root", root},
@@ -193,14 +183,7 @@ func TestAssertChainsUsageRefusals(t *testing.T) {
 		},
 		{"assert", "chains", "--org", "acme", "--verify-policy", vpolicy, "--trusted-root", root},
 		{"assert", "chains", "--org", "acme", "--policy", policy, "--trusted-root", root},
-		{
-			"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", vpolicy,
-			"--trusted-root", root, "--snapshot", snap, "--capture", snap,
-		},
-		{
-			"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", vpolicy,
-			"--snapshot", snap,
-		},
+		{"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", vpolicy},
 		{
 			"assert", "chains", "--org", "acme", "--policy", "/no/such", "--verify-policy", vpolicy,
 			"--trusted-root", root,
@@ -224,7 +207,7 @@ func TestAssertChainsUsageRefusals(t *testing.T) {
 }
 
 func TestAssertChainsSectionGates(t *testing.T) {
-	snap, policy, vpolicy, root := chainsWorld(t)
+	_, policy, vpolicy, root := chainsWorld(t)
 	swapChainsBV(t)
 
 	t.Run("no chains section in the assert policy", func(t *testing.T) {
@@ -245,7 +228,7 @@ func TestAssertChainsSectionGates(t *testing.T) {
 
 		code := Run([]string{
 			"assert", "chains", "--org", "acme", "--policy", bare, "--verify-policy", vpolicy,
-			"--trusted-root", root, "--snapshot", snap,
+			"--trusted-root", root,
 		}, &stdout, &stderr)
 		if code != exitUsage || !strings.Contains(stderr.String(), "no chains section") {
 			t.Fatalf("Run = %d, stderr = %q, want the section refusal", code, stderr.String())
@@ -265,7 +248,7 @@ func TestAssertChainsSectionGates(t *testing.T) {
 
 		code := Run([]string{
 			"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", bare,
-			"--trusted-root", root, "--snapshot", snap,
+			"--trusted-root", root,
 		}, &stdout, &stderr)
 		if code != exitUsage || !strings.Contains(stderr.String(), "no source section") {
 			t.Fatalf("Run = %d, stderr = %q, want the source refusal", code, stderr.String())
@@ -273,11 +256,13 @@ func TestAssertChainsSectionGates(t *testing.T) {
 	})
 
 	t.Run("a torn listing seals CANNOT_JUDGE", func(t *testing.T) {
+		swapForgeSnapshot(t, t.TempDir())
+
 		var stdout, stderr bytes.Buffer
 
 		code := Run([]string{
 			"assert", "chains", "--org", "acme", "--policy", policy, "--verify-policy", vpolicy,
-			"--trusted-root", root, "--snapshot", t.TempDir(),
+			"--trusted-root", root,
 		}, &stdout, &stderr)
 		if code != exitBlind {
 			t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s",

@@ -23,6 +23,7 @@ import (
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/gh"
+	"github.com/monumental-archive/stele/internal/gitfetch"
 	"github.com/monumental-archive/stele/internal/govulncheck"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
@@ -70,15 +71,36 @@ var (
 		return storeAttestor{forge: forge, bv: bv, issuer: issuer}
 	}
 
-	newForge = func() gh.Forge {
-		token := os.Getenv("GITHUB_TOKEN")
-		if token == "" {
-			token = os.Getenv("GH_TOKEN")
-		}
+	newForge = func() gh.Forge { return gh.New(forgeToken()) }
 
-		return gh.New(token)
+	// newGitSession builds the session a walk reads git objects through
+	// (stele#384): every repository fetched once, from the same forge
+	// server the forge reads go to and with the same credential.
+	newGitSession = func(want gitfetch.Want, log func(string, ...any)) *gitfetch.Session {
+		return &gitfetch.Session{
+			Remote: gitfetch.GitHubRemote(gh.DefaultServer), Token: forgeToken(), Want: want, Log: log,
+		}
 	}
 )
+
+// forgeToken is the credential every forge read and git fetch carries,
+// "" for anonymous reads of public repositories.
+func forgeToken() string {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return token
+	}
+
+	return os.Getenv("GH_TOKEN")
+}
+
+// closeSession removes what a walk fetched. A directory that will not
+// go is said, never swallowed: the property is that nothing is left
+// behind.
+func closeSession(s *gitfetch.Session, stderr io.Writer) {
+	if err := s.Close(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck // the run's verdict is already written
+	}
+}
 
 // assertCmd dispatches `stele assert <target>`.
 func assertCmd(args []string, stdout, stderr io.Writer) int {
@@ -212,6 +234,30 @@ func predicateMatches(payload []byte, predicateType string) error {
 	return nil
 }
 
+// depthRefusal is the usage refusal a depth request earns, "" when it
+// earns none. Asking for full depth without the trust authority is
+// refused, never a shallower walk that looks like the deep one. And
+// full depth resolves each release's pins through git (stele#384),
+// while a forge snapshot holds no git objects: a replay would fetch
+// them live, and a capture would claim a run it did not record — so
+// both refuse, naming what to run instead.
+func depthRefusal(depth, verifyPolicyPath, snapshotDir, captureDir string) string {
+	switch {
+	case depth != depthPresence && depth != depthFull:
+		return fmt.Sprintf("--depth %q is not a depth (presence, full)", depth)
+	case depth == depthFull && verifyPolicyPath == "":
+		return "--verify-policy is required with --depth full: it names the trust identities"
+	case depth == depthFull && snapshotDir != "":
+		return "--snapshot cannot replay --depth full: the release pins are read through git, and a" +
+			" snapshot holds no git objects — run --depth full against the live forge, or replay at presence depth"
+	case depth == depthFull && captureDir != "":
+		return "--capture cannot record --depth full: the release pins are read through git, and a" +
+			" capture records no git objects — capture at presence depth, or run --depth full without --capture"
+	default:
+		return ""
+	}
+}
+
 // assertEvidence runs the evidence-completeness walk: policy loaded,
 // the forge chosen (live, snapshot replay, or capture-through), the
 // contract sources stacked manifest-first, the debt file parsed into
@@ -272,14 +318,9 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
 	}
 
-	// Depth is validated before anything is opened: asking for full
-	// depth without the trust authority is a usage refusal, never a
-	// shallower walk that looks like the deep one.
-	switch {
-	case depth != depthPresence && depth != depthFull:
-		return usageFail(fmt.Sprintf("--depth %q is not a depth (presence, full)", depth))
-	case depth == depthFull && verifyPolicyPath == "":
-		return usageFail("--verify-policy is required with --depth full: it names the trust identities")
+	// Depth is validated before anything is opened.
+	if refusal := depthRefusal(depth, verifyPolicyPath, snapshotDir, captureDir); refusal != "" {
+		return usageFail(refusal)
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
@@ -332,18 +373,19 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 	// policy) and the cryptographic boundary.
 	var full *assert.FullDepth
 
-	if depth == depthFull {
-		fd, derr := loadFullDepth(verifyPolicyPath, rootJSON, forge)
-		if derr != nil {
-			return usageFail(derr.Error())
-		}
-
-		full = fd
-	}
-
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
+	}
+
+	if depth == depthFull {
+		fd, pins, derr := openFullDepth(verifyPolicyPath, rootJSON, forge, out.logf)
+		if derr != nil {
+			return usageFail(derr.Error())
+		}
+		defer closeSession(pins, stderr)
+
+		full = fd
 	}
 
 	scope := population.Scope{Org: org, Repo: repo}
@@ -982,11 +1024,10 @@ func readVEXDir(dir string) (*vexjoin.Decisions, error) {
 // verifier bound to the trust boundary, the walk sealed out.
 func assertTags(args []string, stdout, stderr io.Writer) int {
 	var (
-		jsonOut                 bool
-		org, repo, policyPath   string
-		debtPath                string
-		root                    rootFlags
-		snapshotDir, captureDir string
+		jsonOut               bool
+		org, repo, policyPath string
+		debtPath              string
+		root                  rootFlags
 	)
 
 	flags := flag.NewFlagSet("stele assert tags", flag.ContinueOnError)
@@ -997,8 +1038,6 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&policyPath, "policy", "", "path to the committed assert policy (required)")
 	debtFlag(flags, &debtPath)
 	root.register(flags)
-	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
-	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
 	flags.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -1023,8 +1062,6 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		return usageFail("--repo must be owner/name")
 	case policyPath == "":
 		return usageFail("--policy is required")
-	case snapshotDir != "" && captureDir != "":
-		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
@@ -1047,18 +1084,21 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	// Every branch, every tag and the ledger, commits-only but for the
+	// notes: the ledger annotates branch commits a tag may not reach,
+	// and the policy names no branch to narrow it to (stele#384).
+	git := newGitSession(gitfetch.Want{Heads: true, NotesRef: *pol.Tags.NotesRef, Tags: true}, out.logf)
+	if cerr := git.Check(); cerr != nil {
+		return usageFail(cerr.Error())
+	}
+	defer closeSession(git, stderr)
+
 	forge := newForge()
-	if snapshotDir != "" {
-		forge = gh.Snapshot{Dir: snapshotDir}
-	} else if captureDir != "" {
-		forge = gh.Capture{Live: forge, Dir: captureDir}
-	}
-
-	tags, ok := forge.(gh.TagReader)
-	if !ok {
-		return usageFail("this forge cannot read tags")
-	}
-
 	scope := population.Scope{Org: org, Repo: repo}
 
 	pop, perr := resolvePopulation(scope, forge, pol.Population)
@@ -1071,12 +1111,7 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
-	out := &latch{w: stdout}
-	if jsonOut {
-		out = &latch{w: stderr}
-	}
-
-	rep, err := assert.Tags(pol, pop, tags, tv, j, out.logf, root.facts()...)
+	rep, err := assert.Tags(pol, pop, git, tv, j, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
@@ -1094,18 +1129,18 @@ func assertTags(args []string, stdout, stderr io.Writer) int {
 }
 
 // assertChains runs the chain-coverage audit (stele#94): the last
-// evidence-audit bash's walk, cloneless. The assert policy carries
+// evidence-audit bash's walk, over the history it fetches itself
+// (stele#384). The assert policy carries
 // the declared exceptions; the verify policy carries where the
 // ledger lives and which branches it covers — one declaration, read
 // here rather than restated.
 func assertChains(args []string, stdout, stderr io.Writer) int {
 	var (
-		jsonOut                 bool
-		org, repo, policyPath   string
-		verifyPolicyPath        string
-		debtPath                string
-		root                    rootFlags
-		snapshotDir, captureDir string
+		jsonOut               bool
+		org, repo, policyPath string
+		verifyPolicyPath      string
+		debtPath              string
+		root                  rootFlags
 	)
 
 	flags := flag.NewFlagSet("stele assert chains", flag.ContinueOnError)
@@ -1118,8 +1153,6 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 		"path to the committed verify policy (required: it names the ledger, the branches and the identities)")
 	debtFlag(flags, &debtPath)
 	root.register(flags)
-	flags.StringVar(&snapshotDir, "snapshot", "", "replay a captured snapshot directory instead of the live API")
-	flags.StringVar(&captureDir, "capture", "", "record every live answer into this directory while walking")
 	flags.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -1146,8 +1179,6 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 		return usageFail("--policy is required")
 	case verifyPolicyPath == "":
 		return usageFail("--verify-policy is required")
-	case snapshotDir != "" && captureDir != "":
-		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
@@ -1180,24 +1211,21 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 		return usageFail(err.Error())
 	}
 
-	forge := newForge()
-	if snapshotDir != "" {
-		forge = gh.Snapshot{Dir: snapshotDir}
-	} else if captureDir != "" {
-		forge = gh.Capture{Live: forge, Dir: captureDir}
-	}
-
-	tags, ok := forge.(gh.TagReader)
-	if !ok {
-		return usageFail("this forge cannot read chain notes")
-	}
-
 	out := &latch{w: stdout}
 	if jsonOut {
 		out = &latch{w: stderr}
 	}
 
-	cv := chainWalker{vpol: vpol, tags: tags, bv: bv, log: out.logf}
+	// Each protected branch commits-only and the ledger whole, one
+	// fetch per repository (stele#384).
+	git := newGitSession(gitfetch.Want{Branches: refs, NotesRef: notesRef}, out.logf)
+	if cerr := git.Check(); cerr != nil {
+		return usageFail(cerr.Error())
+	}
+	defer closeSession(git, stderr)
+
+	forge := newForge()
+	cv := chainWalker{vpol: vpol, git: git, bv: bv, log: out.logf}
 	scope := population.Scope{Org: org, Repo: repo}
 
 	pop, perr := resolvePopulation(scope, forge, pol.Population)
@@ -1210,7 +1238,7 @@ func assertChains(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
-	rep, err := assert.Chains(pol, pop, tags, cv, notesRef, refs, j, out.logf, root.facts()...)
+	rep, err := assert.Chains(pol, pop, git, cv, notesRef, refs, j, out.logf, root.facts()...)
 	if out.err != nil {
 		return exitIO
 	}
@@ -1257,19 +1285,22 @@ func loadChainAuthority(path string) (*policy.Policy, string, []string, error) {
 }
 
 // chainWalker binds the audit's verification seam to the real chain
-// engine over the forge-backed history — the single-binary payoff
-// again: the audit asserting "this chain verifies" and the verifier
-// deciding what verifying MEANS are one implementation.
+// engine over the fetched history — the single-binary payoff again:
+// the audit asserting "this chain verifies" and the verifier deciding
+// what verifying MEANS are one implementation.
 type chainWalker struct {
 	vpol *policy.Policy
-	tags gh.TagReader
+	git  *gitfetch.Session
 	bv   verify.BundleVerifier
 	log  verify.Logf
 }
 
 // Verify implements assert.ChainVerifier.
 func (c chainWalker) Verify(owner, repo, ref string) (int, error) {
-	h := &gh.History{Reader: c.tags, Owner: owner, Repo: repo, NotesRef: *c.vpol.Source.NotesRef}
+	h, err := c.git.Repo(owner, repo)
+	if err != nil {
+		return 0, err
+	}
 
 	verdict, err := verify.Chain(c.vpol, verify.Coords{Owner: owner, Repo: repo}, ref, h, c.bv, c.log)
 	if err != nil {

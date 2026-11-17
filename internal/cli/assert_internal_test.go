@@ -19,6 +19,7 @@ import (
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/chain"
 	"github.com/monumental-archive/stele/internal/evidence"
+	"github.com/monumental-archive/stele/internal/gittest"
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/oci"
 	"github.com/monumental-archive/stele/internal/osv"
@@ -579,7 +580,6 @@ func (s *storeForge) FileAt(_, _, _, _ string) ([]byte, bool, error)      { retu
 func (s *storeForge) PackageVersionDigest(_, _, _ string) (string, error) { return "", nil }
 func (s *storeForge) Workflows(_, _ string) ([]workflow.File, error)      { return nil, nil }
 func (s *storeForge) FailedRuns(_, _, _ string) ([]string, error)         { return nil, nil }
-func (s *storeForge) TagCommit(_, _, _ string) (string, error)            { return "", nil }
 
 // attestorBV scripts the cryptographic boundary.
 type attestorBV struct {
@@ -893,66 +893,48 @@ func TestAssertEvidenceStoreGuards(t *testing.T) {
 	})
 }
 
-// tagsSnapshot writes a replayable tag-audit world: one annotated,
-// signed tag on a linked revision, with the chain genesis one commit
-// earlier.
-func tagsSnapshot(t *testing.T) (string, string) { //nolint:gocritic // snapshot dir, policy path
+// tagsWorld builds the tag-audit world as a real repository the run
+// fetches (stele#384): one annotated, signed tag on a linked revision,
+// with the chain genesis one commit earlier. It returns the policy.
+func tagsWorld(t *testing.T) string {
 	t.Helper()
 
-	dir := t.TempDir()
+	r := gittest.New(t)
+	genesis := r.Commit("feat: the genesis")
+	target := r.Commit("feat: the release")
 
-	const (
-		genesis = "2222222222222222222222222222222222222222"
-		target  = "3333333333333333333333333333333333333333"
-		tagObj  = "4444444444444444444444444444444444444444"
-	)
+	r.Note("refs/notes/commits", genesis, []byte(linkNoteJSON))
+	r.Note("refs/notes/commits", target, []byte(linkNoteJSON))
+	r.Annotated("v1.0.0", target, "release-mint[bot]", true)
 
-	link := `{"Rev": "%s", "Note": "` + snapshotNote(linkNoteJSON) + `"}`
+	swapGitRemotes(t, map[string]*gittest.Repo{"acme/widget": r})
 
-	files := map[string]string{
-		"snap/acme/widget/tagrefs.json": `[{"Name": "v1.0.0", "ObjectSHA": "` + tagObj + `", "Annotated": true}]`,
-		"snap/acme/widget/tagobjects/" + tagObj + ".json": `{"Tagger": "release-mint[bot]", ` +
-			`"Target": "` + target + `", "Payload": "b2JqZWN0", ` +
-			`"Signature": "c2ln"}`,
-		"snap/acme/widget/notes/refs%2Fnotes%2Fcommits.json": `[` +
-			fmt.Sprintf(link, genesis) + `, ` + fmt.Sprintf(link, target) + `]`,
-		"snap/acme/widget/commits/" + genesis + ".json": `{"Parents": [], "CommitEpoch": 100}`,
-		"snap/acme/widget/commits/" + target + ".json": `{"Parents": ["` +
-			genesis + `"], "CommitEpoch": 200}`,
-		"snap/acme/widget/ancestry/" + genesis + "..." + target + ".json": `true`,
-		"policy.json": `{"schema": 7, "issuer": "https://token.example.com", ` +
-			`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
-			`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
-			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
-			`"tags": {"tagPattern": "^v[0-9]", "taggerName": "release-mint[bot]", ` +
-			`"identityPattern": "^https://github\\.com/acme/", "proofFloor": {"floor": "certificate-transparency"}, ` +
-			`"notesRef": "refs/notes/commits", ` +
-			`"epochs": {"widget": "v0.1.0"}}}`,
-	}
-
-	for path, content := range files {
-		full := filepath.Join(dir, path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	return filepath.Join(dir, "snap"), filepath.Join(dir, "policy.json")
+	return tagsPolicy(t)
 }
 
-// linkNoteJSON is the chain-link note the snapshot fixtures carry.
+// tagsPolicy writes the tag-audit policy.
+func tagsPolicy(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "policy.json")
+	policy := `{"schema": 7, "issuer": "https://token.example.com", ` +
+		`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
+		`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
+		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}, ` +
+		`"tags": {"tagPattern": "^v[0-9]", "taggerName": "release-mint[bot]", ` +
+		`"identityPattern": "^https://github\\.com/acme/", "proofFloor": {"floor": "certificate-transparency"}, ` +
+		`"notesRef": "refs/notes/commits", ` +
+		`"epochs": {"widget": "v0.1.0"}}}`
+
+	if err := os.WriteFile(path, []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// linkNoteJSON is the chain-link note the fixture ledgers carry.
 const linkNoteJSON = `{"version": 2, "provenance": {"bundle": {}}}`
-
-// snapshotNote renders one note the way a capture records it: the
-// blob's bytes, base64, because a note is bytes and the snapshot
-// keeps no second opinion about whether they parse (stele#193).
-func snapshotNote(note string) string {
-	return base64.StdEncoding.EncodeToString([]byte(note))
-}
 
 // scriptedTagVerifier accepts every signature — the trust boundary is
 // proven in internal/trust; the cli layer under test only routes.
@@ -977,8 +959,8 @@ func swapTagVerifier(t *testing.T, tv assert.TagVerifier) {
 	t.Cleanup(func() { newTagVerifier = orig })
 }
 
-func TestAssertTagsSnapshotEndToEnd(t *testing.T) {
-	snap, policy := tagsSnapshot(t)
+func TestAssertTagsEndToEnd(t *testing.T) {
+	policy := tagsWorld(t)
 	swapTagVerifier(t, scriptedTagVerifier{})
 
 	root := filepath.Join(t.TempDir(), "root.json")
@@ -989,8 +971,7 @@ func TestAssertTagsSnapshotEndToEnd(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{
-		"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-		"--trusted-root", root, "--snapshot", snap,
+		"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--trusted-root", root,
 	}, &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
@@ -1002,7 +983,7 @@ func TestAssertTagsSnapshotEndToEnd(t *testing.T) {
 }
 
 func TestAssertTagsRefusingSignature(t *testing.T) {
-	snap, policy := tagsSnapshot(t)
+	policy := tagsWorld(t)
 	swapTagVerifier(t, scriptedTagVerifier{err: errors.New("chains to no trusted authority")})
 
 	root := filepath.Join(t.TempDir(), "root.json")
@@ -1013,8 +994,7 @@ func TestAssertTagsRefusingSignature(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{
-		"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-		"--trusted-root", root, "--snapshot", snap,
+		"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--trusted-root", root,
 	}, &stdout, &stderr)
 	if code != exitRefused {
 		t.Fatalf("Run = %d, want %d\nstdout: %s", code, exitRefused, stdout.String())
@@ -1022,18 +1002,17 @@ func TestAssertTagsRefusingSignature(t *testing.T) {
 }
 
 func TestAssertTagsUsageRefusals(t *testing.T) {
-	snap, policy := tagsSnapshot(t)
+	policy := tagsWorld(t)
 
 	rows := [][]string{
 		{"assert", "tags", "--policy", policy},
 		{"assert", "tags", "--org", "acme", "--repo", "acme/widget", "--policy", policy},
 		{"assert", "tags", "--repo", "solo", "--policy", policy},
 		{"assert", "tags", "--repo", "acme/widget"},
-		{"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--snapshot", snap, "--capture", snap},
 		// Signing epochs declared: the run goes looking for trust
 		// material rather than skipping the audit — no local document
 		// takes the TUF origin, which the package fence refuses.
-		{"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--snapshot", snap},
+		{"assert", "tags", "--repo", "acme/widget", "--policy", policy},
 	}
 
 	for _, args := range rows {
@@ -1099,7 +1078,7 @@ func TestAssertTagsPolicyWithoutSection(t *testing.T) {
 }
 
 func TestAssertTagsJSONAndWalkFailure(t *testing.T) {
-	snap, policy := tagsSnapshot(t)
+	policy := tagsWorld(t)
 	swapTagVerifier(t, scriptedTagVerifier{})
 
 	root := filepath.Join(t.TempDir(), "root.json")
@@ -1111,8 +1090,7 @@ func TestAssertTagsJSONAndWalkFailure(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 
 		code := Run([]string{
-			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-			"--trusted-root", root, "--snapshot", snap, "--json",
+			"assert", "tags", "--repo", "acme/widget", "--policy", policy, "--trusted-root", root, "--json",
 		}, &stdout, &stderr)
 		if code != exitOK {
 			t.Fatalf("Run = %d, stderr: %s", code, stderr.String())
@@ -1127,10 +1105,10 @@ func TestAssertTagsJSONAndWalkFailure(t *testing.T) {
 	t.Run("a torn walk seals CANNOT_JUDGE", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 
-		// An empty snapshot: the tag listing itself is unreadable.
+		// A repository whose history is not there to fetch: the walk
+		// could not see it, which says nothing about its tags.
 		code := Run([]string{
-			"assert", "tags", "--repo", "acme/widget", "--policy", policy,
-			"--trusted-root", root, "--snapshot", t.TempDir(),
+			"assert", "tags", "--repo", "acme/gone", "--policy", policy, "--trusted-root", root,
 		}, &stdout, &stderr)
 		if code != exitBlind {
 			t.Fatalf("Run = %d, want %d\nstdout: %s\nstderr: %s",

@@ -512,7 +512,7 @@ func TestLoaderStreamGuards(t *testing.T) {
 	})
 
 	t.Run("signing epochs with no trusted root", func(t *testing.T) {
-		_, policy := tagsSnapshot(t)
+		policy := tagsPolicy(t)
 
 		sweepWriteFailures(t, []string{"assert", "tags", "--repo", "acme/widget", "--policy", policy})
 	})

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monumental-archive/stele/internal/gitfetch"
 	"github.com/monumental-archive/stele/internal/standin"
 	"github.com/monumental-archive/stele/internal/trust"
 )
@@ -22,8 +23,11 @@ import (
 // TestMain fences the network out of the package's test binary. The
 // file origin resolves for real (it is just a read); the TUF origin
 // refuses, so any test that reaches it must swap this seam
-// deliberately and say what it is proving. It also lets the binary
-// serve as its own stand-in cosign (internal/standin, stele#320).
+// deliberately and say what it is proving. Git fetches are fenced the
+// same way: every remote is a path that is not there, so a test that
+// fetches must build its repositories and say so (swapGitRemotes). It
+// also lets the binary serve as its own stand-in cosign
+// (internal/standin, stele#320).
 func TestMain(m *testing.M) {
 	resolveTrustedRoot = func(p trust.RootPlan) ([]byte, error) {
 		if p.Origin == trust.OriginTUF {
@@ -33,7 +37,46 @@ func TestMain(m *testing.M) {
 		return trust.ResolveRoot(p)
 	}
 
+	productionGitSession = newGitSession
+	newGitSession = func(want gitfetch.Want, log func(string, ...any)) *gitfetch.Session {
+		return &gitfetch.Session{
+			Remote: func(owner, repo string) string {
+				return "file:///the-gate-does-not-reach-the-network/" + owner + "/" + repo
+			},
+			Want: want,
+			Log:  log,
+		}
+	}
+
 	os.Exit(standin.Main(m))
+}
+
+// productionGitSession is the seam as the binary ships it, kept for
+// the one test that pins it.
+var productionGitSession func(gitfetch.Want, func(string, ...any)) *gitfetch.Session
+
+// TestTheGitSessionReachesTheForgeServer pins the shipped seam: a
+// repository is fetched from the forge server the forge reads go to,
+// under the same credential.
+func TestTheGitSessionReachesTheForgeServer(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "the-gh-token")
+
+	s := productionGitSession(gitfetch.Want{Tags: true}, nil)
+
+	if got := s.Remote("acme", "widget"); got != "https://github.com/acme/widget.git" {
+		t.Fatalf("Remote = %s", got)
+	}
+
+	if s.Token != "the-gh-token" {
+		t.Fatalf("Token = %q, want the forge's own credential", s.Token)
+	}
+
+	t.Setenv("GITHUB_TOKEN", "the-github-token")
+
+	if got := productionGitSession(gitfetch.Want{Tags: true}, nil).Token; got != "the-github-token" {
+		t.Fatalf("Token = %q, want GITHUB_TOKEN ahead of GH_TOKEN", got)
+	}
 }
 
 // trustedRootBytes stands in for a real trusted-root document. The

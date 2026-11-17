@@ -1,8 +1,8 @@
 // The rules read surface (stele#40): the effective enforcement state
-// a claims derivation is built from. A separate interface from Forge
-// and from TagReader, for the reason both of those are separate —
-// the evidence walk does not read rules, and a fake that scripts
-// rules should not have to script releases.
+// a claims derivation is built from. A separate interface from Forge,
+// for the reason the seams are separate — the evidence walk does not
+// read rules, and a fake that scripts rules should not have to script
+// releases.
 //
 // Everything here returns RAW BYTES rather than a decoded shape, and
 // that is deliberate. The claims engine matches a policy-declared

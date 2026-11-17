@@ -6,10 +6,12 @@ stele level build --org acme
 stele level dependency --repo acme/widget
 ```
 
-One flag, and it names the subject. No clone, no policy file, no
-trusted root, no evidence-layout declaration. Point it at a repository
-and it answers, and a stranger pointing at the same repository gets the
-same answer.
+One flag, and it names the subject. No policy file, no trusted root,
+no evidence-layout declaration. stele needs `git` and fetches the
+history it reads itself — it makes no checkout, downloads no source and
+leaves nothing behind — so there is still nothing to set up. Point it
+at a repository and it answers, and a stranger pointing at the same
+repository gets the same answer.
 
 That is the whole design goal, and everything below follows from it:
 **a level is not a number an organization writes down and this tool
