@@ -154,8 +154,8 @@ func (c *Client) fetch(url string) ([]verify.StoredBundle, error) {
 		// (stele#209) — two GitHub readers that disagreed about what a
 		// throttle looks like would report the same outage two ways, and
 		// this leg's way would be "the evidence is not there".
-		if wait, ok := gh.Throttled(resp.StatusCode, resp.Header, body); ok {
-			return nil, gh.ThrottleRefusal(fmt.Sprintf("HTTP %d", resp.StatusCode), wait)
+		if t, ok := gh.Throttled(resp.StatusCode, resp.Header, body); ok {
+			return nil, gh.ThrottleRefusal(fmt.Sprintf("HTTP %d", resp.StatusCode), &t)
 		}
 
 		// A credential that cannot read this store is not an absence of
