@@ -721,6 +721,21 @@ func (s Scope) roster(set *Set, listed []gh.Repo, d *Declaration) (*Set, error) 
 	return nil, reconcileError(s.Org, undeclared, unlisted)
 }
 
+// ReconcileError is the reconciliation's refusal, typed so a caller
+// that PRINTS the population (stele#388) can name both sides without
+// re-deriving them: the two lists are the ones the refusal was built
+// from, never a second reading.
+type ReconcileError struct {
+	// Owner is the organisation whose listing was reconciled.
+	Owner string
+	// Undeclared are listed repositories the declaration does not
+	// account for, sorted.
+	Undeclared []string
+	// Unlisted are declared repositories inside the coverage that the
+	// listing does not show, sorted.
+	Unlisted []string
+}
+
 // reconcileError names every repository the two sides disagree about.
 // Names, never a count: a count cannot say which repository went
 // missing, and the repository that went missing is the whole finding.
@@ -728,24 +743,28 @@ func reconcileError(org string, undeclared, unlisted []string) error {
 	sort.Strings(undeclared)
 	sort.Strings(unlisted)
 
+	return &ReconcileError{Owner: org, Undeclared: undeclared, Unlisted: unlisted}
+}
+
+func (e *ReconcileError) Error() string {
 	var parts []string
 
-	if len(undeclared) > 0 {
+	if len(e.Undeclared) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"the listing shows %s, which the declared population does not account for"+
 				" (declare each, with its tracks, or with an empty track list and a reason)",
-			strings.Join(undeclared, " "),
+			strings.Join(e.Undeclared, " "),
 		))
 	}
 
-	if len(unlisted) > 0 {
+	if len(e.Unlisted) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"the declared population names %s, which the listing does not show"+
 				" (an unseen repository is unchecked, not clean)",
-			strings.Join(unlisted, " "),
+			strings.Join(e.Unlisted, " "),
 		))
 	}
 
-	return fmt.Errorf("population: %s does not reconcile with its declaration: %s",
-		org, strings.Join(parts, "; "))
+	return fmt.Sprintf("population: %s does not reconcile with its declaration: %s",
+		e.Owner, strings.Join(parts, "; "))
 }

@@ -45,6 +45,7 @@ the same statement as this one and tested against it.
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
 | `stele derive vex-subjects` | the signing plan for one or more VEX decisions: per decision, the releases it reaches and the subjects a claim about it is signed over, or why it is refused; `--unsigned-only` omits what the attestation store already holds |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
+| `stele derive population` | the population every assert target enumerates, printed per member with its resolved tracks and the reconciliation by name; with `--repo --tracks`, one repository's membership and track agreement |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |

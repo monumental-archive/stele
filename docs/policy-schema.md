@@ -847,10 +847,13 @@ code).
   build consumed) is the caller's typed input, never a key here.
   The registry byte-proof templates are the assert policy's
   `published` section ([assert-policy-schema.md](assert-policy-schema.md#the-published-section)).
-- **Population enumeration** (which repos the org audit walks, the
-  opt-out file) — orchestration, not verification: `stele verify`
-  verifies what it is pointed at; the walk over the org stays in
-  the caller until `assert` decides otherwise.
+- **Population enumeration** (which repos the org audit walks) —
+  not this policy's: `stele verify` verifies what it is pointed at.
+  `assert` decided where it lives (stele#153). It is the assert
+  policy's `population` section, enumerated once by
+  `internal/population`, and printed for any caller that needs it
+  by `stele derive population` (stele#388,
+  [population.md](population.md)).
 - **Per-name digest discipline in `build.enrichment`** — whether a
   given claimed dependency owes a digest. A digestless entry is legal
   in the shape (identified by `uri` alone), which is how an image

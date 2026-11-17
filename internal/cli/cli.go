@@ -162,6 +162,11 @@ usage:
               the class's planned legs must produce, present exactly
               once and nothing unplanned, as sha256 lines flat and
               grouped by leg — or a registry class's image digests
+    population  the population every assert target walks, printed:
+              each member's resolved tracks and the reconciliation
+              by name; exit 1 when roster and listing disagree, 4
+              when the listing cannot be read. With --repo and
+              --tracks: is it a member, and do the tracks match
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -291,7 +296,8 @@ derive vex-subjects takes --policy --decision... --org|--repo
 [--snapshot --out --unsigned-only --store]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --class
 --expected --dir [--subjects-out --leg-subjects-out
---registry-subjects-out]; the other
+--registry-subjects-out]; derive population takes --policy
+--org|--repo [--tracks --out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
