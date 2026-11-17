@@ -61,7 +61,6 @@ version mismatch, never as an unknown-field error.
           "kind": "files",
           "entry": "^(?P<major>\\d+)-(?P<arch>[a-z0-9_]+)$",
           "unit": "cell",
-          "shape": "<major>-<arch>",
           "extension": ".tar.gz",
           "label": "${major}",
           "assets": [
@@ -154,17 +153,25 @@ version mismatch, never as an unknown-field error.
   yours:
 
   - `kind: "files"` — each leg leaves files in a directory. `entry`,
-    `unit`, `shape`, `extension`, `label` and `assets`, each a
-    non-empty list entry of `noun`, `of` and `suffix`. Every planned
+    `unit`, `extension`, `label` and `assets`, each a non-empty list
+    entry of `noun`, `suffix` and optionally `of`. Every planned
     asset must be present exactly once, matched by `suffix`; every
     file carrying `extension` must be claimed by a leg. Each asset's
     `suffix` must end in `extension`, or the listing could never see
     it.
-  - `kind: "registry"` — each leg pushed an image and left one JSON
-    digest document. `entry`, `unit`, `shape`, `extension` and
-    `legField`: the document carries exactly `legField`, `image`,
-    `tag` and `digest`, all non-empty strings, so `legField` may not
-    be one of the other three.
+  - `kind: "registry"` — each leg pushed an image and left one file
+    recording the digest, in a declared `form`, which the engine
+    owns like the kind. `form: "document"` takes `entry`, `unit`,
+    `extension` and `legField`: one JSON document per leg carrying
+    exactly `legField`, `image`, `tag` and `digest`, all non-empty
+    strings, so `legField` may not be one of the other three.
+    `form: "bare-digest"` takes `entry`, `unit` and optionally
+    `extension`: one file per leg holding one `sha256:<hex>` digest,
+    the leg being the file's name less `extension` (absent, every
+    non-hidden file is read). A bare digest names no image, so it
+    has no subject lines; `derive subjects` refuses it by name. An
+    unknown `form` refuses at load by name, and each form takes
+    exactly its own parameters.
 
   `entry` is the pattern a planned leg must match, anchored at both
   ends (`^…$`) — unanchored, an entry merely containing a match would
@@ -173,12 +180,15 @@ version mismatch, never as an unknown-field error.
   else; `$$` is a literal dollar. A placeholder naming an undefined
   group, a group by position, or nothing at all is refused at load,
   because the expansion would silently drop that segment and match
-  names the plan never meant. `unit`, `shape` and `noun`/`of` are the
-  refusals' words: `the plan names no <unit>s`, `planned <unit> "x"
-  is not <shape>`, `expected exactly one <noun> for <of>`; the first
-  asset's `noun` names an unplanned file. An unknown `kind` refuses
-  at load by name, and a kind takes exactly its own parameters: one
-  it needs and you omit, and one it does not read, each refuse.
+  names the plan never meant. `unit` and `noun`/`of` are the
+  refusals' words: `the plan names no <unit>s`, `expected exactly
+  one <noun> for <of>` (`of` absent: the entry as planned); the first
+  asset's `noun` names an unplanned file. An entry the pattern
+  refuses is reported with the pattern itself, `planned <unit> "x"
+  does not match <entry>` — never a prose restatement that could
+  disagree with it. An unknown `kind` refuses at load by name, and a
+  kind takes exactly its own parameters: one it needs and you omit,
+  and one it does not read, each refuse.
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
 - `storeVsaFromVersion` — the machinery version (inclusive) from

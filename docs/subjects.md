@@ -39,9 +39,14 @@ computes:
 - `files` — a planned entry matching `entry` expands into `assets`,
   each a suffix that exactly one file in `--dir` must end with; the
   leg is labelled by `label`.
-- `registry` — each planned entry matching `entry` is named by
-  exactly one digest document's `legField`, beside `image`, `tag`
-  and `digest`; the leg is labelled by that field.
+- `registry` — each planned leg left one digest file, in the
+  class's declared `form`. A `document` names its leg in
+  `legField`, beside `image`, `tag` and `digest`, and the leg is
+  labelled by that field. A `bare-digest` file holds one digest
+  and is named by its leg; it states no image, so it has no subject
+  lines and `derive subjects` refuses it. Both forms are read by
+  one reader in `internal/release`, shared with any other leg that
+  compares what a build pushed.
 
 A class with a naming shape no current kind expresses is new engine
 work — a kind — never a flag or a pattern on the command line.
@@ -66,8 +71,9 @@ Exit 1, with every problem named in one message:
 - an asset carrying the class's extension that no leg planned —
   `unplanned <noun> <name>: N <noun>s for M planned <unit>s`, the
   noun being the first asset's;
-- an empty plan, a leg planned twice, or a leg not shaped for its
-  class;
+- an empty plan, a leg planned twice, or a leg the class's pattern
+  refuses — `planned <unit> "<entry>" does not match <entry>`, the
+  declared pattern itself;
 - for a registry class, a leg with no digest, a digest naming a leg
   the plan does not, two documents for one leg, and a document
   missing a field or carrying one it never had — each stating the

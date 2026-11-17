@@ -196,7 +196,7 @@ func TestSubjectsFromADeclaredShape(t *testing.T) {
 
 	_, err = class(t, "board-firmware").Subjects(filepath.Join(dir, "assets"), []string{"alpha@r2", "gamma-r1"})
 	refused(t, err, []string{
-		`release: board-firmware subjects: planned board "gamma-r1" is not <board>@r<rev>`,
+		`release: board-firmware subjects: planned board "gamma-r1" does not match ^(?P<board>[a-z]+)@(?P<rev>r[0-9]+)$`,
 	})
 
 	_, err = class(t, "board-firmware").Subjects(filepath.Join(dir, "assets"), []string{"alpha@r2", "delta@r1"})
@@ -346,16 +346,16 @@ func TestSubjectsRefusals(t *testing.T) {
 		{
 			name: "a target that is not a plain name", class: "rust-binary", fixture: "go",
 			plan: []string{"linux-*"},
-			want: []string{`planned target "linux-*" is not a plain name`},
+			want: []string{`planned target "linux-*" does not match ^(?P<target>[^/\\ \t\n*?\[]+)$`},
 		},
 		{
 			name: "an empty target", class: "go-binary", fixture: "go", plan: []string{""},
-			want: []string{`planned target "" is not a plain name`},
+			want: []string{`planned target "" does not match ^(?P<target>`},
 		},
 		{
 			name: "a pgrx cell that is not major-arch", class: "pgrx-extension", fixture: "pgrx",
 			plan: []string{"16-x-amd64"},
-			want: []string{`planned cell "16-x-amd64" is not <major>-<arch>`},
+			want: []string{`planned cell "16-x-amd64" does not match ^(?P<major>\d+)-(?P<arch>[a-z0-9_]+)$`},
 		},
 		{
 			name: "one archive claimed by two legs", class: "go-binary", fixture: "go",
@@ -551,7 +551,7 @@ func TestRegistrySubjectsRefusals(t *testing.T) {
 		},
 		{
 			name: "a major that is not a number", plan: []string{"16", "pg17"},
-			want: []string{`planned major "pg17" is not a major`},
+			want: []string{`planned major "pg17" does not match ^\d+$`},
 		},
 		{
 			name: "a major planned twice", plan: []string{"16", "16"},

@@ -1,12 +1,12 @@
 // A class's subject shape, as its assert-policy entry declares it
 // (stele#442). Which classes exist and how their assets are named are
 // one organisation's packaging conventions, so they are policy; what
-// this file owns is the set of shape KINDS, because each kind names a
-// judgment the engine computes — the baseImages mechanism rule
-// (docs/assert-policy-schema.md). A kind takes exactly its own
-// parameters, its templates name only the entry pattern's own groups,
-// and every one of those facts is refused at load, never at release
-// time.
+// this file owns is the set of shape KINDS (and a registry class's
+// digest FORMS), because each names a judgment the engine computes —
+// the baseImages mechanism rule (docs/assert-policy-schema.md). A kind
+// takes exactly its own parameters, its templates name only the entry
+// pattern's own groups, and every one of those facts is refused at
+// load, never at release time.
 
 package release
 
@@ -27,9 +27,21 @@ const (
 	// every one present exactly once and none unplanned.
 	ShapeFiles ShapeKind = "files"
 	// ShapeRegistry is a class whose subjects were pushed to a
-	// registry: each planned leg leaves one digest document naming
-	// its leg, the image and the digest pushed.
+	// registry: each planned leg leaves one file recording the digest
+	// it pushed, in the class's declared form.
 	ShapeRegistry ShapeKind = "registry"
+)
+
+// RegistryForm names one way a registry leg records what it pushed.
+type RegistryForm string
+
+const (
+	// FormDocument is a JSON digest document per leg, naming its leg
+	// in a declared field beside the image, the tag and the digest.
+	FormDocument RegistryForm = "document"
+	// FormBareDigest is a file per leg holding one bare
+	// `sha256:<hex>` digest; the leg is the file's name.
+	FormBareDigest RegistryForm = "bare-digest"
 )
 
 // SubjectShape is a class's declared subject shape: the kind, then
@@ -45,21 +57,21 @@ type SubjectShape struct {
 	Entry *string `json:"entry"`
 	// Unit is what one planned entry is called in a refusal: "the
 	// plan names no <unit>s" (both kinds).
-	Unit *string `json:"unit,omitempty"`
-	// Shape says, in a refusal, what an entry failing Entry is not:
-	// `planned <unit> "x" is not <shape>` (both kinds).
-	Shape *string `json:"shape,omitempty"`
+	Unit *string `json:"unit"`
 	// Extension is the suffix every subject file carries; a file
-	// with it that no leg claims is unplanned (both kinds).
-	Extension *string `json:"extension"`
+	// with it that no leg claims is unplanned (files, and the
+	// registry document form; optional for a bare digest).
+	Extension *string `json:"extension,omitempty"`
 	// Label is the leg-grouped manifest's prefix for a leg, a
 	// template over Entry's groups (files).
 	Label *string `json:"label,omitempty"`
 	// Assets are what one leg produces, in the order its lines are
 	// written (files).
 	Assets []ShapeAsset `json:"assets,omitempty"`
+	// Form is how each leg records its digest (registry).
+	Form *RegistryForm `json:"form,omitempty"`
 	// LegField is the field of each digest document that names its
-	// leg (registry).
+	// leg (registry, document form).
 	LegField *string `json:"legField,omitempty"`
 }
 
@@ -69,20 +81,20 @@ type ShapeAsset struct {
 	// <noun> for <of>".
 	Noun *string `json:"noun"`
 	// Of names the leg in that refusal, a template over the entry's
-	// groups.
-	Of *string `json:"of"`
+	// groups. Absent, the leg is named as the plan wrote it.
+	Of *string `json:"of,omitempty"`
 	// Suffix is the asset name's ending, a template over the entry's
 	// groups; any non-empty, non-hidden stem before it is the
 	// release's own naming.
 	Suffix *string `json:"suffix"`
 }
 
-// The parameter names shared by both kinds.
+// The parameter names more than one kind or form reads.
 const (
 	paramEntry     = "entry"
 	paramUnit      = "unit"
-	paramShape     = "shape"
 	paramExtension = "extension"
+	paramForm      = "form"
 )
 
 // Fields a digest document always carries beside its leg field.
@@ -91,20 +103,6 @@ const (
 	docTag    = "tag"
 	docDigest = "digest"
 )
-
-// owns names the parameters one kind reads, in the order its
-// refusals report them. A kind absent from this switch is a kind this
-// engine does not implement — the one place that fact is written.
-func owns(k ShapeKind) []string {
-	switch k {
-	case ShapeFiles:
-		return []string{paramEntry, paramUnit, paramShape, paramExtension, "label", "assets"}
-	case ShapeRegistry:
-		return []string{paramEntry, paramUnit, paramShape, paramExtension, "legField"}
-	default:
-		return nil
-	}
-}
 
 // Compiled is a class's shape made executable: exactly one of the two
 // is set, by kind.
@@ -123,22 +121,23 @@ func (s *SubjectShape) Compile(class string) (*Compiled, error) {
 		return nil, fmt.Errorf("%s.kind is absent or empty", where)
 	}
 
-	owned := owns(*s.Kind)
-	if owned == nil {
-		return nil, fmt.Errorf("%s.kind %q is not a subject shape this stele implements", where, *s.Kind)
+	reader, err := s.reader(where)
+	if err != nil {
+		return nil, err
 	}
 
+	required, optional := owns(*s.Kind, s.form())
 	declared := s.params()
 
-	for _, name := range owned {
+	for _, name := range required {
 		if !declared[name] {
-			return nil, fmt.Errorf("%s.%s is absent or empty — the %s kind requires it", where, name, *s.Kind)
+			return nil, fmt.Errorf("%s.%s is absent or empty — the %s requires it", where, name, reader)
 		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(declared)) {
-		if declared[name] && !slices.Contains(owned, name) {
-			return nil, fmt.Errorf("%s.%s is declared but the %s kind does not read it", where, name, *s.Kind)
+		if declared[name] && !slices.Contains(required, name) && !slices.Contains(optional, name) {
+			return nil, fmt.Errorf("%s.%s is declared but the %s does not read it", where, name, reader)
 		}
 	}
 
@@ -154,6 +153,36 @@ func (s *SubjectShape) Compile(class string) (*Compiled, error) {
 	return s.compileFiles(class, where, entry)
 }
 
+// reader names the judgment a shape selects, for its refusals, and
+// refuses a kind or a form this engine does not implement — by name,
+// before any parameter is read.
+func (s *SubjectShape) reader(where string) (string, error) {
+	switch *s.Kind {
+	case ShapeFiles:
+		return "files kind", nil
+	case ShapeRegistry:
+	default:
+		return "", fmt.Errorf("%s.kind %q is not a subject shape this stele implements", where, *s.Kind)
+	}
+
+	switch f := s.form(); f {
+	case "":
+		return "", fmt.Errorf("%s.form is absent or empty — the registry kind requires it", where)
+	case FormDocument, FormBareDigest:
+		return "registry kind's " + string(f) + " form", nil
+	default:
+		return "", fmt.Errorf("%s.form %q is not a registry form this stele implements", where, f)
+	}
+}
+
+func (s *SubjectShape) form() RegistryForm {
+	if s.Form == nil {
+		return ""
+	}
+
+	return *s.Form
+}
+
 // params is every parameter this engine reads off a shape, whichever
 // kind owns it — one table, so "required by my kind" and "read by
 // nobody here" are answered from the same list.
@@ -163,11 +192,28 @@ func (s *SubjectShape) params() map[string]bool {
 	return map[string]bool{
 		paramEntry:     set(s.Entry),
 		paramUnit:      set(s.Unit),
-		paramShape:     set(s.Shape),
 		paramExtension: set(s.Extension),
 		"label":        set(s.Label),
 		"assets":       len(s.Assets) > 0,
+		paramForm:      s.form() != "",
 		"legField":     set(s.LegField),
+	}
+}
+
+// owns names the parameters one kind (and, for a registry, one form)
+// requires and those it reads when declared, in the order refusals
+// report them. A kind or form absent from this switch is one this
+// engine does not implement — reader refuses it first.
+//
+//nolint:gocritic // unnamedResult: required, then optional
+func owns(k ShapeKind, f RegistryForm) ([]string, []string) {
+	switch {
+	case k == ShapeFiles:
+		return []string{paramEntry, paramUnit, paramExtension, "label", "assets"}, nil
+	case f == FormDocument:
+		return []string{paramEntry, paramUnit, paramForm, paramExtension, "legField"}, nil
+	default: // the bare digest: the file's name is the leg
+		return []string{paramEntry, paramUnit, paramForm}, []string{paramExtension}
 	}
 }
 
@@ -189,6 +235,13 @@ func anchored(where, pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
+// mismatch is the one refusal for a planned entry its class's
+// pattern does not accept. It prints the declared pattern itself: a
+// prose restatement would be a second copy that could disagree.
+func mismatch(unit, e string, entry *regexp.Regexp) error {
+	return fmt.Errorf("planned %s %q does not match %s", unit, e, entry)
+}
+
 func (s *SubjectShape) compileFiles(class, where string, entry *regexp.Regexp) (*Compiled, error) {
 	ext := *s.Extension
 
@@ -196,19 +249,22 @@ func (s *SubjectShape) compileFiles(class, where string, entry *regexp.Regexp) (
 		return nil, err
 	}
 
-	assets := make([]ShapeAsset, len(s.Assets))
-
 	for i, a := range s.Assets {
 		at := fmt.Sprintf("%s.assets[%d]", where, i)
 
-		for name, f := range map[string]*string{"noun": a.Noun, "of": a.Of, "suffix": a.Suffix} {
+		for name, f := range map[string]*string{"noun": a.Noun, "suffix": a.Suffix} {
 			if f == nil || *f == "" {
 				return nil, fmt.Errorf("%s.%s is absent or empty", at, name)
 			}
 		}
 
-		for name, f := range map[string]*string{"of": a.Of, "suffix": a.Suffix} {
-			if err := placeholders(at+"."+name, *f, entry); err != nil {
+		templates := map[string]*string{"suffix": a.Suffix}
+		if a.Of != nil {
+			templates["of"] = a.Of
+		}
+
+		for _, name := range slices.Sorted(maps.Keys(templates)) {
+			if err := placeholders(at+"."+name, *templates[name], entry); err != nil {
 				return nil, err
 			}
 		}
@@ -220,26 +276,29 @@ func (s *SubjectShape) compileFiles(class, where string, entry *regexp.Regexp) (
 			return nil, fmt.Errorf("%s.suffix %q does not end in the extension %q — no listed file could match it",
 				at, *a.Suffix, ext)
 		}
-
-		assets[i] = a
 	}
 
-	label := *s.Label
-	unit, shape := *s.Unit, *s.Shape
+	assets := slices.Clone(s.Assets)
+	label, unit := *s.Label, *s.Unit
 
 	return &Compiled{Files: &AssetClass{
 		Name: class, Unit: unit, Kind: *assets[0].Noun, Extension: ext,
 		leg: func(e string) (Leg, error) {
 			match := entry.FindStringSubmatchIndex(e)
 			if match == nil {
-				return Leg{}, fmt.Errorf("planned %s %q is not %s", unit, e, shape)
+				return Leg{}, mismatch(unit, e, entry)
 			}
 
 			expand := func(tmpl string) string { return string(entry.ExpandString(nil, tmpl, e, match)) }
 
 			leg := Leg{Entry: e, Label: expand(label)}
 			for _, a := range assets {
-				leg.Assets = append(leg.Assets, Expected{Kind: *a.Noun, Of: expand(*a.Of), Suffix: expand(*a.Suffix)})
+				of := e
+				if a.Of != nil {
+					of = expand(*a.Of)
+				}
+
+				leg.Assets = append(leg.Assets, Expected{Kind: *a.Noun, Of: of, Suffix: expand(*a.Suffix)})
 			}
 
 			return leg, nil
@@ -248,16 +307,21 @@ func (s *SubjectShape) compileFiles(class, where string, entry *regexp.Regexp) (
 }
 
 func (s *SubjectShape) compileRegistry(class, where string, entry *regexp.Regexp) (*Compiled, error) {
-	field := *s.LegField
-	if field == docImage || field == docTag || field == docDigest {
-		return nil, fmt.Errorf("%s.legField %q is a field every digest document already carries for itself — "+
-			"the leg needs a field of its own", where, field)
+	c := &RegistryClass{Name: class, Unit: *s.Unit, Form: *s.Form, entry: entry}
+
+	if s.Extension != nil {
+		c.Extension = *s.Extension
 	}
 
-	return &Compiled{Registry: &RegistryClass{
-		Name: class, Unit: *s.Unit, Shape: *s.Shape, Extension: *s.Extension, LegField: field,
-		entry: entry,
-	}}, nil
+	if c.Form == FormDocument {
+		c.LegField = *s.LegField
+		if c.LegField == docImage || c.LegField == docTag || c.LegField == docDigest {
+			return nil, fmt.Errorf("%s.legField %q is a field every digest document already carries for itself — "+
+				"the leg needs a field of its own", where, c.LegField)
+		}
+	}
+
+	return &Compiled{Registry: c}, nil
 }
 
 // placeholderRE finds a template's placeholders in regexp.Expand's

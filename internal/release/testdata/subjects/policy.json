@@ -13,10 +13,9 @@
           "kind": "files",
           "entry": "^(?P<target>[^/\\\\ \\t\\n*?\\[]+)$",
           "unit": "target",
-          "shape": "a plain name",
           "extension": ".tar.gz",
           "label": "${target}",
-          "assets": [{ "noun": "archive", "of": "${target}", "suffix": "-${target}.tar.gz" }]
+          "assets": [{ "noun": "archive", "suffix": "-${target}.tar.gz" }]
         }
       },
       "rust-binary": {
@@ -25,10 +24,9 @@
           "kind": "files",
           "entry": "^(?P<target>[^/\\\\ \\t\\n*?\\[]+)$",
           "unit": "target",
-          "shape": "a plain name",
           "extension": ".tar.gz",
           "label": "${target}",
-          "assets": [{ "noun": "archive", "of": "${target}", "suffix": "-${target}.tar.gz" }]
+          "assets": [{ "noun": "archive", "suffix": "-${target}.tar.gz" }]
         }
       },
       "pgrx-extension": {
@@ -37,7 +35,6 @@
           "kind": "files",
           "entry": "^(?P<major>\\d+)-(?P<arch>[a-z0-9_]+)$",
           "unit": "cell",
-          "shape": "<major>-<arch>",
           "extension": ".tar.gz",
           "label": "${major}",
           "assets": [
@@ -54,9 +51,9 @@
         "bundles": ["attestations-extimg.intoto.jsonl"],
         "subjects": {
           "kind": "registry",
+          "form": "document",
           "entry": "^\\d+$",
           "unit": "major",
-          "shape": "a major",
           "extension": ".json",
           "legField": "pg"
         }
@@ -67,7 +64,6 @@
           "kind": "files",
           "entry": "^(?P<board>[a-z]+)@(?P<rev>r[0-9]+)$",
           "unit": "board",
-          "shape": "<board>@r<rev>",
           "extension": ".bin",
           "label": "${board}.${rev}",
           "assets": [

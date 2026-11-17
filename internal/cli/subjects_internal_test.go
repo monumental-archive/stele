@@ -260,7 +260,7 @@ func TestDeriveSubjectsRefusals(t *testing.T) {
 		},
 		{
 			"a pgrx cell not shaped for its class", "pgrx-extension", `["16"]`, pgrxDir,
-			`planned cell "16" is not <major>-<arch>`,
+			`planned cell "16" does not match ^(?P<major>\d+)-(?P<arch>[a-z0-9_]+)$`,
 		},
 		{
 			"a leg the directory does not hold", "go-binary", `["linux-amd64","windows-amd64"]`, goDir,
