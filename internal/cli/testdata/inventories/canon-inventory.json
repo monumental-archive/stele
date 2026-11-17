@@ -1,0 +1,16 @@
+{
+  "rust-crate": { "kind": "crates", "artifactSuffix": "-crate" },
+  "rust-binary": { "kind": "planned" },
+  "wasm-npm": { "kind": "planned" },
+  "oci-image": { "kind": "none" },
+  "oci-image-crate": { "kind": "planned" },
+  "go-binary": { "kind": "binaries" },
+  "source-archive": { "kind": "planned" },
+  "pgrx-extension": {
+    "kind": "variants",
+    "artifact": "{package}-pg{variant}",
+    "features": ["pg{variant}"],
+    "noDefaultFeatures": true
+  },
+  "pgrx-extension-image": { "kind": "planned" }
+}

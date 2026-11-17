@@ -22,6 +22,14 @@ shipped.
   `shipped/` documents were written by this code. It proves the
   harness runs and nothing more; it does not meet the Done-when row.
 - The captured set comes from the batch's proof-pass release-lab
-  release. Its plans are downloaded with one `gh run download` inside
-  the artifacts' one-day retention, and its run id is recorded in
-  `inputs.json`.
+  release, captured with one command inside the plan artifacts'
+  one-day retention:
+
+  ```sh
+  internal/cli/testdata/inventories/capture.sh <publish run id>
+  ```
+
+  It writes `release-lab-<version>-run-<id>/`. The run's URL goes into
+  `inputs.json`. The assert policy is the canon's at the run's pin,
+  with `canon-inventory.json` adding the inventory declarations the
+  canon swap commits.
