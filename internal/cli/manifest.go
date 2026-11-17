@@ -23,8 +23,9 @@
 // target that leg built (stele#223) — is the same kind of fact and
 // lands the same way, but it is one no policy can answer: no
 // vocabulary names a release's build artifacts by the leg that
-// produced them, and only the publisher holds the split — one subject
-// manifest per build leg, which is what `--leg-subjects` takes. An
+// produced them, and only the publisher holds the split — each class's
+// subject lines as its legs emitted them, `<target> <sha256>  <name>`,
+// which is what `--leg-lines` takes and splits here (stele#400). An
 // artifact no leg claims refuses the manifest rather than shipping
 // unattributed: a scoped rebuild would then judge a population that
 // silently omitted it, which is the same defect as an untyped entry
@@ -33,12 +34,19 @@
 // What the release published somewhere OTHER than its assets — a
 // container image, a registry package — is the third such fact
 // (stele#329), and the one with no asset to join against: nothing in
-// `--assets` can name it, so a release that shipped only an image
-// listed no artifact at all and every walk downstream had to recover
-// the subject from the proofs about it. It arrives the way a leg's
-// artifacts do, `--registry-subjects <class>:<target>=<path>`, and is
-// held to the one rule the join can still make: a registry subject is
-// not also an asset.
+// the asset directory can name it, so a release that shipped only an
+// image listed no artifact at all and every walk downstream had to
+// recover the subject from the proofs about it. It arrives the way a
+// leg's artifacts do, `--registry-lines <class>=<file>`, and is held
+// to the one rule the join can still make: a registry subject is not
+// also an asset.
+//
+// The inputs are the run's own (stele#400): the directory of what
+// ships, hashed here; the attestation bundles, placed into it under
+// the names the policy declares; and the machinery tree, whose version
+// mirror states the machinery version. The shell that used to hash,
+// split and rename in front of this command decided what a subject
+// line means without a test.
 //
 // What leaves this command is proven readable, not assumed: the
 // rendered bytes are read back through the same internal/evidence
@@ -54,7 +62,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/monumental-archive/stele/internal/assert"
 	"github.com/monumental-archive/stele/internal/evidence"
@@ -71,137 +78,80 @@ type manifestArgs struct {
 	machineryVersion string
 	entries          []evidence.Entry
 	out              string
+	// notes are what preparing the inputs did — bundles placed, a
+	// rehearsal's missing bundle — reported once the manifest stands.
+	notes []string
 }
 
-// legSubjects is the repeatable `--leg-subjects <class>:<target>=<path>`
-// flag: one build leg's subject manifest per occurrence, which is the
-// shape the publisher already holds — every matrix job emits the
-// digests of what it produced, and this reads them back rather than
-// asking a caller to restate the split in some new spelling.
-//
-// A leg is a (class, target) pair (stele#223), because that is the
-// unit a build job and a rebuild both have. Keying it by class alone
-// left the manifest unable to say which artifacts one target's
-// rebuild covers, and a judge that cannot ask that question grades
-// artifacts nobody rebuilt.
+// legSubjects are the release's build legs. A leg is a (class, target)
+// pair (stele#223), because that is the unit a build job and a rebuild
+// both have. Keying it by class alone left the manifest unable to say
+// which artifacts one target's rebuild covers, and a judge that cannot
+// ask that question grades artifacts nobody rebuilt.
 type legSubjects []legSubjectSet
 
 // legSubjectSet is one leg: the class, the target it built, and the
-// sha256sum manifest of the artifacts that produced.
+// subjects that leg emitted.
 type legSubjectSet struct {
-	class  string
-	target string
-	path   string
+	class    string
+	target   string
+	subjects []verify.Subject
+	// flag is the flag that supplied the leg, so a refusal names the
+	// input the caller wrote.
+	flag string
 }
 
-// key spells one leg for a diagnostic and for the duplicate check —
-// the same spelling the flag takes, so a message names the thing the
-// caller typed.
-func (l legSubjectSet) key() string { return l.class + ":" + l.target }
+// key spells one leg for a diagnostic and for the duplicate check.
+func (l *legSubjectSet) key() string { return l.class + ":" + l.target }
 
-// String implements flag.Value — the legs named so far, which is what
-// a usage dump should show; the paths are noise there.
-func (l *legSubjects) String() string {
-	names := make([]string, 0, len(*l))
-	for _, leg := range *l {
-		names = append(names, leg.key())
-	}
-
-	return strings.Join(names, ",")
+// manifestFlags is the raw flag surface, before anything is read.
+type manifestFlags struct {
+	classes, storeVSA, policyPath string
+	assetsDir, bundlesDir         string
+	machineryTree                 string
+	rehearsal                     bool
+	legLines, registryLines       classLines
 }
 
-// Set implements flag.Value. A leg named twice is refused here rather
-// than merged: two manifests for one leg means the caller holds two
-// answers for what that leg built, and merging them would pick one
-// silently.
-//
-// The path is cut off first, at the leftmost `=`, so a path may carry
-// either delimiter; class and target may carry neither, which is the
-// price of a delimiter and is paid where the values are short and the
-// publisher chooses them.
-func (l *legSubjects) Set(v string) error { return l.add(flagLegSubjects, v) }
-
-// registrySubjects is `--registry-subjects`: the same leg-keyed shape
-// for what a leg published to a registry instead of beside the
-// manifest. Its own type only so a refusal names the flag the caller
-// typed; the grammar and the duplicate rule are the one definition.
-type registrySubjects struct{ legSubjects }
-
-// Set implements flag.Value.
-func (r *registrySubjects) Set(v string) error { return r.add(flagRegistrySubjects, v) }
-
-// The two flags that take a leg's subject manifest.
-const (
-	flagLegSubjects      = "--leg-subjects"
-	flagRegistrySubjects = "--registry-subjects"
-)
-
-// add parses one `<class>:<target>=<path>` occurrence of the named
-// flag — the one grammar both flags share.
-func (l *legSubjects) add(flagName, v string) error {
-	leg, path, ok := strings.Cut(v, "=")
-	if !ok {
-		return fmt.Errorf("%s %q is not <class>:<target>=<path>", flagName, v)
-	}
-
-	class, target, named := strings.Cut(leg, ":")
-
-	class, target, path = strings.TrimSpace(class), strings.TrimSpace(target), strings.TrimSpace(path)
-	if !named || class == "" || target == "" || path == "" {
-		return fmt.Errorf("%s %q is not <class>:<target>=<path>", flagName, v)
-	}
-
-	set := legSubjectSet{class: class, target: target, path: path}
-
-	for _, other := range *l {
-		if other.key() == set.key() {
-			return fmt.Errorf("%s names %s twice — one build leg has one subject set", flagName, set.key())
-		}
-	}
-
-	*l = append(*l, set)
-
-	return nil
-}
-
-// parseManifestArgs reads the flag surface.
+// parseManifestArgs reads the flag surface, then prepares the inputs:
+// the policy, the bundles placed, the directory hashed, the lines
+// split and every asset typed.
 //
 //nolint:gocritic // unnamedResult: the int is an exit code, cli.Run's established vocabulary
 func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	ma := &manifestArgs{}
-
-	var (
-		classes, storeVSA, assets, policyPath string
-		perLeg                                legSubjects
-		registry                              registrySubjects
-	)
+	mf := &manifestFlags{}
 
 	flags := flag.NewFlagSet("stele emit manifest", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&classes, "classes", "",
+	flags.StringVar(&mf.classes, "classes", "",
 		"comma-separated evidence classes this release ships (required)")
-	flags.StringVar(&storeVSA, "store-vsa", "",
+	flags.StringVar(&mf.storeVSA, "store-vsa", "",
 		"true when verdicts live in the attestation store, false for legacy bundle assets (required; "+
 			"a layout is declared, never defaulted)")
-	flags.StringVar(&ma.machineryVersion, "machinery-version", "",
-		"version of the publish machinery producing this release (required) — the attested spelling of "+
-			"the fact the policy epochs derive obligations from")
-	flags.StringVar(&assets, "assets", "",
-		"sha256sum manifest of the assets this release publishes beside the manifest (required) — each "+
-			"entry is pinned and typed, and a manifest cannot pin itself")
-	flags.StringVar(&policyPath, "assert-policy", "",
+	flags.StringVar(&mf.machineryTree, "machinery-tree", "",
+		"the publish machinery's tree (required) — its version mirror states the machinery version, the"+
+			" fact the policy epochs derive obligations from")
+	flags.StringVar(&mf.assetsDir, "assets-dir", "",
+		"directory of every asset this release publishes beside the manifest (required) — hashed here,"+
+			" each entry pinned and typed; a manifest cannot pin itself")
+	flags.StringVar(&mf.bundlesDir, "bundles-dir", "",
+		"directory of the release's attestation bundles (required): each subdirectory holds one bundle and"+
+			" is the name it is placed under, or one flat file is the policy's umbrella bundle")
+	flags.BoolVar(&mf.rehearsal, "rehearsal", false,
+		"the run is a rehearsal: a release with no bundle is reported, not refused")
+	flags.StringVar(&mf.policyPath, "assert-policy", "",
 		"assert policy whose evidence vocabulary types each asset (required) — which names mark a "+
 			"document ABOUT the release is a declared org fact, never this tool's knowledge. Named for "+
 			"the document it takes: --policy is the VERIFY policy in this verb's other modes")
-	flags.Var(&perLeg, "leg-subjects",
-		"the sha256sum manifest of the artifacts ONE build leg produced, as `<class>:<target>=<path>`, "+
-			"repeatable once per leg — the split only the publisher holds, and the answer a rebuild "+
-			"scopes its population by, at the grain a rebuild actually covers. Every build subject in "+
-			"--assets must be claimed by exactly one of these")
-	flags.Var(&registry, "registry-subjects",
-		"the sha256sum manifest of what ONE build leg published somewhere other than the release's assets "+
-			"— a container image, a registry package — as `<class>:<target>=<path>`, repeatable once per "+
-			"leg. Each line is the digest and the name its provenance attests; none may also be an asset")
+	flags.Var(&mf.legLines, "leg-lines",
+		"one class's build subject lines as its legs emitted them, `<target> <sha256>  <name>`, as"+
+			" `<class>=<file>`, repeatable once per class — the split only the publisher holds, and the"+
+			" answer a rebuild scopes its population by. Every build subject must be claimed by one leg")
+	flags.Var(&mf.registryLines, "registry-lines",
+		"one class's registry subject lines, `<target> <sha256>  <name>`, as `<class>=<file>`,"+
+			" repeatable once per class — what a leg published somewhere other than the release's assets;"+
+			" none may also be an asset")
 	flags.StringVar(&ma.out, "out", "", "file to write the manifest to; empty prints to stdout")
 
 	if err := flags.Parse(args); err != nil {
@@ -217,40 +167,120 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 	}
 
 	switch {
-	case classes == "":
+	case flags.NArg() > 0:
+		return ma, usageFail(fmt.Sprintf("unexpected argument %q", flags.Arg(0)))
+	case mf.classes == "":
 		return ma, usageFail("--classes is required — a manifest declaring no classes declares nothing")
-	case storeVSA == "":
+	case mf.storeVSA == "":
 		return ma, usageFail("--store-vsa is required: true or false — the verdict layout is declared, never defaulted")
-	case ma.machineryVersion == "":
-		return ma, usageFail("--machinery-version is required — obligations are derived from it through the" +
-			" policy epochs, and a manifest without it cannot answer them")
-	case assets == "":
-		return ma, usageFail("--assets is required — a manifest that lists nothing says nothing about what" +
+	case mf.machineryTree == "":
+		return ma, usageFail("--machinery-tree is required — obligations are derived from its version through" +
+			" the policy epochs, and a manifest without it cannot answer them")
+	case mf.assetsDir == "":
+		return ma, usageFail("--assets-dir is required — a manifest that lists nothing says nothing about what" +
 			" the release published")
-	case policyPath == "":
+	case mf.bundlesDir == "":
+		return ma, usageFail("--bundles-dir is required — a release's provenance is placed beside what it" +
+			" describes, or its absence is declared a rehearsal")
+	case mf.policyPath == "":
 		return ma, usageFail("--assert-policy is required: the asset types come from the org's declared" +
 			" evidence vocabulary, and this tool holds no names of its own")
 	}
 
-	layout, err := strconv.ParseBool(storeVSA)
+	layout, err := strconv.ParseBool(mf.storeVSA)
 	if err != nil {
-		return ma, usageFail(fmt.Sprintf("--store-vsa %q is not true or false", storeVSA))
+		return ma, usageFail(fmt.Sprintf("--store-vsa %q is not true or false", mf.storeVSA))
 	}
 
-	entries, err := typedEntries(assets, policyPath, perLeg, registry.legSubjects)
-	if err != nil {
+	if err := prepareManifest(ma, mf); err != nil {
 		return ma, usageFail(err.Error())
 	}
 
 	ma.storeVSA = layout
-	ma.entries = entries
-	ma.classes = splitTypes(classes)
+	ma.classes = splitTypes(mf.classes)
 
 	return ma, exitOK
 }
 
-// typedEntries reads the release's asset manifest and stamps each
-// asset with what it IS, through the policy's declared vocabulary.
+// prepareManifest reads every input in the one order that is correct:
+// the policy (it names the bundles), the bundles placed (they ship),
+// then the directory hashed (it now holds them), then the lines split
+// and joined against what was hashed.
+func prepareManifest(ma *manifestArgs, mf *manifestFlags) error {
+	version, err := machineryOfTree(mf.machineryTree)
+	if err != nil {
+		return err
+	}
+
+	pol, err := loadEvidencePolicy(mf.policyPath)
+	if err != nil {
+		return err
+	}
+
+	if derr := assetsDirectory(mf.assetsDir); derr != nil {
+		return derr
+	}
+
+	notes, err := placeBundles(mf.bundlesDir, mf.assetsDir, pol, mf.rehearsal)
+	if err != nil {
+		return err
+	}
+
+	listed, err := hashAssetsDir(mf.assetsDir)
+	if err != nil {
+		return err
+	}
+
+	entries, err := manifestEntries(listed, pol, mf.legLines, mf.registryLines)
+	if err != nil {
+		return err
+	}
+
+	ma.machineryVersion = version
+	ma.entries = entries
+	ma.notes = notes
+
+	return nil
+}
+
+// loadEvidencePolicy reads the assert policy's evidence vocabulary.
+func loadEvidencePolicy(path string) (*assert.EvidencePolicy, error) {
+	pf, err := os.Open(path) //nolint:gosec // the policy path is operator-supplied by design
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
+	}
+	defer pf.Close() //nolint:errcheck // read-only close
+
+	// The loader refuses a policy with no evidence section, so the
+	// vocabulary is always there to type with.
+	pol, err := assert.LoadPolicy(pf)
+	if err != nil {
+		return nil, err
+	}
+
+	return pol.Evidence, nil
+}
+
+// manifestEntries splits each class's lines into legs and stamps each
+// asset with what it IS.
+func manifestEntries(
+	listed []verify.Subject, pol *assert.EvidencePolicy, legLines, registryLines classLines,
+) ([]evidence.Entry, error) {
+	var perLeg, registry legSubjects
+
+	if err := joinClassLines(&perLeg, flagLegLines, legLines); err != nil {
+		return nil, err
+	}
+
+	if err := joinClassLines(&registry, flagRegistryLines, registryLines); err != nil {
+		return nil, err
+	}
+
+	return typedEntries(listed, pol, perLeg, registry)
+}
+
+// typedEntries stamps each asset with what it IS, through the policy's
+// declared vocabulary.
 //
 // The classification is the engine's (internal/assert), never a
 // caller's: the flag it replaced asked callers for "the RELEASED
@@ -259,28 +289,14 @@ func parseManifestArgs(args []string, stderr io.Writer) (*manifestArgs, int) {
 // bash (stele#156).
 // The class and target attribution is the CALLER's, and it is the one
 // thing here that is: no declared vocabulary names a release's build
-// artifacts by the leg that produced them, so the split arrives as one
-// subject manifest per leg and is joined to the release's assets by
-// name and digest — never trusted as a second list of what shipped
+// artifacts by the leg that produced them, so the split arrives as
+// each class's lines and is joined to the release's assets by name
+// and digest — never trusted as a second list of what shipped
 // (stele#185, at target grain stele#223).
-func typedEntries(assets, policyPath string, perLeg, registry legSubjects) ([]evidence.Entry, error) {
-	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design
-	if err != nil {
-		return nil, err //nolint:wrapcheck // the path is in the message; a prefix would say it twice
-	}
-	defer pf.Close() //nolint:errcheck // read-only close
-
-	pol, err := assert.LoadPolicy(pf)
-	if err != nil {
-		return nil, err
-	}
-
-	listed, err := digestManifest(assets)
-	if err != nil {
-		return nil, err
-	}
-
-	built, err := legOfAsset(listed, perLeg, pol.Evidence)
+func typedEntries(
+	listed []verify.Subject, pol *assert.EvidencePolicy, perLeg, registry legSubjects,
+) ([]evidence.Entry, error) {
+	built, err := legOfAsset(listed, perLeg, pol)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +304,7 @@ func typedEntries(assets, policyPath string, perLeg, registry legSubjects) ([]ev
 	entries := make([]evidence.Entry, 0, len(listed))
 
 	for _, a := range listed {
-		if pol.Evidence.Classify(a.Name) == evidence.TypeEvidence {
+		if pol.Classify(a.Name) == evidence.TypeEvidence {
 			entries = append(entries, evidence.NewEvidence(a.Name, a.SHA256))
 
 			continue
@@ -296,9 +312,8 @@ func typedEntries(assets, policyPath string, perLeg, registry legSubjects) ([]ev
 
 		leg, claimed := built[a.Name]
 		if !claimed {
-			return nil, fmt.Errorf("%s is a build subject no --leg-subjects manifest claims — an"+
-				" artifact with no class and no target goes unjudged by every scoped rebuild, in silence",
-				a.Name)
+			return nil, fmt.Errorf("%s is a build subject no %s line claims — an artifact with no class"+
+				" and no target goes unjudged by every scoped rebuild, in silence", a.Name, flagLegLines)
 		}
 
 		entries = append(entries, evidence.NewSubject(a.Name, a.SHA256, leg.class, leg.target))
@@ -318,7 +333,7 @@ func typedEntries(assets, policyPath string, perLeg, registry legSubjects) ([]ev
 // There is no second list to join these against — that absence is the
 // reason the flag exists — so the one cross-statement check left is
 // the one that keeps the two populations apart: a name the release
-// publishes as an asset is an asset, claimed by --leg-subjects and
+// publishes as an asset is an asset, claimed by --leg-lines and
 // pinned by the checksum manifest, and stating it here as well would
 // hand a walk two answers about where one artifact lives. Everything
 // else about an entry (a class the release declared, one answer per
@@ -333,16 +348,11 @@ func registryEntries(listed []verify.Subject, registry legSubjects) ([]evidence.
 	var entries []evidence.Entry
 
 	for _, leg := range registry {
-		subjects, err := digestManifest(leg.path)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, s := range subjects {
+		for _, s := range leg.subjects {
 			if shipped[s.Name] {
 				return nil, fmt.Errorf("%s %s names %s, which this release publishes as an asset — an"+
 					" asset is claimed by %s, and one artifact lives in one place",
-					flagRegistrySubjects, leg.key(), s.Name, flagLegSubjects)
+					leg.flag, leg.key(), s.Name, flagLegLines)
 			}
 
 			entries = append(entries, evidence.NewRegistrySubject(s.Name, s.SHA256, leg.class, leg.target))
@@ -372,22 +382,17 @@ func legOfAsset(
 	built := make(map[string]legSubjectSet)
 
 	for _, leg := range perLeg {
-		subjects, err := digestManifest(leg.path)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, s := range subjects {
+		for _, s := range leg.subjects {
 			switch digest, ok := shipped[s.Name]; {
 			case !ok:
-				return nil, fmt.Errorf("--leg-subjects %s names %s, which this release does not publish"+
-					" — a leg cannot claim an artifact that did not ship", leg.key(), s.Name)
+				return nil, fmt.Errorf("%s %s names %s, which this release does not publish"+
+					" — a leg cannot claim an artifact that did not ship", leg.flag, leg.key(), s.Name)
 			case digest != s.SHA256:
-				return nil, fmt.Errorf("--leg-subjects %s pins %s at %s, but the release publishes %s"+
-					" — one artifact, two digests", leg.key(), s.Name, s.SHA256, digest)
+				return nil, fmt.Errorf("%s %s pins %s at %s, but the release publishes %s"+
+					" — one artifact, two digests", leg.flag, leg.key(), s.Name, s.SHA256, digest)
 			case pol.Classify(s.Name) == evidence.TypeEvidence:
-				return nil, fmt.Errorf("--leg-subjects %s names %s, which the evidence vocabulary calls a"+
-					" document ABOUT the release — a document belongs to no one leg", leg.key(), s.Name)
+				return nil, fmt.Errorf("%s %s names %s, which the evidence vocabulary calls a"+
+					" document ABOUT the release — a document belongs to no one leg", leg.flag, leg.key(), s.Name)
 			}
 
 			if other, claimed := built[s.Name]; claimed {
@@ -400,6 +405,20 @@ func legOfAsset(
 	}
 
 	return built, nil
+}
+
+// joinClassLines splits each class's lines into legs. A leg cannot
+// arrive twice: one class's lines are split once, merging a target's
+// lines into one leg, and a class named twice is refused by the split.
+func joinClassLines(into *legSubjects, flagName string, files classLines) error {
+	legs, err := splitClassLines(flagName, files)
+	if err != nil {
+		return err
+	}
+
+	*into = append(*into, legs...)
+
+	return nil
 }
 
 // digestManifest reads one sha256sum manifest from disk through the
@@ -436,6 +455,10 @@ func runEmitManifest(ma *manifestArgs, doc io.Writer, out *latch) error {
 
 	if err := writeJSONDoc(ma.out, manifest, doc, out); err != nil {
 		return err
+	}
+
+	for _, note := range ma.notes {
+		out.logf("%s", note)
 	}
 
 	registry, _ := manifest.RegistrySubjects()
