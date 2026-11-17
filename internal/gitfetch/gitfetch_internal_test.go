@@ -829,3 +829,56 @@ func TestAFailingHostIsRetriedAndARefusalIsNot(t *testing.T) {
 		})
 	}
 }
+
+// TestFetchShallowTagsFromATaglessRemote (stele#446): git refuses a
+// --depth fetch whose tag glob matches nothing, so the tags refspec is
+// asked for only when the remote advertises a tag. A tagless remote is
+// a successful fetch that brings no tag; a tagged one still brings its
+// tag at depth one.
+func TestFetchShallowTagsFromATaglessRemote(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		tag     bool
+		tags    []string
+		commits int
+	}{
+		{name: "a remote with no tag answers with none", tag: false, tags: nil, commits: 0},
+		{name: "a remote with one tag brings it at depth one", tag: true, tags: []string{"v1.0.0"}, commits: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := gittest.New(t)
+			r.Commit("feat: one")
+
+			tip := r.Commit("feat: two")
+			if tt.tag {
+				r.Lightweight("v1.0.0", tip)
+			}
+
+			f := fetch(t, &Fetcher{}, r.URL(), "", Want{Tags: true, Shallow: true})
+
+			refs, err := f.Repo.TagRefs()
+			if err != nil {
+				t.Fatalf("TagRefs = %v", err)
+			}
+
+			var names []string
+			for _, ref := range refs {
+				names = append(names, ref.Name)
+			}
+
+			if !slices.Equal(names, tt.tags) {
+				t.Fatalf("tags = %v, want %v", names, tt.tags)
+			}
+
+			if got := objects(t, f.dir); len(got["commit"]) != tt.commits {
+				t.Fatalf("objects = %v, want %d commit(s): the tagged one and nothing behind it", got, tt.commits)
+			}
+		})
+	}
+}
