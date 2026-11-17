@@ -1753,4 +1753,3 @@ The target (`stele assert published --policy --repo [--subjects
 - `--rehearsal` (bytes mode only) proves nothing and says so per
   subject: nothing was published, so the manifest passes through
   unproved and no report is sealed.
-
