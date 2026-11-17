@@ -318,11 +318,18 @@ func (f *Fetcher) fill(dir, remote, token string, want Want) (*Fetched, error) {
 
 // present asks the remote which of the exact refs the want names it
 // has — one round trip, so an absent branch or ledger is an answer
-// rather than a failed fetch.
+// rather than a failed fetch. A want for tags asks the same round trip
+// whether the remote has ANY tag (stele#446): git refuses a shallow
+// fetch whose tag glob matches nothing, so "no tags" must be learned
+// here as an answer, not discovered as a refused fetch.
 func (f *Fetcher) present(dir, remote string, env []string, want Want) (map[string]bool, error) {
 	exact := append([]string{}, want.Branches...)
 	if want.NotesRef != "" {
 		exact = append(exact, want.NotesRef)
+	}
+
+	if want.Tags {
+		exact = append(exact, tagRefs+"*")
 	}
 
 	present := map[string]bool{}
@@ -358,11 +365,27 @@ func commitSpecs(want Want, present map[string]bool) []string {
 		specs = append(specs, "+refs/heads/*:refs/heads/*")
 	}
 
-	if want.Tags {
-		specs = append(specs, "+refs/tags/*:refs/tags/*")
+	// Only when the remote advertised a tag: a tagless remote is a
+	// fetch that brings no tag, never a refusal.
+	if want.Tags && anyTag(present) {
+		specs = append(specs, "+"+tagRefs+"*:"+tagRefs+"*")
 	}
 
 	return specs
+}
+
+// tagRefs is the namespace git keeps tags under.
+const tagRefs = "refs/tags/"
+
+// anyTag reports whether the remote advertised at least one tag ref.
+func anyTag(present map[string]bool) bool {
+	for ref := range present {
+		if strings.HasPrefix(ref, tagRefs) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // network runs one command that reaches the remote, on the ladder: a
