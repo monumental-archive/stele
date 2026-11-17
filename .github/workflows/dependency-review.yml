@@ -9,7 +9,7 @@ permissions: {}
 
 jobs:
   review:
-    uses: monumental-archive/.github/.github/workflows/dependency-review.yml@53fc81e2d7db5d543ddcea782ba843bb46004c51 # v1.68.4
+    uses: monumental-archive/.github/.github/workflows/dependency-review.yml@ea8415620d3f220a6e9a3a146a8ba7e8f7a05e89 # v1.68.5
     permissions:
       contents: read # checkout for the diff of manifests
 ...
