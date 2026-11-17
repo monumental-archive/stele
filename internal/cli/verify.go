@@ -109,6 +109,25 @@ func (a trustAdapter) Attestation(bundleJSON []byte, id trust.Identity, sha256He
 	return v, nil
 }
 
+// AttestationFromWorkflow proves a DSSE bundle another run signed,
+// under a workflow identity: the path a published base is verified
+// on (stele#402), reached only through verify.WorkflowVerifier.
+func (a trustAdapter) AttestationFromWorkflow(
+	bundleJSON []byte, id *trust.WorkflowIdentity, sha256Hex string,
+) (*trust.Verified, error) {
+	b, err := trust.LoadBundle(bundleJSON)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: %w", err)
+	}
+
+	v, err := a.v.VerifyFromWorkflow(b, id, "sha256", sha256Hex)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: %w", err)
+	}
+
+	return v, nil
+}
+
 // LoggedAt is the transparency log's observed instant of a verified
 // signing — trust.Verified's own reading, unrepeated.
 func (trustAdapter) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }

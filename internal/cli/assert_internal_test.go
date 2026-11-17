@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -716,6 +717,123 @@ func TestStoreAttestor(t *testing.T) {
 				t.Fatalf("Verify = %v, want nil", err)
 			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
 				t.Fatalf("Verify = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// workflowBV scripts the published-artifact path beside the exact
+// one, recording each identity it is asked to prove under.
+type workflowBV struct {
+	attestorBV
+
+	asked *[]string
+}
+
+func (b workflowBV) AttestationFromWorkflow(
+	raw []byte, id *trust.WorkflowIdentity, hex string,
+) (*trust.Verified, error) {
+	*b.asked = append(*b.asked, id.String())
+
+	return b.Attestation(raw, trust.Identity{}, hex)
+}
+
+// TestStoreAttestorWorkflow pins a published artifact's candidate
+// (stele#402): it is proven through the separate workflow path under
+// the attestor's own issuer, its anchors are refused before any proof
+// when malformed, its predicate is still required, and a boundary that
+// cannot prove one refuses rather than passing.
+func TestStoreAttestorWorkflow(t *testing.T) {
+	t.Parallel()
+
+	const signer = "https://github.com/acme/signer/.github/workflows/sign.yml"
+
+	one := []jsonx.Raw{jsonx.Raw(`{"bundle": 1}`)}
+	published := assert.WorkflowCandidate{
+		Workflow: signer, Owner: "acme", Ref: "refs/tags/v1.2.3", Runner: assert.FirstPartyRunner,
+	}
+
+	tests := []struct {
+		name      string
+		bv        func(asked *[]string) verify.BundleVerifier
+		issuer    string
+		edit      func(*assert.WorkflowCandidate)
+		predicate string
+		want      string // "" for verified
+	}{
+		{
+			name: "a published artifact verifies under its workflow identity",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			predicate: "https://acme.example/approval/v1",
+		},
+		{
+			name: "its predicate is still required",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			predicate: "https://acme.example/other/v1", want: "predicate type is not https://acme.example/other/v1",
+		},
+		{
+			name: "a refused signature surfaces",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{err: errors.New("cert not trusted"), asked: asked}
+			},
+			want: "cert not trusted",
+		},
+		{
+			name: "a ref that is not fully qualified refuses before any proof",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			edit: func(c *assert.WorkflowCandidate) { c.Ref = "v1.2.3" },
+			want: `trust: source ref "v1.2.3" is not a fully qualified ref`,
+		},
+		{
+			name: "the attestor's issuer completes the identity",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			issuer: "-", want: `trust: issuer "" is not an https URL`,
+		},
+		{
+			name: "a boundary that cannot prove a published artifact refuses",
+			bv:   func(*[]string) verify.BundleVerifier { return attestorBV{payload: okStatement} },
+			want: "this verifier cannot prove an artifact another run signed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var asked []string
+
+			issuer := "https://issuer.example"
+			if tt.issuer == "-" {
+				issuer = ""
+			}
+
+			candidate := published
+			if tt.edit != nil {
+				tt.edit(&candidate)
+			}
+
+			a := storeAttestor{forge: &storeForge{bundles: one}, bv: tt.bv(&asked), issuer: issuer}
+
+			err := a.Verify("acme", "", "sha256:"+strings.Repeat("c", 64),
+				[]assert.Candidate{{Workflow: &candidate}}, tt.predicate)
+
+			switch {
+			case tt.want == "" && err != nil:
+				t.Fatalf("Verify = %v, want nil", err)
+			case tt.want == "" && !reflect.DeepEqual(asked, []string{
+				signer + "@* from https://github.com/acme at refs/tags/v1.2.3 on github-hosted",
+			}):
+				t.Fatalf("proven under %q", asked)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Fatalf("Verify = %v, want the refusal %q", err, tt.want)
 			}
 		})
 	}
