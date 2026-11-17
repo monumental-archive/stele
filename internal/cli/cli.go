@@ -140,7 +140,9 @@ usage:
     vex       this release's coverage document: every shipped
               inventory scanned, every finding joined to the recorded
               decisions by exact (advisory, package, version), and a
-              refusal when a gate-class finding has no decision
+              refusal when a gate-class finding has no decision; the
+              base-layer ecosystems and the author are the assert
+              policy's, and --inventories finds the documents itself
     claims    the control claims for one branch, matched by RULE
               CONTENT against the forge's live enforcement state
               through the policy's declared table; a lapsed control
@@ -252,8 +254,8 @@ derive sbom flags: [--out --expect-version] <binary>..., or
 takes --policy --repo --branch [--canon-root --canon-digest --out
 --snapshot|--capture]; derive facts takes --archetype --repo --git-dir --server-url
 [--version --rev --tree --title --description]; derive vex
-takes --subjects --vex --author --id --released [--base-ecosystems
---out]; derive vex-subjects takes --policy --decision --org|--repo
+takes --policy --subjects|--inventories --vex --id --released [--out];
+derive vex-subjects takes --policy --decision --org|--repo
 [--snapshot --out]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --class
 --expected --dir [--subjects-out --leg-subjects-out

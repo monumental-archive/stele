@@ -73,6 +73,11 @@ type BlastRadiusPolicy struct {
 	// by the upgrade wherever the newest release proves the upgrade
 	// remedies it.
 	Supported *string `json:"supported,omitempty"`
+	// VEXAuthor is who asserts the statements of a VEX document this
+	// org derives (`derive vex`, stele#397) — OpenVEX's `author`, an
+	// identity only the org can name. Optional: the walk reads nothing
+	// from it, and the derivation refuses without it by name.
+	VEXAuthor *string `json:"vexAuthor,omitempty"`
 }
 
 // SupportedLatestRelease is the one support window this walk knows:
@@ -102,6 +107,10 @@ func (b *BlastRadiusPolicy) validate() error {
 				return fmt.Errorf("blastRadius.canary.%s is absent or empty", name)
 			}
 		}
+	}
+
+	if b.VEXAuthor != nil && *b.VEXAuthor == "" {
+		return errors.New("blastRadius.vexAuthor is empty — a statement asserted by nobody asserts nothing")
 	}
 
 	if b.Supported != nil && *b.Supported != SupportedLatestRelease {

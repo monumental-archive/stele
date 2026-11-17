@@ -623,7 +623,8 @@ Optional; required to run `stele assert blast-radius`:
   "blastRadius": {
     "osEcosystems": ["debian", "alpine", "ubuntu", "rocky", "redhat", "rpm"],
     "canary": { "repo": "release-lab", "tag": "v0.17.0", "advisory": "RUSTSEC-2021-0127" },
-    "supported": "latest-release"
+    "supported": "latest-release",
+    "vexAuthor": "example-org"
   }
 }
 ```
@@ -636,6 +637,13 @@ Optional; required to run `stele assert blast-radius`:
   gate.
 - `canary` — the pinned release that must yield its known advisory,
   or the scanner cannot see and the walk refuses to judge.
+- `vexAuthor` — who asserts the statements of a VEX document the org
+  derives (`stele derive vex`, stele#397): OpenVEX's `author`, an
+  identity only the org can name. Optional, and read by nothing but
+  the derivation, which refuses without it by name; declared, an
+  empty value is refused at load. `derive vex --policy` reads
+  `osEcosystems` from this same section, so the classification the
+  derivation gates on and the one this walk reports by are one list.
 - `supported` — which releases the org still answers for. Optional;
   absent, every published release does and every finding gates. The
   one value is `latest-release`: only each repository's newest stable

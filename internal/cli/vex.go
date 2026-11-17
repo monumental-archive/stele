@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/triage"
 	"github.com/monumental-archive/stele/internal/vex"
@@ -44,13 +45,13 @@ var newVEXScanner = func() osv.Scanner { return osv.Runner{} }
 
 // vexArgs is everything `derive vex` reads.
 type vexArgs struct {
-	subjects   string
-	vexDir     string
-	ecosystems string
-	author     string
-	id         string
-	released   string
-	out        string
+	policyPath  string
+	subjects    string
+	inventories string
+	vexDir      string
+	id          string
+	released    string
+	out         string
 }
 
 // subject pairs one artifact identifier with the inventory describing
@@ -70,13 +71,15 @@ func parseVEXArgs(args []string, stderr io.Writer) (*vexArgs, int) {
 
 	flags := flag.NewFlagSet("stele derive vex", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.StringVar(&va.policyPath, "policy", "",
+		"path to the committed assert policy: blastRadius names the base-layer ecosystems and the author (required)")
 	flags.StringVar(&va.subjects, "subjects", "",
-		"comma-separated <product-id>=<inventory-path> pairs; one per artifact this release ships (required)")
+		"comma-separated <product-id>=<inventory-path> pairs; one per artifact this release ships "+
+			"(this or --inventories)")
+	flags.StringVar(&va.inventories, "inventories", "",
+		"directory of the inventories to cover, found by the policy's evidence.sbomSuffix; each document's "+
+			"own name is its product (this or --subjects)")
 	flags.StringVar(&va.vexDir, "vex", "", "directory of recorded *.openvex.json decisions (required)")
-	flags.StringVar(&va.ecosystems, "base-ecosystems", "",
-		"comma-separated ecosystem substrings whose upgrades arrive by rebuild; "+
-			"findings there with no published fix are reported, never gated")
-	flags.StringVar(&va.author, "author", "", "who asserts these statements (required)")
 	flags.StringVar(&va.id, "id", "", "the derived document's identifier (required)")
 	flags.StringVar(&va.released, "released", "",
 		"RFC 3339 instant of the release this document describes, never a clock reading (required)")
@@ -95,12 +98,14 @@ func parseVEXArgs(args []string, stderr io.Writer) (*vexArgs, int) {
 	}
 
 	switch {
-	case va.subjects == "":
-		return va, usageFail("--subjects is required")
+	case va.policyPath == "":
+		return va, usageFail("--policy is required")
+	case va.subjects == "" && va.inventories == "":
+		return va, usageFail("--subjects or --inventories is required")
+	case va.subjects != "" && va.inventories != "":
+		return va, usageFail("--subjects and --inventories are exclusive: one subject list, named once")
 	case va.vexDir == "":
 		return va, usageFail("--vex is required")
-	case va.author == "":
-		return va, usageFail("--author is required")
 	case va.id == "":
 		return va, usageFail("--id is required")
 	case va.released == "":
@@ -139,7 +144,23 @@ func parseSubjects(spec string) ([]subject, error) {
 // runDeriveVEX scans every inventory, joins, refuses the undecided,
 // and renders what the decisions cover.
 func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
-	subjects, err := parseSubjects(va.subjects)
+	pol, err := loadAssertPolicy(va.policyPath)
+	if err != nil {
+		return fmt.Errorf("derive vex: %w", err)
+	}
+
+	br := pol.BlastRadius
+
+	switch {
+	case br == nil:
+		return fmt.Errorf("derive vex: %s declares no blastRadius section — the base-layer"+
+			" classification this derivation reads has no source", va.policyPath)
+	case br.VEXAuthor == nil:
+		return fmt.Errorf("derive vex: %s declares no blastRadius.vexAuthor — a document's statements"+
+			" are asserted by someone, and only the org can say who", va.policyPath)
+	}
+
+	subjects, err := vexSubjects(va, *pol.Evidence.SBOMSuffix)
 	if err != nil {
 		return err
 	}
@@ -154,7 +175,7 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 		return fmt.Errorf("derive vex: reading decisions from %s: %w", va.vexDir, err)
 	}
 
-	pol := &triage.Policy{BaseEcosystems: splitTypes(va.ecosystems)}
+	classes := &triage.Policy{BaseEcosystems: br.OSEcosystems}
 	scanner := newVEXScanner()
 
 	var (
@@ -164,7 +185,7 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 	)
 
 	for _, s := range subjects {
-		split, serr := scanSubject(pol, scanner, decisions, s)
+		split, serr := scanSubject(classes, scanner, decisions, s)
 		if serr != nil {
 			return serr
 		}
@@ -193,7 +214,73 @@ func runDeriveVEX(va *vexArgs, doc io.Writer, out *latch) error {
 		return fmt.Errorf("derive vex: triage before releasing: %w", err)
 	}
 
-	return renderVEX(va, released, complete, rebuilds, doc, out)
+	return renderVEX(va, *br.VEXAuthor, released, complete, rebuilds, doc, out)
+}
+
+// vexSubjects is the subject list: the caller's pairs, or the
+// inventories found in a directory — every regular file carrying the
+// policy's SBOM suffix, in name order so the document reads the same
+// on every run, each under its own document name. A document with no
+// name is refused: a statement about "" describes nothing, and a
+// product id composed in its place would be a fact nobody stated.
+func vexSubjects(va *vexArgs, suffix string) ([]subject, error) {
+	if va.inventories == "" {
+		return parseSubjects(va.subjects)
+	}
+
+	entries, err := os.ReadDir(va.inventories)
+	if err != nil {
+		return nil, fmt.Errorf("derive vex: --inventories: %w", err)
+	}
+
+	var out []subject
+
+	for _, e := range entries { // os.ReadDir returns name order
+		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), suffix) {
+			continue
+		}
+
+		path := filepath.Join(va.inventories, e.Name())
+
+		name, nerr := inventoryName(path)
+		if nerr != nil {
+			return nil, nerr
+		}
+
+		out = append(out, subject{product: name, inventory: path})
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("derive vex: %s holds no *%s inventory — a document describing nothing covers nothing",
+			va.inventories, suffix)
+	}
+
+	return out, nil
+}
+
+// spdxName is the one field discovery reads of an inventory.
+type spdxName struct {
+	Name *string `json:"name"`
+}
+
+// inventoryName reads an inventory's own document name.
+func inventoryName(path string) (string, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // a file in the directory the caller named
+	if err != nil {
+		return "", fmt.Errorf("derive vex: %w", err)
+	}
+
+	doc, err := jsonx.DecodeForeign[spdxName](raw)
+	if err != nil {
+		return "", fmt.Errorf("derive vex: %s is not an inventory document: %w", filepath.Base(path), err)
+	}
+
+	if doc.Name == nil || strings.TrimSpace(*doc.Name) == "" {
+		return "", fmt.Errorf("derive vex: %s carries no name — its statements would name no product",
+			filepath.Base(path))
+	}
+
+	return *doc.Name, nil
 }
 
 // scanSubject scans one inventory and splits its findings.
@@ -247,10 +334,10 @@ func coverageOf(product string, d *triage.Decided) vex.Coverage {
 // applies. Nothing to say is the ordinary outcome, not a failure, and
 // saying so in machine-readable form spares the caller a glob.
 func renderVEX(
-	va *vexArgs, released time.Time, complete *vex.Complete, rebuilds int, doc io.Writer, out *latch,
+	va *vexArgs, author string, released time.Time, complete *vex.Complete, rebuilds int, doc io.Writer, out *latch,
 ) error {
 	document, err := vex.Render(
-		vex.Options{ID: va.id, Author: va.author, Released: released}, complete,
+		vex.Options{ID: va.id, Author: author, Released: released}, complete,
 	)
 	if errors.Is(err, vex.ErrNoCoverage) {
 		out.logf("derived=false")
