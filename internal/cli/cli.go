@@ -167,6 +167,10 @@ usage:
               by name; exit 1 when roster and listing disagree, 4
               when the listing cannot be read. With --repo and
               --tracks: is it a member, and do the tracks match
+    classes   the evidence classes a release request declares: each
+              requested class validated against the assert policy's
+              evidence.classes and expanded as its declares say,
+              printed as classes=<list> and each declared output
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -297,7 +301,8 @@ derive vex-subjects takes --policy --decision... --org|--repo
 --workflows|--workflow [--repo]; derive subjects takes --policy
 --class --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; derive population takes --policy
---org|--repo [--tracks --out]; the other
+--org|--repo [--tracks --out]; derive classes takes --policy --classes
+[--given name=value...]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups

@@ -58,7 +58,8 @@ func (e *EvidencePolicy) Classify(name string) string {
 		}
 	}
 
-	for _, cp := range e.Classes {
+	for class := range e.Classes {
+		cp := e.Classes[class]
 		if slices.Contains(cp.Bundles, name) || slices.Contains(cp.LegacyVSABundles, name) {
 			return evidence.TypeEvidence
 		}
