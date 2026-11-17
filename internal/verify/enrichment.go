@@ -82,17 +82,8 @@ func validateDemand(e *policy.Enrichment, demand *EnrichmentDemand) error {
 		)
 	}
 
-	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
-	for _, n := range e.Required {
-		allowed[n] = true
-	}
-
-	for _, n := range e.Permitted {
-		allowed[n] = true
-	}
-
 	for _, n := range names {
-		if !allowed[n] {
+		if !e.Permits(n) {
 			return fmt.Errorf(
 				"verify: the demand requires enrichment name %q, which the policy neither requires nor permits — "+
 					"class expectations and the closed set have diverged", n,
@@ -220,19 +211,10 @@ func enrichmentPredicate(s Subject, payload []byte, predicateType string) (*enri
 // subset of the closed set, so they extend only what is required,
 // never what is allowed.
 func judgeNames(e *policy.Enrichment, extras []string, pred *enrichment.Predicate, s Subject) error {
-	allowed := make(map[string]bool, len(e.Required)+len(e.Permitted))
-	for _, n := range e.Required {
-		allowed[n] = true
-	}
-
-	for _, n := range e.Permitted {
-		allowed[n] = true
-	}
-
 	claimed := make(map[string]bool, len(pred.ResolvedDependencies))
 
 	for _, n := range pred.Names() {
-		if !allowed[n] {
+		if !e.Permits(n) {
 			return fmt.Errorf(
 				"verify: %s: enrichment claims %q, which the policy neither requires nor permits — "+
 					"the declared set is closed", s.Name, n,

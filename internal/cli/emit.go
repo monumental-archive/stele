@@ -159,6 +159,7 @@ type emitArgs struct {
 	inventories string
 	signerPin   string
 	out         string
+	vsaIn       vsaInputs
 
 	// vsa: the source verdict (stele#391), owed when the assert
 	// policy declares it
@@ -180,7 +181,7 @@ type emitArgs struct {
 // emitCmd dispatches `stele emit <mode>`.
 func emitCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain, vsa or manifest"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: chain, vsa, manifest or enrichment"); err != nil {
 			return exitIO
 		}
 
@@ -193,8 +194,12 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 	case emitManifest:
 		// Its own path: it shares none of the chain/vsa flag surface.
 		return emitManifestCmd(args[1:], stdout, stderr)
+	case emitEnrichment:
+		// Its own path too: no trust root, no signer, nothing verified.
+		return emitEnrichmentCmd(args[1:], stdout, stderr)
 	default:
-		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa, manifest)\n", mode); err != nil {
+		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (chain, vsa, manifest, enrichment)\n",
+			mode); err != nil {
 			return exitIO
 		}
 
@@ -268,6 +273,7 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
 		fs.StringVar(&ea.out, "out", "", "write the predicate here instead of stdout")
 		registerSourceVerdictFlags(fs, ea)
+		ea.vsaIn.register(fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -375,18 +381,21 @@ func (ea *emitArgs) loadVSA(fail func(error) int) int {
 		return fail(err)
 	}
 
-	if ea.sboms == "" {
-		return fail(errors.New("--sboms is required"))
-	}
+	switch {
+	case ea.sboms != "" && ea.vsaIn.sbomSuffix != "":
+		return fail(errors.New("--sboms and --sbom-assets are exclusive — the SBOM manifest is stated once"))
+	case ea.sboms == "" && ea.vsaIn.sbomSuffix == "":
+		return fail(errors.New(sbomsRequired))
+	case ea.sboms != "":
+		manifest, err = os.ReadFile(ea.sboms)
+		if err != nil {
+			return fail(err)
+		}
 
-	manifest, err = os.ReadFile(ea.sboms)
-	if err != nil {
-		return fail(err)
-	}
-
-	ea.sbomList, err = parseManifest(string(manifest))
-	if err != nil {
-		return fail(err)
+		ea.sbomList, err = parseManifest(string(manifest))
+		if err != nil {
+			return fail(err)
+		}
 	}
 
 	if ea.inventories != "" {
@@ -401,6 +410,10 @@ func (ea *emitArgs) loadVSA(fail func(error) int) int {
 		}
 	}
 
+	if err := ea.vsaIn.load(ea); err != nil {
+		return fail(err)
+	}
+
 	return ea.loadSourceVerdict(fail)
 }
 
@@ -408,6 +421,10 @@ func (ea *emitArgs) loadVSA(fail func(error) int) int {
 func runEmit(ea *emitArgs, out *latch) error {
 	if ea.mode == emitChain {
 		return runEmitChain(ea, out)
+	}
+
+	if err := ea.vsaIn.resolve(ea, out.logf); err != nil {
+		return err
 	}
 
 	return runEmitVSA(ea, out)

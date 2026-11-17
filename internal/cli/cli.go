@@ -209,6 +209,15 @@ usage:
                  written back, the rest reported outstanding
                  (--policy --checkpoint --org|--repo [--start-at
                  --budget --debt --json])
+    published    a release's declared subjects against the stores
+                 that serve them: every file pulled back and compared
+                 to its built digest (a 404 waited on for ten
+                 minutes, any other failure tried three times), every
+                 image tag resolved to its attested index; the
+                 policy's published section says which registry
+                 serves which file (--policy --repo [--subjects
+                 --images --release-tag --package --mode --rehearsal
+                 --out --debt --json])
 
   stele level <track>    what the evidence supports, per track, from
                          SLSA's own requirements; exit 0 pass, 1 fail,
@@ -244,6 +253,15 @@ usage:
               stranger reads at the tag; every value a stated fact and
               every published asset pinned and typed, read back
               through the assert reader before it leaves
+    enrichment  the build-enrichment predicate the workflow signs:
+              the names the policy's build.enrichment requires and
+              permits, each computed from the source the caller
+              declares — a file of the policy tree or of the released
+              source, or rows of a TOML table file for the keys the
+              build consumed (--policy --policy-tree --policy-repo
+              --machinery-digest --repo --tag --source-revision
+              [--file --rows --rows-tables --rows-prefix --rows-file
+              --rows-keys --out])
 
 derive sbom flags: [--out --expect-version] <binary>..., or
 --cargo-package --tree --created [--target --features

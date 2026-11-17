@@ -205,7 +205,7 @@ func TestDeriveSignerDigest(t *testing.T) {
 			name:   "an unreadable workflows directory",
 			args:   []string{"--policy", policy, "--workflows", filepath.Join(dir, "absent")},
 			code:   exitRefused,
-			stderr: "derive signer-digest: open " + filepath.Join(dir, "absent"),
+			stderr: "derive signer-digest: reading the workflows: open " + filepath.Join(dir, "absent"),
 		},
 	}
 
@@ -259,7 +259,8 @@ func TestDeriveSignerDigestUnreadableEntry(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{"derive", "signer-digest", "--policy", policy, "--workflows", tree}, &stdout, &stderr)
-	if code != exitRefused || !strings.Contains(stderr.String(), "derive signer-digest: open "+locked) {
+	want := "derive signer-digest: reading publish.yml: open " + locked
+	if code != exitRefused || !strings.Contains(stderr.String(), want) {
 		t.Fatalf("exit %d, stderr %q: want a refusal naming %s", code, stderr.String(), locked)
 	}
 }

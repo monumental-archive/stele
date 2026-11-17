@@ -119,6 +119,18 @@ func signerWorkflow(path, repo string) (string, error) {
 		return "", fmt.Errorf("derive %s: %w", deriveSignerDigest, err)
 	}
 
+	target, err := expandSigner(p, repo)
+	if err != nil {
+		return "", fmt.Errorf("derive %s: %w", deriveSignerDigest, err)
+	}
+
+	return target, nil
+}
+
+// expandSigner is the policy's signer workflow for one repository: a
+// role ({owner}/{repo}/...) names that repository's own workflow. One
+// expansion, shared by every leg that derives the signer's pin.
+func expandSigner(p *policy.Policy, repo string) (string, error) {
 	target := *p.Trust.Provenance.SignerWorkflow
 	if !strings.Contains(target, "{") {
 		return target, nil
@@ -126,8 +138,7 @@ func signerWorkflow(path, repo string) (string, error) {
 
 	owner, name, ok := strings.Cut(repo, "/")
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", fmt.Errorf("derive %s: the policy's signer workflow %q is a role, so --repo owner/repo"+
-			" must say whose", deriveSignerDigest, target)
+		return "", fmt.Errorf("the policy's signer workflow %q is a role, so --repo owner/repo must say whose", target)
 	}
 
 	return strings.NewReplacer("{owner}", owner, "{repo}", name).Replace(target), nil
@@ -145,14 +156,24 @@ func (sa *signerDigestArgs) tree() ([]workflow.File, string, error) {
 		return []workflow.File{{Name: filepath.Base(sa.workflow), Content: content}}, sa.workflow, nil
 	}
 
-	entries, err := os.ReadDir(sa.workflows)
+	files, err := readWorkflowDir(sa.workflows)
 	if err != nil {
 		return nil, "", fmt.Errorf("derive %s: %w", deriveSignerDigest, err)
 	}
 
-	// The platform keeps a repository's workflows in one flat
-	// directory, so the set is that directory's YAML files and nothing
-	// beneath it — in name order, which ReadDir already gives.
+	return files, sa.workflows, nil
+}
+
+// readWorkflowDir reads a workflows directory. The platform keeps a
+// repository's workflows in one flat directory, so the set is that
+// directory's YAML files and nothing beneath it — in name order, which
+// ReadDir already gives.
+func readWorkflowDir(dir string) ([]workflow.File, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading the workflows: %w", err)
+	}
+
 	var files []workflow.File
 
 	for _, e := range entries {
@@ -161,13 +182,14 @@ func (sa *signerDigestArgs) tree() ([]workflow.File, string, error) {
 			continue
 		}
 
-		content, err := os.ReadFile(filepath.Join(sa.workflows, e.Name()))
+		//nolint:gosec // G304: the directory is the caller's flag; reading its workflows is the feature
+		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, "", fmt.Errorf("derive %s: %w", deriveSignerDigest, err)
+			return nil, fmt.Errorf("reading %s: %w", e.Name(), err)
 		}
 
 		files = append(files, workflow.File{Name: e.Name(), Content: content})
 	}
 
-	return files, sa.workflows, nil
+	return files, nil
 }

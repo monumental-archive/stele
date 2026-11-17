@@ -108,7 +108,7 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains, plans, "+
-				"permissions, advisories or signer-certificates"); err != nil {
+				"permissions, advisories, signer-certificates or published"); err != nil {
 			return exitIO
 		}
 
@@ -134,10 +134,13 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertAdvisories(args[1:], stdout, stderr)
 	case targetSignerCertificates:
 		return assertSignerCertificates(args[1:], stdout, stderr)
+	case targetPublished:
+		return assertPublished(args[1:], stdout, stderr)
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele assert: unknown target %q "+
-				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories, signer-certificates)\n",
+				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories, signer-certificates,"+
+				" published)\n",
 			args[0]); err != nil {
 			return exitIO
 		}

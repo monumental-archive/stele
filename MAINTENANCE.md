@@ -56,6 +56,7 @@ the same statement as this one and tested against it.
 | `stele assert permissions` | every caller's `permissions:` grant against what the reusable tree it calls requires |
 | `stele assert advisories` | one module's govulncheck scan against the committed VEX decisions: only a reachable advisory gates, and only a denying decision excuses it |
 | `stele assert signer-certificates` | every certificate a transparency log holds for a declared signing workflow, read in chunks from a checkpoint and reconciled against a signing the population performed |
+| `stele assert published` | a release's declared subjects against the stores that serve them: file bytes against the built digests, image tags against the attested indexes |
 | `stele level` | what a repository's live evidence supports, per track, taking no declaration for a verdict; `--org --out-dir <dir>` with no track publishes the whole board and never over a level already proven |
 | `stele level build` | provenance, its authenticity, and the platform's own certificate claims |
 | `stele level source` | the source chain measured with no expected identity |
@@ -64,6 +65,7 @@ the same statement as this one and tested against it.
 | `stele emit chain` | source-chain links for the pushed revision and any holes earlier lapses left |
 | `stele emit vsa` | the build-track VSA predicate, from a full release verification; beside it, when the assert policy owes one, the release tag's signed source verdict |
 | `stele emit manifest` | the release evidence manifest: the declared contract a stranger reads at the tag |
+| `stele emit enrichment` | the build-enrichment predicate: the names the policy's `build.enrichment` owes, each computed from the source the caller declares |
 
 ## Exit codes
 

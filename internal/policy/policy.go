@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -123,6 +124,19 @@ type Enrichment struct {
 	PredicateType *string  `json:"predicateType"`
 	Required      []string `json:"required"`
 	Permitted     []string `json:"permitted"`
+}
+
+// Requires reports whether name is one every enrichment claim must
+// carry.
+func (e *Enrichment) Requires(name string) bool { return slices.Contains(e.Required, name) }
+
+// Permits reports whether name is in the CLOSED set an enrichment
+// claim may carry: required ∪ permitted. The one definition the
+// emitter writes to and the verifier judges against — two spellings of
+// the set would drift into a claim one side signs and the other
+// refuses.
+func (e *Enrichment) Permits(name string) bool {
+	return e.Requires(name) || slices.Contains(e.Permitted, name)
 }
 
 // BuildType is one accepted buildType's expectations. An empty key

@@ -1659,3 +1659,97 @@ verified, which the log declared in a signed statement.
   of every chunk it finished, under CANNOT_JUDGE: a caller acting on
   findings reads the report's findings, whatever its verdict, because
   the next run starts past them.
+
+## The published section
+
+The published-bytes proof (stele#392): every file subject a release
+declares is pulled back from the store that serves it and its bytes
+compared to the digest the build recorded, and every image subject's
+advertised tag is asked of its registry and compared to the attested
+index. The manifest the proof passes is what the signer attests next,
+so the attested subject is what shipped. Declaring the section is
+what `stele assert published` needs; absent, the target refuses at
+use by name, because which registry serves which file is this
+document's to say.
+
+```json
+"published": {
+  "registries": [
+    {
+      "extension": ".crate",
+      "coordinate": "file",
+      "url": "https://static.crates.io/crates/{name}/{name}-{version}.crate"
+    },
+    {
+      "extension": ".tgz",
+      "coordinate": "declared",
+      "url": "https://registry.npmjs.org/{name}/-/{basename}-{version}.tgz"
+    }
+  ]
+}
+```
+
+- `registries` — the stores that serve files, each claiming subjects
+  by `extension`. One subject, one registry: an extension that ends
+  another (`.gz` beside `.tar.gz`) is refused at load. The list may
+  be empty — an organisation whose files are all release assets
+  declares none.
+- `url` — an https URL template. Its vocabulary is closed and refused
+  at load: `{file}` (the subject's file name), `{name}` and
+  `{version}` (the package coordinate) and `{basename}` (`{name}`
+  after its last `/`, an npm scope's unscoped name). Placeholders
+  live in the path alone — one in the host, a query or a fragment
+  refuses, because a subject must never choose where it is fetched
+  from — and each value is escaped segment by segment, a segment that
+  is empty, `.` or `..` refused.
+- `coordinate` — where `{name}` and `{version}` come from, required
+  when the template uses them. `file` reads them out of the subject's
+  name, `<name>-<version><extension>`, the version being the first
+  split whose remainder is a semantic version (so `foo-bar-1.0.0-rc.1`
+  is `foo-bar` at `1.0.0-rc.1`). `declared` takes the package the
+  caller declares for that extension (`--package
+  <extension>=<name>@<version>`, split at the last `@`), because some
+  packers mangle the name into the file: a scoped npm package packs as
+  `scope-name-<version>.tgz`.
+
+A file no registry claims is a release asset when the caller declares
+the release (`--release-tag`), fetched from the forge's public
+download address, and refused when it does not: there is no path on
+which a subject is skipped. Images need no entry: content addressing
+already proves an image's bytes, and the tag binding is the one claim
+it does not make. The reference is held to the OCI grammar with every
+part spelled out, never to a registry this document would have to
+name.
+
+The waiting rule is the engine's, not this section's: a 404 is "not
+served yet" — a store answers one for a while after it accepted a
+publish — and is waited on, `min(attempt × 10s, 60s)` a nap, for ten
+minutes in all; anything else (a 5xx, a throttle, a refused
+connection) gets three tries, ten and twenty seconds apart unless the
+host named its own wait, and is then named. A throttle is classified
+where every host's is (`internal/gh`), and its named wait honoured.
+
+The target (`stele assert published --policy --repo [--subjects
+--images --release-tag --package --mode --rehearsal --out]`):
+
+- **refusals of the input** (exit 2) come before any store is asked:
+  a record that is not `<64 hex>  <name>`, an image list that is not
+  `[{image, tag, digest}]`, a subject no registry claims with no
+  release declared, a declared-coordinate subject with no package, an
+  empty proof, and a rehearsal asked for a verdict
+  (`--mode verdict --rehearsal`).
+- **FAIL** (exit 1) — a store served other bytes than were built
+  (`published-bytes`), or a tag names another index, or nothing
+  (`tag-binding`). The walk goes on past divergence.
+- **CANNOT_JUDGE** (exit 4) — a store would not answer within the
+  rule: the file's 404 outlived the budget, or three tries failed, or
+  the registry could not be asked about a tag (`published-read`,
+  naming why). The walk stops there — every further ask would wait out
+  the same rule — and carries what it judged before.
+- on PASS, `--out` receives the proven manifest: the report's judged
+  set, sha256sum lines re-derived from what was served, image lines
+  carrying the untagged reference the signer attests. Nothing is
+  written on any other verdict.
+- `--rehearsal` (bytes mode only) proves nothing and says so per
+  subject: nothing was published, so the manifest passes through
+  unproved and no report is sealed.
