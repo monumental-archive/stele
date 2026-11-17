@@ -837,11 +837,11 @@ have is two answers: two classes, or an asset and a registry subject
 at once.
 
 `stele emit manifest` takes them as
-`--registry-subjects <class>:<target>=<path>`, repeatable, each a
-sha256sum manifest of `<digest>  <attested name>`. There is no second
-list to join these against — that absence is why the flag exists — so
-the one cross-statement check left at emission is that a registry
-subject is not also an asset.
+`--registry-lines <class>=<file>`, repeatable once per class, each
+line `<target> <digest>  <attested name>` as the class's legs emitted
+it. There is no second list to join these against — that absence is
+why the flag exists — so the one cross-statement check left at
+emission is that a registry subject is not also an asset.
 
 At full depth the evidence walk verifies the release's subjects as
 **the checksum manifest's artifacts plus the manifest's registry
@@ -916,11 +916,15 @@ build configuration.
 
 This is the one fact `emit manifest` cannot compute: no declared
 vocabulary names a release's build artifacts by the leg that produced
-them. It arrives as one subject manifest per leg —
-`--leg-subjects <class>:<target>=<path>`, repeatable — which is the
-shape a publisher already holds, since every matrix job emits the
-digests of what it produced. The join is checked in both directions
-against `--assets`, because a caller's split is a second statement
+them. It arrives as each class's subject lines —
+`--leg-lines <class>=<file>`, repeatable once per class, each line
+`<target> <digest>  <name>` — which is the shape a publisher already
+holds, since every matrix job emits the digests of what it produced;
+`emit manifest` splits them into one leg per target. A line with no
+target, a target that is not a plain name (`[A-Za-z0-9._-]`), and
+lines arriving with no class are each refused. The join is checked in
+both directions against the asset directory (`--assets-dir`, hashed
+by `emit manifest` itself), because a caller's split is a second statement
 about the same release: an artifact named by a leg but absent from the
 release did not ship, one whose digest disagrees is not the same
 bytes, one claimed by two legs has no answer, and a document is not an
@@ -928,6 +932,19 @@ artifact any leg built. **An artifact no leg claims refuses the
 manifest**, rather than shipping unattributed — a scoped rebuild would
 then judge a population that silently omitted it, which is the same
 defect as an untyped entry one field over.
+
+The run's other inputs are read the same way (stele#400). The
+machinery version is the version mirror of the tree `--machinery-tree`
+names (its `CITATION.cff`), not a flag. The attestation bundles are
+placed into the asset directory before it is hashed: each directory
+under `--bundles-dir` holds exactly one bundle and its name is the
+name the bundle ships as, and a single flat file is placed as
+`evidence.umbrellaBundle`. Every placed name must be one this
+vocabulary types as evidence, or it is refused by name — a provenance
+under an undeclared name would be typed and judged as a build subject.
+A directory with no file or with two, flat files beside directories,
+and a release with no bundle at all are refused; `--rehearsal` turns
+the last into a reported fact.
 
 What it buys is scope, at both grains. `stele verify repro --class
 <name>` narrows its population to the artifacts that class built, so a

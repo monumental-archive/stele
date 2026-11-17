@@ -265,8 +265,16 @@ func staged(final string, encode func(io.Writer) error) (string, error) {
 	return f.Name(), nil
 }
 
-// cells reads what the board currently holds, by the layout alone.
+// cells reads what the board currently holds, by the layout alone: a
+// cell is a repository × track carrying a report.
 func (b Board) cells() ([]Cell, error) {
+	return b.cellsWith(reportSuffix)
+}
+
+// cellsWith reads the cells carrying a document under any of the
+// given suffixes — the one reader of the layout, whichever document a
+// caller keys a cell by.
+func (b Board) cellsWith(suffixes ...string) ([]Cell, error) {
 	repos, err := os.ReadDir(b.Dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -289,7 +297,7 @@ func (b Board) cells() ([]Cell, error) {
 		}
 
 		for _, f := range files {
-			name, ok := strings.CutSuffix(f.Name(), reportSuffix)
+			name, ok := cutAnySuffix(f.Name(), suffixes)
 			if !ok {
 				continue
 			}
@@ -299,13 +307,25 @@ func (b Board) cells() ([]Cell, error) {
 			// stele that judges more than this one does, and pruning
 			// what we cannot name would silently narrow somebody's
 			// board to our own vocabulary.
-			if t, known := level.TrackByName(name); known {
-				out = append(out, Cell{Repo: repo.Name(), Track: t})
+			t, known := level.TrackByName(name)
+			if c := (Cell{Repo: repo.Name(), Track: t}); known && !slices.Contains(out, c) {
+				out = append(out, c)
 			}
 		}
 	}
 
 	return out, nil
+}
+
+// cutAnySuffix strips the first of suffixes name ends with.
+func cutAnySuffix(name string, suffixes []string) (string, bool) {
+	for _, s := range suffixes {
+		if base, ok := strings.CutSuffix(name, s); ok {
+			return base, true
+		}
+	}
+
+	return "", false
 }
 
 // tidy removes repository directories the prune emptied. An empty

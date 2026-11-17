@@ -450,6 +450,10 @@ type Repo struct {
 	Name     string `json:"name"`
 	Archived bool   `json:"archived"`
 	Fork     bool   `json:"fork"`
+	// Visibility is the forge's own word for who may see the
+	// repository, spelled as the forge spells it and never judged
+	// here (stele#388); empty where the listing did not say.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // RepoLister is the org-listing seam, separate from Forge on purpose:
@@ -519,9 +523,10 @@ func NewForServer(serverURL, token string) *Client {
 }
 
 type repoEntry struct {
-	Name     string `json:"name"`
-	Archived bool   `json:"archived"`
-	Fork     bool   `json:"fork"`
+	Name       string `json:"name"`
+	Archived   bool   `json:"archived"`
+	Fork       bool   `json:"fork"`
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // ListRepos implements RepoLister.

@@ -36,6 +36,7 @@ Every stele document that is **read live** carries the SAME number,
 | assert policy | `internal/assert`, [assert-policy-schema.md](assert-policy-schema.md) |
 | report | `internal/report`, [report-schema.md](report-schema.md) |
 | release plan | `internal/release`, [release-plan.md](release-plan.md) |
+| population | `internal/population`, [population.md](population.md) |
 
 Live-read means nothing historical carries the number: the policies
 are read from the consuming tree as it stands now, and a report or a

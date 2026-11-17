@@ -47,6 +47,7 @@ the same statement as this one and tested against it.
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
 | `stele derive inventories` | a release's every inventory in one call — per-artifact documents from the judged plans and the view folded from them, the shipped binaries' own, or the forge's dependency graph — and the decision's inventory list |
 | `stele derive inventory-plan` | a build leg's inventory plan, by the inventory kind its class declares in the assert policy: one entry per packaged crate, or one per variant cell, named under the class's planned prefix |
+| `stele derive population` | the population every assert target enumerates, printed per member with its resolved tracks and the reconciliation by name; with `--repo --tracks`, one repository's membership and track agreement |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |
@@ -60,7 +61,7 @@ the same statement as this one and tested against it.
 | `stele assert advisories` | one module's govulncheck scan against the committed VEX decisions: only a reachable advisory gates, and only a denying decision excuses it |
 | `stele assert signer-certificates` | every certificate a transparency log holds for a declared signing workflow, read in chunks from a checkpoint and reconciled against a signing the population performed |
 | `stele assert published` | a release's declared subjects against the stores that serve them: file bytes against the built digests, image tags against the attested indexes |
-| `stele level` | what a repository's live evidence supports, per track, taking no declaration for a verdict; `--org --out-dir <dir>` with no track publishes the whole board and never over a level already proven |
+| `stele level` | what a repository's live evidence supports, per track, taking no declaration for a verdict; `--org --out-dir <dir>` with no track publishes the whole board and never over a level already proven; `--published <dir>` measures over the board as published and names every cell that drifts from it |
 | `stele level build` | provenance, its authenticity, and the platform's own certificate claims |
 | `stele level source` | the source chain measured with no expected identity |
 | `stele level dependency` | the DRAFT dependency track, marked draft in every output |

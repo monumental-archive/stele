@@ -173,6 +173,11 @@ usage:
               assert plans judges, by the kind the class declares in
               the assert policy: one entry per packaged crate, or one
               per variant cell, named under the class's planned prefix
+    population  the population every assert target walks, printed:
+              each member's resolved tracks and the reconciliation
+              by name; exit 1 when roster and listing disagree, 4
+              when the listing cannot be read. With --repo and
+              --tracks: is it a member, and do the tracks match
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -310,7 +315,8 @@ derive vex-subjects takes --policy --decision... --org|--repo
 [--dir --version | --crate-dir --variant] [--out]; derive inventories
 takes --policy --classes --repo --version --created --out-dir
 [--evidence-classes --machinery-version --name --tree --binaries-dir
---expect-revision --variants] [<plan>...]; the other
+--expect-revision --variants] [<plan>...]; derive population takes --policy
+--org|--repo [--tracks --out]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
@@ -343,7 +349,10 @@ level takes --repo|--org [--ref --notes-ref --tag --json
 --shield <path>], where --shield writes a shields.io endpoint document
 from the same seal as the report; --org adds [--policy] for the
 declared population, and --org --out-dir <dir> with no track publishes
-<repo>/<track>.report.json and .shield.json per cell. emit adds --machinery-digest --policy-uri; emit chain
+<repo>/<track>.report.json and .shield.json per cell; [--published
+<dir>] seeds the empty --out-dir from the board as published, measures
+over it, and names every cell on which the two disagree (exit 1, or 4
+when a cell judged before cannot be judged now). emit adds --machinery-digest --policy-uri; emit chain
 adds --git-dir --rev --claims --actor --actor-id [--ref --remote
 --clone --committer --genesis --no-append --out], where --no-append
 signs and writes the links to --out without appending; emit
@@ -352,8 +361,8 @@ chain-append takes --policy --repo --git-dir|--clone --links [--ref
 verifies, appends and pushes those links holding no signing identity;
 emit vsa adds --tag --subjects --sboms --signer-digest
 [--out --assert-policy --git-dir --source-out]; emit manifest takes --classes --store-vsa
---machinery-version --assets --assert-policy --leg-subjects
-[--registry-subjects --out]
+--machinery-tree --assets-dir --bundles-dir --assert-policy
+[--leg-lines --registry-lines --rehearsal --out]
 and none of the above; emit decision takes --policy --classes --proof
 --covered --predicate-out --subjects-out and --tag or --stream
 [--inventory --also], and none of the above either.

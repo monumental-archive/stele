@@ -1,0 +1,1 @@
+package 5f95fea54f61da88163c8b5f3603a4e27baac296e895d071c2aec20c92e9142f  monumental-archive-lab-wasm-0.28.4.tgz

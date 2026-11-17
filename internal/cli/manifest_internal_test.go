@@ -10,11 +10,18 @@
 // way its two statements about a release can disagree gets a row: an
 // artifact claimed by nobody, by two legs, by a leg naming bytes the
 // release never shipped, or naming a document instead of an artifact.
+//
+// Every input is the run's own (stele#400): a directory of what ships,
+// a directory of bundles placed into it, a machinery tree, and each
+// class's lines. Every row builds its own, because placing bundles
+// moves files.
 
 package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,225 +38,298 @@ const manifestPolicyJSON = `{
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
     "evidenceSuffixes": [".openvex.json"],
-    "classes": {"go-binary": {"bundles": ["attestations-go-binaries.intoto.jsonl"]}}
+    "classes": {
+      "go-binary": {"bundles": ["attestations-go-binaries.intoto.jsonl"]},
+      "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}
+    }
   }
 }`
 
-const manifestDigest = "3333333333333333333333333333333333333333333333333333333333333333"
+// manifestCitation is the machinery tree's version mirror.
+const manifestCitation = "cff-version: 1.2.0\nversion: 1.40.0\ndate-released: 2026-11-17\n"
 
-// manifestInputs writes an asset manifest and the policy that types
-// it, returning both paths.
-func manifestInputs(t *testing.T, assets string) (string, string) { //nolint:gocritic // two paths
-	t.Helper()
+// The one artifact the release shape builds, and its bytes.
+const (
+	widget     = "widget-linux-amd64.tar.gz"
+	widgetBody = "widget\n"
+	goBundle   = "attestations-go-binaries.intoto.jsonl"
+)
 
-	dir := t.TempDir()
-	assetPath := filepath.Join(dir, "checksums.txt")
-	policyPath := filepath.Join(dir, "assert-policy.json")
+// sumOf is what `sha256sum` prints for body.
+func sumOf(body string) string {
+	h := sha256.Sum256([]byte(body))
 
-	if err := os.WriteFile(assetPath, []byte(assets), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(policyPath, []byte(manifestPolicyJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	return assetPath, policyPath
+	return hex.EncodeToString(h[:])
 }
 
-// subjectsOf writes one build leg's subject manifest and returns the
-// --leg-subjects value naming it.
-func subjectsOf(t *testing.T, class, target, body string) string {
+// releaseFixture is one run's inputs on disk.
+type releaseFixture struct {
+	assets, bundles, policy, tree string
+}
+
+// newRelease writes what ships, the bundles (one directory each,
+// named for what it is placed as), the policy and the machinery tree.
+func newRelease(t *testing.T, files, bundles map[string]string) releaseFixture {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), class+"-"+target+".sha256")
+	root := t.TempDir()
+	r := releaseFixture{
+		assets:  filepath.Join(root, "dist"),
+		bundles: filepath.Join(root, "bundle"),
+		policy:  filepath.Join(root, "assert-policy.json"),
+		tree:    filepath.Join(root, "canon"),
+	}
+
+	for _, dir := range []string{r.assets, r.bundles, r.tree} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write := func(path, body string) {
+		t.Helper()
+
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for name, body := range files {
+		write(filepath.Join(r.assets, name), body)
+	}
+
+	for name, body := range bundles {
+		if err := os.Mkdir(filepath.Join(r.bundles, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		write(filepath.Join(r.bundles, name, "bundle.jsonl"), body)
+	}
+
+	write(r.policy, manifestPolicyJSON)
+	write(filepath.Join(r.tree, "CITATION.cff"), manifestCitation)
+
+	return r
+}
+
+// args is the command with this fixture's inputs, then extra.
+func (r releaseFixture) args(classes string, extra ...string) []string {
+	return append([]string{
+		"manifest", "--classes", classes, "--store-vsa", "true", "--machinery-tree", r.tree,
+		"--assets-dir", r.assets, "--bundles-dir", r.bundles, "--assert-policy", r.policy,
+	}, extra...)
+}
+
+// theRelease is one artifact, the documents published beside it and
+// its class's bundle — the shape a real release hands this command.
+func theRelease(t *testing.T) releaseFixture {
+	t.Helper()
+
+	return newRelease(t, map[string]string{
+		widget:                   widgetBody,
+		"widget-1.0.0.spdx.json": "sbom\n",
+		"decisions.openvex.json": "vex\n",
+	}, map[string]string{goBundle: "bundle\n"})
+}
+
+// legLine is one subject line as a build leg emits it.
+func legLine(target, name, body string) string {
+	return target + " " + sumOf(body) + "  " + name + "\n"
+}
+
+// writeClassLines writes one class's lines and returns the flag value.
+func writeClassLines(t *testing.T, class, body string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "lines")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	return class + ":" + target + "=" + path
+	return class + "=" + path
 }
 
-// goBinaryLeg is what the go-binary build job for one target
-// produced: the one artifact in theReleaseShape below.
-func goBinaryLeg(t *testing.T) string {
+// goBinaryLines is what the go-binary class's one leg emitted.
+func goBinaryLines(t *testing.T) string {
 	t.Helper()
 
-	return subjectsOf(t, "go-binary", "linux-amd64", manifestDigest+"  widget-linux-amd64.tar.gz\n")
+	return writeClassLines(t, "go-binary", legLine("linux-amd64", widget, widgetBody))
 }
 
-// theReleaseShape is one artifact and the documents published beside
-// it — the asset list a real release hands this command.
-const theReleaseShape = manifestDigest + "  widget-linux-amd64.tar.gz\n" +
-	manifestDigest + "  attestations-go-binaries.intoto.jsonl\n" +
-	manifestDigest + "  widget-1.0.0.spdx.json\n" +
-	manifestDigest + "  decisions.openvex.json\n"
+// emitWants runs emit manifest and checks the exit code.
+func emitWants(t *testing.T, args []string, code int) (string, string) { //nolint:gocritic // stdout, stderr
+	t.Helper()
+
+	var stdout, stderr bytes.Buffer
+	if got := emitCmd(args, &stdout, &stderr); got != code {
+		t.Fatalf("emitCmd = %d, want %d (stderr: %s)", got, code, stderr.String())
+	}
+
+	return stdout.String(), stderr.String()
+}
 
 func TestEmitManifestWritesTheDeclaredContract(t *testing.T) {
 	t.Parallel()
 
-	assets, policy := manifestInputs(t, theReleaseShape)
+	r := theRelease(t)
+	out, _ := emitWants(t, r.args("go-binary,oci-image", "--leg-lines", goBinaryLines(t)), exitOK)
 
-	var stdout, stderr bytes.Buffer
-
-	args := []string{
-		"manifest", "--classes", "go-binary,oci-image", "--store-vsa", "true",
-		"--machinery-version", "1.40.0", "--assets", assets, "--assert-policy", policy,
-		"--leg-subjects", goBinaryLeg(t),
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitOK {
-		t.Fatalf("emitCmd = %d (stderr: %s)", got, stderr.String())
-	}
-
-	out := stdout.String()
 	for _, want := range []string{
 		`"schema":5`,
 		`"classes":["go-binary","oci-image"]`,
 		`"storeVsa":true`,
+		// From the machinery tree's CITATION.cff, not a flag.
 		`"machineryVersion":"1.40.0"`,
 		// The artifact is a build subject and names the leg that built
 		// it; the bundle, the inventory and the triage decision are
 		// documents about the release and name no class at all.
-		`{"name":"widget-linux-amd64.tar.gz","sha256":"` + manifestDigest +
+		`{"name":"` + widget + `","sha256":"` + sumOf(widgetBody) +
 			`","type":"build-subject","class":"go-binary","target":"linux-amd64"}`,
-		`{"name":"attestations-go-binaries.intoto.jsonl","sha256":"` + manifestDigest + `","type":"evidence"}`,
-		`{"name":"widget-1.0.0.spdx.json","sha256":"` + manifestDigest + `","type":"evidence"}`,
-		`{"name":"decisions.openvex.json","sha256":"` + manifestDigest + `","type":"evidence"}`,
+		`{"name":"` + goBundle + `","sha256":"` + sumOf("bundle\n") + `","type":"evidence"}`,
+		`{"name":"widget-1.0.0.spdx.json","sha256":"` + sumOf("sbom\n") + `","type":"evidence"}`,
+		`{"name":"decisions.openvex.json","sha256":"` + sumOf("vex\n") + `","type":"evidence"}`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("manifest lacks %s:\n%s", want, out)
 		}
+	}
+
+	// Placed, not copied: the bundle ships from the asset directory.
+	if _, err := os.Stat(filepath.Join(r.assets, goBundle)); err != nil {
+		t.Errorf("the bundle was not placed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(r.bundles, goBundle, "bundle.jsonl")); !os.IsNotExist(err) {
+		t.Errorf("the bundle is still in --bundles-dir (stat: %v)", err)
 	}
 }
 
 func TestEmitManifestUsage(t *testing.T) {
 	t.Parallel()
 
-	assets, policy := manifestInputs(t, theReleaseShape)
-	junk, _ := manifestInputs(t, "not a sha256sum record\n")
-	leg := goBinaryLeg(t)
-
 	tests := []struct {
 		name string
-		args []string
+		args func(t *testing.T, r releaseFixture) []string
+		want string
 	}{
-		{"no classes", []string{
-			"manifest", "--store-vsa", "true", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-		}},
-		{"no layout", []string{
-			"manifest", "--classes", "a", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-		}},
-		{"a layout outside true/false", []string{
-			"manifest", "--classes", "a", "--store-vsa", "store", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-		}},
-		{"no machinery version", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--assets", assets, "--assert-policy", policy,
-		}},
-		{"no assets", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assert-policy", policy,
-		}},
-		{"no policy", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets,
-		}},
-		{"an unreadable asset manifest", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", "/no/such", "--assert-policy", policy,
-		}},
-		{"an asset manifest that is not one", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", junk, "--assert-policy", policy,
-		}},
-		{"an unreadable policy", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", "/no/such",
-		}},
-		{"a policy this build refuses", []string{
-			"manifest", "--classes", "a", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", assets,
-		}},
-		{"unknown flag", []string{"manifest", "--nope"}},
+		{"no classes", func(_ *testing.T, r releaseFixture) []string {
+			return dropFlag(r.args("go-binary"), "--classes")
+		}, "--classes is required"},
+		{"no layout", func(_ *testing.T, r releaseFixture) []string {
+			return dropFlag(r.args("go-binary"), "--store-vsa")
+		}, "--store-vsa is required"},
+		{"a layout outside true/false", func(_ *testing.T, r releaseFixture) []string {
+			return setFlag(r.args("go-binary"), "--store-vsa", "store")
+		}, `--store-vsa "store" is not true or false`},
+		{"no machinery tree", func(_ *testing.T, r releaseFixture) []string {
+			return dropFlag(r.args("go-binary"), "--machinery-tree")
+		}, "--machinery-tree is required"},
+		{"no asset directory", func(_ *testing.T, r releaseFixture) []string {
+			return dropFlag(r.args("go-binary"), "--assets-dir")
+		}, "--assets-dir is required"},
+		{"no bundle directory", func(_ *testing.T, r releaseFixture) []string {
+			return dropFlag(r.args("go-binary"), "--bundles-dir")
+		}, "--bundles-dir is required"},
+		{"no policy", func(_ *testing.T, r releaseFixture) []string {
+			return dropFlag(r.args("go-binary"), "--assert-policy")
+		}, "--assert-policy is required"},
+		{"a stray argument", func(_ *testing.T, r releaseFixture) []string {
+			return append(r.args("go-binary"), "extra")
+		}, `unexpected argument "extra"`},
+		{"unknown flag", func(_ *testing.T, r releaseFixture) []string {
+			return append(r.args("go-binary"), "--assets", "x")
+		}, "flag provided but not defined: -assets"},
+		{"an unreadable policy", func(_ *testing.T, r releaseFixture) []string {
+			return setFlag(r.args("go-binary"), "--assert-policy", "/no/such/policy.json")
+		}, "/no/such/policy.json"},
+		{"a policy this build refuses", func(t *testing.T, r releaseFixture) []string {
+			t.Helper()
+
+			return setFlag(r.args("go-binary"), "--assert-policy", filepath.Join(r.tree, "CITATION.cff"))
+		}, "stele emit manifest: "},
+		{"a policy with no evidence vocabulary", func(t *testing.T, r releaseFixture) []string {
+			t.Helper()
+
+			bare := filepath.Join(t.TempDir(), "policy.json")
+			if err := os.WriteFile(bare, []byte(`{"schema": 9}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			return setFlag(r.args("go-binary"), "--assert-policy", bare)
+		}, "assert: policy: evidence is absent"},
 		// Every way the caller's class split can disagree with the
 		// assets the release actually published. Each is a distinct
 		// route to an artifact judged by the wrong population, or by
 		// none — which is what the field exists to prevent.
-		{"an artifact no build leg claims", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-		}},
-		{"a leg-subjects value that is not <class>:<target>=<path>", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", "go-binary",
-		}},
-		{"a leg-subjects value naming no class", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", ":linux-amd64=/some/path",
-		}},
-		{"a leg-subjects value naming no target at all", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", "go-binary=/some/path",
-		}},
-		{"a leg-subjects value whose target is empty", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", "go-binary:=/some/path",
-		}},
-		{"a leg-subjects value naming no path", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", "go-binary:linux-amd64=",
-		}},
-		{"one build leg named twice", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", leg, "--leg-subjects", leg,
-		}},
-		{"an unreadable subject manifest", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", "go-binary:linux-amd64=/no/such",
-		}},
-		{"a subject manifest that is not one", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy, "--leg-subjects", "go-binary:linux-amd64=" + junk,
-		}},
-		{"a class claiming bytes the release never published", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-			"--leg-subjects", subjectsOf(t, "go-binary", "linux-amd64", manifestDigest+"  never-shipped.tar.gz\n"),
-		}},
-		{"a class pinning one artifact at another digest", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-			"--leg-subjects", subjectsOf(t, "go-binary", "linux-amd64",
-				strings.Repeat("b", 64)+"  widget-linux-amd64.tar.gz\n"),
-		}},
-		{"a class claiming a document about the release", []string{
-			"manifest", "--classes", "go-binary", "--store-vsa", "false", "--machinery-version", "1.0.0",
-			"--assets", assets, "--assert-policy", policy,
-			"--leg-subjects", subjectsOf(t, "go-binary", "linux-amd64",
-				manifestDigest+"  widget-linux-amd64.tar.gz\n"+manifestDigest+"  widget-1.0.0.spdx.json\n"),
-		}},
-		{"one artifact claimed by two build legs", []string{
-			"manifest", "--classes", "go-binary,oci-image", "--store-vsa", "false",
-			"--machinery-version", "1.0.0", "--assets", assets, "--assert-policy", policy,
-			"--leg-subjects", leg,
-			"--leg-subjects", subjectsOf(t, "oci-image", "linux-amd64",
-				manifestDigest+"  widget-linux-amd64.tar.gz\n"),
-		}},
+		{"an artifact no build leg claims", func(_ *testing.T, r releaseFixture) []string {
+			return r.args("go-binary")
+		}, widget + " is a build subject no --leg-lines line claims"},
+		{"a class claiming bytes the release never published", func(t *testing.T, r releaseFixture) []string {
+			t.Helper()
+
+			return r.args("go-binary", "--leg-lines", writeClassLines(t, "go-binary",
+				legLine("linux-amd64", widget, widgetBody)+legLine("linux-amd64", "never-shipped.tar.gz", "x")))
+		}, "--leg-lines go-binary:linux-amd64 names never-shipped.tar.gz, which this release does not publish"},
+		{"a class pinning one artifact at another digest", func(t *testing.T, r releaseFixture) []string {
+			t.Helper()
+
+			return r.args("go-binary", "--leg-lines", writeClassLines(t, "go-binary",
+				legLine("linux-amd64", widget, "other bytes")))
+		}, "--leg-lines go-binary:linux-amd64 pins " + widget + " at " + sumOf("other bytes")},
+		{"a class claiming a document about the release", func(t *testing.T, r releaseFixture) []string {
+			t.Helper()
+
+			return r.args("go-binary", "--leg-lines", writeClassLines(t, "go-binary",
+				legLine("linux-amd64", widget, widgetBody)+legLine("linux-amd64", "widget-1.0.0.spdx.json", "sbom\n")))
+		}, "names widget-1.0.0.spdx.json, which the evidence vocabulary calls a document ABOUT the release"},
+		{"one artifact claimed by two build legs", func(t *testing.T, r releaseFixture) []string {
+			t.Helper()
+
+			return r.args("go-binary,oci-image", "--leg-lines", goBinaryLines(t),
+				"--leg-lines", writeClassLines(t, "oci-image", legLine("linux-amd64", widget, widgetBody)))
+		}, widget + " is claimed by both go-binary:linux-amd64 and oci-image:linux-amd64"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var stdout, stderr bytes.Buffer
-
-			if got := emitCmd(tt.args, &stdout, &stderr); got != exitUsage {
-				t.Errorf("emitCmd(%v) = %d, want %d (stderr: %s)", tt.args, got, exitUsage, stderr.String())
+			_, stderr := emitWants(t, tt.args(t, theRelease(t)), exitUsage)
+			if !strings.Contains(stderr, tt.want) {
+				t.Errorf("stderr %q\nlacks %q", stderr, tt.want)
 			}
 		})
 	}
+}
+
+// dropFlag removes a flag and its value from args.
+func dropFlag(args []string, name string) []string {
+	out := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		if args[i] == name {
+			i++
+
+			continue
+		}
+
+		out = append(out, args[i])
+	}
+
+	return out
+}
+
+// setFlag replaces a flag's value in args.
+func setFlag(args []string, name, value string) []string {
+	out := append([]string(nil), args...)
+
+	for i := range out {
+		if out[i] == name && i+1 < len(out) {
+			out[i+1] = value
+		}
+	}
+
+	return out
 }
 
 // The shape rules live in internal/evidence and refuse through this
@@ -258,43 +338,11 @@ func TestEmitManifestUsage(t *testing.T) {
 func TestEmitManifestRefusesThroughTheSharedDefinition(t *testing.T) {
 	t.Parallel()
 
-	assets, policy := manifestInputs(t, theReleaseShape)
+	r := theRelease(t)
 
-	var stdout, stderr bytes.Buffer
-
-	args := []string{
-		"manifest", "--classes", "go-binary,go-binary", "--store-vsa", "true", "--machinery-version", "1.0.0",
-		"--assets", assets, "--assert-policy", policy, "--leg-subjects", goBinaryLeg(t),
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitRefused {
-		t.Fatalf("emitCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
-	}
-
-	if !strings.Contains(stderr.String(), "declared twice") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
-// An empty asset manifest refuses at the format: a manifest listing
-// nothing says nothing about what the release published, and the
-// refusal comes from the shared definition rather than a check here.
-func TestEmitManifestRefusesAnEmptyAssetList(t *testing.T) {
-	t.Parallel()
-
-	assets, policy := manifestInputs(t, "")
-
-	var stdout, stderr bytes.Buffer
-
-	args := []string{
-		"manifest", "--classes", "go-binary", "--store-vsa", "true", "--machinery-version", "1.0.0",
-		"--assets", assets, "--assert-policy", policy,
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitRefused {
-		t.Fatalf("emitCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
-	}
-
-	if !strings.Contains(stderr.String(), "lists nothing") {
-		t.Fatalf("stderr = %q", stderr.String())
+	_, stderr := emitWants(t, r.args("go-binary,go-binary", "--leg-lines", goBinaryLines(t)), exitRefused)
+	if !strings.Contains(stderr, "declared twice") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -305,86 +353,53 @@ func TestEmitManifestRefusesAnEmptyAssetList(t *testing.T) {
 func TestEmitManifestRefusesAnUndeclaredEntryClass(t *testing.T) {
 	t.Parallel()
 
-	assets, policy := manifestInputs(t, theReleaseShape)
+	r := theRelease(t)
 
-	var stdout, stderr bytes.Buffer
-
-	args := []string{
-		"manifest", "--classes", "oci-image", "--store-vsa", "true", "--machinery-version", "1.0.0",
-		"--assets", assets, "--assert-policy", policy, "--leg-subjects", goBinaryLeg(t),
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitRefused {
-		t.Fatalf("emitCmd = %d, want %d (stderr: %s)", got, exitRefused, stderr.String())
-	}
-
-	if !strings.Contains(stderr.String(), "is not one this release declared") {
-		t.Fatalf("stderr = %q", stderr.String())
+	_, stderr := emitWants(t, r.args("oci-image", "--leg-lines", goBinaryLines(t)), exitRefused)
+	if !strings.Contains(stderr, "is not one this release declared") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
 // A release that ships only documents about itself needs no leg
-// split at all: --leg-subjects is owed by artifacts, and a release
-// whose classes all publish elsewhere (a registry, a package index)
-// has none to claim.
+// split at all: --leg-lines is owed by artifacts, and a release whose
+// classes all publish elsewhere (a registry, a package index) has none
+// to claim.
 func TestEmitManifestNeedsNoLegWhenNothingWasBuiltHere(t *testing.T) {
 	t.Parallel()
 
-	assets, policy := manifestInputs(t,
-		manifestDigest+"  attestations-go-binaries.intoto.jsonl\n"+
-			manifestDigest+"  widget-1.0.0.spdx.json\n")
+	r := newRelease(t, map[string]string{"widget-1.0.0.spdx.json": "sbom\n"}, map[string]string{goBundle: "b\n"})
 
-	var stdout, stderr bytes.Buffer
+	out, _ := emitWants(t, r.args("oci-image"), exitOK)
 
-	args := []string{
-		"manifest", "--classes", "oci-image", "--store-vsa", "true", "--machinery-version", "1.0.0",
-		"--assets", assets, "--assert-policy", policy,
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitOK {
-		t.Fatalf("emitCmd = %d (stderr: %s)", got, stderr.String())
+	if strings.Contains(out, `"class"`) {
+		t.Errorf("a document about the release took a class: %s", out)
 	}
 
-	if strings.Contains(stdout.String(), `"class"`) {
-		t.Errorf("a document about the release took a class: %s", stdout.String())
-	}
-
-	if strings.Contains(stdout.String(), `"target"`) {
-		t.Errorf("a document about the release took a target: %s", stdout.String())
+	if strings.Contains(out, `"target"`) {
+		t.Errorf("a document about the release took a target: %s", out)
 	}
 }
 
 // One class, two targets: the shape a per-class rebuild could not
-// scope (stele#223). Each artifact leaves carrying the target of the
-// leg that produced it — not the class's, which is the same for both
-// — because that is what lets a rebuild covering one of them be
-// judged against one of them.
+// scope (stele#223). One class's lines carry both, and each artifact
+// leaves carrying the target of the leg that produced it — not the
+// class's, which is the same for both.
 func TestEmitManifestTypesEachTargetOfOneClass(t *testing.T) {
 	t.Parallel()
 
-	const linux = "widget-linux-amd64.tar.gz"
-
 	const darwin = "widget-darwin-arm64.tar.gz"
 
-	assets, policy := manifestInputs(t,
-		manifestDigest+"  "+linux+"\n"+manifestDigest+"  "+darwin+"\n"+
-			manifestDigest+"  attestations-go-binaries.intoto.jsonl\n")
+	r := newRelease(t, map[string]string{widget: widgetBody, darwin: "darwin\n"}, map[string]string{goBundle: "b\n"})
+	lines := writeClassLines(t, "go-binary", legLine("linux-amd64", widget, widgetBody)+
+		legLine("darwin-arm64", darwin, "darwin\n"))
 
-	var stdout, stderr bytes.Buffer
+	out, _ := emitWants(t, r.args("go-binary", "--leg-lines", lines), exitOK)
 
-	args := []string{
-		"manifest", "--classes", "go-binary", "--store-vsa", "true", "--machinery-version", "1.49.0",
-		"--assets", assets, "--assert-policy", policy,
-		"--leg-subjects", subjectsOf(t, "go-binary", "linux-amd64", manifestDigest+"  "+linux+"\n"),
-		"--leg-subjects", subjectsOf(t, "go-binary", "darwin-arm64", manifestDigest+"  "+darwin+"\n"),
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitOK {
-		t.Fatalf("emitCmd = %d (stderr: %s)", got, stderr.String())
-	}
-
-	out := stdout.String()
 	for _, want := range []string{
-		`{"name":"` + linux + `","sha256":"` + manifestDigest +
+		`{"name":"` + widget + `","sha256":"` + sumOf(widgetBody) +
 			`","type":"build-subject","class":"go-binary","target":"linux-amd64"}`,
-		`{"name":"` + darwin + `","sha256":"` + manifestDigest +
+		`{"name":"` + darwin + `","sha256":"` + sumOf("darwin\n") +
 			`","type":"build-subject","class":"go-binary","target":"darwin-arm64"}`,
 	} {
 		if !strings.Contains(out, want) {
@@ -394,109 +409,101 @@ func TestEmitManifestTypesEachTargetOfOneClass(t *testing.T) {
 }
 
 // The image-only release (stele#329): every artifact lives in a
-// registry, so --assets names only documents and the manifest used to
-// list no artifact at all. --registry-subjects is where the publisher
-// says what it shipped there — one repository at two digests is two
-// subjects — and each leaves typed, attributed, and outside the build
-// subjects a rebuild compares against the release's assets.
+// registry, so the asset directory holds only documents and the
+// manifest used to list no artifact at all. --registry-lines is where
+// the publisher says what it shipped there — one repository at two
+// digests is two subjects — and each leaves typed, attributed, and
+// outside the build subjects a rebuild compares against the release's
+// assets.
 func TestEmitManifestNamesWhatARegistryHolds(t *testing.T) {
 	t.Parallel()
 
 	const image = "ghcr.io/acme/widget"
 
-	const other = "4444444444444444444444444444444444444444444444444444444444444444"
+	r := newRelease(t, map[string]string{"widget-1.0.0.spdx.json": "sbom\n"},
+		map[string]string{"attestations-image.intoto.jsonl": "b\n"})
+	lines := writeClassLines(t, "oci-image", legLine("pg16", image, "sixteen")+legLine("pg17", image, "seventeen"))
 
-	assets, policy := manifestInputs(t,
-		manifestDigest+"  attestations-go-binaries.intoto.jsonl\n"+
-			manifestDigest+"  widget-1.0.0.spdx.json\n")
+	// With --out the document has a file of its own and progress keeps
+	// stdout.
+	progress, _ := emitWants(t, r.args("oci-image", "--registry-lines", lines, "--out",
+		filepath.Join(t.TempDir(), "m.json")), exitOK)
 
-	var stdout, stderr bytes.Buffer
-
-	args := []string{
-		"manifest", "--classes", "oci-image", "--store-vsa", "true", "--machinery-version", "1.0.0",
-		"--assets", assets, "--assert-policy", policy,
-		"--registry-subjects", subjectsOf(t, "oci-image", "pg16", manifestDigest+"  "+image+"\n"),
-		"--registry-subjects", subjectsOf(t, "oci-image", "pg17", other+"  "+image+"\n"),
-	}
-	if got := emitCmd(args, &stdout, &stderr); got != exitOK {
-		t.Fatalf("emitCmd = %d (stderr: %s)", got, stderr.String())
+	if !strings.Contains(progress, "0 build subject(s) and 2 registry subject(s)") {
+		t.Errorf("the progress line does not count the registry subjects: %s", progress)
 	}
 
-	out := stdout.String()
+	r = newRelease(t, map[string]string{"widget-1.0.0.spdx.json": "sbom\n"},
+		map[string]string{"attestations-image.intoto.jsonl": "b\n"})
+	out, _ := emitWants(t, r.args("oci-image", "--registry-lines", lines), exitOK)
+
 	for _, want := range []string{
-		`{"name":"` + image + `","sha256":"` + manifestDigest +
+		`{"name":"` + image + `","sha256":"` + sumOf("sixteen") +
 			`","type":"registry-subject","class":"oci-image","target":"pg16"}`,
-		`{"name":"` + image + `","sha256":"` + other +
+		`{"name":"` + image + `","sha256":"` + sumOf("seventeen") +
 			`","type":"registry-subject","class":"oci-image","target":"pg17"}`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("manifest lacks %s:\n%s", want, out)
 		}
 	}
-
-	if !strings.Contains(stderr.String(), "0 build subject(s) and 2 registry subject(s)") {
-		t.Errorf("the progress line does not count the registry subjects: %s", stderr.String())
-	}
 }
 
-// Every way --registry-subjects can be wrong refuses by name. The
-// join it cannot make — against a list of what the registry holds —
-// is exactly why the flag exists, so the guards are the ones that
-// remain: the grammar, one subject set per leg, a readable manifest,
-// and the rule that keeps the two populations apart.
+// Every way --registry-lines can be wrong refuses by name. The join it
+// cannot make — against a list of what the registry holds — is exactly
+// why the flag exists, so the guards are the ones that remain: the
+// grammar, one set of lines per class, readable lines, and the rule
+// that keeps the two populations apart.
 func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
 	t.Parallel()
 
-	const artifact = "widget-linux-amd64.tar.gz"
+	const image = "ghcr.io/acme/widget"
 
 	tests := []struct {
 		name     string
 		registry func(t *testing.T) []string
+		code     int
 		want     string
 	}{
 		{
-			"a value that is not a leg",
-			func(*testing.T) []string { return []string{"oci-image=/nowhere"} },
-			`--registry-subjects "oci-image=/nowhere" is not <class>:<target>=<path>`,
+			"a value that is not <class>=<file>",
+			func(*testing.T) []string { return []string{"oci-image"} },
+			exitUsage, `invalid value "oci-image" for flag -registry-lines: "oci-image" is not <class>=<file>`,
 		},
 		{
-			"a value with no path",
-			func(*testing.T) []string { return []string{"oci-image:image"} },
-			"is not <class>:<target>=<path>",
-		},
-		{
-			"one leg named twice",
+			"one class's lines twice",
 			func(t *testing.T) []string {
 				t.Helper()
 
-				leg := subjectsOf(t, "go-binary", "image", manifestDigest+"  ghcr.io/acme/widget\n")
+				lines := writeClassLines(t, "go-binary", legLine("image", image, "i"))
 
-				return []string{leg, leg}
+				return []string{lines, lines}
 			},
-			"--registry-subjects names go-binary:image twice",
+			exitUsage, "--registry-lines names go-binary twice",
 		},
 		{
-			"a manifest that is not there",
-			func(*testing.T) []string { return []string{"go-binary:image=/nowhere/at/all.sha256"} },
-			"no such file",
+			"lines that are not there",
+			func(*testing.T) []string { return []string{"go-binary=/nowhere/at/all.lines"} },
+			exitUsage, "no such file",
 		},
 		{
 			"a registry subject the release also publishes as an asset",
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{subjectsOf(t, "go-binary", "image", manifestDigest+"  "+artifact+"\n")}
+				return []string{writeClassLines(t, "go-binary", legLine("image", widget, widgetBody))}
 			},
-			"one artifact lives in one place",
+			exitUsage, "--registry-lines go-binary:image names " + widget + ", which this release publishes as" +
+				" an asset — an asset is claimed by --leg-lines, and one artifact lives in one place",
 		},
 		{
 			"a class the release did not declare",
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{subjectsOf(t, "oci-image", "image", manifestDigest+"  ghcr.io/acme/widget\n")}
+				return []string{writeClassLines(t, "oci-image", legLine("image", image, "i"))}
 			},
-			"is not one this release declared",
+			exitRefused, "is not one this release declared",
 		},
 	}
 
@@ -504,24 +511,14 @@ func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assets, policy := manifestInputs(t, theReleaseShape)
-
-			args := []string{
-				"manifest", "--classes", "go-binary", "--store-vsa", "true", "--machinery-version", "1.0.0",
-				"--assets", assets, "--assert-policy", policy, "--leg-subjects", goBinaryLeg(t),
-			}
+			args := theRelease(t).args("go-binary", "--leg-lines", goBinaryLines(t))
 			for _, v := range tt.registry(t) {
-				args = append(args, "--registry-subjects", v)
+				args = append(args, "--registry-lines", v)
 			}
 
-			var stdout, stderr bytes.Buffer
-
-			if got := emitCmd(args, &stdout, &stderr); got == exitOK {
-				t.Fatalf("emitCmd = %d, want a refusal (stdout: %s)", got, stdout.String())
-			}
-
-			if !strings.Contains(stderr.String(), tt.want) {
-				t.Fatalf("stderr = %q, want it to mention %q", stderr.String(), tt.want)
+			_, stderr := emitWants(t, args, tt.code)
+			if !strings.Contains(stderr, tt.want) {
+				t.Errorf("stderr %q\nlacks %q", stderr, tt.want)
 			}
 		})
 	}
