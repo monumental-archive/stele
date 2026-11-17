@@ -1,0 +1,8 @@
+{"packages": [
+  {"id": "edtf 0.4.2 (path+file:///w/edtf)", "name": "edtf", "version": "0.4.2", "source": ""},
+  {"id": "pg_edtf 0.4.2 (path+file:///w/pg)", "name": "pg_edtf", "version": "0.4.2", "source": ""},
+  {"id": "chrono 0.4.38 (registry+x)", "name": "chrono", "version": "0.4.38", "source": "registry+x"}],
+ "resolve": {"nodes": [
+  {"id": "edtf 0.4.2 (path+file:///w/edtf)", "deps": [{"pkg": "chrono 0.4.38 (registry+x)", "dep_kinds": [{"kind": ""}]}]},
+  {"id": "pg_edtf 0.4.2 (path+file:///w/pg)", "deps": [{"pkg": "chrono 0.4.38 (registry+x)", "dep_kinds": [{"kind": ""}]}]},
+  {"id": "chrono 0.4.38 (registry+x)", "deps": []}]}}

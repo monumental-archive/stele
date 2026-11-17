@@ -1,0 +1,21 @@
+{
+  "schema": 9,
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "classes": {
+      "rust-crate": {
+        "bundles": ["attestations-crates.intoto.jsonl"],
+        "assetPrefixes": [{"prefix": "sbom-cargo-", "owedFrom": "1.0.0", "planned": true}]
+      },
+      "pgrx-extension": {
+        "bundles": ["attestations-extensions.intoto.jsonl"],
+        "assetPrefixes": [{"prefix": "sbom-pgrx-", "owedFrom": "1.0.0", "planned": true}]
+      },
+      "go-binary": {"bundles": ["attestations-binaries.intoto.jsonl"]},
+      "oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}
+    }
+  }
+}
