@@ -1125,8 +1125,17 @@ func runWalk(va *verifyArgs, out *latch) (*verifyOutcome, error) {
 		return nil, err
 	}
 
+	facts := []report.Fact{{Name: "links", Value: strconv.Itoa(verdict.Links())}}
+
+	// Where the chain changed its source-signing identity (stele#389):
+	// the walk's log line reaches stderr, so the report carries it for
+	// a ledger to record. Present only when the chain changed.
+	if rev := verdict.IdentityChangedAt(); rev != "" {
+		facts = append(facts, report.Fact{Name: "identityChangedAt", Value: rev})
+	}
+
 	return &verifyOutcome{
 		pop:   report.PopulationFromEvidence(1, "branch ref under walk"),
-		facts: []report.Fact{{Name: "links", Value: strconv.Itoa(verdict.Links())}},
+		facts: facts,
 	}, nil
 }

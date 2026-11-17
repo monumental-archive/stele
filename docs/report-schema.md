@@ -146,7 +146,7 @@ never null.
 | --- | --- | --- |
 | `release` | release subjects (manifest size) | `sourceRevision` |
 | `vsa` | release subjects (manifest size) | `verifiedLevels`, `sourceRevision` |
-| `chain` | the one branch ref under walk | `links` |
+| `chain` | the one branch ref under walk | `links`, `identityChangedAt` (only when the chain changed its source-signing identity) |
 
 ## What `verify repro` puts in it
 
