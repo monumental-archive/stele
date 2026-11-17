@@ -234,6 +234,30 @@ func predicateMatches(payload []byte, predicateType string) error {
 	return nil
 }
 
+// depthRefusal is the usage refusal a depth request earns, "" when it
+// earns none. Asking for full depth without the trust authority is
+// refused, never a shallower walk that looks like the deep one. And
+// full depth resolves each release's pins through git (stele#384),
+// while a forge snapshot holds no git objects: a replay would fetch
+// them live, and a capture would claim a run it did not record — so
+// both refuse, naming what to run instead.
+func depthRefusal(depth, verifyPolicyPath, snapshotDir, captureDir string) string {
+	switch {
+	case depth != depthPresence && depth != depthFull:
+		return fmt.Sprintf("--depth %q is not a depth (presence, full)", depth)
+	case depth == depthFull && verifyPolicyPath == "":
+		return "--verify-policy is required with --depth full: it names the trust identities"
+	case depth == depthFull && snapshotDir != "":
+		return "--snapshot cannot replay --depth full: the release pins are read through git, and a" +
+			" snapshot holds no git objects — run --depth full against the live forge, or replay at presence depth"
+	case depth == depthFull && captureDir != "":
+		return "--capture cannot record --depth full: the release pins are read through git, and a" +
+			" capture records no git objects — capture at presence depth, or run --depth full without --capture"
+	default:
+		return ""
+	}
+}
+
 // assertEvidence runs the evidence-completeness walk: policy loaded,
 // the forge chosen (live, snapshot replay, or capture-through), the
 // contract sources stacked manifest-first, the debt file parsed into
@@ -294,14 +318,9 @@ func assertEvidence(args []string, stdout, stderr io.Writer) int {
 		return usageFail("--snapshot and --capture are exclusive: replay reads, capture writes")
 	}
 
-	// Depth is validated before anything is opened: asking for full
-	// depth without the trust authority is a usage refusal, never a
-	// shallower walk that looks like the deep one.
-	switch {
-	case depth != depthPresence && depth != depthFull:
-		return usageFail(fmt.Sprintf("--depth %q is not a depth (presence, full)", depth))
-	case depth == depthFull && verifyPolicyPath == "":
-		return usageFail("--verify-policy is required with --depth full: it names the trust identities")
+	// Depth is validated before anything is opened.
+	if refusal := depthRefusal(depth, verifyPolicyPath, snapshotDir, captureDir); refusal != "" {
+		return usageFail(refusal)
 	}
 
 	pf, err := os.Open(policyPath) //nolint:gosec // the policy path is operator-supplied by design

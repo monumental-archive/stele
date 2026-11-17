@@ -1107,7 +1107,11 @@ roots — and the bound is logged, never silent. Asking for full depth
 without `--verify-policy` is a usage refusal, never a shallower walk
 that looks like the deep one: the policy names the trust identities.
 The trust material the run verifies against comes from the origin
-ladder, `--trusted-root` or TUF, exactly as everywhere else.
+ladder, `--trusted-root` or TUF, exactly as everywhere else. Full
+depth refuses `--snapshot` and `--capture` by name: its pins are git
+objects, which a forge snapshot neither holds nor records, so a
+replay would fetch them live and a capture would claim what it never
+wrote. Replay and capture at presence depth.
 
 ## The tags section
 

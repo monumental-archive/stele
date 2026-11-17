@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/monumental-archive/stele/internal/gitrepo"
+	"github.com/monumental-archive/stele/internal/gittest"
 )
 
 // gitAt runs git in dir with a fixed identity and a caller-chosen
@@ -308,5 +309,34 @@ func TestRevisionsRefusesAShallowClone(t *testing.T) {
 	// reads as a repository that has never released.
 	if _, terr := shallow.AllTags(); !errors.As(terr, &shallowErr) {
 		t.Errorf("AllTags error = %v, want a ShallowError", terr)
+	}
+}
+
+// TestRevisionSubjectIsTheFirstLine: a subject is the first LINE of
+// the message, as Revision documents and as the forge's own reader
+// served it — never git's %s, which joins a first paragraph wrapped
+// onto a second line into one. A history evaluator parses the subject,
+// so the two readings are two different judgments of one commit.
+func TestRevisionSubjectIsTheFirstLine(t *testing.T) {
+	t.Parallel()
+
+	r := gittest.New(t)
+	r.Commit("feat: a subject that wraps\nonto a second line\n\nand a body")
+	r.Commit("fix: one line\n\nwith a body")
+	r.Commit("chore: no body at all")
+
+	revs, err := openHistory(t, r.Dir).Revisions("refs/heads/main", time.Time{})
+	if err != nil {
+		t.Fatalf("Revisions = %v", err)
+	}
+
+	got := make([]string, 0, len(revs))
+	for _, rev := range revs {
+		got = append(got, rev.Subject)
+	}
+
+	want := []string{"chore: no body at all", "fix: one line", "feat: a subject that wraps"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("subjects = %q, want %q", got, want)
 	}
 }

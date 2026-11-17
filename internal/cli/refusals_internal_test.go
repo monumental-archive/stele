@@ -178,6 +178,26 @@ func TestAssertUsageMatrix(t *testing.T) {
 			"--verify-policy is required",
 		},
 		{
+			// A replay of a run whose pins are git objects would fetch
+			// them live (stele#384): refused by name, with what to run.
+			"evidence: full depth will not replay from a snapshot",
+			[]string{
+				"assert", "evidence", "--org", "acme", "--policy", evidencePolicy, "--depth", "full",
+				"--verify-policy", evidencePolicy, "--snapshot", dir,
+			},
+			"--snapshot cannot replay --depth full: the release pins are read through git, and a snapshot holds" +
+				" no git objects — run --depth full against the live forge, or replay at presence depth",
+		},
+		{
+			"evidence: full depth will not claim a capture of its pins",
+			[]string{
+				"assert", "evidence", "--org", "acme", "--policy", evidencePolicy, "--depth", "full",
+				"--verify-policy", evidencePolicy, "--capture", dir,
+			},
+			"--capture cannot record --depth full: the release pins are read through git, and a capture records" +
+				" no git objects — capture at presence depth, or run --depth full without --capture",
+		},
+		{
 			"evidence: full depth resolves a root rather than skipping",
 			[]string{
 				"assert", "evidence", "--org", "acme", "--policy", evidencePolicy,

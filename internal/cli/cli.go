@@ -158,7 +158,8 @@ usage:
     evidence     nothing ships unattested: every release's declared
                  evidence contract is met and every covered subject
                  carries a store-resident verdict (--org|--repo
-                 --policy [--debt --snapshot|--capture])
+                 --policy [--debt --snapshot|--capture]; the
+                 snapshot flags replay presence depth only)
     blast-radius every SBOM scanned, every advisory finding joined
                  against the committed VEX decisions by exact
                  (advisory, package, version) triple (--org|--repo
