@@ -1028,6 +1028,27 @@ affected tag, and (with `publishWorkflows` declared) only when the
 failure was a PUBLISHING run. The asymmetry is the point: what a human may assert
 and what only evidence may assert are different types.
 
+## Inventory admissibility
+
+One rule for every inventory stele reads or writes (stele#396),
+whoever produced it: a document carrying no PURL, or any PURL without
+a version, is refused. The PURL is what every advisory scanner matches
+on, so a package without a versioned one is invisible to all of them,
+and an inventory carrying none gates on nothing. A version is what
+follows `@` in the PURL's last path segment, before any qualifiers or
+subpath.
+
+The rule needs no policy and has no exceptions. It is applied where an
+inventory crosses into or out of the tool: every document
+`derive sbom` writes, every document it folds into a release view,
+and every subject inventory `derive vex` scans. A document another
+tool produced and stele does not otherwise read (an image scanner's
+SPDX) is judged by `stele assert inventory [--json] <document>...`:
+PASS when every document admits; FAIL naming the document and each
+versionless PURL (`versioned-purl`) or the absence of any
+(`inventory-purls`); CANNOT_JUDGE, with the document named
+(`inventory-readable`), when one will not read or parse as SPDX JSON.
+
 ## The inventory plan
 
 The pre-publish half of the planned obligations (.github#544). A

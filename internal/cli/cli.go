@@ -209,6 +209,10 @@ usage:
                  advisory applies excuses it — one that admits,
                  withholds or claims a fix is reported on the finding
                  (--scan --vex --subject [--json])
+    inventory    each handed inventory document (an image
+                 scanner's SPDX, for one) carries PURLs and every one
+                 versioned; one that will not read or parse is
+                 CANNOT_JUDGE ([--json] <document>...)
     signer-certificates  every certificate a transparency log holds
                  for a declared signing workflow reconciles against
                  a signing the population performed; read in chunks

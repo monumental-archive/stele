@@ -49,6 +49,7 @@ the same statement as this one and tested against it.
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |
+| `stele assert inventory` | each handed inventory document carries PURLs, every one versioned — the one admissibility rule `derive sbom` and `derive vex` also apply |
 | `stele assert evidence` | every release's declared evidence contract met, every covered subject carrying a store-resident verdict |
 | `stele assert blast-radius` | every advisory finding over every published SBOM, joined against the committed VEX decisions |
 | `stele assert tags` | every release tag: mint role, signature from the epoch on, a source-chain link on the target |

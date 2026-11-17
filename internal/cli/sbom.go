@@ -169,8 +169,8 @@ func writeInventory(path string, document *sbom.Document, stream io.Writer, out 
 	return writeJSONDoc(path, document, stream, out)
 }
 
-// commitRE is a full git object identifier: SHA-1 or SHA-256.
-var commitRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+// releasedCommitRE is a full git object identifier: SHA-1 or SHA-256.
+var releasedCommitRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // runDeriveBinarySBOM reads every leg, unions the platform legs, and
 // writes the document where asked.
@@ -187,7 +187,7 @@ func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	}
 
 	if sa.expectRevision != "" {
-		if !commitRE.MatchString(sa.expectRevision) {
+		if !releasedCommitRE.MatchString(sa.expectRevision) {
 			return fmt.Errorf("derive sbom: --expect-revision %q is not a full commit identifier", sa.expectRevision)
 		}
 

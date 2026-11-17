@@ -13,11 +13,17 @@
 package sbom
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 )
+
+// ErrNotSPDX reports a document the rule cannot read at all: not
+// inadmissible, unreadable — a judge reports it as blindness, never
+// as a finding about the inventory.
+var ErrNotSPDX = errors.New("sbom: not an SPDX JSON document")
 
 // purlRefType is SPDX's reference type for a package URL.
 const purlRefType = "purl"
@@ -26,12 +32,37 @@ const purlRefType = "purl"
 // to find them, not a dump of the document.
 const bareShown = 3
 
-// Admit refuses an inventory carrying no PURL, or any PURL without a
-// version, naming the document and the counts.
-func Admit(doc *Document) error {
-	total := 0
+// InadmissibleError is the rule's refusal: the document, how many PURLs it
+// carries, and every one without a version. Typed so a caller judging
+// many documents can name each PURL as its own finding; its message is
+// the one every caller prints.
+type InadmissibleError struct {
+	Name  string
+	Total int
+	Bare  []string
+}
 
-	var bare []string
+func (e *InadmissibleError) Error() string {
+	named := ""
+	if len(e.Bare) > 0 {
+		named = " (" + strings.Join(e.Bare[:min(len(e.Bare), bareShown)], ", ")
+		if len(e.Bare) > bareShown {
+			named += fmt.Sprintf(", and %d more", len(e.Bare)-bareShown)
+		}
+
+		named += ")"
+	}
+
+	return fmt.Sprintf(
+		"sbom: %s has %d PURLs, %d versionless%s — a versionless PURL is invisible to every scanner, so an"+
+			" inventory carrying one gates on a set it cannot see", e.Name, e.Total, len(e.Bare), named,
+	)
+}
+
+// Admit is the rule: an inventory carrying no PURL, or any PURL
+// without a version, is refused as *InadmissibleError.
+func Admit(doc *Document) error {
+	refusal := &InadmissibleError{Name: doc.Name}
 
 	for _, p := range doc.Packages {
 		for _, ref := range p.ExternalRefs {
@@ -39,32 +70,19 @@ func Admit(doc *Document) error {
 				continue
 			}
 
-			total++
+			refusal.Total++
 
 			if !versioned(ref.ReferenceLocator) {
-				bare = append(bare, ref.ReferenceLocator)
+				refusal.Bare = append(refusal.Bare, ref.ReferenceLocator)
 			}
 		}
 	}
 
-	if total > 0 && len(bare) == 0 {
+	if refusal.Total > 0 && len(refusal.Bare) == 0 {
 		return nil
 	}
 
-	named := ""
-	if len(bare) > 0 {
-		named = " (" + strings.Join(bare[:min(len(bare), bareShown)], ", ")
-		if len(bare) > bareShown {
-			named += fmt.Sprintf(", and %d more", len(bare)-bareShown)
-		}
-
-		named += ")"
-	}
-
-	return fmt.Errorf(
-		"sbom: %s has %d PURLs, %d versionless%s — a versionless PURL is invisible to every scanner, so an"+
-			" inventory carrying one gates on a set it cannot see", doc.Name, total, len(bare), named,
-	)
+	return refusal
 }
 
 // AdmitBytes reads an inventory another tool produced and admits it.
@@ -73,7 +91,7 @@ func Admit(doc *Document) error {
 func AdmitBytes(raw []byte) (*Document, error) {
 	doc, err := jsonx.DecodeForeign[Document](raw)
 	if err != nil {
-		return nil, fmt.Errorf("sbom: not an SPDX JSON document: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrNotSPDX, err)
 	}
 
 	if err := Admit(doc); err != nil {

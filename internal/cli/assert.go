@@ -56,6 +56,7 @@ const (
 	targetPlans       = "plans"
 	targetPermissions = "permissions"
 	targetAdvisories  = "advisories"
+	targetInventory   = "inventory"
 
 	targetSignerCertificates = "signer-certificates"
 )
@@ -108,7 +109,7 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
 			"stele assert: a target is required: image-facts, evidence, blast-radius, tags, chains, plans, "+
-				"permissions, advisories, signer-certificates or published"); err != nil {
+				"permissions, advisories, inventory, signer-certificates or published"); err != nil {
 			return exitIO
 		}
 
@@ -132,6 +133,8 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 		return assertPermissions(args[1:], stdout, stderr)
 	case targetAdvisories:
 		return assertAdvisories(args[1:], stdout, stderr)
+	case targetInventory:
+		return assertInventory(args[1:], stdout, stderr)
 	case targetSignerCertificates:
 		return assertSignerCertificates(args[1:], stdout, stderr)
 	case targetPublished:
@@ -139,8 +142,8 @@ func assertCmd(args []string, stdout, stderr io.Writer) int {
 	default:
 		if _, err := fmt.Fprintf(stderr,
 			"stele assert: unknown target %q "+
-				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories, signer-certificates,"+
-				" published)\n",
+				"(image-facts, evidence, blast-radius, tags, chains, plans, permissions, advisories, inventory,"+
+				" signer-certificates, published)\n",
 			args[0]); err != nil {
 			return exitIO
 		}
@@ -621,6 +624,53 @@ func refusal(target, subject, detail string, pop report.Population) *report.Repo
 	j.Check(subject, target).Diverged(detail)
 
 	return report.Seal("assert "+target, subject, pop, j, report.NoCanary(), report.NoJudgedSet())
+}
+
+// assertInventory runs the inventory target (stele#396): each handed
+// document judged by the one admissibility rule. A path that will not
+// read is NOT a usage refusal here: the document is the subject, and
+// a subject the run could not see is blindness, reported as
+// CANNOT_JUDGE with the document named.
+func assertInventory(args []string, stdout, stderr io.Writer) int {
+	var jsonOut bool
+
+	flags := flag.NewFlagSet("stele assert inventory", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.BoolVar(&jsonOut, "json", false,
+		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
+
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	if flags.NArg() == 0 {
+		if _, err := fmt.Fprintln(stderr,
+			"stele assert inventory: at least one inventory document is required — a judgment over none judges"+
+				" nothing"); err != nil {
+			return exitIO
+		}
+
+		return exitUsage
+	}
+
+	files := make([]assert.InventoryFile, 0, flags.NArg())
+
+	for _, path := range flags.Args() {
+		content, err := os.ReadFile(path) //nolint:gosec // the documents are operator-supplied by design
+		files = append(files, assert.InventoryFile{Name: path, Content: content, ReadErr: err})
+	}
+
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	rep := assert.Inventories(files, report.NewJournal(), out.logf)
+	if out.err != nil {
+		return exitIO
+	}
+
+	return emitReport(rep, jsonOut, stdout, stderr)
 }
 
 // assertAdvisories runs the advisories target: one module's
