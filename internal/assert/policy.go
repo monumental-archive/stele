@@ -619,6 +619,13 @@ type EvidencePolicy struct {
 	// rolling digests whose evidence lives ONLY in the attestation
 	// store.
 	Continuous *ContinuousPolicy `json:"continuous,omitempty"`
+	// Publish, when set, names the release workflow (stele#448): the
+	// caller stub a release is published through, the shared workflow
+	// it must call, and — for a repository carrying its own machinery
+	// — the stub that calls that machinery locally. A release's pins
+	// are derived from it, and the workflow contract adapter reads it;
+	// absent, neither can run unless the signer identity is templated.
+	Publish *PublishPolicy `json:"publish,omitempty"`
 	// BaseImages, when set, adds the base-approval half: every base
 	// this org builds on carries its approval, so a dependency roll
 	// that outran the approval run surfaces here rather than at the
@@ -684,6 +691,65 @@ type EvidencePolicy struct {
 	// button the burned category must never become. Naming them is a
 	// narrowing, so it is data, not code.
 	PublishWorkflows []string `json:"publishWorkflows,omitempty"`
+}
+
+// PublishPolicy declares where a release is published from — the
+// adopter's convention, with the meanings evidence.continuous already
+// gives the same names, never a file this engine assumes.
+type PublishPolicy struct {
+	// StubPath is the caller's publish workflow, read at the release
+	// tag.
+	StubPath *string `json:"stubPath"`
+	// StubUses is the owner/repo/ prefix (and any path prefix after
+	// it) of the shared workflow the stub must call — the machinery.
+	StubUses *string `json:"stubUses"`
+	// SelfStubPath is the caller stub of a repository whose StubPath
+	// file is itself the reusable workflow: the machinery repository's
+	// own releases, which call it locally. Absent where no repository
+	// carries its own machinery.
+	SelfStubPath *string `json:"selfStubPath,omitempty"`
+}
+
+// validateSections validates each optional evidence section that is
+// declared — every one refuses on its own terms.
+func (e *EvidencePolicy) validateSections() error {
+	if e.Continuous != nil {
+		if err := e.Continuous.validate(); err != nil {
+			return err
+		}
+	}
+
+	if e.Publish != nil {
+		if err := e.Publish.validate(); err != nil {
+			return err
+		}
+	}
+
+	if e.BaseImages != nil {
+		if err := e.BaseImages.validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *PublishPolicy) validate() error {
+	for name, f := range map[string]*string{"stubPath": p.StubPath, "stubUses": p.StubUses} {
+		if f == nil || *f == "" {
+			return fmt.Errorf("evidence.publish.%s is absent or empty", name)
+		}
+	}
+
+	if _, ok := splitStubUses(*p.StubUses); !ok {
+		return fmt.Errorf("evidence.publish.stubUses %q names no owner and repository", *p.StubUses)
+	}
+
+	if p.SelfStubPath != nil && *p.SelfStubPath == "" {
+		return errors.New("evidence.publish.selfStubPath is empty — omit it where no repository carries its own machinery")
+	}
+
+	return nil
 }
 
 // ContinuousPolicy parameterises the continuous-digest half. Every
@@ -1408,16 +1474,8 @@ func (p *Policy) validate() error {
 		return errors.New("issuer is required when evidence.continuous or an evidence.baseImages scope is declared")
 	}
 
-	if e.Continuous != nil {
-		if err := e.Continuous.validate(); err != nil {
-			return err
-		}
-	}
-
-	if e.BaseImages != nil {
-		if err := e.BaseImages.validate(); err != nil {
-			return err
-		}
+	if err := e.validateSections(); err != nil {
+		return err
 	}
 
 	if p.BlastRadius != nil {

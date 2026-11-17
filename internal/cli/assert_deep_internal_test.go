@@ -158,10 +158,10 @@ func deepWorld(t *testing.T, rewrite func(files map[string]string)) ([]string, s
 	wfSeg := url.PathEscape(".github/workflows/publish.yml")
 	files := map[string]string{
 		"acme/widget/releases/v1.0.0/assets/checksums.txt": digest + "  app.tar.gz\n",
-		"acme/widget/files/v1.0.0/" + wfSeg: "uses: acme/canon/.github/workflows/publish.yml@" +
+		"acme/widget/files/v1.0.0/" + wfSeg: "jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@" +
 			strings.Repeat("a", 40) + "\n",
-		"acme/canon/files/" + strings.Repeat("a", 40) + "/" + wfSeg: "uses: acme/signer/.github/workflows/sign.yml@" +
-			strings.Repeat("b", 40) + "\n",
+		"acme/canon/files/" + strings.Repeat("a", 40) + "/" + wfSeg: "jobs:\n  sign:\n" +
+			"    uses: acme/signer/.github/workflows/sign.yml@" + strings.Repeat("b", 40) + "\n",
 	}
 	for p, c := range files {
 		full := filepath.Join(snap, p)

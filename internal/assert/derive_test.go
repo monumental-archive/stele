@@ -90,6 +90,8 @@ func TestDeriveReleaseIsTheWalksReading(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	roots.Publish = loadTestPolicy(t).Evidence.Publish
+
 	pins, err := roots.Resolve(deepForge(), testOrg, "widget", "v1.0.0")
 	if err != nil || pins != deep.releasePins[0] {
 		t.Errorf("pins = %+v, %v; the walk verified %+v", pins, err, deep.releasePins[0])
@@ -275,17 +277,19 @@ func TestNewPinRoots(t *testing.T) {
 		}
 	})
 
-	t.Run("no verdict obligation leaves the machinery unknown", func(t *testing.T) {
+	t.Run("no verdict obligation leaves the machinery unknown, and the stub still names it", func(t *testing.T) {
 		t.Parallel()
 
-		roots, err := assert.NewPinRoots(deepForge(), "", "acme/signer/x.yml")
+		roots, err := assert.NewPinRoots(deepForge(), "", "acme/signer/.github/workflows/sign.yml")
 		if err != nil || roots.MachineryOwner != "" || roots.SelfSigned {
 			t.Fatalf("roots = %+v, %v", roots, err)
 		}
 
-		if _, rerr := roots.Resolve(deepForge(), testOrg, "widget", "v1.0.0"); rerr == nil ||
-			!strings.Contains(rerr.Error(), "names no machinery repository") {
-			t.Fatalf("Resolve = %v, want the undeclared machinery refused", rerr)
+		roots.Publish = loadTestPolicy(t).Evidence.Publish
+
+		pins, rerr := roots.Resolve(deepForge(), testOrg, "widget", "v1.0.0")
+		if rerr != nil || pins != (verify.Pins{Machinery: machineryPin40, Signer: signerPin40}) {
+			t.Fatalf("Resolve = %+v, %v; want the pins the declared stub names", pins, rerr)
 		}
 	})
 

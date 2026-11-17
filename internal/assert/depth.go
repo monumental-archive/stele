@@ -31,6 +31,7 @@ import (
 	"github.com/monumental-archive/stele/internal/evidence"
 	"github.com/monumental-archive/stele/internal/provenance"
 	"github.com/monumental-archive/stele/internal/verify"
+	"github.com/monumental-archive/stele/internal/workflow"
 )
 
 // DeepVerifier runs the verify engine over one release — interface-
@@ -52,10 +53,6 @@ type DeepVerifier interface {
 	SourceVSA(c verify.Coords, envelope []byte, pins verify.Pins) error
 }
 
-// uses40RE finds the machinery pin on a caller's publish workflow:
-// the full-commit uses: reference to the machinery repo's publish or release
-// workflow. The 40-hex capture is the certificate-grade binding; the
-// version comment beside it is presentation.
 // The two halves of the deep leg, as an unseen read names them.
 const (
 	deepRelease = "deep release check"
@@ -63,8 +60,6 @@ const (
 	// deepSourceVerdict is the source-verdict half (stele#391).
 	deepSourceVerdict = "deep source verdict check"
 )
-
-var uses40RE = regexp.MustCompile(`uses:\s*\S*/(?:publish|release)\.ya?ml@([0-9a-f]{40})`)
 
 // fullDepth re-verifies one release through the engine. Refusals land
 // in the taxonomy the walk already has: verdict refusals carry a
@@ -592,7 +587,10 @@ func bundleSubjects(raw []byte) ([]verify.Subject, error) {
 // resolvePins derives the machinery and signer pins for one release —
 // the walk's call into the one derivation.
 func (w *evidenceWalk) resolvePins(repo, tag string) (verify.Pins, error) {
-	return w.full.Resolve(w.forge, w.org, repo, tag)
+	roots := w.full.PinRoots
+	roots.Publish = w.pol.Publish
+
+	return roots.Resolve(w.forge, w.org, repo, tag)
 }
 
 // FileReader is the one forge read pin resolution makes: a workflow
@@ -608,9 +606,10 @@ type AssetReader interface {
 }
 
 // PinRoots is what resolving a release's signing pins needs: the tag
-// resolver and the roots the verify policy's trust identities name.
-// Built by NewPinRoots, so the walk and the verb derive the roots from
-// the identities one way (stele#447).
+// resolver, the roots the verify policy's trust identities name, and
+// the release workflow the assert policy declares (stele#448). Built
+// by NewPinRoots, so the walk and the verb derive the roots from the
+// identities one way (stele#447).
 type PinRoots struct {
 	// Tags resolves a release tag to its commit — read through git, by
 	// the same resolution the tag audit uses (stele#384).
@@ -621,12 +620,16 @@ type PinRoots struct {
 	// identity is templated to the repository under verification, so
 	// pins derive from each release's own tag, no machinery hop.
 	SelfSigned bool
+	// Publish is the assert policy's evidence.publish: where a release
+	// is published from. Every caller sets it from the policy it
+	// holds; nil is the policy declaring none.
+	Publish *PublishPolicy
 }
 
 // NewPinRoots derives the pin-resolution roots from the verify policy's
 // trust identities. verifierWorkflow is empty when the policy declares
 // no verdict obligation; the machinery repository is then unknown, and
-// only the self-attesting topology resolves.
+// no release is read as the machinery's own.
 func NewPinRoots(tags TagResolver, verifierWorkflow, signerWorkflow string) (PinRoots, error) {
 	const ownerRepoPath = 3
 
@@ -655,14 +658,16 @@ func NewPinRoots(tags TagResolver, verifierWorkflow, signerWorkflow string) (Pin
 }
 
 // Resolve derives the machinery and signer pins for one release from
-// the trees a stranger can read: the caller's publish workflow at the
-// tag carries the machinery pin; the machinery publish workflow at that
-// pin carries the signer pin. The machinery repo's own releases run at
-// the tag.
-func (r PinRoots) Resolve(f FileReader, owner, repo, tag string) (verify.Pins, error) {
-	machineryOwner, machineryRepo := r.MachineryOwner, r.MachineryRepo
-	signerWorkflow := r.SignerWorkflow
-
+// the trees a stranger can read, through the one workflow reader
+// (internal/workflow) and nothing that names a file: the declared
+// publish stub at the tag makes one job-level call into the declared
+// machinery at one full commit — the machinery pin — and the workflow
+// that call names, read at that commit, calls the signer at one commit
+// — the signer pin, derived as `derive signer-digest` derives it
+// (workflow.PinnedCommit). The machinery repository's own releases
+// run at the tag: their declared self stub calls the machinery
+// locally.
+func (r *PinRoots) Resolve(f FileReader, owner, repo, tag string) (verify.Pins, error) {
 	// The self-attesting topology (#82): a templated signer identity
 	// means every repository signs for itself — there is no foreign
 	// machinery tree to hop through, and both pins ARE the release
@@ -677,65 +682,223 @@ func (r PinRoots) Resolve(f FileReader, owner, repo, tag string) (verify.Pins, e
 		return verify.Pins{Machinery: sha, Signer: sha}, nil
 	}
 
-	if machineryOwner == "" {
-		return verify.Pins{}, errors.New(
-			"the verify policy names no machinery repository (no trust.verdict) and the signer identity is not" +
-				" templated — pins cannot be derived; declare one or the other",
-		)
+	pub := r.Publish
+	if pub == nil {
+		return verify.Pins{}, errors.New("no evidence.publish is declared and the signer identity is not" +
+			" templated — the release workflow is undeclared, so the pins cannot be derived;" +
+			" the publisher's assert policy declares it")
 	}
 
-	var machineryPin string
-
-	if owner == machineryOwner && repo == machineryRepo {
-		sha, err := r.Tags.TagCommit(owner, repo, tag)
-		if err != nil {
-			return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
-		}
-
-		machineryPin = sha
-	} else {
-		wf, ok, err := f.FileAt(owner, repo, ".github/workflows/publish.yml", tag)
-		if err != nil {
-			return verify.Pins{}, fmt.Errorf("the publish workflow at the tag is unreadable: %w", err)
-		}
-
-		m := uses40RE.FindSubmatch(wf)
-		if !ok || m == nil {
-			return verify.Pins{}, fmt.Errorf(
-				"no full-commit machinery pin on the publish workflow at %s — the verifier identity cannot be derived", tag,
-			)
-		}
-
-		machineryPin = string(m[1])
+	if owner == r.MachineryOwner && repo == r.MachineryRepo {
+		return r.ownMachinery(f, owner, repo, tag)
 	}
 
-	machineryPublish, ok, err := f.FileAt(
-		machineryOwner, machineryRepo, ".github/workflows/publish.yml", machineryPin,
-	)
+	stub, err := readStub(f, owner, repo, *pub.StubPath, tag)
 	if err != nil {
-		return verify.Pins{}, fmt.Errorf(
-			"the machinery publish workflow at %.12s is unreadable: %w", machineryPin, err,
-		)
+		return verify.Pins{}, err
+	}
+
+	call, err := stubCall(stub, *pub.StubUses, *pub.StubPath+" at "+tag)
+	if err != nil {
+		return verify.Pins{}, err
+	}
+
+	signer, err := r.signerAt(f, call.Owner, call.Repo, call.Path, call.Version)
+	if err != nil {
+		return verify.Pins{}, err
+	}
+
+	return verify.Pins{Machinery: call.Version, Signer: signer}, nil
+}
+
+// ownMachinery resolves a release of the machinery repository itself:
+// its machinery pin is the tag's commit, and the workflow its declared
+// self stub calls locally carries the signer pin at that commit.
+func (r *PinRoots) ownMachinery(f FileReader, owner, repo, tag string) (verify.Pins, error) {
+	if r.Publish.SelfStubPath == nil {
+		return verify.Pins{}, fmt.Errorf("%s/%s carries its own machinery, and evidence.publish declares no"+
+			" selfStubPath — the stub its releases run is undeclared", owner, repo)
+	}
+
+	sha, err := r.Tags.TagCommit(owner, repo, tag)
+	if err != nil {
+		return verify.Pins{}, fmt.Errorf("the tag's commit is unreadable: %w", err)
+	}
+
+	self, err := readStub(f, owner, repo, *r.Publish.SelfStubPath, tag)
+	if err != nil {
+		return verify.Pins{}, err
+	}
+
+	path, err := selfCall(self, *r.Publish.SelfStubPath+" at "+tag)
+	if err != nil {
+		return verify.Pins{}, err
+	}
+
+	signer, err := r.signerAt(f, owner, repo, path, sha)
+	if err != nil {
+		return verify.Pins{}, err
+	}
+
+	return verify.Pins{Machinery: sha, Signer: signer}, nil
+}
+
+// readStub reads a declared stub at the tag. Absent is its own
+// refusal: a release with no stub has no release workflow to read,
+// which is not a stub that pins badly.
+func readStub(f FileReader, owner, repo, path, tag string) ([]byte, error) {
+	stub, ok, err := f.FileAt(owner, repo, path, tag)
+	if err != nil {
+		return nil, fmt.Errorf("the publish workflow at the tag is unreadable: %w", err)
 	}
 
 	if !ok {
-		return verify.Pins{}, fmt.Errorf("the machinery repository carries no publish workflow at %.12s", machineryPin)
+		return nil, fmt.Errorf("the publish workflow %s is absent at %s — the release names no workflow it was"+
+			" published through", path, tag)
 	}
 
-	signerRE, err := regexp.Compile(regexp.QuoteMeta(signerWorkflow) + `@([0-9a-f]{40})`)
+	return stub, nil
+}
+
+// signerAt reads the machinery workflow a stub called, at the commit it
+// called it, and derives the signer pin from its job-level calls.
+func (r *PinRoots) signerAt(f FileReader, owner, repo, path, pin string) (string, error) {
+	content, ok, err := f.FileAt(owner, repo, path, pin)
 	if err != nil {
-		return verify.Pins{}, fmt.Errorf("the signer pin pattern does not compile: %w", err)
+		return "", fmt.Errorf("the machinery publish workflow at %.12s is unreadable: %w", pin, err)
 	}
 
-	sm := signerRE.FindSubmatch(machineryPublish)
-	if sm == nil {
-		return verify.Pins{}, fmt.Errorf(
-			"the machinery repository at %.12s declares no signer pin for %s — the provenance identity cannot be derived",
-			machineryPin, signerWorkflow,
-		)
+	if !ok {
+		return "", fmt.Errorf("the machinery repository carries no publish workflow %s at %.12s", path, pin)
 	}
 
-	return verify.Pins{Machinery: machineryPin, Signer: string(sm[1])}, nil
+	subject := fmt.Sprintf("the machinery publish workflow %s/%s/%s at %.12s", owner, repo, path, pin)
+
+	signer, err := workflow.PinnedCommit([]workflow.File{{Name: path, Content: content}}, r.SignerWorkflow, subject)
+	if err != nil {
+		return "", fmt.Errorf("the provenance identity cannot be derived: %w", err)
+	}
+
+	return signer, nil
+}
+
+// fullCommitRE is a pin by commit as a workflow reference spells it.
+var fullCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// stubCall is the ONE job-level call a publish stub makes into the
+// declared machinery, read through internal/workflow: a comment, a
+// step's `uses:` and a string in a `run:` block are not calls. None, a
+// call at a moving ref, two commits, or two workflows are each refused
+// by name — the release must state one machinery at one commit.
+func stubCall(stub []byte, stubUses, subject string) (workflow.Ref, error) {
+	doc, err := workflow.Parse(stub)
+	if err != nil {
+		return workflow.Ref{}, fmt.Errorf("%s: %w", subject, err)
+	}
+
+	var calls []workflow.Ref
+
+	for _, job := range doc.Jobs {
+		if job.Uses == "" {
+			continue
+		}
+
+		ref, err := workflow.ParseRef(job.Uses)
+		if err != nil {
+			return workflow.Ref{}, fmt.Errorf("%s: jobs.%s.uses: %w", subject, job.Name, err)
+		}
+
+		if !underStubUses(ref, stubUses) {
+			continue
+		}
+
+		if !fullCommitRE.MatchString(ref.Version) {
+			return workflow.Ref{}, fmt.Errorf("%s calls %s at %q (jobs.%s), which is not a commit — a moving ref"+
+				" pins no machinery", subject, ref.Path, ref.Version, job.Name)
+		}
+
+		calls = append(calls, ref)
+	}
+
+	return oneCall(calls, stubUses, subject)
+}
+
+// underStubUses reports whether a job-level call reaches the declared
+// machinery: owner and repository compared without case, as the
+// platform resolves them, and the path prefix exactly, as a path.
+func underStubUses(ref workflow.Ref, stubUses string) bool {
+	const segments = 3
+
+	parts := strings.SplitN(strings.TrimPrefix(stubUses, "/"), "/", segments)
+	if ref.Local || len(parts) < segments {
+		return false
+	}
+
+	return strings.EqualFold(ref.Owner, parts[0]) && strings.EqualFold(ref.Repo, parts[1]) &&
+		strings.HasPrefix(ref.Path, parts[2])
+}
+
+// oneCall answers the stub's call when it made exactly one, refusing
+// none, two commits and two workflows by name.
+func oneCall(calls []workflow.Ref, stubUses, subject string) (workflow.Ref, error) {
+	if len(calls) == 0 {
+		return workflow.Ref{}, fmt.Errorf("%s calls nothing under %s — no machinery pin to derive", subject, stubUses)
+	}
+
+	commits, paths := map[string]bool{}, map[string]bool{}
+	for _, c := range calls {
+		commits[c.Version], paths[c.Path] = true, true
+	}
+
+	if len(commits) > 1 {
+		return workflow.Ref{}, fmt.Errorf("%s calls %s at more than one commit — a release states its machinery"+
+			" once: %s", subject, stubUses, strings.Join(slices.Sorted(maps.Keys(commits)), " "))
+	}
+
+	if len(paths) > 1 {
+		return workflow.Ref{}, fmt.Errorf("%s calls more than one workflow under %s — which one publishes is"+
+			" not stated: %s", subject, stubUses, strings.Join(slices.Sorted(maps.Keys(paths)), " "))
+	}
+
+	return calls[0], nil
+}
+
+// selfCall is the path of the ONE workflow a self stub calls in its own
+// repository — the machinery, run at the caller's own commit.
+func selfCall(stub []byte, subject string) (string, error) {
+	doc, err := workflow.Parse(stub)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", subject, err)
+	}
+
+	paths := map[string]bool{}
+
+	for _, job := range doc.Jobs {
+		if job.Uses == "" {
+			continue
+		}
+
+		ref, err := workflow.ParseRef(job.Uses)
+		if err != nil {
+			return "", fmt.Errorf("%s: jobs.%s.uses: %w", subject, job.Name, err)
+		}
+
+		if ref.Local {
+			paths[ref.Path] = true
+		}
+	}
+
+	switch len(paths) {
+	case 0:
+		return "", fmt.Errorf("%s calls no workflow of its own repository — no machinery to read", subject)
+	case 1:
+		for p := range paths {
+			return p, nil
+		}
+	}
+
+	return "", fmt.Errorf("%s calls more than one workflow of its own repository — which one publishes is"+
+		" not stated: %s", subject, strings.Join(slices.Sorted(maps.Keys(paths)), " "))
 }
 
 // FullDepth is everything the full-depth leg needs beyond the walk:

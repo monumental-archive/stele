@@ -165,6 +165,10 @@ func TestDepthFull(t *testing.T) {
 		f.tagCommits = map[string]string{"v1.0.0": tagSHA40}
 		canonWF := f.files["canon:"+machineryPin40+":.github/workflows/publish.yml"]
 		f.files["canon:"+tagSHA40+":.github/workflows/publish.yml"] = canonWF
+		// The machinery's own releases run through its self stub, which
+		// calls the reusable locally (evidence.publish.selfStubPath).
+		f.files["canon:v1.0.0:.github/workflows/self-publish.yml"] = "jobs:\n  publish:\n" +
+			"    uses: ./.github/workflows/publish.yml\n"
 
 		deep := &fakeDeep{}
 
@@ -700,7 +704,10 @@ func TestDepthSelfAttesting(t *testing.T) {
 		}
 	})
 
-	t.Run("no verdict and no template refuses pin derivation", func(t *testing.T) {
+	// The release workflow is the declaration pins derive from
+	// (stele#448): with none declared and no template, there is
+	// nothing to derive them from.
+	t.Run("no release workflow and no template refuses pin derivation", func(t *testing.T) {
 		t.Parallel()
 
 		f := deepForge()
@@ -711,6 +718,7 @@ func TestDepthSelfAttesting(t *testing.T) {
 		}
 
 		pol := loadTestPolicy(t)
+		pol.Evidence.Publish = nil
 		src := assert.Sources{assert.ManifestSource{Forge: f, Policy: pol.Evidence, Asset: "evidence-manifest.json"}}
 
 		rep, rerr := assert.Evidence(pol, orgPop(t, f, nil), f, src, &fakeAttestor{},

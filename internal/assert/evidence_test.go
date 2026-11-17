@@ -31,6 +31,11 @@ const testPolicyJSON = `{
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
     "evidenceSuffixes": [".openvex.json"],
+    "publish": {
+      "stubPath": ".github/workflows/publish.yml",
+      "stubUses": "acme/canon/",
+      "selfStubPath": ".github/workflows/self-publish.yml"
+    },
     "classes": {
       "rust-crate": {
         "bundles": ["attestations-crates.intoto.jsonl"],
