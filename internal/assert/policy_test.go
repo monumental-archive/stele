@@ -44,6 +44,23 @@ func TestLoadPolicyRefusals(t *testing.T) {
 			"requires nothing",
 		},
 		{
+			// The shape's own guards are internal/release's table; this
+			// row proves the loader runs them, so a shape the derive leg
+			// could not judge is refused with the policy (stele#442).
+			"a subject shape of an unknown kind",
+			`{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
+			  "classes": {"a": {"bundles": ["b"], "subjects": {"kind": "tarballs", "entry": "^x$"}}}}}`,
+			`evidence.classes.a.subjects.kind "tarballs" is not a subject shape this stele implements`,
+		},
+		{
+			"a subject shape key no kind reads",
+			`{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
+			  "umbrellaBundle": "u.jsonl", "manifestAsset": "m.json",
+			  "classes": {"a": {"bundles": ["b"], "subjects": {"kind": "files", "pattern": "x"}}}}}`,
+			`unknown field "pattern"`,
+		},
+		{
 			"missing required string",
 			`{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", "checksums": "c.txt",
 			  "umbrellaBundle": "u.jsonl",

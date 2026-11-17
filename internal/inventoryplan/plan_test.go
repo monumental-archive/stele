@@ -3,7 +3,7 @@
 // verbatim (testdata/plans/SOURCE.md), so a passing golden row is the
 // producer writing the bytes the build leg wrote.
 
-package release_test
+package inventoryplan_test
 
 import (
 	"bytes"
@@ -13,11 +13,11 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/inventoryplan"
 	"github.com/monumental-archive/stele/internal/jsonx"
-	"github.com/monumental-archive/stele/internal/release"
 )
 
-const plansFixtures = "testdata/plans"
+const plansFixtures = "testdata"
 
 // producerPolicy carries the canon's two producing shapes and one a
 // stranger's org might declare — a class this org does not have, with
@@ -54,7 +54,7 @@ func producerClass(t *testing.T, class string) *assert.ClassPolicy {
 	return &cp
 }
 
-func render(t *testing.T, entries []release.PlanEntry) string {
+func render(t *testing.T, entries []inventoryplan.PlanEntry) string {
 	t.Helper()
 
 	var b bytes.Buffer
@@ -73,26 +73,26 @@ func TestPlanGoldens(t *testing.T) {
 	tests := []struct {
 		name   string
 		class  string
-		in     func(t *testing.T) release.PlanInputs
+		in     func(t *testing.T) inventoryplan.PlanInputs
 		golden string
 	}{
 		{
 			name:  "packaged crates",
 			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Dir: filepath.Join(plansFixtures, "crates", "package"), Version: "0.4.2"}
+				return inventoryplan.PlanInputs{Dir: filepath.Join(plansFixtures, "crates", "package"), Version: "0.4.2"}
 			},
 			golden: filepath.Join(plansFixtures, "crates", "plan.golden"),
 		},
 		{
 			name:  "one extension cell",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{CrateDir: fixtureCrate(t), Variant: "16"}
+				return inventoryplan.PlanInputs{CrateDir: fixtureCrate(t), Variant: "16"}
 			},
 			golden: filepath.Join(plansFixtures, "extension", "plan.golden"),
 		},
@@ -104,7 +104,7 @@ func TestPlanGoldens(t *testing.T) {
 
 			in := tt.in(t)
 
-			entries, err := release.InventoryPlan(tt.class, producerClass(t, tt.class), &in)
+			entries, err := inventoryplan.InventoryPlan(tt.class, producerClass(t, tt.class), &in)
 			if err != nil {
 				t.Fatalf("InventoryPlan = %v", err)
 			}
@@ -126,9 +126,9 @@ func TestPlanGoldens(t *testing.T) {
 func TestPlanForAStranger(t *testing.T) {
 	t.Parallel()
 
-	in := release.PlanInputs{CrateDir: fixtureCrate(t), Variant: "54"}
+	in := inventoryplan.PlanInputs{CrateDir: fixtureCrate(t), Variant: "54"}
 
-	entries, err := release.InventoryPlan("lua-module", producerClass(t, "lua-module"), &in)
+	entries, err := inventoryplan.InventoryPlan("lua-module", producerClass(t, "lua-module"), &in)
 	if err != nil {
 		t.Fatalf("InventoryPlan = %v", err)
 	}
@@ -202,95 +202,95 @@ func writeCrate(t *testing.T, manifest string) string {
 func TestPlanRefusals(t *testing.T) {
 	t.Parallel()
 
-	crate := func(manifest string) func(t *testing.T) release.PlanInputs {
-		return func(t *testing.T) release.PlanInputs {
+	crate := func(manifest string) func(t *testing.T) inventoryplan.PlanInputs {
+		return func(t *testing.T) inventoryplan.PlanInputs {
 			t.Helper()
 
-			return release.PlanInputs{CrateDir: writeCrate(t, manifest), Variant: "16"}
+			return inventoryplan.PlanInputs{CrateDir: writeCrate(t, manifest), Variant: "16"}
 		}
 	}
 
 	tests := []struct {
 		name  string
 		class string
-		in    func(t *testing.T) release.PlanInputs
+		in    func(t *testing.T) inventoryplan.PlanInputs
 		want  string
 	}{
 		{
 			name:  "a class declaring no inventory",
 			class: "source-archive",
-			in:    func(*testing.T) release.PlanInputs { return release.PlanInputs{} },
+			in:    func(*testing.T) inventoryplan.PlanInputs { return inventoryplan.PlanInputs{} },
 			want:  `class "source-archive" declares no inventory — its leg has no plan to write`,
 		},
 		{
 			name:  "a kind stele writes no plan for",
 			class: "go-binary",
-			in:    func(*testing.T) release.PlanInputs { return release.PlanInputs{} },
+			in:    func(*testing.T) inventoryplan.PlanInputs { return inventoryplan.PlanInputs{} },
 			want:  `class "go-binary" declares inventory kind "binaries", which stele writes no plan for`,
 		},
 		{
 			name:  "a crates leg with no version",
 			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate")}
+				return inventoryplan.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate")}
 			},
 			want: "rust-crate plans from packaged crates: the directory and the version are required",
 		},
 		{
 			name:  "a crate not named for the version",
 			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate", "b-0.9.0.crate"), Version: "1.0.0"}
+				return inventoryplan.PlanInputs{Dir: writeCrates(t, "a-1.0.0.crate", "b-0.9.0.crate"), Version: "1.0.0"}
 			},
 			want: "packaged crate b-0.9.0.crate is not named for version 1.0.0",
 		},
 		{
 			name:  "a crate that is only the version",
 			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Dir: writeCrates(t, "-1.0.0.crate"), Version: "1.0.0"}
+				return inventoryplan.PlanInputs{Dir: writeCrates(t, "-1.0.0.crate"), Version: "1.0.0"}
 			},
 			want: "packaged crate -1.0.0.crate is not named for version 1.0.0",
 		},
 		{
 			name:  "no crates",
 			class: "rust-crate",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{Dir: writeCrates(t, "notes.txt"), Version: "1.0.0"}
+				return inventoryplan.PlanInputs{Dir: writeCrates(t, "notes.txt"), Version: "1.0.0"}
 			},
 			want: "cargo package produced no crates — a class that ships nothing plans nothing",
 		},
 		{
 			name:  "a malformed crate directory pattern",
 			class: "rust-crate",
-			in:    func(*testing.T) release.PlanInputs { return release.PlanInputs{Dir: "[", Version: "1.0.0"} },
+			in:    func(*testing.T) inventoryplan.PlanInputs { return inventoryplan.PlanInputs{Dir: "[", Version: "1.0.0"} },
 			want:  "rust-crate: syntax error in pattern",
 		},
 		{
 			name:  "a variants cell with no variant",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{CrateDir: writeCrate(t, "[package]\nname = \"x\"\n")}
+				return inventoryplan.PlanInputs{CrateDir: writeCrate(t, "[package]\nname = \"x\"\n")}
 			},
 			want: `pgrx-extension plans one cell: the crate directory and a plain variant are required (variant "")`,
 		},
 		{
 			name:  "a variant that is not one plain segment",
 			class: "pgrx-extension",
-			in: func(t *testing.T) release.PlanInputs {
+			in: func(t *testing.T) inventoryplan.PlanInputs {
 				t.Helper()
 
-				return release.PlanInputs{CrateDir: writeCrate(t, "[package]\nname = \"x\"\n"), Variant: "16/amd64"}
+				return inventoryplan.PlanInputs{CrateDir: writeCrate(t, "[package]\nname = \"x\"\n"), Variant: "16/amd64"}
 			},
 			want: `a plain variant are required (variant "16/amd64")`,
 		},
@@ -326,7 +326,7 @@ func TestPlanRefusals(t *testing.T) {
 
 			in := tt.in(t)
 
-			_, err := release.InventoryPlan(tt.class, producerClass(t, tt.class), &in)
+			_, err := inventoryplan.InventoryPlan(tt.class, producerClass(t, tt.class), &in)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("InventoryPlan error = %v\nwant it to carry %q", err, tt.want)
 			}

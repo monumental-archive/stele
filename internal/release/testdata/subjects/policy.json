@@ -1,0 +1,90 @@
+{
+  "schema": 9,
+  "population": { "repositories": [{ "repo": "example" }] },
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "classes": {
+      "go-binary": {
+        "bundles": ["attestations-go-binaries.intoto.jsonl"],
+        "subjects": {
+          "kind": "files",
+          "entry": "^(?P<target>[^/\\\\ \\t\\n*?\\[]+)$",
+          "unit": "target",
+          "extension": ".tar.gz",
+          "label": "${target}",
+          "assets": [{ "noun": "archive", "suffix": "-${target}.tar.gz" }]
+        }
+      },
+      "rust-binary": {
+        "bundles": ["attestations-binaries.intoto.jsonl"],
+        "subjects": {
+          "kind": "files",
+          "entry": "^(?P<target>[^/\\\\ \\t\\n*?\\[]+)$",
+          "unit": "target",
+          "extension": ".tar.gz",
+          "label": "${target}",
+          "assets": [{ "noun": "archive", "suffix": "-${target}.tar.gz" }]
+        }
+      },
+      "pgrx-extension": {
+        "bundles": ["attestations-extensions.intoto.jsonl"],
+        "subjects": {
+          "kind": "files",
+          "entry": "^(?P<major>\\d+)-(?P<arch>[a-z0-9_]+)$",
+          "unit": "cell",
+          "extension": ".tar.gz",
+          "label": "${major}",
+          "assets": [
+            {
+              "noun": "tarball",
+              "of": "pg${major}/${arch}",
+              "suffix": "-pg${major}-linux-${arch}.tar.gz"
+            },
+            {
+              "noun": "debug tarball",
+              "of": "pg${major}/${arch}",
+              "suffix": "-pg${major}-linux-${arch}-debug.tar.gz"
+            }
+          ]
+        }
+      },
+      "pgrx-extension-image": {
+        "bundles": ["attestations-extimg.intoto.jsonl"],
+        "subjects": {
+          "kind": "registry",
+          "form": "document",
+          "entry": "^\\d+$",
+          "unit": "major",
+          "extension": ".json",
+          "legField": "pg"
+        }
+      },
+      "board-firmware": {
+        "bundles": ["attestations-firmware.intoto.jsonl"],
+        "subjects": {
+          "kind": "files",
+          "entry": "^(?P<board>[a-z]+)@(?P<rev>r[0-9]+)$",
+          "unit": "board",
+          "extension": ".bin",
+          "label": "${board}.${rev}",
+          "assets": [
+            {
+              "noun": "image",
+              "of": "${board} ${rev}",
+              "suffix": "_${board}_${rev}.bin"
+            },
+            {
+              "noun": "recovery image",
+              "of": "${board} ${rev}",
+              "suffix": "_${board}_${rev}.rescue.bin"
+            }
+          ]
+        }
+      },
+      "oci-image": { "bundles": ["attestations-image.intoto.jsonl"] }
+    }
+  }
+}

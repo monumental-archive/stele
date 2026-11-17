@@ -1,5 +1,6 @@
-// The inventory plan producers (stele#396): what a build leg states
-// about the inventories its artifacts owe, written as the plan
+// Package inventoryplan writes the inventory plan a build leg states
+// (stele#396): what the leg says about the inventories its artifacts
+// owe, written as the plan
 // document `assert plans` judges. The artifact-to-package mapping
 // exists with certainty exactly once, in the leg that built the
 // artifact, so the leg states it as data from its own inputs; the
@@ -11,8 +12,7 @@
 // under the class's one planned prefix — so the producer and the
 // judgment read one declaration, and a stranger's class with its own
 // naming shape needs no change here.
-
-package release
+package inventoryplan
 
 import (
 	"errors"

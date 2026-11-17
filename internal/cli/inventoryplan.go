@@ -14,8 +14,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/monumental-archive/stele/internal/inventoryplan"
 	"github.com/monumental-archive/stele/internal/jsonx"
-	"github.com/monumental-archive/stele/internal/release"
 )
 
 // deriveInventoryPlan is the mode name.
@@ -26,7 +26,7 @@ type inventoryPlanArgs struct {
 	class  string
 	policy string
 	out    string
-	in     release.PlanInputs
+	in     inventoryplan.PlanInputs
 }
 
 // parseInventoryPlanArgs parses and validates the flags.
@@ -83,7 +83,7 @@ func runDeriveInventoryPlan(pa *inventoryPlanArgs, doc io.Writer, out *latch) er
 		return fmt.Errorf("derive inventory-plan: class %q is not declared in the assert policy", pa.class)
 	}
 
-	entries, err := release.InventoryPlan(pa.class, &cp, &pa.in)
+	entries, err := inventoryplan.InventoryPlan(pa.class, &cp, &pa.in)
 	if err != nil {
 		return fmt.Errorf("derive inventory-plan: %w", err)
 	}

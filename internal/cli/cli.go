@@ -309,8 +309,8 @@ takes --policy --subjects|--inventories --vex --released [--out --id
 --repo --version|--run --release-view --verify-policy];
 derive vex-subjects takes --policy --decision... --org|--repo
 [--snapshot --out --unsigned-only --store]; derive signer-digest takes --policy
---workflows|--workflow [--repo]; derive subjects takes --class
---expected --dir [--subjects-out --leg-subjects-out
+--workflows|--workflow [--repo]; derive subjects takes --policy
+--class --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; derive inventory-plan takes --class --policy
 [--dir --version | --crate-dir --variant] [--out]; derive inventories
 takes --policy --classes --repo --version --created --out-dir

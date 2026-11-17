@@ -56,7 +56,21 @@ version mismatch, never as an unknown-field error.
           { "prefix": "attestations-extimg-pg" },
           { "prefix": "sbom-pgrx-", "owedFrom": "1.42.0" }
         ],
-        "enrichment": ["pgrx-base-images", "pgrx-base"]
+        "enrichment": ["pgrx-base-images", "pgrx-base"],
+        "subjects": {
+          "kind": "files",
+          "entry": "^(?P<major>\\d+)-(?P<arch>[a-z0-9_]+)$",
+          "unit": "cell",
+          "extension": ".tar.gz",
+          "label": "${major}",
+          "assets": [
+            {
+              "noun": "tarball",
+              "of": "pg${major}/${arch}",
+              "suffix": "-pg${major}-linux-${arch}.tar.gz"
+            }
+          ]
+        }
       }
     }
   }
@@ -165,6 +179,53 @@ version mismatch, never as an unknown-field error.
   Absent, the class declares no inventory role, and `derive
   inventories` or `derive inventory-plan` refuses the class by name
   when it runs.
+- `classes.<name>.subjects` — what one planned build leg of this
+  class leaves behind: the shape `stele derive subjects` judges
+  ([subjects.md](subjects.md), stele#442). Optional; a class without
+  it has no subject manifest, and `derive subjects` refuses it by
+  name. Which classes exist and how their assets are named are
+  packaging conventions, so they are declared here, never written in
+  the engine. As with `baseImages`, the KINDS are the engine's,
+  because each names a judgment it computes, and the parameters are
+  yours:
+
+  - `kind: "files"` — each leg leaves files in a directory. `entry`,
+    `unit`, `extension`, `label` and `assets`, each a non-empty list
+    entry of `noun`, `suffix` and optionally `of`. Every planned
+    asset must be present exactly once, matched by `suffix`; every
+    file carrying `extension` must be claimed by a leg. Each asset's
+    `suffix` must end in `extension`, or the listing could never see
+    it.
+  - `kind: "registry"` — each leg pushed an image and left one file
+    recording the digest, in a declared `form`, which the engine
+    owns like the kind. `form: "document"` takes `entry`, `unit`,
+    `extension` and `legField`: one JSON document per leg carrying
+    exactly `legField`, `image`, `tag` and `digest`, all non-empty
+    strings, so `legField` may not be one of the other three.
+    `form: "bare-digest"` takes `entry`, `unit` and optionally
+    `extension`: one file per leg holding one `sha256:<hex>` digest,
+    the leg being the file's name less `extension` (absent, every
+    non-hidden file is read). A bare digest names no image, so it
+    has no subject lines; `derive subjects` refuses it by name. An
+    unknown `form` refuses at load by name, and each form takes
+    exactly its own parameters.
+
+  `entry` is the pattern a planned leg must match, anchored at both
+  ends (`^…$`) — unanchored, an entry merely containing a match would
+  pass. `label`, `of` and `suffix` are templates whose placeholders
+  are `${name}` or `$name` over `entry`'s NAMED groups and nothing
+  else; `$$` is a literal dollar. A placeholder naming an undefined
+  group, a group by position, or nothing at all is refused at load,
+  because the expansion would silently drop that segment and match
+  names the plan never meant. `unit` and `noun`/`of` are the
+  refusals' words: `the plan names no <unit>s`, `expected exactly
+  one <noun> for <of>` (`of` absent: the entry as planned); the first
+  asset's `noun` names an unplanned file. An entry the pattern
+  refuses is reported with the pattern itself, `planned <unit> "x"
+  does not match <entry>` — never a prose restatement that could
+  disagree with it. An unknown `kind` refuses at load by name, and a
+  kind takes exactly its own parameters: one it needs and you omit,
+  and one it does not read, each refuse.
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
 - `storeVsaFromVersion` — the machinery version (inclusive) from

@@ -53,7 +53,7 @@ const inventoryPlanPolicy = `{
   }
 }`
 
-const planFixtures = "../release/testdata/plans"
+const planFixtures = "../inventoryplan/testdata"
 
 // fixtureCrateDir lays the extension fixture's manifest (committed as
 // Cargo.toml.fixture, so the gate sees no Rust crate here) out as a
