@@ -30,7 +30,7 @@ import (
 	"sort"
 	"strings"
 
-	yaml "go.yaml.in/yaml/v3"
+	yaml "go.yaml.in/yaml/v4"
 )
 
 // Level is one permission scope's grant level. The three values are
@@ -264,7 +264,7 @@ func declaresWorkflowCall(on *yaml.Node) bool {
 				return true
 			}
 		}
-	case yaml.DocumentNode, yaml.AliasNode:
+	case yaml.DocumentNode, yaml.AliasNode, yaml.StreamNode:
 	}
 
 	return false
@@ -287,7 +287,7 @@ func parseGrant(n *yaml.Node) (*Grant, error) {
 		return blanketGrant(n)
 	case yaml.MappingNode:
 		return scopeGrant(n)
-	case yaml.SequenceNode, yaml.DocumentNode, yaml.AliasNode:
+	case yaml.SequenceNode, yaml.DocumentNode, yaml.AliasNode, yaml.StreamNode:
 	}
 
 	return nil, errors.New("block is neither a blanket level nor a scope mapping")
