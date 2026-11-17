@@ -16,7 +16,8 @@ run=${1:?usage: capture.sh <publish run id>}
 repo=monumental-archive/release-lab
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
-trap 'rm -rf "${work}"' EXIT
+rc=0
+trap 'rc=$?; rm -rf "${work}"; [ -n "${org_done:-}" ] || [ "${rc}" -ne 0 ] || rc=1; exit "${rc}"' EXIT
 
 meta=$(gh run view "${run}" -R "${repo}" --json headSha,headBranch,url)
 sha=$(jq -r .headSha <<< "${meta}")
@@ -88,3 +89,4 @@ done <<< "${selections}"
 jq . <<< "${index}" > "${set_dir}/cargo/index.json"
 
 echo "capture: ${set_dir#"${here}"/} from ${url}"
+org_done=1
