@@ -147,10 +147,13 @@ usage:
               CONTENT against the forge's live enforcement state
               through the policy's declared table; a lapsed control
               is absent, an unreadable one refuses
-    vex-subjects  which published releases one VEX decision reaches,
-              and the subjects a claim about it is signed over —
-              the assert engine's own inventory walk and join, read
-              from the other direction
+    vex-subjects  the signing plan for VEX decisions: per decision,
+              which published releases it reaches and the subjects
+              a claim about it is signed over — the assert engine's
+              own inventory walk and join, read from the other
+              direction — or why it is refused; with
+              --unsigned-only, the decisions the store already holds
+              are omitted (exit 4 when the store cannot be read)
     signer-digest  the one commit a workflow tree pins its trusted
               signer at, read from the job-level uses: lines the
               platform runs; the signer is the policy's, a tree
@@ -280,8 +283,8 @@ takes --policy --repo --branch [--canon-root --canon-digest --out
 [--version --rev --tree --title --description]; derive vex
 takes --policy --subjects|--inventories --vex --released [--out --id
 --repo --version|--run --release-view --verify-policy];
-derive vex-subjects takes --policy --decision --org|--repo
-[--snapshot --out]; derive signer-digest takes --policy
+derive vex-subjects takes --policy --decision... --org|--repo
+[--snapshot --out --unsigned-only --store]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --class
 --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; the other

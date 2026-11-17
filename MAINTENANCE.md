@@ -43,7 +43,7 @@ the same statement as this one and tested against it.
 | `stele derive facts` | the OCI image metadata one release asserts on its images |
 | `stele derive vex` | this release's coverage document, findings joined to recorded decisions; the base-layer ecosystems and the author read from the assert policy, the inventories given as pairs or found in a directory |
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
-| `stele derive vex-subjects` | which published releases one VEX decision reaches, and the subjects a claim about it is signed over |
+| `stele derive vex-subjects` | the signing plan for one or more VEX decisions: per decision, the releases it reaches and the subjects a claim about it is signed over, or why it is refused; `--unsigned-only` omits what the attestation store already holds |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
