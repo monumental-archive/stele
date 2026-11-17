@@ -169,8 +169,6 @@ func emitEnrichmentCmd(args []string, stdout, stderr io.Writer) int {
 // load validates every input before a byte is read, and binds the
 // claim: the policy's templates expanded for this release, the policy
 // document cited at its pin.
-//
-//nolint:gocritic // unnamedResult: the bound inputs, the policy they came from, any error
 func (ea *enrichmentArgs) load() (*emit.EnrichmentInputs, *policy.Policy, error) {
 	owner, repo, ok := strings.Cut(ea.repo, "/")
 	powner, prepo, pok := strings.Cut(ea.policyRepo, "/")
