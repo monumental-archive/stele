@@ -19,7 +19,8 @@ universe — the vocabulary stays open, per the first Rule):
   tags (tagger role, gitsign signature from the declared epoch, chain
   link on the target), chain coverage of the whole population
   (founded and verified per protected branch, or a declared
-  exception — cloneless, #94), the caller/callee `permissions:` join
+  exception — no checkout: git fetches the history, no source,
+  #94, #384), the caller/callee `permissions:` join
   across a workflow tree (#148 — what a shared workflow's jobs ask
   for is what its callers must grant, computed through the one
   workflow reader in `internal/workflow`).
@@ -106,7 +107,8 @@ over whole, and only then does the next open. State and next step:
    shadow-proven: both want a release to point at, so they batch with
    the cutover.
 6. **the final four — DONE (2026-08-19)**: `assert chains` (#94 at
-   #137) retired the last evidence-audit bash's walk, cloneless, with
+   #137) retired the last evidence-audit bash's walk (cloneless then;
+   since #384 git fetches the history, with no checkout), with
    opt-outs as declared policy exceptions that structurally cannot
    excuse a founded chain's defect; `verify repro` (#96 at #138)
    typed the reproducibility rebuild's verdict, deliberately unwired
