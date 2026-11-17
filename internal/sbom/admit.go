@@ -8,7 +8,9 @@
 // It was three shell copies in the canon — two after an image scan,
 // one reporting (not refusing) on the forge's dependency graph — and
 // it is applied here wherever an inventory crosses into or out of
-// this tool, so the copies go.
+// this tool, so the copies go. It applies to what a run writes or is
+// handed, not to walks over published history (internal/sbomwalk's
+// readers), whose documents cannot be re-emitted.
 
 package sbom
 

@@ -61,7 +61,7 @@ func TestPlanGoldens(t *testing.T) {
 			name:  "one extension cell",
 			class: "pgrx-extension",
 			in: release.PlanInputs{
-				Prefix: "sbom-pgrx-", CrateDir: filepath.Join(plansFixtures, "extension", "crate"), Major: "16",
+				Prefix: "sbom-pgrx-", CrateDir: fixtureCrate(t), Major: "16",
 			},
 			golden: filepath.Join(plansFixtures, "extension", "plan.golden"),
 		},
@@ -88,6 +88,20 @@ func TestPlanGoldens(t *testing.T) {
 	}
 }
 
+// fixtureCrate lays the extension fixture's manifest out as a crate
+// directory. The manifest is committed as Cargo.toml.fixture: a tracked
+// Cargo.toml would make this Go repository's gate see a Rust crate.
+func fixtureCrate(t *testing.T) string {
+	t.Helper()
+
+	manifest, err := os.ReadFile(filepath.Join(plansFixtures, "extension", "Cargo.toml.fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return writeCrate(t, string(manifest))
+}
+
 // writeCrates lays out a packaged-crates directory.
 func writeCrates(t *testing.T, names ...string) string {
 	t.Helper()
@@ -109,6 +123,7 @@ func writeCrate(t *testing.T, manifest string) string {
 
 	dir := t.TempDir()
 	if manifest != "" {
+		//nolint:gosec // G703: the path is the test's own temp dir; the manifest's bytes are content, not a path
 		if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(manifest), 0o600); err != nil {
 			t.Fatal(err)
 		}

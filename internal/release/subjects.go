@@ -163,6 +163,14 @@ func AssetClassNamed(name string) (*AssetClass, bool) {
 	return c, true
 }
 
+// ClassDefined reports whether the release contract has a row for
+// name at all — a subject definition, or inventory facts alone.
+func ClassDefined(name string) bool {
+	_, ok := classRow(name)
+
+	return ok
+}
+
 // classRow returns the row for name, whatever it defines.
 func classRow(name string) (*AssetClass, bool) {
 	for _, c := range assetClasses() {

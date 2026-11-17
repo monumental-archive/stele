@@ -57,6 +57,26 @@ const inventoryPlanPolicy = `{
 
 const planFixtures = "../release/testdata/plans"
 
+// fixtureCrateDir lays the extension fixture's manifest (committed as
+// Cargo.toml.fixture, so the gate sees no Rust crate here) out as a
+// crate directory.
+func fixtureCrateDir(t *testing.T) string {
+	t.Helper()
+
+	manifest, err := os.ReadFile(filepath.Join(planFixtures, "extension", "Cargo.toml.fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	//nolint:gosec // G703: the path is the test's own temp dir; the fixture's bytes are content, not a path
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), manifest, ownerRW); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
+}
+
 func writeInventoryPlanPolicy(t *testing.T, body string) string {
 	t.Helper()
 
@@ -101,7 +121,7 @@ func TestDeriveInventoryPlanWritesTheShellsBytes(t *testing.T) {
 			name: "one extension cell",
 			args: []string{
 				"inventory-plan", "--class", "pgrx-extension", "--policy", policy,
-				"--crate-dir", filepath.Join(planFixtures, "extension", "crate"), "--major", "16",
+				"--crate-dir", fixtureCrateDir(t), "--major", "16",
 			},
 			golden: filepath.Join(planFixtures, "extension", "plan.golden"),
 			logs:   []string{"plans inventory sbom-pgrx-pg_edtf-pg16 for package pg_edtf"},

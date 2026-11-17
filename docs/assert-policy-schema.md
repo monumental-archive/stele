@@ -1038,7 +1038,11 @@ and an inventory carrying none gates on nothing. A version is what
 follows `@` in the PURL's last path segment, before any qualifiers or
 subpath.
 
-The rule needs no policy and has no exceptions. It is applied where an
+The rule needs no policy and has no exceptions. It applies to what a
+run writes or is handed, not to walks over published history: the
+inventory walks (`assert blast-radius`, `derive vex-subjects`, `level`)
+read documents already published, which cannot be re-emitted, and
+nothing here changes what those walks judge. It is applied where an
 inventory crosses into or out of the tool: every document
 `derive sbom` writes, every document it folds into a release view,
 and every subject inventory `derive vex` scans. A document another

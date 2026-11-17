@@ -10,8 +10,10 @@ canon's own shell blocks, run verbatim under bash (GNU bash 5, jq
   `crates/package`;
 - `build-pgrx-extension.yml`, "Emit the inventory plan (what this cell
   built, from its own inputs)", at the same commit, with
-  `UNTRUSTED_CRATE_DIR=crate PG=16` in a directory holding
-  `extension/crate`.
+  `UNTRUSTED_CRATE_DIR=crate PG=16` in a directory holding a `crate`
+  directory whose `Cargo.toml` is `extension/Cargo.toml.fixture`.
 
 The `.crate` files are empty: the block reads their names, never their
-bytes.
+bytes. The manifest is committed as `Cargo.toml.fixture`, never as
+`Cargo.toml`: a tracked Cargo.toml would make this Go repository's gate
+treat it as a Rust crate. The tests lay it out under its real name.

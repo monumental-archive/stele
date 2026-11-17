@@ -37,6 +37,14 @@ func TestRowsWithoutSubjects(t *testing.T) {
 		if _, ok := release.AssetClassNamed(class); ok {
 			t.Errorf("AssetClassNamed(%q) found a subject definition the row does not carry", class)
 		}
+
+		if !release.ClassDefined(class) {
+			t.Errorf("ClassDefined(%q) = false, want the row", class)
+		}
+	}
+
+	if release.ClassDefined("wasm-npm") {
+		t.Error("ClassDefined(wasm-npm) = true; no row declares it")
 	}
 
 	const subjects = "go-binary,pgrx-extension,pgrx-extension-image,rust-binary"
