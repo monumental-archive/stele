@@ -14,12 +14,6 @@ import (
 	"github.com/monumental-archive/stele/internal/baseimage"
 )
 
-// FirstPartyRunner is the runner environment a shared-signer base must
-// have been built on: GitHub's hosted runners, the Fulcio extension's
-// own value. A base built on a self-hosted runner is refused — the
-// mechanism's decided stance (stele#402), as the canon's shell held it.
-const FirstPartyRunner = "github-hosted"
-
 // Approval is what approved one first-party base, named by the fact
 // its kind established: the source ref a shared-signer base was
 // produced at, or the identity a provenance-verified base's provenance
@@ -121,7 +115,7 @@ func (s *BaseImageScope) judgeProvenance(ref string, att Attestor, diverge func(
 // the pin read (a tag and a digest, both required), the source ref
 // derived from the tag by the scope's rules, and the provenance
 // verified under the scope's signer workflow at that ref, from the
-// owner the prefix names, on a hosted runner.
+// owner the prefix names, on the runner environment the scope declares.
 func (s *BaseImageScope) judgeSharedSigner(ref string, att Attestor, diverge func(string)) (Approval, error) {
 	rules, err := s.RefRules()
 	if err != nil {
@@ -147,7 +141,7 @@ func (s *BaseImageScope) judgeSharedSigner(ref string, att Attestor, diverge fun
 		Workflow: serverURL + "/" + *s.SignerWorkflow,
 		Owner:    owner,
 		Ref:      produced,
-		Runner:   FirstPartyRunner,
+		Runner:   *s.RunnerEnvironment,
 	}}
 
 	// The owner's whole store: an image is not named after the

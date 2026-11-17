@@ -750,7 +750,7 @@ func TestStoreAttestorWorkflow(t *testing.T) {
 
 	one := []jsonx.Raw{jsonx.Raw(`{"bundle": 1}`)}
 	published := assert.WorkflowCandidate{
-		Workflow: signer, Owner: "acme", Ref: "refs/tags/v1.2.3", Runner: assert.FirstPartyRunner,
+		Workflow: signer, Owner: "acme", Ref: "refs/tags/v1.2.3", Runner: "github-hosted",
 	}
 
 	tests := []struct {

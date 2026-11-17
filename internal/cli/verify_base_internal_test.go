@@ -39,8 +39,12 @@ const (
 )
 
 // basePolicy is an assert policy declaring the org's first-party scope,
-// a shared signer's, and the official postgres image upstream.
-func basePolicy(signer string) string {
+// a shared signer's requiring the runner environment the recorded
+// certificates state, and the official postgres image upstream.
+func basePolicy() string { return scopedPolicy(orgSigner, "github-hosted") }
+
+// scopedPolicy is basePolicy with the scope's runner environment named.
+func scopedPolicy(signer, runner string) string {
 	return `{"schema": 9, "issuer": "https://token.actions.githubusercontent.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
@@ -48,6 +52,7 @@ func basePolicy(signer string) string {
 	    "baseImages": {
 	      "scopes": [{"name": "org-bases", "mechanism": "shared-signer", "fromFile": "Dockerfile",
 	        "registryPrefix": "ghcr.io/monumental-archive/", "signerWorkflow": "` + signer + `",
+	        "runnerEnvironment": "` + runner + `",
 	        "refs": [{"tag": "^latest$", "ref": "refs/heads/main"},
 	          {"tag": "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)(-.*)?$", "ref": "refs/tags/v${version}"}],
 	        "predicateType": "https://slsa.dev/provenance/v1"}],
@@ -131,11 +136,14 @@ func TestVerifyBaseRecorded(t *testing.T) {
 	tests := []struct {
 		name   string
 		signer string
+		runner string
 		refs   []string
 		code   int
 		want   []string
 	}{
 		{
+			// The scope requires the runner environment the certificate
+			// states, compared as written.
 			name: "verified at latest", refs: []string{latestRef}, code: exitOK,
 			want: []string{
 				"verify base: approved first-party base: " + latestRef + " (produced at refs/heads/main)",
@@ -189,6 +197,16 @@ func TestVerifyBaseRecorded(t *testing.T) {
 			},
 		},
 		{
+			// The same bundle, under a scope requiring a runner
+			// environment its certificate does not state.
+			name: "built on another runner environment", runner: "self-hosted", refs: []string{latestRef},
+			code: exitRefused,
+			want: []string{
+				"no https://slsa.dev/provenance/v1 attestation verifies for these bytes at refs/heads/main",
+				`trust: certificate runner environment "github-hosted" is not "self-hosted"`,
+			},
+		},
+		{
 			// The tag claims 0.28.3; the bytes were built at v0.28.4.
 			name: "built at another ref", refs: []string{"ghcr.io/monumental-archive/lab-pg:0.28.3-pg18-artifact@" +
 				labPgDigest},
@@ -221,13 +239,17 @@ func TestVerifyBaseRecorded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			signer := orgSigner
+			signer, runner := orgSigner, "github-hosted"
 			if tt.signer != "" {
 				signer = tt.signer
 			}
 
-			code, stdout, stderr := runBase(t, basePolicy(signer), append(refArgs(tt.refs...), "--trusted-root",
-				root)...)
+			if tt.runner != "" {
+				runner = tt.runner
+			}
+
+			code, stdout, stderr := runBase(t, scopedPolicy(signer, runner), append(refArgs(tt.refs...),
+				"--trusted-root", root)...)
 			if code != tt.code {
 				t.Fatalf("code = %d, want %d\nstdout: %s\nstderr: %s", code, tt.code, stdout, stderr)
 			}
@@ -330,7 +352,7 @@ type baseReport struct {
 func TestVerifyBaseJSON(t *testing.T) {
 	swapBaseForge(t, gh.Snapshot{Dir: "testdata/base-images"})
 
-	code, stdout, stderr := runBase(t, basePolicy(orgSigner),
+	code, stdout, stderr := runBase(t, basePolicy(),
 		append(refArgs(debianRef, labPgRef, labPgRef), "--trusted-root", publicGood(t), "--json")...)
 	if code != exitOK {
 		t.Fatalf("code = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
@@ -385,7 +407,7 @@ func TestVerifyBaseNothingToJudge(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			code, stdout, stderr := runBase(t, basePolicy(orgSigner), tt.args...)
+			code, stdout, stderr := runBase(t, basePolicy(), tt.args...)
 			if code != exitOK || stdout != tt.wantStdout || stderr != tt.wantStderr {
 				t.Fatalf("code = %d\nstdout: %q, want %q\nstderr: %q, want %q",
 					code, stdout, tt.wantStdout, stderr, tt.wantStderr)
@@ -444,7 +466,7 @@ func TestVerifyBaseUsage(t *testing.T) {
 
 			doc := tt.policy
 			if doc == "" {
-				doc = basePolicy(orgSigner)
+				doc = basePolicy()
 			}
 
 			code, stdout, stderr := runBase(t, doc, tt.args...)
@@ -475,13 +497,13 @@ func TestVerifyBaseUsage(t *testing.T) {
 // second row swaps nothing, but the first resolves a root from disk
 // beside tests that swap the verifier seam.
 func TestVerifyBaseTrustGuards(t *testing.T) {
-	code, _, stderr := runBase(t, basePolicy(orgSigner),
+	code, _, stderr := runBase(t, basePolicy(),
 		append(refArgs(latestRef), "--trusted-root", "/no/such/root.json")...)
 	if code != exitUsage || !strings.Contains(stderr, "/no/such/root.json") {
 		t.Fatalf("an unreadable root: code %d, stderr %q", code, stderr)
 	}
 
-	code, _, stderr = runBase(t, basePolicy(orgSigner),
+	code, _, stderr = runBase(t, basePolicy(),
 		append(refArgs(latestRef), "--trusted-root", tempFile(t, "root.json", "not a root"))...)
 	if code != exitUsage || !strings.Contains(stderr, "stele verify base: trusted root:") {
 		t.Fatalf("a root that builds no verifier: code %d, stderr %q", code, stderr)
@@ -491,7 +513,7 @@ func TestVerifyBaseTrustGuards(t *testing.T) {
 	// unsigned, so no root is read and a bad one is never noticed.
 	swapStatements(t, statementsFor(upstreamPlatforms(pgUpstreamURI)))
 
-	if code, stdout, stderr := runBase(t, basePolicy(orgSigner),
+	if code, stdout, stderr := runBase(t, basePolicy(),
 		append(refArgs(pgBaseRef), "--trusted-root", "/no/such/root.json")...); code != exitOK {
 		t.Fatalf("an upstream reference read a root: code %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
@@ -510,7 +532,7 @@ func TestVerifyBaseBlind(t *testing.T) {
 
 	root := tempFile(t, "root.json", `{"any": "bytes — the seam swallows them"}`)
 
-	code, stdout, stderr := runBase(t, basePolicy(orgSigner), append(refArgs(latestRef), "--trusted-root", root)...)
+	code, stdout, stderr := runBase(t, basePolicy(), append(refArgs(latestRef), "--trusted-root", root)...)
 	if code != exitBlind || !strings.Contains(stdout, "the credential cannot read "+latestRef) ||
 		!strings.Contains(stdout, "verify: CANNOT_JUDGE") ||
 		!strings.Contains(stderr, "the run could not see enough to judge") {
@@ -519,7 +541,7 @@ func TestVerifyBaseBlind(t *testing.T) {
 
 	swapStatements(t, statementsFor(nil, errors.New("connection refused")))
 
-	code, stdout, _ = runBase(t, basePolicy(orgSigner), refArgs(pgBaseRef)...)
+	code, stdout, _ = runBase(t, basePolicy(), refArgs(pgBaseRef)...)
 	if code != exitBlind || !strings.Contains(stdout, "verify: reading "+pgBaseRef+"'s provenance: connection refused") {
 		t.Fatalf("an unreadable registry: code %d\nstdout: %s", code, stdout)
 	}
@@ -567,7 +589,7 @@ func TestVerifyBaseUpstream(t *testing.T) {
 
 		facts := filepath.Join(t.TempDir(), "upstream.json")
 
-		code, stdout, stderr := runBase(t, basePolicy(orgSigner),
+		code, stdout, stderr := runBase(t, basePolicy(),
 			append(refArgs(pgBaseRef), "--bind", "major=14", "--facts-out", facts)...)
 		if code != exitOK || !strings.Contains(stdout,
 			"verify base: "+pgBaseRef+": upstream provenance verified across 2 platform(s)") {
@@ -594,7 +616,7 @@ func TestVerifyBaseUpstream(t *testing.T) {
 
 		facts := filepath.Join(t.TempDir(), "upstream.json")
 
-		code, stdout, _ := runBase(t, basePolicy(orgSigner), append(refArgs(pgBaseRef), "--facts-out", facts)...)
+		code, stdout, _ := runBase(t, basePolicy(), append(refArgs(pgBaseRef), "--facts-out", facts)...)
 		if code != exitRefused || !strings.Contains(stdout, "linux/arm64/v8's provenance names") {
 			t.Fatalf("code %d\nstdout: %s", code, stdout)
 		}
@@ -607,7 +629,7 @@ func TestVerifyBaseUpstream(t *testing.T) {
 	t.Run("a binding the tag disagrees with", func(t *testing.T) {
 		swapStatements(t, statementsFor(upstreamPlatforms(pgUpstreamURI)))
 
-		code, stdout, _ := runBase(t, basePolicy(orgSigner), append(refArgs(pgBaseRef), "--bind", "major=15")...)
+		code, stdout, _ := runBase(t, basePolicy(), append(refArgs(pgBaseRef), "--bind", "major=15")...)
 		if code != exitRefused || !strings.Contains(stdout, `the tag's major is "14", the caller bound "15"`) {
 			t.Fatalf("code %d\nstdout: %s", code, stdout)
 		}
@@ -616,7 +638,7 @@ func TestVerifyBaseUpstream(t *testing.T) {
 	t.Run("facts that cannot be written", func(t *testing.T) {
 		swapStatements(t, statementsFor(upstreamPlatforms(pgUpstreamURI)))
 
-		code, _, stderr := runBase(t, basePolicy(orgSigner),
+		code, _, stderr := runBase(t, basePolicy(),
 			append(refArgs(pgBaseRef), "--facts-out", t.TempDir())...)
 		if code != exitIO || !strings.Contains(stderr, "stele verify base: --facts-out:") {
 			t.Fatalf("code %d\nstderr: %s", code, stderr)
@@ -630,7 +652,7 @@ func TestVerifyBaseWriteFailures(t *testing.T) {
 	swapBaseForge(t, gh.Snapshot{Dir: "testdata/base-images"})
 	swapStatements(t, statementsFor(upstreamPlatforms(pgUpstreamURI)))
 
-	policy := tempFile(t, "assert-policy.json", basePolicy(orgSigner))
+	policy := tempFile(t, "assert-policy.json", basePolicy())
 	root := publicGood(t)
 
 	for _, args := range [][]string{

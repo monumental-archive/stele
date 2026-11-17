@@ -778,7 +778,8 @@ const (
 	// declared registry prefix against the provenance ONE declared
 	// signer workflow minted, at whatever signer commit, from the
 	// prefix's owner, at the source ref the pin's tag implies by a
-	// declared convention (stele#402). It is the shape of an owner
+	// declared convention, on the runner environment the scope
+	// declares (stele#402). It is the shape of an owner
 	// whose repositories all sign through one shared signer, which a
 	// per-pin identity cannot say: the signer's commit is the
 	// publishing release's to pin, and an image's name is not its
@@ -839,6 +840,11 @@ type BaseImageScope struct {
 	// was built at, which the provenance must carry. A tag no rule
 	// matches is refused by name (shared-signer).
 	Refs []RefRule `json:"refs,omitempty"`
+	// RunnerEnvironment is the runner environment the signing
+	// certificate must state, compared exactly as written: the value is
+	// the forge's own vocabulary, which this engine holds no copy of and
+	// never judges (shared-signer).
+	RunnerEnvironment *string `json:"runnerEnvironment,omitempty"`
 	// PredicateType is the predicate the approving attestation must
 	// carry. Every mechanism declares one, because a predicate URI is
 	// policy data and never a literal in this engine
@@ -982,6 +988,10 @@ const paramPredicateType = "predicateType"
 // shared-signer scope declare.
 const paramSignerWorkflow = "signerWorkflow"
 
+// paramRunnerEnvironment names the runner environment a shared-signer
+// scope requires its signing certificate to state.
+const paramRunnerEnvironment = "runnerEnvironment"
+
 // paramFromFile and paramRegistryPrefix name the parameters both
 // prefix mechanisms — provenance-verified and shared-signer — own.
 const (
@@ -1001,15 +1011,16 @@ const paramRefs = "refs"
 // cannot drift apart.
 func (s *BaseImageScope) params() map[string]*string {
 	return map[string]*string{
-		"pinFile":           s.PinFile,
-		"attestorRepo":      s.AttestorRepo,
-		"attestorIdentity":  s.AttestorIdentity,
-		paramFromFile:       s.FromFile,
-		paramRegistryPrefix: s.RegistryPrefix,
-		"pinPattern":        s.PinPattern,
-		"identity":          s.Identity,
-		paramSignerWorkflow: s.SignerWorkflow,
-		paramPredicateType:  s.PredicateType,
+		"pinFile":              s.PinFile,
+		"attestorRepo":         s.AttestorRepo,
+		"attestorIdentity":     s.AttestorIdentity,
+		paramFromFile:          s.FromFile,
+		paramRegistryPrefix:    s.RegistryPrefix,
+		"pinPattern":           s.PinPattern,
+		"identity":             s.Identity,
+		paramSignerWorkflow:    s.SignerWorkflow,
+		paramRunnerEnvironment: s.RunnerEnvironment,
+		paramPredicateType:     s.PredicateType,
 	}
 }
 
@@ -1023,7 +1034,10 @@ func owns(m BaseImageMechanism) []string {
 	case MechanismProvenanceVerified:
 		return []string{paramFromFile, paramRegistryPrefix, "pinPattern", "identity", paramPredicateType}
 	case MechanismSharedSigner:
-		return []string{paramFromFile, paramRegistryPrefix, paramSignerWorkflow, paramRefs, paramPredicateType}
+		return []string{
+			paramFromFile, paramRegistryPrefix, paramSignerWorkflow, paramRefs, paramRunnerEnvironment,
+			paramPredicateType,
+		}
 	default:
 		return nil
 	}

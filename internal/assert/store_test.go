@@ -90,6 +90,7 @@ func sharedSignerFields() []field {
 		{"registryPrefix", `"ghcr.io/acme/"`},
 		{"signerWorkflow", `"acme/signer/.github/workflows/sign.yml"`},
 		{"refs", orgRefs},
+		{"runnerEnvironment", `"github-hosted"`},
 		{"predicateType", `"https://slsa.dev/provenance/v1"`},
 	}
 }
@@ -1129,7 +1130,7 @@ func TestBaseImageScopeRefusals(t *testing.T) {
 		},
 		{
 			"shared-signer", sharedSignerFields(), "shared-bases",
-			[]string{"fromFile", "registryPrefix", "signerWorkflow", "refs", "predicateType"},
+			[]string{"fromFile", "registryPrefix", "signerWorkflow", "refs", "runnerEnvironment", "predicateType"},
 		},
 	} {
 		want := "scopes[" + m.named + "].%s is absent or empty — the " + m.mechanism + " mechanism requires it"

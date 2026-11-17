@@ -699,6 +699,7 @@ and an image's name need not be its repository's.
       "ref": "refs/tags/v${version}"
     }
   ],
+  "runnerEnvironment": "github-hosted",
   "predicateType": "https://slsa.dev/provenance/v1"
 }
 ```
@@ -711,9 +712,12 @@ pattern's named groups — and a tag no rule matches is refused by name
 rather than guessed at. The attestation must verify with a
 certificate naming `signerWorkflow` at ANY ref (only the commit after
 `@` is free; host, owner, repository and path are exact), a source
-repository of the prefix's owner, the derived source ref, and a
-GitHub-hosted runner: a base built on a self-hosted runner is refused.
-It is looked up in the OWNER's attestation store, an organisation's
+repository of the prefix's owner, the derived source ref, and the
+declared `runnerEnvironment`. That last is compared exactly as the
+certificate writes it: the value is the forge's own vocabulary
+(GitHub's certificates say `github-hosted` for its hosted runners),
+so the policy names it and this engine holds no copy of it. It is
+looked up in the OWNER's attestation store, an organisation's
 or a user's, never in a repository read off the image path; that is
 why `registryPrefix` must end at the owner boundary. Four things fail
 closed, each its own finding: a pin with no digest, a pin with no
