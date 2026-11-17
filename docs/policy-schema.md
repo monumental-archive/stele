@@ -824,17 +824,19 @@ code).
 
 - **Signer commit digests** — derived from the consuming tree's
   pins at invocation, never written (above).
-- **Registry byte-proof URLs** (crates.io/npm/release-asset
-  templates) — that is `assert`'s domain (image facts, bundle
-  completeness), not the read-only verifier's. Added to the schema
-  when `assert` ports, as its own section.
 - **Enrichment predicate CONTENTS** (which lock file, which
-  base-image majors, how each digest is computed) — still `emit`'s
+  base-image majors, how each digest is computed) — `emit`'s
   write-side concern. `build.enrichment` declares only the
   EXPECTATIONS a reader holds the claim to: which names are owed and
   which are allowed. The distinction is the derivation boundary — a
   verifier that knew how to compute the contents would be the writer
-  inverted (stele#86).
+  inverted (stele#86). `stele emit enrichment` computes the claim:
+  every name it emits is held to this closed set, and where each
+  name's bytes come from (a file of the policy tree or of the
+  released source, or rows of a TOML table file for the keys the
+  build consumed) is the caller's typed input, never a key here.
+  The registry byte-proof templates are the assert policy's
+  `published` section ([assert-policy-schema.md](assert-policy-schema.md#the-published-section)).
 - **Population enumeration** (which repos the org audit walks, the
   opt-out file) — orchestration, not verification: `stele verify`
   verifies what it is pointed at; the walk over the org stays in
