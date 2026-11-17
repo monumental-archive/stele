@@ -10,6 +10,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.24.1](https://github.com/monumental-archive/stele/compare/v0.24.0...v0.24.1) - 2026-11-17
+
+### Fixed
+
+- update github.com/sigstore/rekor to v1.5.6 ([#302](https://github.com/monumental-archive/stele/pull/302))
+- judge tags past a link no branch or tag reaches ([#413](https://github.com/monumental-archive/stele/pull/413))
+- update github.com/sigstore/rekor to v1.6.0 ([#412](https://github.com/monumental-archive/stele/pull/412))
+- found the tag horizon on every tied genesis candidate ([#416](https://github.com/monumental-archive/stele/pull/416))
+
 ## [0.24.0](https://github.com/monumental-archive/stele/compare/v0.23.0...v0.24.0) - 2026-11-17
 
 ### Breaking
