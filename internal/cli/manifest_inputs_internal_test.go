@@ -109,7 +109,7 @@ func TestEmitManifestSplitsClassLines(t *testing.T) {
 		{"blank lines are not lines", func(t *testing.T) []string {
 			t.Helper()
 
-			return []string{"--leg-lines", writeLines(t, "go-binary",
+			return []string{"--leg-lines", writeClassLines(t, "go-binary",
 				"\n  \n"+legLine("linux-amd64", widget, widgetBody)+"\n")}
 		}},
 		{"an empty class beside no lines contributes nothing", func(t *testing.T) []string {
@@ -119,8 +119,8 @@ func TestEmitManifestSplitsClassLines(t *testing.T) {
 			// exactly when that class built nothing: no refusal.
 			return []string{
 				"--leg-lines", goBinaryLines(t),
-				"--leg-lines", writeLines(t, "", ""),
-				"--registry-lines", writeLines(t, "", "\n \n"),
+				"--leg-lines", writeClassLines(t, "", ""),
+				"--registry-lines", writeClassLines(t, "", "\n \n"),
 			}
 		}},
 	} {
@@ -159,7 +159,7 @@ func TestEmitManifestClassLineRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{"--leg-lines", writeLines(t, "", legLine("linux-amd64", widget, widgetBody))}
+				return []string{"--leg-lines", writeClassLines(t, "", legLine("linux-amd64", widget, widgetBody))}
 			},
 			"stele emit manifest: --leg-lines: subjects arrived with no class to attribute them to",
 		},
@@ -170,7 +170,7 @@ func TestEmitManifestClassLineRefusals(t *testing.T) {
 
 				return []string{
 					"--leg-lines", goBinaryLines(t),
-					"--registry-lines", writeLines(t, "", legLine("image", "ghcr.io/x/y", "i")),
+					"--registry-lines", writeClassLines(t, "", legLine("image", "ghcr.io/x/y", "i")),
 				}
 			},
 			"--registry-lines: subjects arrived with no class to attribute them to",
@@ -180,7 +180,7 @@ func TestEmitManifestClassLineRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{"--leg-lines", writeLines(t, "go-binary", sumOf(widgetBody)+"\n")}
+				return []string{"--leg-lines", writeClassLines(t, "go-binary", sumOf(widgetBody)+"\n")}
 			},
 			"--leg-lines go-binary line 1: subject line names no target — an untargeted artifact no scoped" +
 				" rebuild judges",
@@ -190,7 +190,7 @@ func TestEmitManifestClassLineRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{"--leg-lines", writeLines(t, "go-binary", " "+sumOf(widgetBody)+"  "+widget+"\n")}
+				return []string{"--leg-lines", writeClassLines(t, "go-binary", " "+sumOf(widgetBody)+"  "+widget+"\n")}
 			},
 			"--leg-lines go-binary line 1: subject line names no target",
 		},
@@ -199,7 +199,7 @@ func TestEmitManifestClassLineRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{"--leg-lines", writeLines(t, "go-binary", "\n"+legLine("../linux-amd64", widget, widgetBody))}
+				return []string{"--leg-lines", writeClassLines(t, "go-binary", "\n"+legLine("../linux-amd64", widget, widgetBody))}
 			},
 			`--leg-lines go-binary line 2: target "../linux-amd64" is not a plain name`,
 		},
@@ -208,9 +208,9 @@ func TestEmitManifestClassLineRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{"--leg-lines", writeLines(t, "go-binary", "linux-amd64 nonsense\n")}
+				return []string{"--leg-lines", writeClassLines(t, "go-binary", "linux-amd64 nonsense\n")}
 			},
-			"--leg-lines go-binary line 1: manifest line 1 is not a sha256sum record",
+			"--leg-lines go-binary line 1: manifest: subject line 1 is not a sha256sum record",
 		},
 		{
 			"one class's lines twice",

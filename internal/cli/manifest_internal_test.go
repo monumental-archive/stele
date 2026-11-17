@@ -137,8 +137,8 @@ func legLine(target, name, body string) string {
 	return target + " " + sumOf(body) + "  " + name + "\n"
 }
 
-// writeLines writes one class's lines and returns the flag value.
-func writeLines(t *testing.T, class, body string) string {
+// writeClassLines writes one class's lines and returns the flag value.
+func writeClassLines(t *testing.T, class, body string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "lines")
@@ -153,7 +153,7 @@ func writeLines(t *testing.T, class, body string) string {
 func goBinaryLines(t *testing.T) string {
 	t.Helper()
 
-	return writeLines(t, "go-binary", legLine("linux-amd64", widget, widgetBody))
+	return writeClassLines(t, "go-binary", legLine("linux-amd64", widget, widgetBody))
 }
 
 // emitWants runs emit manifest and checks the exit code.
@@ -267,26 +267,26 @@ func TestEmitManifestUsage(t *testing.T) {
 		{"a class claiming bytes the release never published", func(t *testing.T, r releaseFixture) []string {
 			t.Helper()
 
-			return r.args("go-binary", "--leg-lines", writeLines(t, "go-binary",
+			return r.args("go-binary", "--leg-lines", writeClassLines(t, "go-binary",
 				legLine("linux-amd64", widget, widgetBody)+legLine("linux-amd64", "never-shipped.tar.gz", "x")))
 		}, "--leg-lines go-binary:linux-amd64 names never-shipped.tar.gz, which this release does not publish"},
 		{"a class pinning one artifact at another digest", func(t *testing.T, r releaseFixture) []string {
 			t.Helper()
 
-			return r.args("go-binary", "--leg-lines", writeLines(t, "go-binary",
+			return r.args("go-binary", "--leg-lines", writeClassLines(t, "go-binary",
 				legLine("linux-amd64", widget, "other bytes")))
 		}, "--leg-lines go-binary:linux-amd64 pins " + widget + " at " + sumOf("other bytes")},
 		{"a class claiming a document about the release", func(t *testing.T, r releaseFixture) []string {
 			t.Helper()
 
-			return r.args("go-binary", "--leg-lines", writeLines(t, "go-binary",
+			return r.args("go-binary", "--leg-lines", writeClassLines(t, "go-binary",
 				legLine("linux-amd64", widget, widgetBody)+legLine("linux-amd64", "widget-1.0.0.spdx.json", "sbom\n")))
 		}, "names widget-1.0.0.spdx.json, which the evidence vocabulary calls a document ABOUT the release"},
 		{"one artifact claimed by two build legs", func(t *testing.T, r releaseFixture) []string {
 			t.Helper()
 
 			return r.args("go-binary,oci-image", "--leg-lines", goBinaryLines(t),
-				"--leg-lines", writeLines(t, "oci-image", legLine("linux-amd64", widget, widgetBody)))
+				"--leg-lines", writeClassLines(t, "oci-image", legLine("linux-amd64", widget, widgetBody)))
 		}, widget + " is claimed by both go-binary:linux-amd64 and oci-image:linux-amd64"},
 	}
 
@@ -391,7 +391,7 @@ func TestEmitManifestTypesEachTargetOfOneClass(t *testing.T) {
 	const darwin = "widget-darwin-arm64.tar.gz"
 
 	r := newRelease(t, map[string]string{widget: widgetBody, darwin: "darwin\n"}, map[string]string{goBundle: "b\n"})
-	lines := writeLines(t, "go-binary", legLine("linux-amd64", widget, widgetBody)+
+	lines := writeClassLines(t, "go-binary", legLine("linux-amd64", widget, widgetBody)+
 		legLine("darwin-arm64", darwin, "darwin\n"))
 
 	out, _ := emitWants(t, r.args("go-binary", "--leg-lines", lines), exitOK)
@@ -422,7 +422,7 @@ func TestEmitManifestNamesWhatARegistryHolds(t *testing.T) {
 
 	r := newRelease(t, map[string]string{"widget-1.0.0.spdx.json": "sbom\n"},
 		map[string]string{"attestations-image.intoto.jsonl": "b\n"})
-	lines := writeLines(t, "oci-image", legLine("pg16", image, "sixteen")+legLine("pg17", image, "seventeen"))
+	lines := writeClassLines(t, "oci-image", legLine("pg16", image, "sixteen")+legLine("pg17", image, "seventeen"))
 
 	// With --out the document has a file of its own and progress keeps
 	// stdout.
@@ -475,7 +475,7 @@ func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				lines := writeLines(t, "go-binary", legLine("image", image, "i"))
+				lines := writeClassLines(t, "go-binary", legLine("image", image, "i"))
 
 				return []string{lines, lines}
 			},
@@ -491,7 +491,7 @@ func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{writeLines(t, "go-binary", legLine("image", widget, widgetBody))}
+				return []string{writeClassLines(t, "go-binary", legLine("image", widget, widgetBody))}
 			},
 			exitUsage, "--registry-lines go-binary:image names " + widget + ", which this release publishes as" +
 				" an asset — an asset is claimed by --leg-lines, and one artifact lives in one place",
@@ -501,7 +501,7 @@ func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
 			func(t *testing.T) []string {
 				t.Helper()
 
-				return []string{writeLines(t, "oci-image", legLine("image", image, "i"))}
+				return []string{writeClassLines(t, "oci-image", legLine("image", image, "i"))}
 			},
 			exitRefused, "is not one this release declared",
 		},
