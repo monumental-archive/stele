@@ -95,8 +95,9 @@ const (
 )
 
 // Throttled reports whether one forge response is the host throttling
-// THIS CALLER rather than refusing THIS SUBJECT, and the wait the host
-// named — zero when it named none.
+// THIS CALLER rather than refusing THIS SUBJECT, and the evidence that
+// says so: the wait the host named (zero when it named none), every
+// marker the response carried, and its rate headers (stele#383).
 //
 // This is the ONE place that question is answered, for every leg that
 // reads GitHub (stele#209): the status test lives here too, so no
@@ -127,34 +128,171 @@ const (
 // file's rule that only the status is trusted: it is asked one
 // documented question about ONE status, and its only power is to move
 // a refusal onto the retry ladder, never off one.
-func Throttled(status int, header http.Header, body []byte) (time.Duration, bool) {
+func Throttled(status int, header http.Header, body []byte) (Throttle, bool) {
 	if status != http.StatusForbidden {
-		return 0, false
+		return Throttle{}, false
 	}
 
+	// Every marker is read, never the first that matches: which ones
+	// the host sent together is the evidence a person tuning a
+	// schedule needs (stele#383), and stopping at the first would
+	// print a refusal with its second cause missing.
+	var markers []string
+
 	if strings.TrimSpace(header.Get("Retry-After")) != "" {
-		return retryAfter(header), true
+		markers = append(markers, MarkerRetryAfter)
 	}
 
 	// Exhaustion is the marker; anything else the counter says is not
 	// one, and a counter that will not parse is no counter at all.
 	if n, err := strconv.Atoi(strings.TrimSpace(header.Get("X-Ratelimit-Remaining"))); err == nil && n <= 0 {
-		return 0, true
+		markers = append(markers, MarkerRemainingZero)
 	}
 
 	if secondaryLimitRE.Match(body) {
-		return 0, true
+		markers = append(markers, MarkerSecondaryBody)
 	}
 
-	return 0, false
+	if len(markers) == 0 {
+		return Throttle{}, false
+	}
+
+	t := ThrottleEvidence(header, markers...)
+	t.Wait = RetryAfter(header)
+
+	return t, true
 }
 
-// retryAfter is the wait a response's Retry-After names, zero when it
+// The markers a throttle is classified on, by the names its refusal
+// prints them under. The first three are the forge's 403 markers;
+// the last is the status the HTTP standard names a throttle with
+// (RFC 6585), which HostThrottle reads for every other host.
+const (
+	MarkerRetryAfter      = "retry-after"
+	MarkerRemainingZero   = "ratelimit-remaining-0"
+	MarkerSecondaryBody   = "secondary-limit-body"
+	MarkerTooManyRequests = "http-429"
+)
+
+// HostThrottle is the typed throttle refusal one response from a host
+// OTHER than the forge's REST API amounts to, or nil when the response
+// is no throttle (stele#383). what names the read, as it does for
+// ThrottleRefusal.
+//
+// Two shapes classify, and each is read through the one place it is
+// already defined:
+//
+//   - a 429, the standard's own word for a throttle. Its marker is the
+//     status; a Retry-After beside it is the wait, read by RetryAfter
+//     with the forge's clamp, and printed as evidence;
+//   - a 403 carrying the forge's markers, through Throttled, because a
+//     host on the forge's estate throttles in the forge's shape.
+//
+// Nothing else is a throttle here — a 503 with a Retry-After is the
+// host failing, not the host pacing this caller — and a host that
+// sends no rate headers gets every field printed absent. The refusal
+// wraps ErrThrottled and carries its wait for RetryWait, exactly as
+// the forge's does.
+//
+// The forge's own reads do NOT come through here: there a 429 stays
+// transient, the class it has always had (stele#217), and only the
+// 403 is a throttle. This entry is for the hosts beside the forge.
+func HostThrottle(what string, status int, header http.Header, body []byte) error {
+	if status == http.StatusTooManyRequests {
+		t := ThrottleEvidence(header, MarkerTooManyRequests)
+		t.Wait = RetryAfter(header)
+
+		return ThrottleRefusal(what, &t)
+	}
+
+	if t, ok := Throttled(status, header, body); ok {
+		return ThrottleRefusal(what, &t)
+	}
+
+	return nil
+}
+
+// absent is how a header the response did not carry is printed: said
+// outright, so an empty field cannot be read as a header sent empty.
+const absent = "absent"
+
+// Throttle is one throttle refusal's evidence: the wait the host
+// named, which markers classified the response, and the rate headers
+// as the response carried them (stele#383). A CANNOT_JUDGE from a
+// throttle must be diagnosable from the run's own log — whether the
+// hourly budget was spent or a secondary limit tripped is the
+// difference between moving a schedule and splitting a walk.
+//
+// Exported because every host stele throttles on types its refusals
+// with this one shape — the forge's REST API, and any other reader
+// beside it — and a host with no rate headers simply has them absent.
+// Only these four headers are ever copied out of a response, so no
+// credential a request or response carries can reach the message.
+type Throttle struct {
+	// Wait is the pause the host named, zero when it named none.
+	Wait time.Duration
+	// Markers names what classified the response, in the order
+	// Throttled reads them.
+	Markers []string
+	// The rate headers, raw, "" when the response did not carry one.
+	Remaining, Reset, Resource, RetryAfter string
+}
+
+// ThrottleEvidence reads a response's rate headers into a Throttle
+// classified by the named markers. Throttled is its caller for the
+// forge; a reader whose host signals a throttle some other way names
+// its own markers and passes what headers it has (none, for a host
+// that sends none).
+func ThrottleEvidence(header http.Header, markers ...string) Throttle {
+	return Throttle{
+		Markers:    markers,
+		Remaining:  strings.TrimSpace(header.Get("X-Ratelimit-Remaining")),
+		Reset:      strings.TrimSpace(header.Get("X-Ratelimit-Reset")),
+		Resource:   strings.TrimSpace(header.Get("X-Ratelimit-Resource")),
+		RetryAfter: strings.TrimSpace(header.Get("Retry-After")),
+	}
+}
+
+// String renders the evidence as the refusal prints it. Header values
+// are server-controlled, so each is quoted: a value cannot break the
+// line it is printed on or pose as a neighbouring field.
+func (t Throttle) String() string {
+	markers := absent
+	if len(t.Markers) > 0 {
+		markers = strings.Join(t.Markers, ", ")
+	}
+
+	reset := quoted(t.Reset)
+	// The reset is epoch seconds; the same instant in UTC is what a
+	// person reading a log compares against the run's timestamps.
+	if secs, err := strconv.ParseInt(t.Reset, 10, 64); err == nil {
+		reset += " (" + time.Unix(secs, 0).UTC().Format(time.RFC3339) + ")"
+	}
+
+	return fmt.Sprintf("marker: %s; x-ratelimit-remaining: %s; x-ratelimit-reset: %s;"+
+		" x-ratelimit-resource: %s; retry-after: %s",
+		markers, quoted(t.Remaining), reset, quoted(t.Resource), quoted(t.RetryAfter))
+}
+
+// quoted prints one header value: absent by name, otherwise quoted.
+func quoted(v string) string {
+	if v == "" {
+		return absent
+	}
+
+	return strconv.Quote(v)
+}
+
+// RetryAfter is the wait a response's Retry-After names, zero when it
 // names none. The ONE reading of that header for every status that can
 // carry it: a 429 says unambiguously what a 403 has to be classified
 // into, but the number both name is the same number, read and clamped
 // here alone (stele#217).
-func retryAfter(header http.Header) time.Duration {
+//
+// Exported for every host stele reads, not only the forge (stele#383):
+// a reader of another host that honoured a different clamp would let
+// that host hold a walk longer than the forge may.
+func RetryAfter(header http.Header) time.Duration {
 	return namedWait(strings.TrimSpace(header.Get("Retry-After")))
 }
 
@@ -193,16 +331,28 @@ type waitError struct {
 	what string
 	wait time.Duration
 	kind error
+	// evidence is what classified the refusal, printed after the
+	// sentence; "" for a refusal that needed no classifying.
+	evidence string
 }
 
-func (t *waitError) Error() string { return t.what + ": " + t.kind.Error() }
+func (t *waitError) Error() string {
+	if t.evidence == "" {
+		return t.what + ": " + t.kind.Error()
+	}
+
+	return t.what + ": " + t.kind.Error() + " [" + t.evidence + "]"
+}
 
 func (t *waitError) Unwrap() error { return t.kind }
 
 // ThrottleRefusal builds the error a throttled read returns: what was
-// being read, then the one sentence every leg says for a throttle.
-func ThrottleRefusal(what string, wait time.Duration) error {
-	return &waitError{what: what, wait: wait, kind: ErrThrottled}
+// being read, then the one sentence every leg says for a throttle, then
+// the evidence that classified it (stele#383). The sentinel is
+// unchanged — errors.Is(err, ErrThrottled) and the ladder read it
+// exactly as before; the evidence is for the person reading the log.
+func ThrottleRefusal(what string, t *Throttle) error {
+	return &waitError{what: what, wait: t.Wait, kind: ErrThrottled, evidence: t.String()}
 }
 
 // transientRefusal builds the error a 429 returns: still transient —
@@ -792,15 +942,15 @@ func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
 		// The download host throttles with the same 403 the API does,
 		// through the one classifier — a walk pulling many assets is
 		// exactly the pace that earns one.
-		if wait, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
-			return nil, ThrottleRefusal(fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), wait)
+		if t, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
+			return nil, ThrottleRefusal(fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), &t)
 		}
 
 		// The 429 the download host answers a rate limit with names its
 		// own wait, read through the same one place the 403's is.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return nil, transientRefusal(
-				fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), retryAfter(resp.Header),
+				fmt.Sprintf("gh: asset %s: HTTP %d", u, resp.StatusCode), RetryAfter(resp.Header),
 			)
 		}
 
@@ -916,8 +1066,8 @@ func (c *Client) once(target, path, accept string) ([]byte, string, bool, error)
 	// Asked before the status vocabulary below, because the throttle is
 	// the one refusal the status cannot name: the classifier owns which
 	// statuses can carry it, so no case here restates that rule.
-	if wait, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
-		return nil, "", false, ThrottleRefusal(fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), wait)
+	if t, ok := Throttled(resp.StatusCode, resp.Header, body); ok {
+		return nil, "", false, ThrottleRefusal(fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), &t)
 	}
 
 	switch resp.StatusCode {
@@ -929,7 +1079,7 @@ func (c *Client) once(target, path, accept string) ([]byte, string, bool, error)
 		return nil, "", false, fmt.Errorf("gh: %s: HTTP %d: %w", path, resp.StatusCode, ErrForbidden)
 	case http.StatusTooManyRequests:
 		return nil, "", false, transientRefusal(
-			fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), retryAfter(resp.Header),
+			fmt.Sprintf("gh: %s: HTTP %d", path, resp.StatusCode), RetryAfter(resp.Header),
 		)
 	default:
 		// The status alone: the body is server-controlled prose.

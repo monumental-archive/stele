@@ -177,12 +177,12 @@ func TestThrottledClassifiesOneResponse(t *testing.T) {
 				header.Set(k, v)
 			}
 
-			wait, got := gh.Throttled(tc.status, header, []byte(tc.body))
+			th, got := gh.Throttled(tc.status, header, []byte(tc.body))
 			if got != tc.want {
 				t.Fatalf("Throttled(%d) = %v, want %v", tc.status, got, tc.want)
 			}
 
-			if wait != tc.wait {
+			if wait := th.Wait; wait != tc.wait {
 				t.Fatalf("wait = %v, want %v", wait, tc.wait)
 			}
 		})
@@ -727,5 +727,310 @@ func TestAttestationStoreThrottleIsTyped(t *testing.T) {
 				t.Fatalf("Retryable(%v) = %v, want %v", err, got, tc.unseeing)
 			}
 		})
+	}
+}
+
+// throttleSentence is the one sentence every throttle refusal says,
+// spelled out so each row below asserts the WHOLE message.
+const throttleSentence = "the host throttled this walk, which says nothing about the subject"
+
+// TestThrottleRefusalPrintsItsEvidence pins the message a throttled
+// walk ends with, whole (stele#383). Before it, the refusal said the
+// sentence and nothing else, so a CANNOT_JUDGE from a throttle could
+// not say whether the hourly budget was spent or a secondary limit
+// tripped. Each row runs the real ladder to exhaustion, so the
+// message is the one a run prints, attempt count included.
+func TestThrottleRefusalPrintsItsEvidence(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "gh: /orgs/acme/repos?per_page=100: after 4 attempts: " +
+		"gh: /orgs/acme/repos?per_page=100: HTTP 403: " + throttleSentence
+
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		body    string
+		want    string
+	}{
+		{
+			name:    "retry-after alone",
+			headers: map[string]string{"Retry-After": "60"},
+			want: prefix + ` [marker: retry-after; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: "60"]`,
+		},
+		{
+			name: "a spent budget alone, its reset rendered as UTC",
+			headers: map[string]string{
+				"X-RateLimit-Remaining": "0",
+				"X-RateLimit-Reset":     "1763400000",
+				"X-RateLimit-Resource":  "core",
+			},
+			body: forbiddenBody,
+			want: prefix + ` [marker: ratelimit-remaining-0; x-ratelimit-remaining: "0";` +
+				` x-ratelimit-reset: "1763400000" (2025-11-17T17:20:00Z);` +
+				` x-ratelimit-resource: "core"; retry-after: absent]`,
+		},
+		{
+			name: "the secondary-limit body alone, every header absent",
+			body: secondaryBody,
+			want: prefix + ` [marker: secondary-limit-body; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: absent]`,
+		},
+		{
+			// The measured shape of 2026-08-20: a secondary limit with
+			// the primary budget healthy. The counter is printed though
+			// it is no marker — it is the evidence that rules the
+			// hourly budget out.
+			name: "the secondary-limit body beside a healthy counter",
+			headers: map[string]string{
+				"X-RateLimit-Remaining": "4799",
+				"X-RateLimit-Resource":  "core",
+			},
+			body: secondaryBody,
+			want: prefix + ` [marker: secondary-limit-body; x-ratelimit-remaining: "4799";` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: "core"; retry-after: absent]`,
+		},
+		{
+			name: "two markers together are both named",
+			headers: map[string]string{
+				"Retry-After":           "30",
+				"X-RateLimit-Remaining": "0",
+			},
+			body: secondaryBody,
+			want: prefix + ` [marker: retry-after, ratelimit-remaining-0, secondary-limit-body;` +
+				` x-ratelimit-remaining: "0"; x-ratelimit-reset: absent; x-ratelimit-resource: absent;` +
+				` retry-after: "30"]`,
+		},
+		{
+			// A server-controlled value cannot break the line or pose as
+			// the next field: it is quoted, and an unparsable reset gets
+			// no rendered time.
+			name: "a hostile value is quoted and an unparsable reset renders no time",
+			headers: map[string]string{
+				"X-RateLimit-Remaining": "0",
+				"X-RateLimit-Reset":     "soon; retry-after: 0",
+			},
+			want: prefix + ` [marker: ratelimit-remaining-0; x-ratelimit-remaining: "0";` +
+				` x-ratelimit-reset: "soon; retry-after: 0"; x-ratelimit-resource: absent; retry-after: absent]`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newProbe(t, 99, func(w http.ResponseWriter) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+
+				w.WriteHeader(http.StatusForbidden)
+				writeBody(w, []byte(tc.body))
+			})
+
+			_, err := p.client.ListRepos("acme")
+			if err == nil {
+				t.Fatal("ListRepos answered where the forge throttled")
+			}
+
+			if err.Error() != tc.want {
+				t.Fatalf("err =\n%s\nwant\n%s", err, tc.want)
+			}
+
+			// Evidence, not a new class: the sentinel and the ladder read
+			// the refusal exactly as before.
+			if !errors.Is(err, gh.ErrThrottled) {
+				t.Fatalf("errors.Is(%v, ErrThrottled) = false", err)
+			}
+		})
+	}
+}
+
+// TestThrottleRefusalNeverPrintsACredential pins item 4 of stele#383:
+// only the four rate headers are copied out of a response, so neither
+// the token the request carried nor an Authorization header a response
+// echoed can reach the message.
+func TestThrottleRefusalNeverPrintsACredential(t *testing.T) {
+	t.Parallel()
+
+	const echoed = "Bearer echoed-secret-value"
+
+	p := newProbe(t, 99, func(w http.ResponseWriter) {
+		w.Header().Set("Authorization", echoed)
+		w.Header().Set("X-Ratelimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	_, err := p.client.ListRepos("acme")
+	if err == nil || !errors.Is(err, gh.ErrThrottled) {
+		t.Fatalf("ListRepos = %v, want the throttle refusal", err)
+	}
+
+	for _, secret := range []string{p.client.Token, echoed, "echoed-secret-value", "Authorization", "authorization"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("err = %v carries %q — a credential in a refusal", err, secret)
+		}
+	}
+}
+
+// TestHostThrottleTypesAnotherHostsRefusal drives the entry a reader of
+// a host other than the forge's REST API types its throttles through
+// (stele#383 item 3) — a certificate log, git over HTTP — from that
+// host's own response: no rate headers, a 429 rather than the forge's
+// 403. The refusal is the same shape as the forge's, whole message
+// asserted, wrapping ErrThrottled and carrying the host's wait.
+func TestHostThrottleTypesAnotherHostsRefusal(t *testing.T) {
+	t.Parallel()
+
+	const what = "ct: https://log.example/ct/v1/get-entries: HTTP 429"
+
+	for _, tc := range []struct {
+		name    string
+		status  int
+		headers map[string]string
+		body    string
+		// want is the whole message, "" when the response is no
+		// throttle; wait is the pause RetryWait must take after it.
+		want string
+		wait time.Duration
+	}{
+		{
+			name:    "a bare 429 naming its wait",
+			status:  http.StatusTooManyRequests,
+			headers: map[string]string{"Retry-After": "30"},
+			want: what + ": " + throttleSentence + ` [marker: http-429; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: "30"]`,
+			wait: 30 * time.Second,
+		},
+		{
+			name:   "a 429 with no header at all prints every field absent",
+			status: http.StatusTooManyRequests,
+			want: what + ": " + throttleSentence + ` [marker: http-429; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: absent]`,
+			wait: time.Second,
+		},
+		{
+			// The forge's clamp, not the host's number: a host could
+			// otherwise hold a walk longer than the forge may.
+			name:    "another host's wait past the bound is clamped like the forge's",
+			status:  http.StatusTooManyRequests,
+			headers: map[string]string{"Retry-After": "86400"},
+			want: what + ": " + throttleSentence + ` [marker: http-429; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: "86400"]`,
+			wait: 120 * time.Second,
+		},
+		{
+			// Only the four rate headers are copied out of a response.
+			name:    "a 429 echoing a credential prints none of it",
+			status:  http.StatusTooManyRequests,
+			headers: map[string]string{"Authorization": "Bearer echoed-secret-value"},
+			want: what + ": " + throttleSentence + ` [marker: http-429; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: absent]`,
+			wait: time.Second,
+		},
+		{
+			name:   "a 403 in the forge's shape is the forge's throttle",
+			status: http.StatusForbidden,
+			body:   secondaryBody,
+			want: what + ": " + throttleSentence + ` [marker: secondary-limit-body; x-ratelimit-remaining: absent;` +
+				` x-ratelimit-reset: absent; x-ratelimit-resource: absent; retry-after: absent]`,
+			wait: time.Second,
+		},
+		{
+			name:   "a bare 403 is the subject, not the pace",
+			status: http.StatusForbidden,
+			body:   forbiddenBody,
+		},
+		{
+			// RFC 9110: a 503's Retry-After is how long the host expects
+			// to be down — the host failing, which is the caller's
+			// transient, never a throttle.
+			name:    "a 503 naming a wait is the host failing",
+			status:  http.StatusServiceUnavailable,
+			headers: map[string]string{"Retry-After": "60"},
+		},
+		{
+			name:    "an answer carrying every header is still an answer",
+			status:  http.StatusOK,
+			headers: map[string]string{"Retry-After": "60", "X-Ratelimit-Remaining": "0"},
+		},
+		{
+			name:   "absence is absence",
+			status: http.StatusNotFound,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			header := http.Header{}
+			for k, v := range tc.headers {
+				header.Set(k, v)
+			}
+
+			err := gh.HostThrottle(what, tc.status, header, []byte(tc.body))
+
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("HostThrottle(%d) = %v, want no throttle", tc.status, err)
+				}
+
+				return
+			}
+
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("err =\n%v\nwant\n%s", err, tc.want)
+			}
+
+			if !errors.Is(err, gh.ErrThrottled) {
+				t.Fatalf("errors.Is(%v, ErrThrottled) = false", err)
+			}
+
+			if got := gh.RetryWait(err, time.Second); got != tc.wait {
+				t.Fatalf("RetryWait = %v, want %v", got, tc.wait)
+			}
+		})
+	}
+}
+
+// TestRetryAfterIsTheOneReading pins the exported reading of the
+// header, clamp included, for every host that names a wait.
+func TestRetryAfterIsTheOneReading(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, value string
+		want        time.Duration
+	}{
+		{name: "a named wait", value: "60", want: 60 * time.Second},
+		{name: "surrounding space is no part of the number", value: " 45 ", want: 45 * time.Second},
+		{name: "absent names no wait", value: ""},
+		{name: "a value that will not parse names no wait", value: "in a little while"},
+		{name: "zero names no wait", value: "0"},
+		{name: "a negative wait names none", value: "-30"},
+		{name: "past the bound is clamped", value: "86400", want: 120 * time.Second},
+		{name: "an overflowing wait is clamped, not inverted", value: "9223372036854775807", want: 120 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			header := http.Header{}
+			if tc.value != "" {
+				header.Set("Retry-After", tc.value)
+			}
+
+			if got := gh.RetryAfter(header); got != tc.want {
+				t.Fatalf("RetryAfter(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestThrottleWithNoMarkerSaysSo pins the guard in String: evidence
+// built with no marker prints the marker absent, never an empty field.
+func TestThrottleWithNoMarkerSaysSo(t *testing.T) {
+	t.Parallel()
+
+	const want = "marker: absent; x-ratelimit-remaining: absent; x-ratelimit-reset: absent;" +
+		" x-ratelimit-resource: absent; retry-after: absent"
+	if got := gh.ThrottleEvidence(nil).String(); got != want {
+		t.Fatalf("String() =\n%s\nwant\n%s", got, want)
 	}
 }
