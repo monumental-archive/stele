@@ -813,11 +813,11 @@ type BaseImageScope struct {
 	// (provenance-verified, shared-signer).
 	FromFile *string `json:"fromFile,omitempty"`
 	// RegistryPrefix selects which of those references this scope
-	// judges. It ends at the OWNER boundary (`<host>/<owner>/`):
-	// provenance-verified reads the publishing repository off the
-	// path that follows it, and shared-signer reads the owner whose
-	// attestation store it asks off its last segment — derivations
-	// whose precondition validate enforces rather than assumes.
+	// judges. It ends at the OWNER boundary (`<host>/<owner>/`)
+	// because its last segment is the owner whose attestation store is
+	// read — never a repository guessed from the image path, since a
+	// package's name is not its repository's (stele#458) — a
+	// precondition validate enforces rather than assumes.
 	// References outside the prefix are out of scope, not findings:
 	// whose bases those are is another mechanism's question
 	// (provenance-verified, shared-signer).
@@ -1103,17 +1103,8 @@ func (s *BaseImageScope) validate() error {
 // prefix stops where the owner does, and that the identity template
 // names only groups the pattern actually captures.
 func (s *BaseImageScope) validateProvenance(where string) error {
-	// The publishing repository is read off the reference path
-	// immediately after the prefix, so the prefix must end where the
-	// owner does. A prefix reaching further would swallow the
-	// repository segment and the derivation would address the wrong
-	// repository — silently, and in the direction of a pass.
-	if !ownerBoundary(*s.RegistryPrefix) {
-		return fmt.Errorf(
-			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
-				"because the publishing repository is derived from the reference path that follows it",
-			where, *s.RegistryPrefix,
-		)
+	if err := s.validateOwnerPrefix(where); err != nil {
+		return err
 	}
 
 	re, err := regexp.Compile(*s.PinPattern)
@@ -1138,15 +1129,8 @@ func (s *BaseImageScope) validateProvenance(where string) error {
 // owner does, that the signer is a workflow, and that every tag rule
 // reads and expands.
 func (s *BaseImageScope) validateSharedSigner(where string) error {
-	// The owner whose store is asked is the prefix's last segment, so
-	// the prefix must end there: one reaching into a repository would
-	// name a store nobody keeps.
-	if !ownerBoundary(*s.RegistryPrefix) {
-		return fmt.Errorf(
-			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
-				"because the owner whose attestation store is read is its last segment",
-			where, *s.RegistryPrefix,
-		)
+	if err := s.validateOwnerPrefix(where); err != nil {
+		return err
 	}
 
 	if !signerWorkflowRE.MatchString(*s.SignerWorkflow) {
@@ -1156,6 +1140,23 @@ func (s *BaseImageScope) validateSharedSigner(where string) error {
 	_, err := s.RefRules()
 	if err != nil {
 		return fmt.Errorf("%s.%w", where, err)
+	}
+
+	return nil
+}
+
+// validateOwnerPrefix holds a prefix scope's prefix to the owner
+// boundary. Both prefix kinds read their attestations from the owner
+// the prefix's last segment names, so the prefix must end there: one
+// reaching into a repository would name a store nobody keeps, and
+// silently, in the direction of an empty one.
+func (s *BaseImageScope) validateOwnerPrefix(where string) error {
+	if !ownerBoundary(*s.RegistryPrefix) {
+		return fmt.Errorf(
+			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
+				"because the owner whose attestation store is read is its last segment",
+			where, *s.RegistryPrefix,
+		)
 	}
 
 	return nil

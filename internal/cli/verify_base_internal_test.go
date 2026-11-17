@@ -318,6 +318,27 @@ func TestVerifyBaseProvenanceVerified(t *testing.T) {
 		}
 	})
 
+	// stele#458 on the real bundle: an exact identity naming the signer
+	// at the commit that signed lab-pg verifies from the owner's store,
+	// though no repository is named lab-pg — the guessed repository's
+	// store would have been empty.
+	t.Run("an exact identity, verified from the owner's store", func(t *testing.T) {
+		swapBaseForge(t, gh.Snapshot{Dir: "testdata/base-images"})
+
+		const signedBy = "https://github.com/monumental-archive/signer/.github/workflows/sign.yml@" +
+			"0d6c6e297684c8ba401fb9c212532628fe552148"
+
+		doc := strings.Replace(documentedPolicy(),
+			`"https://github.com/monumental-archive/${repo}/.github/workflows/publish.yml@refs/tags/v${version}"`,
+			`"`+signedBy+`"`, 1)
+
+		code, stdout, stderr := runBase(t, doc, append(refArgs(labPgRef), "--trusted-root", root)...)
+		if code != exitOK || !strings.Contains(stdout,
+			"verify base: approved first-party base: "+labPgRef+" (under "+signedBy+")") {
+			t.Fatalf("code %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+	})
+
 	// Measured on the recorded store: the documented example names the
 	// caller's own publish workflow at the release tag, while the org's
 	// bases carry the shared signer's identity — so that form could

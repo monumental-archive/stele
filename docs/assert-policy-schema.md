@@ -685,9 +685,12 @@ reference and `identity` is expanded from its capture groups, so the
 signer demanded is DERIVED FROM THE PIN and the two cannot drift
 apart; a template naming a group the pattern never captures is
 refused at load rather than expanded into an identity missing a
-segment. `registryPrefix` must end at the owner boundary
-(`<host>/<owner>/`), because the publishing repository is read off the
-path that follows it.
+segment. The attestation is looked up in the OWNER's store, an
+organisation's or a user's: a package's name need not be its
+repository's, and which repository signed is the identity's to say,
+not where the attestation was found. `registryPrefix` must therefore
+end at the owner boundary (`<host>/<owner>/`), its last segment being
+that owner.
 
 Bases OUTSIDE the prefix produce nothing at all — no finding, no
 count. Whose bases those are is another mechanism's question, and an
