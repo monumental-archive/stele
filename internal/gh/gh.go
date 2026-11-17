@@ -940,50 +940,6 @@ func (c *Client) FailedRuns(owner, repo, branch string) ([]string, error) {
 	return out, nil
 }
 
-// The two kinds of account the forge keeps an attestation store for,
-// as GET /users/{login} spells its `type`.
-const (
-	ownerOrganization = "Organization"
-	ownerUser         = "User"
-)
-
-// ownerStore is the path of an owner's attestation store, in the
-// documented form for its kind: an organisation's under /orgs, a
-// user's under /users. Measured 2026-11-17, each endpoint also answers
-// for the other kind (/orgs/jdx for a user, /users/monumental-archive
-// for an organisation), but that is not the contract, so the kind is
-// read rather than the overlap relied on. An absent owner, and an
-// account of any other kind, are refused by name: neither has a store
-// to be empty.
-func (c *Client) ownerStore(owner string) (string, error) {
-	body, _, ok, err := c.get("/users/"+url.PathEscape(owner), "application/vnd.github+json")
-	if err != nil {
-		return "", err
-	}
-
-	if !ok {
-		return "", fmt.Errorf("gh: owner %q does not exist", owner)
-	}
-
-	account, err := jsonx.DecodeForeign[struct {
-		Type *string `json:"type"`
-	}](body)
-	if err != nil {
-		return "", fmt.Errorf("gh: owner %s: %w", owner, err)
-	}
-
-	switch {
-	case account.Type == nil:
-		return "", fmt.Errorf("gh: owner %q: the forge states no account type", owner)
-	case *account.Type == ownerOrganization:
-		return "/orgs/" + url.PathEscape(owner), nil
-	case *account.Type == ownerUser:
-		return "/users/" + url.PathEscape(owner), nil
-	}
-
-	return "", fmt.Errorf("gh: owner %q is a %s account, which keeps no attestation store", owner, *account.Type)
-}
-
 // AssetURL is the public download address of one release asset: the
 // address a stranger pulls, and the one Asset reads. One definition, so
 // a leg that downloads through another client — the release proof,
@@ -1050,6 +1006,50 @@ func escapePath(path string) string {
 	}
 
 	return strings.Join(parts, "/")
+}
+
+// The two kinds of account the forge keeps an attestation store for,
+// as GET /users/{login} spells its `type`.
+const (
+	ownerOrganization = "Organization"
+	ownerUser         = "User"
+)
+
+// ownerStore is the path of an owner's attestation store, in the
+// documented form for its kind: an organisation's under /orgs, a
+// user's under /users. Measured 2026-11-17, each endpoint also answers
+// for the other kind (/orgs/jdx for a user, /users/monumental-archive
+// for an organisation), but that is not the contract, so the kind is
+// read rather than the overlap relied on. An absent owner, and an
+// account of any other kind, are refused by name: neither has a store
+// to be empty.
+func (c *Client) ownerStore(owner string) (string, error) {
+	body, _, ok, err := c.get("/users/"+url.PathEscape(owner), "application/vnd.github+json")
+	if err != nil {
+		return "", err
+	}
+
+	if !ok {
+		return "", fmt.Errorf("gh: owner %q does not exist", owner)
+	}
+
+	account, err := jsonx.DecodeForeign[struct {
+		Type *string `json:"type"`
+	}](body)
+	if err != nil {
+		return "", fmt.Errorf("gh: owner %s: %w", owner, err)
+	}
+
+	switch {
+	case account.Type == nil:
+		return "", fmt.Errorf("gh: owner %q: the forge states no account type", owner)
+	case *account.Type == ownerOrganization:
+		return "/orgs/" + url.PathEscape(owner), nil
+	case *account.Type == ownerUser:
+		return "/users/" + url.PathEscape(owner), nil
+	}
+
+	return "", fmt.Errorf("gh: owner %q is a %s account, which keeps no attestation store", owner, *account.Type)
 }
 
 func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {
