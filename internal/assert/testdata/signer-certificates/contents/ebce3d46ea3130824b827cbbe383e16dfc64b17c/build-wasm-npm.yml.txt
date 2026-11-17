@@ -1,0 +1,277 @@
+# Artifact class: wasm-npm. Two jobs, split on the only line that matters —
+# whether the job runs caller-supplied code (docs/release.md).
+#
+#   build   runs cargo and wasm-pack, so it runs caller code (build.rs,
+#           proc macros, tests). It gets `contents: read` and nothing else,
+#           and it is the job that hashes the exact tarball bytes.
+#   The registry publish lives in publish-wasm-npm.yml (#118): the
+#   repro gate sits between build and upload, so the irreversible step
+#   cannot share a workflow with the build it gates.
+#
+# wasm-pack and node/npm are CALLER BUILD INPUTS, pinned in the caller's own
+# mise config exactly like its rust toolchain — not belt tools, because the
+# belt is the universal layer and this class is not universal. The jobs
+# assert their presence and fail with the remedy rather than installing
+# anything unpinned.
+#
+# No npm install on this path, by rule (#117): install-time lifecycle
+# scripts are npm's worst network-and-code-execution vector, and this
+# class never runs one — wasm-pack builds from cargo, pack/publish take
+# the tarball as-is. Any future step that must install node dependencies
+# on an attested path runs `npm ci --ignore-scripts` or does not land.
+#
+# npm mints its own provenance and publish attestations under trusted
+# publishing, naming the CALLER's workflow — a second, independent evidence
+# path beside the org's Sigstore identity (docs/slsa-reference.md: the two
+# are documented, not unified).
+---
+name: build-wasm-npm
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      crate-dir:
+        # forwarding: universal
+        description: Directory of the wasm crate, relative to the repo root.
+        required: false
+        type: string
+        default: .
+      npm-scope:
+        # forwarding: universal
+        description: >
+          npm scope (without the @) the package publishes under. Empty
+          means unscoped. Scoped is canon for this organisation: the
+          scope is claimed and cannot be squatted, and the org namespace
+          is where trusted publishing is enforced.
+        required: false
+        type: string
+        default: ""
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): build and hash the same
+          bytes, upload NO release-* artifact (the gate needs only the
+          subjects), skip the smoke tests (the gate proves bytes; the
+          first build already proved behaviour), and publish nothing.
+          Intermediate artifacts carry a repro- prefix so the two builds
+          of one run cannot collide or cross-contaminate a glob.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      subjects:
+        description: sha256sum manifest of the packed npm tarball.
+        value: ${{ jobs.build.outputs.subjects }}
+      artifact-name:
+        description: Actions artifact holding the packed tarball.
+        value: ${{ jobs.build.outputs.artifact-name }}
+      package:
+        description: >
+          The npm package as name@version, read from the generated
+          package.json. The verifier needs the real name: a scoped
+          package's tarball filename mangles the scope, so the name cannot
+          be reconstructed from the file.
+        value: ${{ jobs.build.outputs.package }}
+      registry-subjects:
+        description: >
+          The packed tarball's sha256sum line with its target in front —
+          `package <hex>  <tarball>`. The tarball ships to the npm
+          registry and never to the release, so this is the shape
+          attach-release takes for it (#1168). Built here and published
+          by a later job: the orchestrator passes it on only for a
+          release that really published.
+        value: ${{ jobs.build.outputs.registry-subjects }}
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build, test and pack the wasm package
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      # No belt: a build-class job needs exactly the caller's pinned build
+      # inputs (rust, wasm-pack, node), never the org's linters — see the
+      # matching note in build-rust-binary.yml.
+    outputs:
+      subjects: ${{ steps.pack.outputs.subjects }}
+      artifact-name: npm-package
+      package: ${{ steps.pack.outputs.package }}
+      registry-subjects: ${{ steps.pack.outputs.registry-subjects }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise and the caller's pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin — the
+          # v0.18.2 darwin leg pulled same-day mise 2026.8.4 while every
+          # pinned site ran 2026.8.3 (#117: nothing unpinned on an attested
+          # path, the installer included).
+          version: 2026.11.4
+          # No tool cache anywhere downstream of a signature.
+          cache: false
+
+      - name: Assert the caller pinned its build inputs
+        run: |
+          set -euo pipefail
+          # Build inputs live in the caller's mise config, like its rust
+          # toolchain. Nothing is installed ad hoc here: an unpinned tool in
+          # a signing pipeline is the thing the whole toolbelt design
+          # exists to prevent.
+          for tool in wasm-pack node npm; do
+            command -v "${tool}" > /dev/null || {
+              emsg="${tool} not found — pin it in this repository's mise config; it is a build input of the"
+              emsg+=" wasm-npm class"
+              echo "::error::${emsg}"
+              exit 1
+            }
+          done
+          rustup target add wasm32-unknown-unknown
+      - name: Refuse a tag whose version disagrees with the manifest
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+        run: |
+          set -euo pipefail
+          meta=$(cargo metadata --no-deps --format-version 1 \
+            --manifest-path "${UNTRUSTED_CRATE_DIR}/Cargo.toml")
+          manifest=$(jq -r '[.packages[].version] | unique | .[]' <<< "${meta}")
+          versions=$(wc -l <<< "${manifest}")
+          if [[ ${versions} -ne 1 ]]; then
+            echo "::error::workspace members disagree on version; canon is [workspace.package] inheritance"
+            exit 1
+          fi
+          if [[ ${manifest} != "${UNTRUSTED_VERSION}" ]]; then
+            echo "::error::tag says ${UNTRUSTED_VERSION}, manifest says ${manifest}"
+            exit 1
+          fi
+      - name: Test
+        env:
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path "${UNTRUSTED_CRATE_DIR}/Cargo.toml"
+      - name: Build the package
+        env:
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+          UNTRUSTED_SCOPE: ${{ inputs.npm-scope }}
+        run: |
+          set -euo pipefail
+          scope_flag=()
+          if [[ -n ${UNTRUSTED_SCOPE} ]]; then
+            scope_flag=(--scope "${UNTRUSTED_SCOPE}")
+          fi
+          wasm-pack build --release "${scope_flag[@]}" "${UNTRUSTED_CRATE_DIR}"
+      - name: Pack and hash the exact bytes that will publish
+        id: pack
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+        run: |
+          set -euo pipefail
+          # npm pack here, npm publish <tarball> there: the bytes that are
+          # hashed, signed and verified are the bytes that ship, with no
+          # re-pack in between to drift.
+          mkdir -p dist
+          pkg="${UNTRUSTED_CRATE_DIR}/pkg"
+          name=$(jq -r '.name' "${pkg}/package.json")
+          version=$(jq -r '.version' "${pkg}/package.json")
+          # npm's provenance validation (E422) requires package.json's
+          # repository to match the caller repository. wasm-pack copies it
+          # from Cargo.toml's `repository` field — so its absence must
+          # fail HERE, with the remedy, not at the registry after
+          # everything else succeeded. Found by the v0.14.1 run.
+          repo_url=$(jq -r '.repository.url // .repository // ""' "${pkg}/package.json")
+          want="https://github.com/${GITHUB_REPOSITORY}"
+          norm="${repo_url#git+}"
+          norm="${norm%.git}"
+          if [[ ${norm} != "${want}" ]]; then
+            emsg="package.json repository is '${repo_url}', npm provenance requires '${want}' — set repository ="
+            emsg+=" \"${want}\" in the crate's Cargo.toml (canon: [workspace.package] repository with repository.workspace ="
+            emsg+=" true)"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          if [[ ${version} != "${UNTRUSTED_VERSION}" ]]; then
+            echo "::error::package.json says ${version}, tag says ${UNTRUSTED_VERSION}"
+            exit 1
+          fi
+          pkg_abs=$(realpath "${pkg}")
+          cd dist
+          tarball=$(npm pack "${pkg_abs}" --silent)
+          if [[ ! -s ${tarball} ]]; then
+            echo "::error::npm pack produced nothing"
+            exit 1
+          fi
+          manifest=$(sha256sum "${tarball}")
+          # registry-subjects — one tarball, one leg: the same digest
+          # the signer is handed, carrying the publisher's name for a
+          # class that varies nothing.
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            printf '%s\n' "${manifest}"
+            echo "SUBJECTS_EOF"
+            echo "package=${name}@${version}"
+            echo "registry-subjects=package ${manifest}"
+          } >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "${manifest}"
+      - name: Emit the inventory plan (which package this artifact ships)
+        # The artifact-to-package mapping exists with certainty exactly
+        # once — here, where the tarball was just packed from the crate
+        # this job was told to build (#537). The plan is the mapping as
+        # data: the sbom job derives the crate's closure from it on the
+        # prove leg, so no caller ever declares (and drifts) a second
+        # copy of this job's own crate-dir input. Not on the repro leg:
+        # the comparator proves bytes, not inventories.
+        # The document is sbom-npm-<package>: the prefix names what the
+        # artifact IS (the wasm-npm class's owed assetPrefixes in
+        # slsa/assert-policy.json), while the closure inside stays cargo
+        # — what it is MADE OF. The pgrx cells obey the same rule
+        # (sbom-pgrx-* documents over cargo closures); the two halves
+        # disagreeing silently is the #544 defect.
+        #
+        # plan-producer: wasm-npm sbom-npm-
+        if: ${{ !inputs.repro }}
+        env:
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+        run: |
+          set -euo pipefail
+          meta=$(cargo metadata --no-deps --format-version 1 \
+            --manifest-path "${UNTRUSTED_CRATE_DIR}/Cargo.toml")
+          mp=$(realpath "${UNTRUSTED_CRATE_DIR}/Cargo.toml")
+          mkdir -p plan
+          jq --arg mp "${mp}" \
+            '[.packages[] | select(.manifest_path == $mp) | .name]
+             | if length != 1 then error("crate-dir resolves to \(length) packages") else . end
+             | map({class: "wasm-npm", doc: ("sbom-npm-" + .),
+                    params: {cargoPackage: .}})' \
+            <<< "${meta}" > plan/plan.json
+          jq -r '.[] | "::notice::plans inventory \(.doc) for package \(.params.cargoPackage)"' plan/plan.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: sbom-plan-wasm
+          path: plan/plan.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: npm-package
+          path: dist/*.tgz
+          if-no-files-found: error
+...

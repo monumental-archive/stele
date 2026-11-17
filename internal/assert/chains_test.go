@@ -17,7 +17,7 @@ import (
 )
 
 const chainsPolicyJSON = `{
-  "schema": 7,
+  "schema": 8,
   "evidence": {
     "sbomSuffix": ".spdx.json",
     "checksums": "checksums.txt",

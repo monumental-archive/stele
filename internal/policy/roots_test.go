@@ -34,7 +34,7 @@ const rootsSection = `"slsaRootsOfTrust": [
 func withRoots(t *testing.T, section string) string {
 	t.Helper()
 
-	return mutate(t, `"schema": 7,`, `"schema": 7,
+	return mutate(t, `"schema": 8,`, `"schema": 8,
   `+section)
 }
 
@@ -108,7 +108,7 @@ func TestReachabilitySkipsSectionsAPolicyDoesNotDeclare(t *testing.T) {
 	t.Parallel()
 
 	const buildOnly = `{
-	  "schema": 7,
+	  "schema": 8,
 	  "issuer": "https://token.example.com",
 	  "slsaRootsOfTrust": [
 	    {"attesterId": "https://github.com/acme/signer", "maxLevels": ["SLSA_BUILD_LEVEL_3"]}

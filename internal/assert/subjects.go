@@ -84,6 +84,14 @@ var (
 	// which callers die at the next pin bump is the whole point of
 	// asking).
 	PermissionsSubjects = everyRepository()
+	// SignerCertificatesSubjects: a signer certificate is reconciled
+	// against the run that minted it, and a signing workflow signs for
+	// every track — a build's provenance, a source record, a VEX
+	// document — so no track scopes which repository may have run it.
+	// The question is whether the run's repository is the population's
+	// at all, which is the roster (the canon's reconciler read the
+	// roster whole for the same reason, .github#1250).
+	SignerCertificatesSubjects = everyRepository()
 )
 
 // Enumerate opens the population at this target's door.

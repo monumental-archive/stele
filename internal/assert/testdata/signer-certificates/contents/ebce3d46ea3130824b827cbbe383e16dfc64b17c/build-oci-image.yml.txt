@@ -1,0 +1,642 @@
+# Artifact class: oci-image. Every rule below was arrived at in three
+# repositories before it was written down here (docs/release.md).
+#
+#   Native hardware per architecture. No QEMU, and therefore no single
+#   `--platform linux/amd64,linux/arm64` build: emulation tests the image
+#   on the wrong machine, and an image that passes under emulation has not
+#   been shown to work where it runs.
+#
+#   Build and push are separate. A combined build-and-push has no moment at
+#   which a testable image exists un-published, so it is built, loaded,
+#   smoke-tested, and only then pushed. The manifest list is assembled from
+#   the per-architecture images afterwards.
+#
+#   The published bytes are pulled back BY DIGEST and proved again before
+#   anything is signed. A signature must assert something demonstrated of
+#   the artifact a stranger will pull, never of a local twin.
+#
+#   Every first-party base is verified before it is instantiated
+#   (#715). A `FROM` under this owner's ghcr namespace must carry an
+#   org attestation for the pinned digest, minted by the org signer,
+#   from the ref that could legitimately have produced it — the pgrx
+#   build environment's rule (base-attest.yml plus the fail-closed
+#   check in build-pgrx-extension.yml), generalised to the bases a
+#   caller names. A digest pin says the bytes did not change; the
+#   attestation says whose bytes they are.
+#
+#   This workflow stops after the per-arch digest pushes (#118): the
+#   index is assembled and TAGGED exactly once, post-gate, in
+#   assemble-oci-index.yml — no public reference exists until the
+#   repro gate has compared the per-arch digests bit for bit.
+#
+# No `docker/*` actions: `docker buildx` and `docker login` are preinstalled
+# on the runners, proven in the lab, and using them keeps the organisation's
+# Actions allowlist at four patterns instead of eight.
+#
+# No cache of any kind. A workflow that publishes carries none — everything
+# downstream of it gets signed.
+#
+#   The compile lives OUTSIDE the Dockerfile (#295). The repro gate
+#   measured the containerised cargo build nondeterministic while the
+#   same crates built bit-for-bit under the belt's pinned rust — so the
+#   binary is built in the caller's mise-pinned toolchain and the
+#   Dockerfile stays pure assembly over pinned inputs. One toolchain,
+#   not two; determinism by construction, proven by the gate.
+#
+#   For the common case the caller DECLARES it (#775): `binary-crate`
+#   names the crate, and the binary is built by release/rust-build.sh —
+#   the same definition the rust-binary class's own leg runs, so the
+#   pinned toolchain, the reproducibility flags and the inventory plan
+#   (#537) are one statement rather than a recipe every consumer
+#   rewrites. Measured 2026-08-21: release-lab's and iiif-server's
+#   prepare scripts were the same twenty-five lines with one binary
+#   name changed, and neither emitted the plan, which is what left an
+#   oci-image-only repository unable to publish at all (#773).
+#   `prepare` remains for materialisation a declaration cannot express,
+#   and the two are mutually exclusive: a caller states one or the
+#   other, never both.
+---
+name: build-oci-image
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      dockerfile:
+        # forwarding: universal
+        description: Path to the Dockerfile, relative to the context.
+        required: false
+        type: string
+        default: Dockerfile
+      context:
+        # forwarding: universal
+        description: Build context directory.
+        required: false
+        type: string
+        default: .
+      smoke-test:
+        # forwarding: universal
+        description: >
+          Script proving the image does the one thing it exists to do —
+          booted, extensions loaded, server answering. Receives the image
+          reference as $1. Run twice: once on the loaded image before
+          anything is published, and again on the bytes pulled back from
+          the registry. Empty means no smoke test, which is permitted and
+          unwise.
+        required: false
+        type: string
+        default: ""
+      prepare:
+        # forwarding: universal
+        description: >
+          Script materialising build artifacts into the context before the
+          image build, run with the caller's own mise-pinned toolchain
+          under the same reproducibility flags as the rust-binary class.
+          Receives the matrix architecture (amd64|arm64) as $1. This is
+          the correct-by-construction answer to #295: a compile inside
+          BuildKit runs a second toolchain the belt does not pin (the lab
+          ran rust:1.97-slim by tag while the belt's pinned rust built the
+          same crates bit-for-bit), and the repro gate proved that path
+          nondeterministic. With the compile out here, the Dockerfile is
+          pure assembly — a digest-pinned or scratch base plus COPY of
+          bytes this job just built — and nothing nondeterministic remains
+          inside the image build. The repro leg runs the same script,
+          which is what makes the gate a proof of the whole path. Empty
+          means the Dockerfile is self-contained; a Dockerfile that
+          compiles is the #295 failure mode. The script runs with
+          SOURCE_DATE_EPOCH exported, so a compile that stamps a time
+          reads the released commit's own instead of the clock — which
+          is what the class was actually missing.
+        required: false
+        type: string
+        default: ""
+      binary-crate:
+        # forwarding: universal
+        description: >
+          Directory of the crate whose binary this image ships — the
+          declarative half of the compile-outside-the-Dockerfile rule
+          (#775). Declared, the class builds that crate's binaries
+          through release/rust-build.sh: the rust-binary class's own
+          definition, so the pinned toolchain, SOURCE_DATE_EPOCH,
+          CARGO_INCREMENTAL=0, the path remap, the preserved
+          cargo-auditable section and the inventory plan arrive by
+          construction rather than by a script each consumer writes
+          again. The binaries are installed into `<context>/dist/`,
+          mode 0755, named as cargo names them — which is what both
+          existing consumers' Dockerfiles already COPY. Refused
+          alongside `prepare`: one or the other.
+
+          Linux only, and musl by construction: an image's runtime is
+          the architecture it was built on, and the org's images are
+          `FROM scratch`, where a dynamically linked binary cannot run.
+          The arch-to-target pairing is the matrix's own, beside the
+          runner it belongs to — the same pairing build-rust-binary's
+          plan job makes for the canon target list.
+        required: false
+        type: string
+        default: ""
+      plan-class:
+        # forwarding: universal
+        description: >
+          The evidence class this leg's inventory plan names (#843). The
+          class is the unit of obligation, and a crate-built image and a
+          Dockerfile-only one owe different evidence — the first an
+          `sbom-image-*` document, the second nothing — so they are two
+          classes rather than one class with two shapes. The caller of
+          publish.yml never states this: its guard job derives the name
+          from the same `binary-crate` declaration that decides whether
+          a plan is emitted at all, and hands it here, so a plan and the
+          evidence manifest cannot name different classes for one image.
+          Empty means plan nothing, which is the continuous archetype:
+          it builds no release view, so there is no obligation list for
+          a plan to be judged against.
+        required: false
+        type: string
+        default: ""
+      facts:
+        # forwarding: universal
+        description: >
+          The resolved facts map (JSON, org.opencontainers.image.* keys)
+          from the orchestrator's facts job. Builds consume it — as config
+          labels on every per-arch image and annotations on the index —
+          and derive nothing themselves. Both build invocations below take
+          the SAME label set from it: a label changes the config digest
+          while every layer stays identical, so a drifted set would
+          publish an image that was never smoked.
+        required: true
+        type: string
+      source-epoch:
+        # forwarding: universal
+        description: >
+          Committer epoch of the released commit, resolved beside the
+          facts. Exported as SOURCE_DATE_EPOCH, which BuildKit propagates
+          into the config and index `created` fields — so the one
+          wall-clock value this build could otherwise publish beside a
+          commit-pinned one is unwritable, not merely avoided.
+        required: true
+        type: string
+      dry-run:
+        # forwarding: discretionary — rehearsal is versioned-only; continuous has no gate to rehearse
+        description: Rehearsal — build and prove, push nothing.
+        required: false
+        type: boolean
+        default: false
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): build and push by digest
+          exactly like the first build (digest pushes are idempotent — a
+          reproduced rebuild is a no-op landing on the same digest, a
+          mismatch leaves an unreferenced, untagged, harmless digest and
+          the gate goes red), skip the smoke test, and record the digest
+          under a repro- prefixed artifact so the gate can compare.
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and smoke ${{ matrix.arch }}
+    strategy:
+      fail-fast: true
+      matrix:
+        # Arch, the runner that IS that arch, and the canon target a
+        # declarative binary is built for on it — one row, so the three
+        # cannot drift apart. The targets are the two Linux members of
+        # build-rust-binary.yml's canon list, paired with the same
+        # runners that leg pairs them with.
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write # push the per-architecture image by digest
+    env:
+      # The prepare environment, mirrored from build-rust-binary (same
+      # rationale, same flags — see its header): the caller's own pinned
+      # toolchain, nothing global, and reproducibility by construction
+      # rather than by audit. Inert when no prepare script is given.
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_STRIP: "false"
+      # The fourth input (#778): the release profile's default is thin
+      # LOCAL LTO across 16 codegen units, and that path was measured
+      # not to reproduce — four distinct binaries from four legs of one
+      # commit. A `prepare` script gets the determinism inputs the
+      # class's own steps get (#308), so it gets this one too; the
+      # declarative path takes it from release/rust-build.sh, where the
+      # measurement is written down.
+      CARGO_PROFILE_RELEASE_LTO: fat
+      RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/build
+    steps:
+      - name: Refuse a caller that declares the binary twice
+        # One or the other (#775). `binary-crate` builds through the
+        # rust-binary class's own definition; `prepare` runs a script
+        # the caller wrote. A caller stating both has two answers to
+        # "what goes in the context", and the second would overwrite
+        # the first silently — with the inventory plan describing
+        # whichever the class believed. Before the checkout: a
+        # contradiction must cost seconds, not an image.
+        env:
+          UNTRUSTED_PREPARE: ${{ inputs.prepare }}
+          UNTRUSTED_BINARY_CRATE: ${{ inputs.binary-crate }}
+        run: |
+          set -euo pipefail
+          if [[ -n ${UNTRUSTED_PREPARE} && -n ${UNTRUSTED_BINARY_CRATE} ]]; then
+            emsg="prepare and binary-crate are both declared — the class materialises the context one way or the"
+            emsg+=" other; delete the prepare script the declaration replaces (#775)"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Verify every first-party base carries its org attestation
+        # Verify-before-instantiation for the CONSUMER's bases (#715),
+        # the shape build-pgrx-extension.yml has always had for the
+        # canon's own build environment, generalised to the bases a
+        # caller's Dockerfile names. The digest pin
+        # (`lint:from-digests`) proves the bytes did not change; this
+        # proves they are the right bytes — two facts, neither
+        # sufficient alone, and until now the org had only the first
+        # for a first-party base while deleting the per-repo script
+        # that had the second (#670).
+        #
+        # BEFORE the build, and before `prepare` compiles anything: a
+        # base nobody attested must cost seconds, not a full image.
+        # Network-bound (registry plus the attestation API), so it can
+        # never be a `lint:*` — the gate is deterministic
+        # (docs/direction.md) — and a Monday `audit:*` would report a
+        # base already shipped. The class build is the only place left,
+        # which is also the only place that knows the Dockerfile.
+        #
+        # Fail-closed and derived, never declared. The identity comes
+        # from the canon's one declaration (security/identity.toml via
+        # identity.sh, #579); the org PATH comes from the environment,
+        # because a scope is the environment's to supply and an
+        # identity is not (identity.toml's own header). The ref anchor
+        # is derived from the tag the pin carries, the way the deleted
+        # script derived `1.2.3-pg18` -> `refs/tags/v1.2.3`, so the
+        # gate cannot drift from the pin: a versioned publisher can
+        # only have produced these bytes at `refs/tags/v<version>`
+        # (publish.yml's guard admits nothing else) and a continuous
+        # one only from its branch. A declared regex per repository
+        # would be the literal nothing bumps (#314's class).
+        #
+        # What is NOT judged here: a base outside this owner's ghcr
+        # namespace. Its approval mechanism is `base-attest.yml` for
+        # the canon's pgrx set and `lint:from-digests` everywhere else
+        # — see docs/build-track.md, which names which bases are
+        # approved by which mechanism.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNTRUSTED_CONTEXT: ${{ inputs.context }}
+          UNTRUSTED_DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          export ORG_CANON_DIR="${GITHUB_WORKSPACE}/.org-canon"
+          # shellcheck source=/dev/null
+          . "${ORG_CANON_DIR}/mise/identity.sh"
+          signer=$(org_identity signer-workflow)
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          prefix="ghcr.io/${owner}/"
+          refs=$("${ORG_CANON_DIR}/mise/dockerfile-bases.sh" \
+            "${UNTRUSTED_CONTEXT}/${UNTRUSTED_DOCKERFILE}")
+          if [[ -z ${refs} ]]; then
+            echo "::notice::no base to approve (scratch, or stages only)"
+            exit 0
+          fi
+          # gh reads the subject manifest from the registry itself
+          # (measured: a digest under the wrong path fails with
+          # MANIFEST_UNKNOWN before any signature is examined), so a
+          # private first-party base needs the credential this job
+          # already holds.
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          checked=0
+          while IFS= read -r ref; do
+            [[ -n ${ref} ]] || continue
+            if [[ ${ref} != "${prefix}"* ]]; then
+              echo "::notice::base outside ${prefix}: ${ref} — judged by base-attest.yml or lint:from-digests, not here"
+              continue
+            fi
+            if [[ ${ref} != *"@sha256:"* ]]; then
+              echo "::error::${ref} is a first-party base with no digest — there is nothing to verify; pin as image:tag@sha256:…"
+              exit 1
+            fi
+            digest="${ref##*@}"
+            name="${ref%@*}"
+            repo_path="${name%%:*}"
+            tag="${name#"${repo_path}"}"
+            tag="${tag#:}"
+            case "${tag}" in
+              "")
+                emsg="${ref} carries a digest but no tag, so the ref that produced it cannot be derived — pin as"
+                emsg+=" image:tag@sha256:… (Renovate rolls both together)"
+                echo "::error::${emsg}"
+                exit 1
+                ;;
+              latest)
+                # The continuous archetype's stream tag. Its publishes
+                # run from a branch (continuous.yml's guard refuses
+                # tags) and the org's default branch is main.
+                source_ref="refs/heads/main"
+                ;;
+              *)
+                # `1.2.3`, `1.2.3-pg18`, `1.2.3-pg18-artifact`: the
+                # class decorates the version, the version names the
+                # tag. Anything else is a shape this org's publish
+                # path cannot produce, so it is refused rather than
+                # guessed at.
+                core="${tag%%-*}"
+                if [[ ! ${core} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                  emsg="${ref}: cannot derive the ref that produced it from tag '${tag}' — org image tags are"
+                  emsg+=" 'latest' or a version, optionally class-decorated (1.2.3-pg18)"
+                  echo "::error::${emsg}"
+                  exit 1
+                fi
+                source_ref="refs/tags/v${core}"
+                ;;
+            esac
+            # --owner and --signer-workflow together are the org claim:
+            # signed by the org's ONE signer, from a repository in this
+            # owner's account. --signer-digest is deliberately absent:
+            # it pins the signer COMMIT, and a base signed at an older
+            # signer than the tree building on it is the normal case,
+            # not a finding (measured: release-lab v0.27.0's index
+            # carries signer e4a285f8 while this tree pins e90a971e).
+            if ! gh attestation verify "oci://${repo_path}@${digest}" \
+              --owner "${owner}" \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --signer-workflow "${signer}" \
+              --source-ref "${source_ref}" \
+              --deny-self-hosted-runners > /dev/null; then
+              emsg="${ref}: no org attestation for these bytes at ${source_ref} — a first-party base is verified"
+              emsg+=" before it is instantiated (#715); the refusal above is gh's own"
+              echo "::error::${emsg}"
+              exit 1
+            fi
+            echo "::notice::approved first-party base: ${ref} (produced at ${source_ref})"
+            checked=$((checked + 1))
+          done <<< "${refs}"
+          echo "::notice::${checked} first-party base(s) verified"
+      - name: Install mise and the caller's pinned toolchain
+        # Either path compiles in the CALLER's pinned toolchain, which
+        # is the whole point of #295 — the declaration changes who
+        # writes the recipe, never whose rust runs it.
+        if: ${{ inputs.prepare != '' || inputs.binary-crate != '' }}
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin
+          # (#117: nothing unpinned on an attested path, the installer
+          # included).
+          version: 2026.11.4
+          # No tool cache anywhere downstream of a signature.
+          cache: false
+
+      - name: Materialise build artifacts into the context (prepare)
+        if: inputs.prepare != ''
+        env:
+          ARCH: ${{ matrix.arch }}
+          # The determinism inputs the class gives its own build steps, given
+          # to the caller's compile too — measured, not assumed (#295): two
+          # clean `cargo build --release --locked` runs of the same crate
+          # differ without SOURCE_DATE_EPOCH and are byte-identical with it,
+          # because a build script that stamps a time (cc, and anything
+          # embedding a build date) has nothing else to read. This is the
+          # actual root cause of the oci-image class never reproducing: the
+          # in-container build never had the epoch either, so moving the
+          # compile out was necessary but not sufficient. build-rust-binary
+          # exports the same value and reproduces bit for bit, which is what
+          # made the difference measurable in the first place.
+          SOURCE_DATE_EPOCH: ${{ inputs.source-epoch }}
+          UNTRUSTED_PREPARE: ${{ inputs.prepare }}
+        run: |
+          set -euo pipefail
+          if [[ ! -x ${UNTRUSTED_PREPARE} ]]; then
+            echo "::error::prepare ${UNTRUSTED_PREPARE} is not executable"
+            exit 1
+          fi
+          "${UNTRUSTED_PREPARE}" "${ARCH}"
+      - name: Build the declared binary into the context (binary-crate)
+        # The declarative half (#775), through the one definition the
+        # rust-binary class's leg runs: same pinned toolchain, same
+        # determinism inputs, same staging rule, and the inventory plan
+        # this class could not otherwise emit (#773). It runs on BOTH
+        # repro-gate legs, exactly as `prepare` does — a compile the
+        # rebuild skipped would leave the gate proving the image build
+        # and not the path.
+        #
+        # SOURCE_DATE_EPOCH comes from the facts job, the same resolved
+        # instant every other timestamp surface of this release is a
+        # function of; the script would otherwise read the commit
+        # itself, which is the same value by a second derivation.
+        if: inputs.binary-crate != ''
+        env:
+          TARGET: ${{ matrix.target }}
+          SOURCE_DATE_EPOCH: ${{ inputs.source-epoch }}
+          PACKAGE_DIR: ${{ inputs.binary-crate }}
+          STAGE_DIR: ${{ inputs.context }}/dist
+          # The document names what the artifact IS — an image — while
+          # the params name what it is MADE OF, a cargo closure; the two
+          # disagreeing silently is the #544 defect. `-image` names the
+          # DOCUMENT apart from the package, the way the pgrx cells name
+          # theirs `<crate>-pg<major>`: one crate can ship as a binary
+          # AND inside an image, and two documents describing one
+          # artifact name is a union the engine rightly refuses.
+          #
+          # The class name is GIVEN, never chosen here (#843): the one
+          # derivation lives in publish.yml's guard, which reads the same
+          # `binary-crate` declaration this step is gated on. A leg that
+          # picked its own name would be that rule stated twice, and the
+          # day the two spellings differ the plans judgment reds with
+          # "a leg ran for an undeclared class".
+          #
+          # Negated deliberately: an empty string is FALSY in a GitHub
+          # expression, so `repro && '' || inputs.plan-class` would yield
+          # the class on both legs.
+          PLAN_CLASS: ${{ !inputs.repro && inputs.plan-class || '' }}
+          PLAN_DOC_PREFIX: sbom-image-
+          PLAN_ARTIFACT_SUFFIX: -image
+        run: |
+          set -euo pipefail
+          # The crate DIRECTORY is the caller's declaration; the package
+          # NAME is cargo's answer, read from the manifest that lives
+          # there and never from the directory's basename — the two
+          # agree by convention and diverge without warning. Exactly one
+          # package must live there, the same refusal build-wasm-npm
+          # makes of its crate-dir.
+          meta=$(cargo metadata --no-deps --format-version 1 \
+            --manifest-path "${PACKAGE_DIR}/Cargo.toml")
+          mp=$(realpath "${PACKAGE_DIR}/Cargo.toml")
+          PACKAGE=$(jq -r --arg mp "${mp}" \
+            '[.packages[] | select(.manifest_path == $mp) | .name]
+             | if length != 1 then error("binary-crate resolves to \(length) packages") else .[0] end' \
+            <<< "${meta}")
+          export PACKAGE
+          .org-canon/release/rust-build.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        # The plan the sbom job folds into the release view. Both arches
+        # state the same mapping and the engine collapses them, exactly
+        # as the rust-binary targets and the pgrx cells do.
+        #
+        # Gated on the class, not on the crate (#843): the step above
+        # writes a plan only when it was given a class to plan under, and
+        # `if-no-files-found: error` would otherwise turn "nothing to
+        # plan" into a failed build. The continuous archetype is exactly
+        # that case — it declares a crate and builds no release view — and
+        # it now uploads nothing rather than an artifact nothing fetched.
+        if: ${{ inputs.plan-class != '' && !inputs.repro }}
+        with:
+          name: sbom-plan-oci-${{ matrix.arch }}
+          path: plan/plan.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Resolve the image name
+        id: name
+        run: |
+          set -euo pipefail
+          # ghcr.io rejects an owner with capitals and the failure lands at
+          # push time, so it is lowercased here rather than discovered
+          # three minutes into a release.
+          image="ghcr.io/$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+      - name: Create a container-driver builder
+        run: |
+          set -euo pipefail
+          # The runner's default buildx builder uses the `docker` driver,
+          # which cannot push by digest — "push-by-digest is currently not
+          # implemented for docker driver". The docker-container driver
+          # can, and it still supports --load for the smoke test, so one
+          # builder serves both halves.
+          #
+          # No --driver-opt cache settings and no registry mirror: this
+          # workflow publishes, so it carries no cache of any kind.
+          docker buildx create --use --name org-oci --driver docker-container
+      - name: Build for testing, loaded and unpublished
+        env:
+          ARCH: ${{ matrix.arch }}
+          FACTS: ${{ inputs.facts }}
+          SOURCE_DATE_EPOCH: ${{ inputs.source-epoch }}
+          UNTRUSTED_CONTEXT: ${{ inputs.context }}
+          UNTRUSTED_DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          # The SAME labels as the push below, from the same map: labels
+          # are part of the config the smoke test runs against.
+          pairs=$(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "${FACTS}")
+          LABELS=()
+          while IFS= read -r kv; do LABELS+=(--label "${kv}"); done <<< "${pairs}"
+          # No --platform: the runner IS the target architecture, so the
+          # default native build is the guarantee that no emulation crept
+          # in. --load puts it in the local daemon, where it can be tested
+          # and cannot be pulled by anyone.
+          docker buildx build \
+            --file "${UNTRUSTED_CONTEXT}/${UNTRUSTED_DOCKERFILE}" \
+            "${LABELS[@]}" \
+            --load --tag "oci-under-test:${ARCH}" \
+            "${UNTRUSTED_CONTEXT}"
+      - name: Smoke the loaded image
+        if: ${{ inputs.smoke-test != '' && !inputs.repro }}
+        env:
+          ARCH: ${{ matrix.arch }}
+          UNTRUSTED_SMOKE: ${{ inputs.smoke-test }}
+        run: |
+          set -euo pipefail
+          if [[ ! -x ${UNTRUSTED_SMOKE} ]]; then
+            echo "::error::smoke-test ${UNTRUSTED_SMOKE} is not executable"
+            exit 1
+          fi
+          "${UNTRUSTED_SMOKE}" "oci-under-test:${ARCH}"
+      - name: Push by digest
+        id: push
+        if: ${{ !inputs.dry-run }}
+        env:
+          ARCH: ${{ matrix.arch }}
+          FACTS: ${{ inputs.facts }}
+          SOURCE_DATE_EPOCH: ${{ inputs.source-epoch }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.name.outputs.image }}
+          UNTRUSTED_CONTEXT: ${{ inputs.context }}
+          UNTRUSTED_DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          pairs=$(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "${FACTS}")
+          LABELS=()
+          while IFS= read -r kv; do LABELS+=(--label "${kv}"); done <<< "${pairs}"
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          # push-by-digest: no tag yet. A tag would make the untested
+          # per-architecture image pullable by name before the manifest
+          # exists and before anything has been proved.
+          #
+          # This rebuilds, but from the same builder in the same job, so
+          # every layer is already resolved. That is builder state, not a
+          # cache anyone else can poison.
+          # Build as its own statement, then read the metadata. Sequencing
+          # the two inside one command substitution would hand the exit
+          # status to jq and mask a failed build entirely, and silencing
+          # the build would throw away the log needed to explain it.
+          #
+          # oci-mediatypes=true is load-bearing, not cosmetic: the exporter
+          # default is false, a Docker-mediatype manifest makes imagetools
+          # create assemble a Docker manifest list, and that format has no
+          # annotations field — buildx drops index annotations SILENTLY
+          # (docker/buildx#1965). The assert step downstream proves the
+          # published index is OCI precisely because this is the failure
+          # mode that looks exactly like success.
+          # --provenance=false and --sbom=false, measured (#118): buildx
+          # otherwise embeds a per-build attestation manifest carrying
+          # wall-clock metadata, so two identical builds NEVER share a
+          # digest — the lab's first full-width gate run proved it on
+          # every image class. The org's provenance is its own signed
+          # evidence (the signer), never the embedded blob, so nothing
+          # is lost. rewrite-timestamp=true clamps layer mtimes to
+          # SOURCE_DATE_EPOCH — RUN and COPY otherwise record the
+          # build's own clock into the layer bytes.
+          outspec="type=image,name=${IMAGE},push-by-digest=true"
+          outspec+=",name-canonical=true,push=true,oci-mediatypes=true,rewrite-timestamp=true"
+          docker buildx build \
+            --file "${UNTRUSTED_CONTEXT}/${UNTRUSTED_DOCKERFILE}" \
+            "${LABELS[@]}" \
+            --provenance=false --sbom=false \
+            --output "${outspec}" \
+            --metadata-file /tmp/meta.json \
+            "${UNTRUSTED_CONTEXT}"
+          digest=$(jq -r '."containerimage.digest"' /tmp/meta.json)
+          if [[ ! ${digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no digest from the push"
+            exit 1
+          fi
+          # Written to a file, not to a job output. Outputs of a MATRIX
+          # job overwrite one another — the legs share one output map — so
+          # a digest passed that way is a race that surfaces later as a
+          # manifest silently missing an architecture.
+          mkdir -p /tmp/digests
+          printf '%s' "${digest}" > "/tmp/digests/${ARCH}"
+          echo "::notice::${ARCH} pushed as ${digest}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.dry-run }}
+        with:
+          name: ${{ inputs.repro && 'repro-' || '' }}oci-digest-${{ matrix.arch }}
+          path: /tmp/digests/
+          if-no-files-found: error
+          retention-days: 1
+...

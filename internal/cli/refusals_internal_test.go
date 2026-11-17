@@ -31,7 +31,7 @@ const baseScopeName = "org-pins"
 func baseImagesPolicy(t *testing.T, pinFile string) *assert.Policy {
 	t.Helper()
 
-	content := `{"schema": 7, "issuer": "https://token.example.com",
+	content := `{"schema": 8, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "classes": {"oci-image": {"bundles": ["b.jsonl"]}},
@@ -135,7 +135,7 @@ func TestAssertUsageMatrix(t *testing.T) {
 	dir := t.TempDir()
 
 	notAPolicy := filepath.Join(dir, "not-a-policy.json")
-	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 7}`), 0o600); err != nil {
+	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 8}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -697,7 +697,7 @@ func TestBasePinsNamesADeclaredScope(t *testing.T) {
 func provenanceScopePolicy(t *testing.T) *assert.Policy {
 	t.Helper()
 
-	content := `{"schema": 7, "issuer": "https://token.example.com",
+	content := `{"schema": 8, "issuer": "https://token.example.com",
 	  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
 	    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
 	    "classes": {"oci-image": {"bundles": ["b.jsonl"]}},

@@ -1,0 +1,320 @@
+# Mint the version DOI on Zenodo, after the release is public — after
+# proof, like everything else (docs/release.md). This is the deliberate
+# replacement for Zenodo's flip-switch GitHub integration, whose webhook
+# carries no shared-secret token (a Critical-risk Webhooks posture): here
+# DOI minting is a job in the attested release flow, authenticated with a
+# scoped token the repository owns.
+#
+# Runs no caller code. The deposit is the release's source tarball plus
+# metadata read from CITATION.cff at the released tag — the file
+# fix:citation derives from REUSE.toml and lint:citation keeps honest,
+# so the permanent record's licence and creators are the tree's own
+# declarations, never a literal or a fallback (#316 findings 1+6: the
+# v0.22.1 sandbox record said MIT for a 0BSD repo and credited the
+# machine account, because both fields were hard-coded fallbacks). The
+# file is REQUIRED here even though the lint already gates it upstream:
+# a permanent record fails closed, never publishes a guess.
+#
+# Versioning: Zenodo's concept DOI covers the software; each release gets
+# a version DOI. The concept is found by the concept-DOI identifier
+# CITATION.cff records — a direct fetch, not a search, so the title
+# listing's 100-deposition page cap can never mis-resolve it (#316
+# addendum A: past the cap a title search either errors on newversion
+# or silently splits the citation record). With no identifier recorded
+# this is the FIRST mint: guarded by asserting no submitted deposition
+# already bears the title, and the summary tells the human to record
+# the minted concept DOI in CITATION.cff before the next release.
+#
+# Idempotency (#484): the step's contract is a STATE — "a published
+# record for (concept, this version) exists" — not a call sequence.
+# Both measured failure directions are lost responses: v1.34.1 lost the
+# reply AFTER a successful publish (the run went red over a published
+# DOI), v0.7.0 lost a plain GET before any side effect. So the step
+# converges: a direct read of the concept's latest published version is
+# the oracle, consulted before acting (a rerun over a published DOI
+# exits green) and again after a failed publish (the truth is the
+# archive's state, never curl's exit code). Idempotent reads and PUTs
+# retry freely; POSTs never carry a curl retry — their safety is the
+# oracle, not repetition. A stale unpublished draft under the concept
+# (the wreckage of an interrupted run) is deleted before newversion, so
+# the step is rerunnable from any interruption point. First mints have
+# no prior state to converge to: there the title guard still refuses on
+# rerun, instructing the human — failing closed with the fix named.
+---
+name: mint-doi
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+    secrets:
+      zenodo-token:
+        # forwarding: universal
+        description: Zenodo personal access token (deposit:write + deposit:actions)
+        required: true
+
+permissions: {}
+
+jobs:
+  mint:
+    name: Deposit and publish the version DOI
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # download the release source tarball
+    steps:
+      - name: Deposit, then publish — the DOI names the released bytes
+        env:
+          ZENODO_TOKEN: ${{ secrets.zenodo-token }}
+          # Production, always — there is no sandbox lever (#316): a lab
+          # that rehearses DOIs against sandbox never proves the DOI
+          # path, and the sandbox's mirrored API is where the false
+          # v0.22.1 record hid. A DOI squats no namespace, so rehearsal
+          # releases minting real version DOIs under one concept is the
+          # design, stated in release-lab's README.
+          BASE_URL: https://zenodo.org
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          # Who is calling, for registries whose access policy asks
+          # (#907). Measured 2026-08-24: zenodo.org serves an
+          # unidentified request today, so this is not fixing a live
+          # break the way the crates.io exchange was — it is sent
+          # because identifying the caller is the documented contract,
+          # and because this path mints DOIs, where an unattributed 403
+          # would land AFTER the commitment point.
+          ORG_USER_AGENT: >-
+            monumental-archive-publish
+            (https://github.com/monumental-archive/.github)
+        run: |
+          set -euo pipefail
+          # Helpers split by idempotency (#484). Reads and PUTs converge
+          # on the same state however often they run, so they retry
+          # transient failures freely. POSTs create — they carry NO curl
+          # retry ever; their safety is the state oracle below, not
+          # repetition. Token in the header, never the URL — URLs land
+          # in logs.
+          retry=(--retry 5 --retry-all-errors --retry-max-time 120)
+          api() {
+            # Authenticated non-idempotent call (POST/DELETE): one shot.
+            curl -sSf -H "User-Agent: ${ORG_USER_AGENT}" \
+              -H "Authorization: Bearer ${ZENODO_TOKEN}" "$@"
+          }
+          api_idem() {
+            # Authenticated idempotent call (GET/PUT): retries.
+            curl -sSf "${retry[@]}" -H "User-Agent: ${ORG_USER_AGENT}" \
+              -H "Authorization: Bearer ${ZENODO_TOKEN}" "$@"
+          }
+          pub_get() {
+            # PUBLIC read that may REDIRECT: the concept record 302s to
+            # its latest version, so -L — and deliberately no token:
+            # credentials are never sent through a redirect for a read
+            # that needs none. Measured on canon v1.22.0: the token
+            # helper returned the HTML redirect body, jq died on it, and
+            # the DOI was lost after the commitment point (#316).
+            curl -sSfL "${retry[@]}" -H "User-Agent: ${ORG_USER_AGENT}" "$@"
+          }
+          oracle() {
+            # The state oracle (#484): the concept's latest PUBLISHED
+            # version, read directly — no search, so no page cap to
+            # mis-resolve (#316 addendum A). Prints
+            # "<doi>\t<conceptdoi>\t<recid>\t<version>"; a genuinely
+            # absent or malformed answer fails the caller's capture.
+            pub_get "${BASE_URL}/api/records/${concept_recid}/versions/latest" \
+              | jq -er '[.doi, (.conceptdoi // "unrecorded"), (.id | tostring),
+                  (.metadata.version // "unversioned")] | @tsv'
+          }
+          done_summary() {
+            {
+              echo "### DOI minted"
+              echo
+              echo "- version: \`$1\`"
+              echo "- concept: \`$2\`"
+              if [[ -n ${3:-} ]]; then
+                echo
+                echo "$3"
+              fi
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::notice::DOI $1 (concept $2)"
+          }
+          repo="${GITHUB_REPOSITORY}"
+          title="${repo}"
+
+          # The released source, from GitHub's own tarball of the tag.
+          gh api "repos/${repo}/tarball/${TAG}" > source.tar.gz
+
+          # Metadata: CITATION.cff at the released tag — the attested
+          # revision, so the record states what the tag's tree states.
+          # Required: a permanent record never publishes a fallback
+          # (#316 findings 1+6). Test gh's exit status, not the
+          # pipeline's: on a 404 gh prints the JSON error body to
+          # stdout, and piping that into base64 -d would fail only
+          # because an error body happens not to be valid base64. Decide
+          # on "does the file exist", not "did the decoder choke".
+          if ! content=$(gh api "repos/${repo}/contents/CITATION.cff?ref=${TAG}" --jq .content 2> /dev/null) \
+            || ! printf '%s\n' "${content}" | base64 -d > cff.yaml; then
+            emsg="no CITATION.cff at ${TAG} — a DOI-minting repo derives one from REUSE.toml (fix:citation; lint:citation"
+            emsg+=" gates this upstream)"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          # The file is fix:citation's render, so its format is the
+          # generator's: these reads parse what the generator writes.
+          name_lines=$(grep -A1 '^[[:space:]]*- family-names:' cff.yaml \
+            | paste - - | sed -E 's/.*family-names: *"?([^"]*)"?.*given-names: *"?([^"]*)"?.*/\1, \2/' || true)
+          if [[ -z ${name_lines} ]]; then
+            echo "::error::CITATION.cff carries no authors — the record credits people, never an account name"
+            exit 1
+          fi
+          creators=$(printf '%s\n' "${name_lines}" | jq -R '{name: .}' | jq -sc '.')
+          licence=$(sed -n 's/^license: //p' cff.yaml | sed -n 1p)
+          if [[ ! ${licence} =~ ^[A-Za-z0-9.+-]+$ ]]; then
+            emsg="CITATION.cff license '${licence}' is not a single SPDX id — Zenodo's vocabulary holds ids, not"
+            emsg+=" expressions"
+            echo "::error::${emsg}"
+            exit 1
+          fi
+          desc="Release ${TAG} of ${repo}. Built, proven and signed by the monumental-archive"
+          desc+=" release pipeline; verification instructions ship with the GitHub release."
+          metadata=$(jq -nc \
+            --arg title "${title}" \
+            --arg desc "${desc}" \
+            --arg version "${UNTRUSTED_VERSION}" \
+            --arg licence "${licence}" \
+            --argjson creators "${creators}" \
+            '{metadata: {title: $title, upload_type: "software",
+              description: $desc, version: $version, creators: $creators,
+              access_right: "open", license: ($licence | ascii_downcase)}}')
+
+          # The concept, from the identifier CITATION.cff records — a
+          # direct fetch that resolves the concept record to its latest
+          # version. No title listing, so the 100-deposition page cap
+          # can never mis-resolve the concept or split the citation
+          # record (#316 addendum A).
+          concept_doi=$(awk '/^identifiers:/{f=1} f && /value:/{print $NF; exit}' cff.yaml)
+          if [[ -z ${concept_doi} ]]; then
+            # First mint. Refuse if a submitted deposition already bears
+            # this title — a concept the tree failed to record; minting
+            # again would split the citation record permanently.
+            listing=$(api_idem "${BASE_URL}/api/deposit/depositions?q=title:%22${repo##*/}%22&size=10")
+            existing=$(jq -r --arg t "${title}" '[.[] | select(.title == $t and .submitted == true)] | length' <<< "${listing}")
+            if [[ ${existing} != "0" ]]; then
+              emsg="a submitted deposition already bears this title but CITATION.cff records no concept DOI — record it"
+              emsg+=" under identifiers: before minting again"
+              echo "::error::${emsg}"
+              exit 1
+            fi
+            dep=$(api -X POST "${BASE_URL}/api/deposit/depositions" \
+              -H 'Content-Type: application/json' --data '{}')
+          else
+            # New version of the recorded concept; its draft carries the
+            # previous files, which are removed so the deposit is exactly
+            # this release.
+            concept_recid="${concept_doi##*.}"
+            if [[ ! ${concept_recid} =~ ^[0-9]+$ ]]; then
+              echo "::error::CITATION.cff concept DOI '${concept_doi}' does not end in a Zenodo record id"
+              exit 1
+            fi
+            # THE ORACLE (#484): the concept's latest published version,
+            # read directly — no search, so no page cap to mis-resolve
+            # (#316 addendum A). One read answers two questions: "is the
+            # goal state already true?" (a rerun after a lost publish
+            # response finds this version already latest, and the DOI is
+            # the outcome, not the call — exit green) and, if not,
+            # "which record does newversion grow from?".
+            # shellcheck disable=SC2310,SC2312  # an oracle failure must
+            # reach the error branch below, not abort via set -e
+            if ! IFS=$'\t' read -r latest_doi latest_concept latest latest_version < <(oracle); then
+              echo "::error::the concept record ${concept_recid} did not resolve to a latest published version"
+              exit 1
+            fi
+            if [[ ${latest_version} == "${UNTRUSTED_VERSION}" ]]; then
+              done_summary "${latest_doi}" "${latest_concept}" \
+                "**Already published** — a previous attempt minted this version's DOI; this run converged on it (#484)."
+              exit 0
+            fi
+            # Clean up the wreckage of an interrupted run: an unpublished
+            # draft under this concept blocks newversion, and its contents
+            # are unknown — delete it and build fresh, so the deposit's
+            # contents are this run's by construction. Published records
+            # are never touched: the jq filter demands submitted == false
+            # AND this concept, whatever the search matched.
+            drafts=$(api_idem "${BASE_URL}/api/deposit/depositions?q=conceptrecid:${concept_recid}&status=draft&size=50" \
+              | jq -r --arg c "${concept_recid}" \
+                '.[] | select(.submitted == false and ((.conceptrecid // "") | tostring) == $c) | .links.self')
+            while IFS= read -r d; do
+              if [[ -n ${d} ]]; then
+                echo "::notice::deleting stale unpublished draft ${d} left by an interrupted run"
+                api -X DELETE "${d}" > /dev/null
+              fi
+            done <<< "${drafts}"
+            newv=$(api -X POST "${BASE_URL}/api/deposit/depositions/${latest}/actions/newversion")
+            draft=$(jq -r '.links.latest_draft' <<< "${newv}")
+            dep=$(api_idem "${draft}")
+            depself=$(jq -r .links.self <<< "${dep}")
+            file_ids=$(jq -r '.files[].id' <<< "${dep}")
+            while IFS= read -r f; do
+              if [[ -n ${f} ]]; then
+                api -X DELETE "${depself}/files/${f}" > /dev/null
+              fi
+            done <<< "${file_ids}"
+          fi
+          bucket=$(jq -r '.links.bucket' <<< "${dep}")
+          self=$(jq -r '.links.self' <<< "${dep}")
+          publish=$(jq -r '.links.publish' <<< "${dep}")
+
+          # PUTs are idempotent — bucket upload and metadata converge on
+          # the same state however often they run, so they retry.
+          api_idem -X PUT "${bucket}/${repo##*/}-${UNTRUSTED_VERSION}.tar.gz" \
+            --data-binary @source.tar.gz -H 'Content-Type: application/octet-stream' > /dev/null
+          api_idem -X PUT "${self}" -H 'Content-Type: application/json' \
+            --data "${metadata}" > /dev/null
+          # The commitment point. One POST, no curl retry — then the
+          # truth is the archive's state, never curl's exit code (#484,
+          # measured on v1.34.1: the publish landed and the response was
+          # lost, so exit 22 reported failure over a published DOI). On
+          # any failure to get a DOI out of the response, re-read the
+          # oracle: present means this run's publish landed — green;
+          # absent means it genuinely failed — red. First mints have no
+          # concept to re-read; there a lost response stays red, and the
+          # rerun fails closed on the title guard with the fix named.
+          doi=""
+          # shellcheck disable=SC2310  # a failed publish must reach the
+          # oracle re-read below, not abort via set -e
+          if published=$(api -X POST "${publish}"); then
+            # An unparsable success body must reach the re-read below,
+            # never die here — hence the swallowed jq failures.
+            doi=$(jq -r '.doi // empty' <<< "${published}" || true)
+            concept=$(jq -r '.conceptdoi // "first release — concept DOI equals this version"' <<< "${published}" || true)
+          fi
+          if [[ -z ${doi} && -n ${concept_doi} ]]; then
+            # Three reads, spaced — a publish that landed as the response
+            # was lost may take a moment to appear as the latest version.
+            for attempt in 1 2 3; do
+              # shellcheck disable=SC2310,SC2312  # a failed re-read means
+              # "not recovered", handled by the fall-through — never abort
+              if IFS=$'\t' read -r now_doi now_concept _ now_version < <(oracle) \
+                && [[ ${now_version} == "${UNTRUSTED_VERSION}" ]]; then
+                done_summary "${now_doi}" "${now_concept}" \
+                  "**Published despite a lost response** — the publish landed; this run recovered the DOI from the record (#484)."
+                exit 0
+              fi
+              if [[ ${attempt} -lt 3 ]]; then sleep 20; fi
+            done
+          fi
+          if [[ -z ${doi} ]]; then
+            echo "::error::publish failed and the concept's latest published version is not ${UNTRUSTED_VERSION}"
+            exit 1
+          fi
+          first=""
+          if [[ -z ${concept_doi} ]]; then
+            first="**First mint** — record the concept DOI in CITATION.cff
+          (\`identifiers:\`, via fix:citation's preserved field) before
+          the next release; later mints resolve the concept from it."
+          fi
+          done_summary "${doi}" "${concept}" "${first}"
+...

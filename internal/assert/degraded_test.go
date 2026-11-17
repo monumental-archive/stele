@@ -920,7 +920,7 @@ func TestPolicyStructuralRefusals(t *testing.T) {
 	}{
 		{
 			name: "no evidence section",
-			doc:  `{"schema": 7}`,
+			doc:  `{"schema": 8}`,
 			want: "evidence is absent",
 		},
 		{

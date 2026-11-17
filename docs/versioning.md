@@ -28,7 +28,7 @@ refusal share one definition.
 ## One epoch for live-read documents
 
 Every stele document that is **read live** carries the SAME number,
-`schema`, currently **7**:
+`schema`, currently **8**:
 
 | document | where |
 | --- | --- |
@@ -78,7 +78,7 @@ verbatim:
 
 ```console
 $ stele verify policy --verify-policy slsa/verify-policy.json
-policy: jsonx: schema 6 is not the implemented schema 7 — refusing, never best-efforting
+policy: jsonx: schema 7 is not the implemented schema 8 — refusing, never best-efforting
 ```
 
 The command is offline and side-effect-free: it opens one file, runs
@@ -107,16 +107,17 @@ reader that agrees with them today.
 
 ## Identifiers written into history keep their own numbers
 
-Two identifiers are NOT part of the epoch, because the documents
+Three identifiers are NOT part of the epoch, because the documents
 carrying them already exist and cannot be rewritten on demand:
 
 | identifier | why it is separate |
 | --- | --- |
 | chain note `version` (`internal/chain`, [chain-format.md](chain-format.md)) | Notes live in a walked ledger. Moving the number means re-emitting every link; under one epoch, a report field gaining a key would force a ledger re-emission. |
 | evidence-manifest `schema` (`internal/evidence`) | Manifests are published assets on releases that already shipped. Moving the number orphans every one of them until it is re-emitted, so under one epoch a report field gaining a key would force a re-emission across the corpus. It moved to 2 when entries gained their type (stele#156), to 3 when they gained the class that built them (stele#185), to 4 when they gained the target that produced them (stele#223), and to 5 when a release could name what it published to a registry (stele#329). |
+| signer-certificates checkpoint `schema` (`internal/ctlog`, [assert-policy-schema.md](assert-policy-schema.md#the-signercertificates-section)) | A checkpoint persists between runs wherever its caller keeps it, and is the judged prefix of a log. Under one epoch a policy key change would orphan every watch's checkpoint, and the only way back is a person re-founding it by `--start-at` — a gap in the watch bought by an unrelated key. It is 1 (stele#387). |
 
-Both therefore move only when their OWN shape moves, under the same
-rule. History is honest about what it holds; it is never renumbered
+All three therefore move only when their OWN shape moves, under the
+same rule. History is honest about what it holds; it is never renumbered
 to match a document it has nothing to do with.
 
 Where the two differ is what can be done about the documents already

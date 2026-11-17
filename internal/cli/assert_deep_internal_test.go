@@ -75,7 +75,7 @@ func TestLoadFullDepth(t *testing.T) {
 		t.Parallel()
 
 		p := filepath.Join(t.TempDir(), "vp.json")
-		if err := os.WriteFile(p, []byte(`{"schema": 7}`), 0o600); err != nil {
+		if err := os.WriteFile(p, []byte(`{"schema": 8}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -395,8 +395,8 @@ func blindBaseApproval(t *testing.T, respond http.HandlerFunc, says string) {
 				`"pinFile": "docker/base-images.toml", "attestorRepo": ".github", `+
 				`"attestorIdentity": "https://github.com/acme/.github/.github/workflows/base-attest.yml@refs/heads/main", `+
 				`"predicateType": "https://acme.example/attestations/base-image-approval/v1"}]}}}`, 1)
-		scoped = strings.Replace(scoped, `{"schema": 7, `,
-			`{"schema": 7, "issuer": "https://token.actions.githubusercontent.com", `, 1)
+		scoped = strings.Replace(scoped, `{"schema": 8, `,
+			`{"schema": 8, "issuer": "https://token.actions.githubusercontent.com", `, 1)
 
 		if scoped == files["policy.json"] {
 			t.Fatal("the fixture policy changed shape — the base-scope rewrite matched nothing")

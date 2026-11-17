@@ -1,0 +1,401 @@
+# Artifact class: rust-binary. Statically linked Linux binaries and native
+# macOS binaries, built on the hardware they will run on (docs/release.md).
+#
+#   Native hardware per target. No cross-compilation between architectures
+#   and no emulation: a binary tested under emulation has not been shown to
+#   work where it runs. The only "cross" is libc — musl instead of glibc on
+#   the Linux legs, which the same machine links and executes natively.
+#
+#   musl-tools comes from apt, deliberately. Rust's *-musl targets bundle
+#   their own musl libc and self-link pure-Rust code, but one C dependency
+#   (ring, mimalloc — both in iiif-server's lock) needs a musl-targeting C
+#   compiler, and a transitive C dep can arrive in any PR. Installing it
+#   unconditionally keeps every build identical. Distro-signed via Ubuntu's
+#   own mirrors; Scorecard's Pinned-Dependencies does not examine apt (read
+#   from checks/raw/shell_download_validate.go, not from the docs).
+#
+#   Builds are reproducible by construction (Best Practices Silver
+#   build_repeatable): SOURCE_DATE_EPOCH from the released commit,
+#   incremental compilation off, paths remapped, symbols kept (stripping
+#   would destroy the cargo-auditable section), fat LTO instead of the
+#   profile's default thin LOCAL LTO — which was measured not to
+#   reproduce, #778 — and archives normalised. The first four live in
+#   release/rust-build.sh with the compile they govern; the last is
+#   this file's own step.
+#
+# No cache of any kind: everything downstream of this job gets signed.
+---
+name: build-rust-binary
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      targets:
+        # forwarding: universal
+        description: >
+          Comma-separated subset of the canon targets. The plan job refuses
+          anything outside the canon list — a typo must fail the release,
+          not quietly build three targets instead of four.
+        required: false
+        type: string
+        default: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin
+      smoke-test:
+        # forwarding: universal
+        description: >
+          Script proving a built binary does the one thing it exists to do.
+          Receives the directory holding the leg's binaries as $1 and the
+          target triple as $2, and runs on every leg — on the machine class
+          the binaries will ship for. Empty means no smoke test, which is
+          permitted and unwise.
+        required: false
+        type: string
+        default: ""
+      ref:
+        # forwarding: discretionary — only the repro-check comparator rebuilds at a foreign ref
+        description: >
+          Ref of the caller repository to build; empty means the
+          triggering commit. Exists for the reproducibility audit, which
+          rebuilds a released tag from a run on main and must check out
+          the tag, not the branch that has moved past it.
+        required: false
+        type: string
+        default: ""
+      exclude:
+        # forwarding: universal
+        description: >
+          Comma-separated workspace members this class must not touch —
+          the pgrx-extension crate above all, which builds only inside
+          its Postgres container.
+        required: false
+        type: string
+        default: ""
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): build and hash the same
+          bytes, upload NO release-* artifact (the gate needs only the
+          subjects), skip the smoke tests (the gate proves bytes; the
+          first build already proved behaviour), and publish nothing.
+          Intermediate artifacts carry a repro- prefix so the two builds
+          of one run cannot collide or cross-contaminate a glob.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      subjects:
+        description: sha256sum manifest of the release archives.
+        value: ${{ jobs.collect.outputs.subjects }}
+      leg-subjects:
+        # The same digests, carrying the one fact only the leg that
+        # produced them holds: WHICH target it built. `stele emit
+        # manifest` types every build subject with its class and its
+        # target (schema 4, stele#223), and a rebuild's unit is a
+        # target — so a scoped rebuild can only be judged against the
+        # targets the manifest names. Flat `subjects` stays exactly as
+        # it is: it is what the signer signs, and a signed subject set
+        # is not the place to state a build fact.
+        description: >
+          sha256sum manifest of the release archives, each line
+          prefixed with the target whose leg produced it.
+        value: ${{ jobs.collect.outputs.leg-subjects }}
+      artifact-name:
+        description: Actions artifact holding the release archives.
+        value: ${{ jobs.collect.outputs.artifact-name }}
+
+permissions: {}
+
+jobs:
+  # The matrix is constructed, not configured: this job validates the
+  # requested targets against canon and emits the include list the build
+  # job consumes. A target GitHub's `if:` would have silently skipped is
+  # instead a target that either builds or fails the whole release here.
+  plan:
+    name: Validate the target list
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      expected: ${{ steps.plan.outputs.expected }}
+    steps:
+      - name: Derive the matrix from the requested targets
+        id: plan
+        env:
+          UNTRUSTED_TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra requested <<< "${UNTRUSTED_TARGETS// /}"
+          if ((${#requested[@]} == 0)); then
+            echo "::error::no targets requested — a release that builds nothing is not a release"
+            exit 1
+          fi
+          include="[]"
+          for t in "${requested[@]}"; do
+            case "${t}" in
+              x86_64-unknown-linux-musl) runner=ubuntu-24.04 ;;
+              aarch64-unknown-linux-musl) runner=ubuntu-24.04-arm ;;
+              x86_64-apple-darwin) runner=macos-15-intel ;;
+              aarch64-apple-darwin) runner=macos-15 ;;
+              *)
+                echo "::error::unknown target ${t}; canon targets only"
+                exit 1
+                ;;
+            esac
+            include=$(jq -c --arg t "${t}" --arg r "${runner}" \
+              '. + [{target: $t, runner: $r}]' <<< "${include}")
+          done
+          dupes=$(jq -r '[.[].target] | length - (unique | length)' <<< "${include}")
+          if [[ ${dupes} != "0" ]]; then
+            echo "::error::duplicate target requested"
+            exit 1
+          fi
+          matrix=$(jq -c '{include: .}' <<< "${include}")
+          expected=$(jq -c '[.[].target]' <<< "${include}")
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          echo "expected=${expected}" >> "${GITHUB_OUTPUT}"
+          jq -r '.[] | "::notice::will build \(.target) on \(.runner)"' <<< "${include}"
+  build:
+    name: Build and smoke ${{ matrix.target }}
+    needs: plan
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      # No MISE_GLOBAL_CONFIG_FILE and no toolbelt checkout, deliberately:
+      # a build leg needs exactly the caller's own pinned toolchain and
+      # nothing else. The belt is linters this job never runs — and it
+      # cannot be locked for linux-arm64 anyway (committed ships no
+      # aarch64-linux asset), which took the first arm64 leg down as a
+      # locked-mode install failure for a tool the leg had no use for.
+      # Measured in the lab, 2026-08-09.
+      #
+      # The reproducibility inputs are NOT restated here: they live in
+      # release/rust-build.sh beside the compile they govern — one
+      # definition for the two classes that ship a Rust binary (#775),
+      # so a flag can never reach one class's build and miss the other's.
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # The canon tree, for release/rust-build.sh: a symlink to the tree
+      # this run already resolved — no checkout, no network and no belt.
+      # The toolbelt note above is about MISE_GLOBAL_CONFIG_FILE, which
+      # stays absent.
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the caller's pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin — the
+          # v0.18.2 darwin leg pulled same-day mise 2026.8.4 while every
+          # pinned site ran 2026.8.3 (#117: nothing unpinned on an attested
+          # path, the installer included).
+          version: 2026.11.4
+          # No tool cache anywhere downstream of a signature.
+          cache: false
+
+      - name: Resolve the exclusion flags for the test invocation
+        env:
+          UNTRUSTED_EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          set -euo pipefail
+          flags=""
+          IFS=',' read -ra members <<< "${UNTRUSTED_EXCLUDE// /}"
+          for m in "${members[@]}"; do
+            if [[ -n ${m} ]]; then flags="${flags} --exclude ${m}"; fi
+          done
+          echo "EXCLUDE_FLAGS=${flags}" >> "${GITHUB_ENV}"
+      - name: Refuse a tag whose version disagrees with the manifest
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          meta=$(cargo metadata --no-deps --format-version 1)
+          manifest=$(jq -r '[.packages[].version] | unique | .[]' <<< "${meta}")
+          versions=$(wc -l <<< "${manifest}")
+          if [[ ${versions} -ne 1 ]]; then
+            echo "::error::workspace members disagree on version; canon is [workspace.package] inheritance"
+            exit 1
+          fi
+          if [[ ${manifest} != "${UNTRUSTED_VERSION}" ]]; then
+            echo "::error::tag says ${UNTRUSTED_VERSION}, manifest says ${manifest}"
+            exit 1
+          fi
+      # The class's whole compile, from the one definition the oci-image
+      # class's declarative binary also runs through (#775): the
+      # determinism inputs, the target and musl toolchain, the
+      # cargo-auditable assertion, the staging rule, and the inventory
+      # plan (#537). A caller states only its scope — here, the whole
+      # workspace minus the members the caller excluded.
+      - name: Build, stage and plan
+        env:
+          TARGET: ${{ matrix.target }}
+          EXCLUDE: ${{ inputs.exclude }}
+          STAGE_DIR: staged
+          # No plan on the repro leg: the comparator proves bytes, not
+          # inventories. The prefix is the rust-binary class's own
+          # planned obligation in slsa/assert-policy.json — and the
+          # marker below is how `lint:plan-producers` joins the two, so
+          # a prefix renamed on one side reds the gate (#833).
+          #
+          # plan-producer: rust-binary sbom-cargo-
+          #
+          # Negated deliberately: an empty string is FALSY in a GitHub
+          # expression, so `repro && '' || 'rust-binary'` would yield
+          # 'rust-binary' on both legs.
+          PLAN_CLASS: ${{ !inputs.repro && 'rust-binary' || '' }}
+          PLAN_DOC_PREFIX: sbom-cargo-
+        run: .org-canon/release/rust-build.sh
+
+      - name: Test on the target
+        # After the build, not before it: the target toolchain this test
+        # needs is installed by release/rust-build.sh, which is the one
+        # place the class's build environment is stated (#775).
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Against the release target, not the host default: the musl legs
+          # prove the statically linked test binaries actually run, which is
+          # the property the shipped binary claims.
+          # shellcheck disable=SC2086  # the flags are flag-shaped on purpose
+          cargo test --workspace --locked --target "${TARGET}" ${EXCLUDE_FLAGS}
+      - name: Smoke the binaries
+        if: ${{ inputs.smoke-test != '' && !inputs.repro }}
+        env:
+          TARGET: ${{ matrix.target }}
+          UNTRUSTED_SMOKE: ${{ inputs.smoke-test }}
+        run: |
+          set -euo pipefail
+          if [[ ! -x ${UNTRUSTED_SMOKE} ]]; then
+            echo "::error::smoke-test ${UNTRUSTED_SMOKE} is not executable"
+            exit 1
+          fi
+          "${UNTRUSTED_SMOKE}" "${PWD}/staged" "${TARGET}"
+      - name: Archive, normalised
+        env:
+          TARGET: ${{ matrix.target }}
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Same source, same bytes: fixed member order, zeroed ownership,
+          # mtimes clamped to the released commit, gzip stripped of its
+          # timestamp. macOS runners get gnu-tar as gtar; tar there is bsdtar,
+          # which has none of these flags.
+          tar=tar
+          if command -v gtar > /dev/null; then tar=gtar; fi
+          epoch=$(git log -1 --pretty=%ct)
+          name="${GITHUB_REPOSITORY##*/}-${UNTRUSTED_VERSION}-${TARGET}"
+          mkdir -p dist
+          "${tar}" --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@${epoch}" -C staged -cf - . | gzip -n > "dist/${name}.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.repro && 'repro-' || '' }}binary-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: sbom-plan-binary-${{ matrix.target }}
+          path: plan/plan.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Outputs of a MATRIX job overwrite one another, so the legs hand their
+  # archives over as artifacts and this job — the only place with all of
+  # them — refuses a missing leg and emits the one subject manifest.
+  collect:
+    name: Collect and refuse a partial set
+    needs:
+      - plan
+      - build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions: {}
+    outputs:
+      subjects: ${{ steps.manifest.outputs.subjects }}
+      leg-subjects: ${{ steps.manifest.outputs.leg-subjects }}
+      artifact-name: release-binaries
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.repro && 'repro-binary-*' || 'binary-*' }}
+          merge-multiple: true
+          path: dist
+
+      - name: Compute the subject manifest
+        id: manifest
+        env:
+          EXPECTED: ${{ needs.plan.outputs.expected }}
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          # Every planned target must have produced exactly its archive; a
+          # release quietly missing a platform looks like a success to
+          # everyone who runs the other three.
+          target_list=$(jq -r '.[]' <<< "${EXPECTED}")
+          targets=()
+          while IFS= read -r t; do
+            if [[ -n ${t} ]]; then targets+=("${t}"); fi
+          done <<< "${target_list}"
+          for t in "${targets[@]}"; do
+            matches=(./*-"${t}".tar.gz)
+            if ((${#matches[@]} != 1)); then
+              echo "::error::expected exactly one archive for ${t}, found ${#matches[@]}"
+              exit 1
+            fi
+          done
+          archives=(./*.tar.gz)
+          if ((${#archives[@]} != ${#targets[@]})); then
+            echo "::error::${#archives[@]} archives for ${#targets[@]} planned targets"
+            exit 1
+          fi
+          manifest=$(sha256sum ./*.tar.gz | sed 's| \./| |')
+          # The same digests once more, each prefixed with the target
+          # whose leg produced it. The prefix comes from the PLANNED
+          # target list this step has just proved matches exactly one
+          # archive each — never from parsing a target back out of a
+          # filename, which would be a second derivation of a fact the
+          # matrix already stated.
+          legs=()
+          for t in "${targets[@]}"; do
+            sums=$(sha256sum ./*-"${t}".tar.gz)
+            sums="${sums// .\// }"
+            while IFS= read -r line; do
+              legs+=("${t} ${line}")
+            done <<< "${sums}"
+          done
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            printf '%s\n' "${manifest}"
+            echo "SUBJECTS_EOF"
+            echo "leg-subjects<<LEGS_EOF"
+            printf '%s\n' "${legs[@]}"
+            echo "LEGS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "${manifest}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: release-binaries
+          path: dist/*.tar.gz
+          if-no-files-found: error
+...

@@ -1,0 +1,96 @@
+# Apply the advertised tags to already-pushed, gate-compared indexes
+# (#118). The builds push by digest only; this workflow — strictly
+# downstream of the repro gate — puts the EXACT manifest bytes the gate
+# compared under each tag: fetch the manifest by digest, PUT the same
+# bytes to the tag name, and assert the tag resolves to the digest. No
+# re-assembly, no imagetools create, so the digest cannot change under
+# the tag — the crane-tag pattern with nothing but curl.
+#
+# capability-boundary: this workflow runs no caller-supplied code — its
+# inputs are typed and whitelist-validated, its body is curl and jq
+# against ghcr.io — and it holds no id-token; `packages: write` is the
+# only capability, spent on manifest PUTs to names the digests already
+# live under.
+---
+name: tag-images
+
+"on":
+  workflow_call:
+    inputs:
+      images:
+        # forwarding: universal
+        description: >
+          JSON array of {image, tag, digest} — the untagged lowercase
+          ghcr.io reference, the tag to apply, and the index digest the
+          repro gate compared. Extra keys are ignored, so a build's
+          signing-matrix output passes through unchanged.
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  tag:
+    name: Apply the gated tags
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      packages: write # PUT the manifest under its tag
+    steps:
+      - name: Tag each gated digest with its advertised name
+        env:
+          UNTRUSTED_IMAGES: ${{ inputs.images }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! jq -e 'type == "array" and length > 0 and all(.[];
+              (.image | type == "string") and (.tag | type == "string")
+              and (.digest | type == "string"))' \
+            <<< "${UNTRUSTED_IMAGES}" > /dev/null 2>&1; then
+            echo "::error::images is not a JSON array of {image, tag, digest}"
+            exit 1
+          fi
+          jq -r '.[] | [.image, .tag, .digest] | @tsv' \
+            <<< "${UNTRUSTED_IMAGES}" > /tmp/images.tsv
+          while IFS=$'\t' read -r image tag digest; do
+            if [[ ! ${image} =~ ^ghcr\.io/[a-z0-9._/-]+$ ]]; then
+              echo "::error::not a lowercase ghcr.io reference"
+              exit 1
+            fi
+            if [[ ! ${tag} =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::implausible tag"
+              exit 1
+            fi
+            if [[ ! ${digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::digest is not sha256:<64 lowercase hex>"
+              exit 1
+            fi
+            name="${image#ghcr.io/}"
+            # ghcr's token endpoint accepts the Actions token as password
+            # for a pull+push scope on the package the job may write.
+            token=$(curl -sSf -u "${GITHUB_ACTOR}:${GH_TOKEN}" \
+              "https://ghcr.io/token?scope=repository:${name}:pull,push&service=ghcr.io" \
+              | jq -r '.token')
+            # Fetch the exact manifest bytes and their media type by
+            # digest; PUT the same bytes under the tag. Content-Type must
+            # round-trip or the registry would compute a different digest.
+            curl -sSf -H "Authorization: Bearer ${token}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+              -o /tmp/manifest.json -D /tmp/headers \
+              "https://ghcr.io/v2/${name}/manifests/${digest}"
+            ctype=$(grep -i '^content-type:' /tmp/headers | tr -d '\r' | cut -d' ' -f2)
+            curl -sSf -X PUT -H "Authorization: Bearer ${token}" \
+              -H "Content-Type: ${ctype}" \
+              --data-binary @/tmp/manifest.json \
+              "https://ghcr.io/v2/${name}/manifests/${tag}" > /dev/null
+            # The proof: the tag resolves to the gated digest, byte for
+            # byte the index the repro gate compared.
+            resolved=$(docker buildx imagetools inspect "${image}:${tag}" \
+              --format '{{json .Manifest}}' | jq -r '.digest')
+            if [[ ${resolved} != "${digest}" ]]; then
+              echo "::error::${image}:${tag} resolves to ${resolved}, gated ${digest}"
+              exit 1
+            fi
+            echo "::notice::${image}:${tag} -> ${digest}"
+          done < /tmp/images.tsv
+...

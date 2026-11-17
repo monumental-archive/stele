@@ -1,0 +1,367 @@
+# The pgrx-extension artifact images: one `FROM scratch` image per PG
+# major, both architectures, built from the SAME verified tarballs whose
+# digests the release attests — in-run, not from a post-release download,
+# so there is one byte path and the index is signed in the same run under
+# the same identity (docs/release.md).
+#
+# FROM scratch executes nothing, so both platforms assemble in one build
+# with no emulation involved — there is nothing to emulate. The consumer
+# proof afterwards pulls the pushed index back BY DIGEST and does what the
+# README tells consumers to do: COPY --from into a stock postgres and
+# CREATE EXTENSION.
+#
+# Since #118 the build pushes UNTAGGED (by digest): the per-major tag
+# is applied post-gate by tag-images.yml, putting the exact manifest
+# bytes the gate compared under the advertised name — digest preserved
+# by construction.
+#
+# The runnable convenience image deliberately does not exist in canon:
+# its CVE posture would be its base's, refreshable only by a release —
+# the exact failure ma-db's own-the-installation decision documents.
+---
+name: build-pgrx-images
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      crate-dir:
+        # forwarding: universal
+        description: Directory of the extension crate (names the image).
+        required: true
+        type: string
+      pg-majors:
+        # forwarding: universal
+        description: PG majors, matching what build-pgrx-extension built.
+        required: false
+        type: string
+        default: 14,15,16,17,18
+      facts:
+        # forwarding: universal
+        description: >
+          The resolved facts map (JSON, org.opencontainers.image.* keys)
+          from the orchestrator's facts job — the same map every image
+          this release publishes carries. Applied as config labels and
+          index annotations; this workflow derives no metadata of its own.
+          (Its predecessor derived `created` from the only checkout it
+          has, which is canon — every published extension image carried a
+          .github commit's timestamp. Resolving in the caller's own guard
+          job makes that bug unwritable.)
+        required: true
+        type: string
+      source-epoch:
+        # forwarding: universal
+        description: >
+          Committer epoch of the released commit, for SOURCE_DATE_EPOCH.
+        required: true
+        type: string
+      dry-run:
+        # forwarding: discretionary — rehearsal is versioned-only; continuous has no gate to rehearse
+        description: Rehearsal — assemble and prove locally, push nothing.
+        required: false
+        type: boolean
+        default: false
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): assemble and push the
+          per-major indexes by digest exactly like the first build (a
+          reproduced rebuild is an idempotent no-op; a mismatch leaves
+          an unreferenced, untagged digest and the gate goes red), skip
+          the behavioural proofs, and record the digests under repro-
+          prefixed artifacts so the gate can compare. Both builds stage
+          from the SAME release-extensions artifact, so a compare here
+          isolates image-layer nondeterminism.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      images:
+        description: >
+          JSON array of {pg, image, tag, digest} for every pushed index —
+          the signing matrix, and (tag included) the verdict's tag→digest
+          binding expectations.
+        value: ${{ jobs.collect.outputs.images }}
+      registry-subjects:
+        description: >
+          The same indexes as target-prefixed sha256sum lines, one per
+          PG major — `<major> <hex>  <image>` — the shape attach-release
+          takes for what a class published to a registry instead of
+          beside the release (#1168). The major is this class's target
+          grain, exactly as it is on the tarballs' leg-subjects.
+        value: ${{ jobs.collect.outputs.registry-subjects }}
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Derive the image matrix
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      expected: ${{ steps.plan.outputs.expected }}
+    steps:
+      - name: Derive the matrix
+        id: plan
+        env:
+          UNTRUSTED_MAJORS: ${{ inputs.pg-majors }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra majors <<< "${UNTRUSTED_MAJORS// /}"
+          if ((${#majors[@]} == 0)); then
+            echo "::error::no PG majors requested"
+            exit 1
+          fi
+          include="[]"
+          for pg in "${majors[@]}"; do
+            if [[ ! ${pg} =~ ^[0-9]+$ ]]; then
+              echo "::error::${pg} is not a PG major"
+              exit 1
+            fi
+            include=$(jq -c --arg pg "${pg}" '. + [{pg: $pg}]' <<< "${include}")
+          done
+          matrix=$(jq -c '{include: .}' <<< "${include}")
+          expected=$(jq -c '[.[].pg]' <<< "${include}")
+          {
+            echo "matrix=${matrix}"
+            echo "expected=${expected}"
+          } >> "${GITHUB_OUTPUT}"
+  image:
+    name: Assemble and prove the pg${{ matrix.pg }} artifact image
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # push the per-major index by digest and tag
+    env:
+      PG: ${{ matrix.pg }}
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      MISE_GLOBAL_CONFIG_FILE: ${{ github.workspace }}/.org-canon/mise/config.toml
+    steps:
+      - name: Resolve the canon tree (the ref the caller pinned)
+        uses: $/.github/actions/canon
+
+      - name: Install mise and the pinned toolchain
+        # The facts assertion is a belt tool, not a file in the canon
+        # tree: #495 replaced release/assert-image-facts.sh with
+        # `stele assert image-facts`, and a binary on PATH has to be
+        # installed where a script only had to be checked out.
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.4
+          cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-extensions
+          path: tarballs
+
+      - name: Stage the per-arch trees from the verified tarballs
+        env:
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+        run: |
+          set -euo pipefail
+          name=$(basename "${UNTRUSTED_CRATE_DIR}" | tr '-' '_')
+          for arch in amd64 arm64; do
+            tarball="tarballs/${name}-${UNTRUSTED_VERSION}-pg${PG}-linux-${arch}.tar.gz"
+            if [[ ! -f ${tarball} ]]; then
+              echo "::error::missing ${tarball} — the extension build did not produce this cell"
+              exit 1
+            fi
+            mkdir -p "staged/${arch}"
+            tar -xzf "${tarball}" -C "staged/${arch}"
+          done
+      - name: Resolve the image name
+        id: name
+        env:
+          UNTRUSTED_CRATE_DIR: ${{ inputs.crate-dir }}
+        run: |
+          set -euo pipefail
+          base=$(basename "${UNTRUSTED_CRATE_DIR}" | tr '[:upper:]' '[:lower:]')
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${owner}/${base}" >> "${GITHUB_OUTPUT}"
+      - name: Create a container-driver builder
+        run: docker buildx create --use --name org-pgrx --driver docker-container
+
+      - name: Build both platforms and push by digest, untagged (#118)
+        id: push
+        if: ${{ !inputs.dry-run }}
+        env:
+          FACTS: ${{ inputs.facts }}
+          SOURCE_DATE_EPOCH: ${{ inputs.source-epoch }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.name.outputs.image }}
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # --annotation was silently ignored before buildx 0.12
+          # (docker/buildx#1965) — assert the floor rather than trust the
+          # runner image.
+          buildx_version=$(docker buildx version)
+          v=$(sed -nE '1s/^.*v?([0-9]+)\.([0-9]+)\.[0-9]+.*$/\1.\2/p' <<< "${buildx_version}")
+          pair=$(printf '%s\n%s' "0.12" "${v}")
+          ordered=$(sort -V <<< "${pair}")
+          floor=$(head -1 <<< "${ordered}")
+          if [[ -z ${v} ]] || [[ ${floor} != "0.12" ]]; then
+            echo "::error::buildx ${v:-unknown} < 0.12: index annotations would be dropped silently"
+            exit 1
+          fi
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          # Labels for both per-arch configs, annotations for the index —
+          # one map, generated the same way at every surface. This path
+          # produces its index in the single build below, so the index:
+          # annotations enter here rather than at an imagetools create.
+          pairs=$(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "${FACTS}")
+          LABELS=()
+          while IFS= read -r kv; do LABELS+=(--label "${kv}"); done <<< "${pairs}"
+          ANNOS=()
+          while IFS= read -r kv; do ANNOS+=(--annotation "index:${kv}"); done <<< "${pairs}"
+          # One build, both platforms: FROM scratch runs nothing, so no
+          # emulation is involved and the native-hardware rule is not in
+          # play — there is no hardware behaviour to prove.
+          #
+          # oci-mediatypes=true: the exporter default is false and a
+          # Docker manifest list has no annotations field to carry the
+          # map (docker/buildx#1965) — the assert step downstream proves
+          # the published index is OCI.
+          # --provenance=false / --sbom=false / rewrite-timestamp=true:
+          # the determinism set, measured in the lab's first gate run —
+          # see build-oci-image.yml's push step for the full argument.
+          outspec="type=image,name=${IMAGE},push-by-digest=true"
+          outspec+=",name-canonical=true,push=true,oci-mediatypes=true,rewrite-timestamp=true"
+          docker buildx build \
+            --file .org-canon/docker/pgrx-artifact.Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            "${LABELS[@]}" \
+            "${ANNOS[@]}" \
+            --provenance=false --sbom=false \
+            --output "${outspec}" \
+            --metadata-file /tmp/meta.json \
+            .
+          digest=$(jq -r '."containerimage.digest"' /tmp/meta.json)
+          if [[ ! ${digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no index digest from the push"
+            exit 1
+          fi
+          mkdir -p /tmp/digests
+          # The tag NAME rides along — applied only post-gate, by
+          # tag-images.yml putting the very same manifest bytes under the
+          # tag — so downstream consumers (the VSA's tag→digest binding
+          # proof) never re-derive the scheme: the step that names the
+          # tag is the step that records it, and nothing referenceable
+          # exists until the repro gate has passed.
+          jq -n --arg pg "${PG}" --arg image "${IMAGE}" --arg digest "${digest}" \
+            --arg tag "${UNTRUSTED_VERSION}-pg${PG}-artifact" \
+            '{pg: $pg, image: $image, tag: $tag, digest: $digest}' > "/tmp/digests/pg${PG}.json"
+          echo "::notice::pg${PG} index ${digest}"
+      - name: Prove the pushed image the way a consumer uses it
+        if: ${{ !inputs.dry-run && !inputs.repro }}
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r .digest "/tmp/digests/pg${PG}.json")
+          build=$(python3 -c '
+          import tomllib
+          with open(".org-canon/docker/pgrx-base-images.toml", "rb") as f:
+              print(tomllib.load(f)["build"]["'"${PG}"'"])
+          ')
+          # By digest, never by tag, and exactly the documented pattern:
+          # COPY --from into a stock postgres, then CREATE EXTENSION.
+          cat > /tmp/consumer.Dockerfile << EOF
+          FROM ${IMAGE}@${digest} AS ext
+          FROM ${build}
+          COPY --from=ext /usr/lib/postgresql/${PG}/lib/ /usr/lib/postgresql/${PG}/lib/
+          COPY --from=ext /usr/share/postgresql/${PG}/extension/ /usr/share/postgresql/${PG}/extension/
+          EOF
+          docker buildx build --file /tmp/consumer.Dockerfile --load \
+            --tag "consumer-proof:pg${PG}" /tmp
+          docker run --rm "consumer-proof:pg${PG}" bash -c '
+            set -euo pipefail
+            ext=$(ls /usr/share/postgresql/*/extension/*.control | sed -n 1p)
+            ext=$(basename "${ext}" .control)
+            su postgres -c "
+              set -euo pipefail
+              /usr/lib/postgresql/*/bin/initdb -D /tmp/pgdata -A trust > /dev/null
+              /usr/lib/postgresql/*/bin/pg_ctl -D /tmp/pgdata -o \"-c listen_addresses=\" -w start > /dev/null
+              psql -c \"CREATE EXTENSION ${ext};\"
+            "
+          '
+      - name: Assert the published metadata equals the facts
+        if: ${{ !inputs.dry-run && !inputs.repro }}
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          FACTS: ${{ inputs.facts }}
+        # Same proof as the oci-image class, at this class's own pull-back
+        # point: OCI index, annotations and every per-arch config's labels
+        # all EQUAL the one map.
+        run: |
+          set -euo pipefail
+          DIGEST=$(jq -r .digest "/tmp/digests/pg${PG}.json")
+          export DIGEST
+          stele assert image-facts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.dry-run }}
+        with:
+          name: ${{ inputs.repro && 'repro-' || '' }}pgrx-image-digest-pg${{ matrix.pg }}
+          path: /tmp/digests/
+          if-no-files-found: error
+          retention-days: 1
+
+  collect:
+    name: Collect the signing matrix
+    needs:
+      - plan
+      - image
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions: {}
+    outputs:
+      images: ${{ steps.collect.outputs.images }}
+      registry-subjects: ${{ steps.collect.outputs.registry-subjects }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.repro && 'repro-pgrx-image-digest-pg*' || 'pgrx-image-digest-pg*' }}
+          merge-multiple: true
+          path: digests
+
+      - name: Assemble and refuse a partial set
+        id: collect
+        env:
+          EXPECTED: ${{ needs.plan.outputs.expected }}
+        run: |
+          set -euo pipefail
+          expected_count=$(jq -r 'length' <<< "${EXPECTED}")
+          images=$(jq -sc '.' digests/*.json)
+          got=$(jq -r 'length' <<< "${images}")
+          if [[ ${got} != "${expected_count}" ]]; then
+            echo "::error::${got} image digests for ${expected_count} planned majors; refusing a partial set"
+            exit 1
+          fi
+          echo "images=${images}" >> "${GITHUB_OUTPUT}"
+          # The set just proved complete, restated in the shape the
+          # manifest step reads: every major names one repository, so
+          # the digest is what tells the five apart and the major is
+          # which leg built it.
+          lines=$(jq -r '.[] | "\(.pg) \(.digest | sub("^sha256:"; ""))  \(.image)"' <<< "${images}")
+          {
+            echo "registry-subjects<<REGISTRY_EOF"
+            printf '%s\n' "${lines}"
+            echo "REGISTRY_EOF"
+          } >> "${GITHUB_OUTPUT}"
+          jq -r '.[] | "::notice::pg\(.pg) \(.digest)"' <<< "${images}"
+...

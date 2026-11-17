@@ -1,0 +1,406 @@
+# Artifact class: go-binary. Static Go binaries for Linux and native
+# macOS binaries, built and tested on the hardware they will run on
+# (docs/release.md).
+#
+#   Native hardware per target, same doctrine as rust-binary: no
+#   cross-compilation between legs and no emulation — a binary tested
+#   under emulation has not been shown to work where it runs. GOOS/GOARCH
+#   could cross-compile every target from one runner, and deliberately
+#   does not: what Go's toolchain removes is the toolchain MATRIX, not
+#   the testing obligation. With CGO_ENABLED=0 there is exactly one
+#   compiler and a static output on every leg — no musl-tools, no target
+#   installs, no apt at all. That absence is the class being cheaper by
+#   construction (stele#7), and it also retires rust-binary's one
+#   accepted unpinned install.
+#
+#   Hermetic by construction: CGO_ENABLED=0 (one compiler, static
+#   output), GOTOOLCHAIN=local (the caller's mise pin is the only
+#   toolchain; go.mod's directive disagreeing is a loud failure, never an
+#   auto-download), -trimpath (no runner paths in the binary), -mod
+#   defaults to readonly and go.sum refuses any module byte drift — the
+#   checksummed proxy fetch is the one accepted network dependency,
+#   the un-vendoring decision in stele's CLAUDE.md. These are stated
+#   HERE, at the job, not inherited from the caller's mise [env]: the
+#   class guarantees its own hermeticity for every caller.
+#
+#   The binary carries its own inventory: Go embeds the module list and
+#   the VCS facts (vcs.revision, vcs.time, vcs.modified) in every build,
+#   and `go version -m` reads them back out of the shipped bytes — the
+#   property cargo-auditable is bolted onto rust-binary to provide. The
+#   build asserts the stamp below rather than hoping: the revision must
+#   equal the released commit and the tree must be clean. There is no
+#   manifest-version check because Go has no manifest version to check —
+#   the stamp assertion is this class's stronger replacement: it binds
+#   the bytes to the commit, not a declaration to a tag name.
+#
+# No cache of any kind: everything downstream of this job gets signed.
+# Go's build cache starts empty on a fresh runner and is never persisted.
+---
+name: build-go-binary
+
+"on":
+  workflow_call:
+    inputs:
+      version:
+        # forwarding: universal
+        description: Version being released, without the leading v.
+        required: true
+        type: string
+      targets:
+        # forwarding: universal
+        description: >
+          Comma-separated subset of the canon targets, named as
+          <goos>-<goarch>. The plan job refuses anything outside the
+          canon list — a typo must fail the release, not quietly build
+          three targets instead of four.
+        required: false
+        type: string
+        default: linux-amd64,linux-arm64,darwin-amd64,darwin-arm64
+      smoke-test:
+        # forwarding: universal
+        description: >
+          Script proving a built binary does the one thing it exists to
+          do. Receives the directory holding the leg's binaries as $1 and
+          the target as $2, and runs on every leg — on the machine class
+          the binaries will ship for. Empty means no smoke test, which is
+          permitted and unwise.
+        required: false
+        type: string
+        default: ""
+      ref:
+        # forwarding: discretionary — only the repro-check comparator rebuilds at a foreign ref
+        description: >
+          Ref of the caller repository to build; empty means the
+          triggering commit. Exists for the reproducibility audit, which
+          rebuilds a released tag from a run on main and must check out
+          the tag, not the branch that has moved past it.
+        required: false
+        type: string
+        default: ""
+      repro:
+        # forwarding: discretionary — the repro leg sets it; omission means a first build
+        description: >
+          Rebuild leg of the repro gate (#118): build and hash the same
+          bytes, upload NO release-* artifact (the gate needs only the
+          subjects), skip the smoke tests (the gate proves bytes; the
+          first build already proved behaviour), and publish nothing.
+          Intermediate artifacts carry a repro- prefix so the two builds
+          of one run cannot collide or cross-contaminate a glob.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      subjects:
+        description: sha256sum manifest of the release archives.
+        value: ${{ jobs.collect.outputs.subjects }}
+      leg-subjects:
+        # The same digests, carrying the one fact only the leg that
+        # produced them holds: WHICH target it built. `stele emit
+        # manifest` types every build subject with its class and its
+        # target (schema 4, stele#223), and a rebuild's unit is a
+        # target — so a scoped rebuild can only be judged against the
+        # targets the manifest names. Flat `subjects` stays exactly as
+        # it is: it is what the signer signs, and a signed subject set
+        # is not the place to state a build fact.
+        description: >
+          sha256sum manifest of the release archives, each line
+          prefixed with the target whose leg produced it.
+        value: ${{ jobs.collect.outputs.leg-subjects }}
+      artifact-name:
+        description: Actions artifact holding the release archives.
+        value: ${{ jobs.collect.outputs.artifact-name }}
+
+permissions: {}
+
+jobs:
+  # The matrix is constructed, not configured: this job validates the
+  # requested targets against canon and emits the include list the build
+  # job consumes. A target GitHub's `if:` would have silently skipped is
+  # instead a target that either builds or fails the whole release here.
+  plan:
+    name: Validate the target list
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      expected: ${{ steps.plan.outputs.expected }}
+    steps:
+      - name: Derive the matrix from the requested targets
+        id: plan
+        env:
+          UNTRUSTED_TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra requested <<< "${UNTRUSTED_TARGETS// /}"
+          if ((${#requested[@]} == 0)); then
+            echo "::error::no targets requested — a release that builds nothing is not a release"
+            exit 1
+          fi
+          include="[]"
+          for t in "${requested[@]}"; do
+            case "${t}" in
+              linux-amd64) runner=ubuntu-24.04 ;;
+              linux-arm64) runner=ubuntu-24.04-arm ;;
+              darwin-amd64) runner=macos-15-intel ;;
+              darwin-arm64) runner=macos-15 ;;
+              *)
+                echo "::error::unknown target ${t}; canon targets only (<goos>-<goarch>)"
+                exit 1
+                ;;
+            esac
+            include=$(jq -c --arg t "${t}" --arg r "${runner}" \
+              '. + [{target: $t, runner: $r}]' <<< "${include}")
+          done
+          dupes=$(jq -r '[.[].target] | length - (unique | length)' <<< "${include}")
+          if [[ ${dupes} != "0" ]]; then
+            echo "::error::duplicate target requested"
+            exit 1
+          fi
+          matrix=$(jq -c '{include: .}' <<< "${include}")
+          expected=$(jq -c '[.[].target]' <<< "${include}")
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          echo "expected=${expected}" >> "${GITHUB_OUTPUT}"
+          jq -r '.[] | "::notice::will build \(.target) on \(.runner)"' <<< "${include}"
+  build:
+    name: Build and smoke ${{ matrix.target }}
+    needs: plan
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      MISE_LOCKED: "1"
+      # No MISE_GLOBAL_CONFIG_FILE and no toolbelt checkout, deliberately:
+      # a build leg needs exactly the caller's own pinned toolchain and
+      # nothing else — the belt is linters this job never runs, and it
+      # cannot be locked for every leg's platform anyway (measured on the
+      # rust-binary arm64 leg, 2026-08-09).
+      #
+      # Hermeticity, stated by the class rather than inherited from the
+      # caller (see the header):
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+      GOFLAGS: -trimpath
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install mise and the caller's pinned toolchain
+        uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          # mise itself is a build input and floats without this pin
+          # (#117: nothing unpinned on an attested path, the installer
+          # included).
+          version: 2026.11.4
+          # No tool cache anywhere downstream of a signature.
+          cache: false
+
+      - name: Assert the toolchain and the leg
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # The toolchain is a caller build input like rust's — asserted,
+          # never installed here; an unpinned install on a release leg is
+          # a runner mutation.
+          command -v go > /dev/null || {
+            echo "::error::go missing — pin go in this repository's mise config; it is the build input of the go-binary class"
+            exit 1
+          }
+          # Native builds only: the leg's host must BE the target, or the
+          # runner mapping in the plan job has drifted and the binary
+          # about to be tested is not the binary that ships.
+          goos=$(go env GOOS)
+          goarch=$(go env GOARCH)
+          host="${goos}-${goarch}"
+          if [[ ${host} != "${TARGET}" ]]; then
+            echo "::error::leg for ${TARGET} is running on ${host} — native hardware only"
+            exit 1
+          fi
+      - name: Test on the target
+        run: |
+          set -euo pipefail
+          # On the release target's own hardware, under the shipped
+          # configuration: CGO_ENABLED=0, so the tested binaries are the
+          # static shape that ships. No -race here — the race runtime is
+          # a TEST instrument that requires cgo on linux (measured,
+          # stele#1); it belongs to the ci gate, and this leg proves the
+          # artifact, not the diff.
+          go test ./...
+      - name: Build every command
+        run: |
+          set -euo pipefail
+          # The command list comes from the module's own package graph,
+          # never from a directory convention: a main package is what Go
+          # says is a main package, wherever it lives.
+          mkdir -p staged
+          mains=$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./...)
+          pkgs=()
+          while IFS= read -r p; do
+            if [[ -n ${p} ]]; then pkgs+=("${p}"); fi
+          done <<< "${mains}"
+          if ((${#pkgs[@]} == 0)); then
+            echo "::error::no main packages in this module — go-binary is the wrong class"
+            exit 1
+          fi
+          for p in "${pkgs[@]}"; do
+            b="${p##*/}"
+            if [[ -e staged/${b} ]]; then
+              echo "::error::two main packages both build a binary named ${b}"
+              exit 1
+            fi
+            go build -o "staged/${b}" "${p}"
+          done
+      - name: Refuse a binary whose stamp is not the released commit
+        run: |
+          set -euo pipefail
+          # Go embeds the module list and the VCS facts in every binary,
+          # and `go version -m` reads them back out of the built bytes —
+          # the artifact-carries-its-inventory property this class rests
+          # on (stele#7). Asserted, not hoped: the stamped revision must
+          # equal the commit being released and the tree must be clean,
+          # which binds the bytes to the commit more strongly than any
+          # manifest-version comparison could.
+          head=$(git rev-parse HEAD)
+          for b in staged/*; do
+            info=$(go version -m "${b}")
+            rev=$(sed -n 's/^.*vcs\.revision=//p' <<< "${info}")
+            modified=$(sed -n 's/^.*vcs\.modified=//p' <<< "${info}")
+            if [[ ${rev} != "${head}" ]]; then
+              echo "::error::${b##*/}: stamped revision ${rev:-<none>} is not the released commit ${head}"
+              exit 1
+            fi
+            if [[ ${modified} != "false" ]]; then
+              echo "::error::${b##*/}: vcs.modified=${modified:-<none>} — a release builds a clean tree"
+              exit 1
+            fi
+            if ! grep -qE '^[[:space:]]+mod[[:space:]]' <<< "${info}"; then
+              echo "::error::${b##*/}: no module stamp — the shipped bytes must carry their inventory"
+              exit 1
+            fi
+          done
+      - name: Smoke the binaries
+        if: ${{ inputs.smoke-test != '' && !inputs.repro }}
+        env:
+          TARGET: ${{ matrix.target }}
+          UNTRUSTED_SMOKE: ${{ inputs.smoke-test }}
+        run: |
+          set -euo pipefail
+          if [[ ! -x ${UNTRUSTED_SMOKE} ]]; then
+            echo "::error::smoke-test ${UNTRUSTED_SMOKE} is not executable"
+            exit 1
+          fi
+          "${UNTRUSTED_SMOKE}" "${PWD}/staged" "${TARGET}"
+      - name: Archive, normalised
+        env:
+          TARGET: ${{ matrix.target }}
+          UNTRUSTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Same source, same bytes: fixed member order, zeroed ownership,
+          # mtimes clamped to the released commit, gzip stripped of its
+          # timestamp. macOS runners get gnu-tar as gtar; tar there is
+          # bsdtar, which has none of these flags.
+          tar=tar
+          if command -v gtar > /dev/null; then tar=gtar; fi
+          epoch=$(git log -1 --pretty=%ct)
+          name="${GITHUB_REPOSITORY##*/}-${UNTRUSTED_VERSION}-${TARGET}"
+          mkdir -p dist
+          "${tar}" --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@${epoch}" -C staged -cf - . | gzip -n > "dist/${name}.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.repro && 'repro-' || '' }}go-binary-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Outputs of a MATRIX job overwrite one another, so the legs hand their
+  # archives over as artifacts and this job — the only place with all of
+  # them — refuses a missing leg and emits the one subject manifest.
+  collect:
+    name: Collect and refuse a partial set
+    needs:
+      - plan
+      - build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions: {}
+    outputs:
+      subjects: ${{ steps.manifest.outputs.subjects }}
+      leg-subjects: ${{ steps.manifest.outputs.leg-subjects }}
+      artifact-name: release-go-binaries
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.repro && 'repro-go-binary-*' || 'go-binary-*' }}
+          merge-multiple: true
+          path: dist
+
+      - name: Compute the subject manifest
+        id: manifest
+        env:
+          EXPECTED: ${{ needs.plan.outputs.expected }}
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          # Every planned target must have produced exactly its archive; a
+          # release quietly missing a platform looks like a success to
+          # everyone who runs the other three.
+          target_list=$(jq -r '.[]' <<< "${EXPECTED}")
+          targets=()
+          while IFS= read -r t; do
+            if [[ -n ${t} ]]; then targets+=("${t}"); fi
+          done <<< "${target_list}"
+          for t in "${targets[@]}"; do
+            matches=(./*-"${t}".tar.gz)
+            if ((${#matches[@]} != 1)); then
+              echo "::error::expected exactly one archive for ${t}, found ${#matches[@]}"
+              exit 1
+            fi
+          done
+          archives=(./*.tar.gz)
+          if ((${#archives[@]} != ${#targets[@]})); then
+            echo "::error::${#archives[@]} archives for ${#targets[@]} planned targets"
+            exit 1
+          fi
+          manifest=$(sha256sum ./*.tar.gz | sed 's| \./| |')
+          # The same digests once more, each prefixed with the target
+          # whose leg produced it. The prefix comes from the PLANNED
+          # target list this step has just proved matches exactly one
+          # archive each — never from parsing a target back out of a
+          # filename, which would be a second derivation of a fact the
+          # matrix already stated.
+          legs=()
+          for t in "${targets[@]}"; do
+            sums=$(sha256sum ./*-"${t}".tar.gz)
+            sums="${sums// .\// }"
+            while IFS= read -r line; do
+              legs+=("${t} ${line}")
+            done <<< "${sums}"
+          done
+          {
+            echo "subjects<<SUBJECTS_EOF"
+            printf '%s\n' "${manifest}"
+            echo "SUBJECTS_EOF"
+            echo "leg-subjects<<LEGS_EOF"
+            printf '%s\n' "${legs[@]}"
+            echo "LEGS_EOF"
+          } >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "${manifest}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.repro }}
+        with:
+          name: release-go-binaries
+          path: dist/*.tar.gz
+          if-no-files-found: error
+...
