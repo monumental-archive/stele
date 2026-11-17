@@ -58,8 +58,8 @@ func testServer(t *testing.T) *gh.Client {
 		// All three travel: the listing reports facts, and the
 		// membership rule that reads them is the population's.
 		writeBody(w, []byte(`[
-		  {"name": "widget", "archived": false, "fork": false},
-		  {"name": "old", "archived": true, "fork": false},
+		  {"name": "widget", "archived": false, "fork": false, "visibility": "public"},
+		  {"name": "old", "archived": true, "fork": false, "visibility": "private"},
 		  {"name": "copy", "archived": false, "fork": true}]`))
 	})
 
@@ -140,8 +140,8 @@ func TestClientReads(t *testing.T) {
 
 	repos, err := c.ListRepos("acme")
 	if err != nil || !reflect.DeepEqual(repos, []gh.Repo{
-		{Name: "widget"},
-		{Name: "old", Archived: true},
+		{Name: "widget", Visibility: "public"},
+		{Name: "old", Archived: true, Visibility: "private"},
 		{Name: "copy", Fork: true},
 	}) {
 		t.Fatalf("ListRepos = %v, %v — the listing reports facts, and filters none of them", repos, err)
