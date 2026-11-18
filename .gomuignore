@@ -1,0 +1,9 @@
+# Adoption of the canon's Go mutation leg (monumental-archive/.github
+# #1356): gomu reads this file, and tracking it at the root opts stele
+# into the weekly mutation run (.github/workflows/mutants.yml).
+#
+# It holds NO pattern, by rule: a pattern drops whole files from the run
+# and from the count. An equivalent mutant is recorded at its site
+# instead, with its reason:
+#
+#   //mutants:equivalent <type> <reason>
