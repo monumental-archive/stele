@@ -1,11 +1,14 @@
-// emit vsa's input resolution (stele#392): what the canon's verdict
-// step resolved in shell before it called this binary, resolved here so
-// the step is one call. Every input keeps its explicit form; each
-// alternative here is exclusive with it, so one fact is stated once:
+// emit's input resolution (stele#392, stele#472): what the canon's
+// verdict steps resolved in shell before they called this binary,
+// resolved here so each step is one call. Every input keeps its
+// explicit form; each alternative here is exclusive with it, so one
+// fact is stated once:
 //
 //   - --policy-ref (with --policy-repo and --policy-tree) instead of
 //     --machinery-digest and --policy-uri: the ref the caller pinned,
-//     resolved to its commit through the forge;
+//     resolved to its commit through the forge. Both verdict modes —
+//     `emit vsa` and `emit source-vsa` — take it, through the one
+//     policyPin below;
 //   - --signer-workflows instead of --signer-digest: the pin derived
 //     from the tree's own uses: lines (derive signer-digest's rule);
 //   - --sbom-assets instead of --sboms: the release's own SBOM assets,
@@ -39,25 +42,40 @@ var resolveCommit = func(owner, repo, ref string) (string, bool, error) {
 	return gh.New(forgeToken()).CommitSHA(owner, repo, ref)
 }
 
-// vsaInputs is the alternative inputs and what they resolve to.
-type vsaInputs struct {
-	policyRef, policyRepo, policyTree string
-	signerWorkflows                   string
-	sbomSuffix                        string
-	inventoryPlan                     string
+// policyPin is the policy pin's alternative form: the ref the caller
+// pinned, resolved to the commit a verdict names as its policy digest,
+// and the URI of the policy document at that commit. One type, so the
+// two verdict modes that take it run one implementation (stele#472).
+type policyPin struct {
+	ref, repo, tree string
 
 	// resolved by load, consumed by resolve
-	policyRel string
-	planned   []string
+	rel string
+}
+
+// register adds the policy-ref alternative to a verdict mode's flags.
+func (p *policyPin) register(fs *flag.FlagSet) {
+	fs.StringVar(&p.ref, "policy-ref", "",
+		"the ref the policy tree is pinned at, resolved to its commit — the machinery digest, and the commit the"+
+			" policy URI names (instead of --machinery-digest and --policy-uri; needs --policy-repo, --policy-tree)")
+	fs.StringVar(&p.repo, "policy-repo", "", "owner/repo the policy tree is (with --policy-ref)")
+	fs.StringVar(&p.tree, "policy-tree", "", "the checkout the policy is read from (with --policy-ref)")
+}
+
+// vsaInputs is emit vsa's own alternative inputs — the release's SBOMs,
+// the inventory plan and the signer pin, which only that mode reads —
+// and what they resolve to.
+type vsaInputs struct {
+	signerWorkflows string
+	sbomSuffix      string
+	inventoryPlan   string
+
+	// resolved by load, consumed by resolve
+	planned []string
 }
 
 // register adds the alternatives to emit vsa's flag set.
 func (v *vsaInputs) register(fs *flag.FlagSet) {
-	fs.StringVar(&v.policyRef, "policy-ref", "",
-		"the ref the policy tree is pinned at, resolved to its commit — the machinery digest, and the commit the"+
-			" policy URI names (instead of --machinery-digest and --policy-uri; needs --policy-repo, --policy-tree)")
-	fs.StringVar(&v.policyRepo, "policy-repo", "", "owner/repo the policy tree is (with --policy-ref)")
-	fs.StringVar(&v.policyTree, "policy-tree", "", "the checkout the policy is read from (with --policy-ref)")
 	fs.StringVar(&v.signerWorkflows, "signer-workflows", "",
 		"a workflows directory the signer digest is derived from, as derive signer-digest does"+
 			" (instead of --signer-digest)")
@@ -77,7 +95,7 @@ func (v *vsaInputs) load(ea *emitArgs) error {
 		return fmt.Errorf("--tag %q is not a plausible release tag", ea.tag)
 	}
 
-	if err := v.loadPolicyPin(ea); err != nil {
+	if err := ea.pin.load(ea); err != nil {
 		return err
 	}
 
@@ -107,10 +125,11 @@ func (v *vsaInputs) load(ea *emitArgs) error {
 	return nil
 }
 
-// loadPolicyPin holds the policy pin: either the explicit commit, or
-// the ref to resolve with what names the policy at it.
-func (v *vsaInputs) loadPolicyPin(ea *emitArgs) error {
-	if v.policyRef == "" {
+// load holds the policy pin: either the explicit commit, or the ref to
+// resolve with what names the policy at it. Offline, so a refusal here
+// is a usage refusal, before anything networks.
+func (p *policyPin) load(ea *emitArgs) error {
+	if p.ref == "" {
 		if !commitRE.MatchString(ea.machineryPin) {
 			return fmt.Errorf("--machinery-digest %q is not a commit, and no --policy-ref names one — "+
 				"refusing a verdict with no policy", ea.machineryPin)
@@ -124,16 +143,16 @@ func (v *vsaInputs) loadPolicyPin(ea *emitArgs) error {
 			"--machinery-digest and --policy-uri cannot accompany it")
 	}
 
-	if owner, repo, ok := strings.Cut(v.policyRepo, "/"); !ok || owner == "" || repo == "" {
+	if owner, repo, ok := strings.Cut(p.repo, "/"); !ok || owner == "" || repo == "" {
 		return errors.New("--policy-ref needs --policy-repo owner/repo: the repository the ref is resolved in")
 	}
 
-	rel, err := policyPathInTree(v.policyTree, ea.policyPath)
+	rel, err := policyPathInTree(p.tree, ea.policyPath)
 	if err != nil {
 		return err
 	}
 
-	v.policyRel = rel
+	p.rel = rel
 
 	return nil
 }
@@ -176,10 +195,8 @@ const sbomsRequired = "--sboms is required unless --sbom-assets names the releas
 // run's (exit 1): the inputs were well-formed and the forge's answer
 // would not do.
 func (v *vsaInputs) resolve(ea *emitArgs, log func(format string, args ...any)) error {
-	if v.policyRef != "" {
-		if err := v.resolvePolicy(ea, log); err != nil {
-			return err
-		}
+	if err := ea.pin.resolve(ea, log); err != nil {
+		return err
 	}
 
 	if v.sbomSuffix != "" {
@@ -206,33 +223,38 @@ func (v *vsaInputs) resolve(ea *emitArgs, log func(format string, args ...any)) 
 	return nil
 }
 
-// resolvePolicy turns the ref into the commit the verdict names, and
-// names the policy document at that commit.
-func (v *vsaInputs) resolvePolicy(ea *emitArgs, log func(format string, args ...any)) error {
-	owner, repo, _ := strings.Cut(v.policyRepo, "/")
+// resolve turns the ref, when one was given, into the commit the
+// verdict names, and names the policy document at that commit. No ref,
+// nothing to resolve: the explicit pin stands.
+func (p *policyPin) resolve(ea *emitArgs, log func(format string, args ...any)) error {
+	if p.ref == "" {
+		return nil
+	}
 
-	commit := v.policyRef
+	owner, repo, _ := strings.Cut(p.repo, "/")
+
+	commit := p.ref
 	if !commitRE.MatchString(commit) {
-		sha, ok, err := resolveCommit(owner, repo, v.policyRef)
+		sha, ok, err := resolveCommit(owner, repo, p.ref)
 
 		switch {
 		case err != nil:
-			return fmt.Errorf("emit: could not resolve the policy ref %s to a commit: %w", v.policyRef, err)
+			return fmt.Errorf("emit: could not resolve the policy ref %s to a commit: %w", p.ref, err)
 		case !ok:
 			return fmt.Errorf("emit: could not resolve the policy ref %s to a commit: %s has no such ref",
-				v.policyRef, v.policyRepo)
+				p.ref, p.repo)
 		case !commitRE.MatchString(sha):
 			return fmt.Errorf("emit: could not resolve the policy ref %s to a commit: the forge answered %q",
-				v.policyRef, sha)
+				p.ref, sha)
 		}
 
 		commit = sha
 	}
 
 	ea.machineryPin = commit
-	ea.policyURI = gh.New("").BlobURL(owner, repo, commit, v.policyRel)
+	ea.policyURI = gh.New("").BlobURL(owner, repo, commit, p.rel)
 
-	log("emit: policy ref %s is commit %s", v.policyRef, commit)
+	log("emit: policy ref %s is commit %s", p.ref, commit)
 
 	return nil
 }

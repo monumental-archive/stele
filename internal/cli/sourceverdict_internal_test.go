@@ -1146,3 +1146,137 @@ func mustRead(t *testing.T, path string) string {
 
 	return string(b)
 }
+
+// emitSourcePinned runs `emit source-vsa` with the policy pin given by
+// the caller — pin replaces the explicit --machinery-digest and
+// --policy-uri the other helper passes — over a policy file whose own
+// directory is the policy tree.
+func (w *sourceWorld) emitSourcePinned(t *testing.T, pin func(tree string) []string, extra ...string) sourceRun {
+	t.Helper()
+
+	px := files(t)
+	run := sourceRun{source: filepath.Join(t.TempDir(), "source.json")}
+
+	args := append([]string{
+		"emit", "source-vsa",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", relTag,
+		"--assert-policy", sourceAssertPolicy(t, true, signingEpochs), "--git-dir", w.repo.Dir,
+		"--out", run.source, "--machinery-version", srcMachinery,
+	}, pin(filepath.Dir(px.policy))...)
+
+	return runCLI(append(args, extra...), run)
+}
+
+// TestEmitSourceVSAResolvesThePolicyRef (stele#472): --policy-ref,
+// resolved through the same code `emit vsa` runs, yields byte for byte
+// the envelope the explicit --machinery-digest and --policy-uri for
+// that commit yield.
+func TestEmitSourceVSAResolvesThePolicyRef(t *testing.T) {
+	w := newSourceWorld(t)
+	w.build(t)
+
+	sha := strings.Repeat("b", 40)
+	swapResolveCommit(t, sha, true, nil)
+
+	byRef := w.emitSourcePinned(t, func(tree string) []string {
+		return []string{"--policy-ref", "v1.69.4", "--policy-repo", "acme/canon", "--policy-tree", tree}
+	})
+	if byRef.code != exitOK {
+		t.Fatalf("by ref: Run = %d, stderr %q", byRef.code, byRef.stderr)
+	}
+
+	explicit := w.emitSourcePinned(t, func(string) []string {
+		return []string{
+			"--machinery-digest", sha,
+			"--policy-uri", "https://github.com/acme/canon/blob/" + sha + "/policy.json",
+		}
+	})
+	if explicit.code != exitOK {
+		t.Fatalf("explicit: Run = %d, stderr %q", explicit.code, explicit.stderr)
+	}
+
+	got, err := os.ReadFile(byRef.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := os.ReadFile(explicit.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("the envelope by ref differs from the explicit one:\n by ref: %s\nexplicit: %s", got, want)
+	}
+
+	if !strings.Contains(byRef.stdout, "emit: policy ref v1.69.4 is commit "+sha) {
+		t.Errorf("stdout = %q, want the resolution stated", byRef.stdout)
+	}
+}
+
+// TestEmitSourceVSAPolicyRefRefusals: the pin's guards, each by name,
+// the same as on `emit vsa`.
+func TestEmitSourceVSAPolicyRefRefusals(t *testing.T) {
+	sha := strings.Repeat("b", 40)
+
+	tests := []struct {
+		name    string
+		pin     func(tree string) []string
+		resolve func(t *testing.T)
+		code    int
+		want    string
+	}{
+		{
+			"a ref beside an explicit digest", func(tree string) []string {
+				return []string{
+					"--policy-ref", "v1.69.4", "--policy-repo", "acme/canon", "--policy-tree", tree,
+					"--machinery-digest", sha,
+				}
+			}, nil, exitUsage,
+			"--policy-ref resolves the machinery digest and the policy URI — --machinery-digest and --policy-uri",
+		},
+		{"a ref with no repository", func(tree string) []string {
+			return []string{"--policy-ref", "v1.69.4", "--policy-tree", tree}
+		}, nil, exitUsage, "--policy-ref needs --policy-repo owner/repo"},
+		{"a ref with no tree", func(string) []string {
+			return []string{"--policy-ref", "v1.69.4", "--policy-repo", "acme/canon"}
+		}, nil, exitUsage, "--policy-tree is required"},
+		{"a ref the forge does not resolve", func(tree string) []string {
+			return []string{"--policy-ref", "v9.9.9", "--policy-repo", "acme/canon", "--policy-tree", tree}
+		}, func(t *testing.T) {
+			t.Helper()
+			swapResolveCommit(t, "", false, nil)
+		}, exitRefused, "emit: could not resolve the policy ref v9.9.9 to a commit: acme/canon has no such ref"},
+		{"a forge that fails", func(tree string) []string {
+			return []string{"--policy-ref", "v1.69.4", "--policy-repo", "acme/canon", "--policy-tree", tree}
+		}, func(t *testing.T) {
+			t.Helper()
+			swapResolveCommit(t, "", false, errors.New("forge down"))
+		}, exitRefused, "could not resolve the policy ref v1.69.4 to a commit: forge down"},
+		{
+			"no pin at all", func(string) []string { return nil }, nil, exitUsage,
+			`--machinery-digest "" is not a commit, and no --policy-ref names one`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newSourceWorld(t)
+			w.build(t)
+
+			if tt.resolve != nil {
+				tt.resolve(t)
+			}
+
+			run := w.emitSourcePinned(t, tt.pin)
+			if run.code != tt.code || !strings.Contains(run.stderr, tt.want) {
+				t.Fatalf("Run = %d, stderr %q — want %d and %q", run.code, run.stderr, tt.code, tt.want)
+			}
+
+			if written(run.source) {
+				t.Error("a refusal wrote an envelope")
+			}
+		})
+	}
+}
