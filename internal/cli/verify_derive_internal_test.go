@@ -144,7 +144,7 @@ func TestVerifyDerivesItsPins(t *testing.T) {
 		subjects := stageFile(t, filepath.Join(t.TempDir(), "subjects"), appSHA+"  app.tar.gz\n")
 
 		var stdout, stderr bytes.Buffer
-		if code := Run(w.vsa("--subjects", subjects), &stdout, &stderr); code != exitOK {
+		if code := Run(w.vsa("--subjects", subjects, "--assert-policy", w.ap), &stdout, &stderr); code != exitOK {
 			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 		}
 
@@ -177,7 +177,7 @@ func TestVerifyDerivesItsPins(t *testing.T) {
 
 		var stdout, stderr bytes.Buffer
 
-		code := Run(w.vsa("--subjects", subjects, "--machinery-digest", tagC), &stdout, &stderr)
+		code := Run(w.vsa("--subjects", subjects, "--assert-policy", w.ap, "--machinery-digest", tagC), &stdout, &stderr)
 		if code != exitRefused {
 			t.Fatalf("Run = %d, want %d\nstderr: %s", code, exitRefused, stderr.String())
 		}
@@ -353,17 +353,49 @@ func TestVerifyDerivationRefusals(t *testing.T) {
 		want  []string
 	}{
 		{
-			name: "a publish workflow with no full-commit pin",
+			name: "a publish stub calling the machinery at a moving ref",
 			tags: noPins{},
 			shape: func(t *testing.T, w derivedWorld) []string {
 				t.Helper()
 				stageFile(t, snapPath(w.snap, "files", "v1.0.0", url.PathEscape(".github/workflows/publish.yml")),
-					"uses: acme/canon/.github/workflows/publish.yml@v1\n")
+					"jobs:\n  publish:\n    uses: acme/canon/.github/workflows/publish.yml@v1\n")
 
 				return w.vsa("--assert-policy", w.ap)
 			},
 			want: []string{
-				"the signing pins of acme/widget@v1.0.0: no full-commit machinery pin on the publish workflow at v1.0.0",
+				"the signing pins of acme/widget@v1.0.0: .github/workflows/publish.yml at v1.0.0 calls " +
+					`.github/workflows/publish.yml at "v1" (jobs.publish), which is not a commit`,
+			},
+		},
+		{
+			name: "a release whose publish stub is absent at the tag",
+			tags: noPins{},
+			shape: func(t *testing.T, w derivedWorld) []string {
+				t.Helper()
+
+				if err := os.Remove(snapPath(w.snap, "files", "v1.0.0",
+					url.PathEscape(".github/workflows/publish.yml"))); err != nil {
+					t.Fatal(err)
+				}
+
+				return w.vsa("--assert-policy", w.ap)
+			},
+			want: []string{
+				"the signing pins of acme/widget@v1.0.0: the publish workflow .github/workflows/publish.yml is absent" +
+					" at v1.0.0",
+			},
+		},
+		{
+			name: "pins derived with no release workflow declared",
+			tags: noPins{},
+			shape: func(t *testing.T, w derivedWorld) []string {
+				t.Helper()
+
+				return w.vsa("--subjects", stageFile(t, filepath.Join(t.TempDir(), "subjects"), appSHA+"  app.tar.gz\n"))
+			},
+			want: []string{
+				"the signing pins of acme/widget@v1.0.0: no evidence.publish is declared and the signer identity" +
+					" is not templated",
 			},
 		},
 		{

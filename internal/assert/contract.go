@@ -463,24 +463,29 @@ func registrySubjects(entries []evidence.Asset) []verify.Subject {
 // WorkflowSource is the GitHub-workflow-convention adapter: the
 // classes a release owes are read from the caller's publish workflow
 // AT THE TAG — the only honest source for releases that predate the
-// manifest. The parsing mirrors what the callers actually wrote
-// (a `classes:` input line; the machinery repo's own publish.yml is
-// a reusable, so its caller stub is self-publish.yml), and the repo
-// version comes from the pin comment on the uses: line, the tag
-// itself for the machinery repo.
+// manifest. Which file that is, is the policy's evidence.publish
+// (stele#448): its stubPath, or — where that file is itself the
+// reusable, a repository carrying its own machinery — its
+// selfStubPath. The parsing mirrors what the callers actually wrote (a
+// `classes:` input line), and the machinery version comes from the pin
+// comment on the job-level call into the declared machinery, the tag
+// itself where there is none. A policy declaring no evidence.publish
+// names no release workflow, and this adapter then speaks for nothing.
 type WorkflowSource struct {
 	Forge  gh.Forge
 	Policy *EvidencePolicy
 }
 
-var (
-	classesRE    = regexp.MustCompile(`(?m)^[^#\n]*classes:\s*(.+)$`)
-	pinCommentRE = regexp.MustCompile(`uses:.*(?:publish|release)\.ya?ml@[^#\n]*#\s*v(\d+\.\d+\.\d+)`)
-)
+var classesRE = regexp.MustCompile(`(?m)^[^#\n]*classes:\s*(.+)$`)
 
 // Contract implements ContractSource.
 func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, error) {
-	wf, ok, err := w.Forge.FileAt(owner, repo, ".github/workflows/publish.yml", tag)
+	pub := w.Policy.Publish
+	if pub == nil {
+		return nil, false, nil
+	}
+
+	wf, ok, err := w.Forge.FileAt(owner, repo, *pub.StubPath, tag)
 	if err != nil {
 		return nil, false, fmt.Errorf("assert: workflow contract of %s/%s@%s: %w", owner, repo, tag, err)
 	}
@@ -490,7 +495,11 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	}
 
 	if callable(wf) {
-		wf, ok, err = w.Forge.FileAt(owner, repo, ".github/workflows/self-publish.yml", tag)
+		if pub.SelfStubPath == nil {
+			return nil, false, nil
+		}
+
+		wf, ok, err = w.Forge.FileAt(owner, repo, *pub.SelfStubPath, tag)
 		if err != nil {
 			return nil, false, fmt.Errorf("assert: workflow contract of %s/%s@%s: %w", owner, repo, tag, err)
 		}
@@ -514,8 +523,8 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 	// obligation's shape; a repository carrying its own machinery uses
 	// a local reference, so its version is the tag itself.
 	machineryVersion := strings.TrimPrefix(tag, "v")
-	if pm := pinCommentRE.FindSubmatch(wf); pm != nil {
-		machineryVersion = string(pm[1])
+	if v, found := pinVersion(wf, *pub.StubUses); found {
+		machineryVersion = v
 	}
 
 	// A workflow input names the classes the release SHIPPED and could
@@ -531,6 +540,35 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		MachineryVersion: machineryVersion,
 		Origin:           "publish workflow at " + tag,
 	}, true, nil
+}
+
+// pinVersion reads the version comment an author wrote beside the
+// stub's job-level call into the declared machinery. The call is the
+// one the workflow reader finds; only the comment — which no reader
+// keeps — is matched over the bytes, and only beside that exact
+// reference, so a comment naming some other workflow is never read.
+func pinVersion(stub []byte, stubUses string) (string, bool) {
+	doc, err := workflow.Parse(stub)
+	if err != nil {
+		return "", false
+	}
+
+	for _, job := range doc.Jobs {
+		ref, rerr := workflow.ParseRef(job.Uses)
+		if job.Uses == "" || rerr != nil || !underStubUses(ref, stubUses) {
+			continue
+		}
+
+		re := regexp.MustCompile(`(?m)^[^#\n]*uses:\s*["']?` + regexp.QuoteMeta(strings.TrimSpace(job.Uses)) +
+			`["']?\s*#\s*v(\d+\.\d+\.\d+)`)
+		if m := re.FindSubmatch(stub); m != nil {
+			return string(m[1]), true
+		}
+
+		return "", false
+	}
+
+	return "", false
 }
 
 // callable answers "may anything call this workflow" through the ONE

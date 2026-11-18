@@ -273,6 +273,7 @@ func evidenceSnapshotWith(t *testing.T, rewrite func(files map[string]string)) (
 		"policy.json": `{"schema": 9, "evidence": {"sbomSuffix": ".spdx.json", ` +
 			`"checksums": "checksums.txt", "umbrellaBundle": "attestations.intoto.jsonl", ` +
 			`"manifestAsset": "evidence-manifest.json", ` +
+			`"publish": {"stubPath": ".github/workflows/publish.yml", "stubUses": "acme/canon/"}, ` +
 			`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`,
 	}
 

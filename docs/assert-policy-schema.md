@@ -44,6 +44,11 @@ version mismatch, never as an unknown-field error.
     "manifestAsset": "evidence-manifest.json",
     "storeVsaFromVersion": "1.13.0",
     "publishWorkflows": ["publish", "self-publish"],
+    "publish": {
+      "stubPath": ".github/workflows/publish.yml",
+      "stubUses": "monumental-archive/.github/",
+      "selfStubPath": ".github/workflows/self-publish.yml"
+    },
     "classes": {
       "rust-crate": {
         "bundles": ["attestations-crates.intoto.jsonl"],
@@ -219,9 +224,11 @@ version mismatch, never as an unknown-field error.
   always. An unparsable pin on a release fails TOWARD the store
   obligation. The **machinery version** — defined once here, used by
   every epoch field — is the version of the shared release machinery
-  a release pinned at its tag: the `uses:` pin comment on the
-  caller's publish workflow. A repository carrying its own machinery
-  has no pin comment, so its machinery version is its own tag. The
+  a release pinned at its tag: the version comment beside the
+  job-level call the declared publish stub makes into the machinery
+  (`publish`, below). A repository carrying its own machinery calls
+  it locally, with no pin comment, so its machinery version is its
+  own tag. The
   pre-#79 names `storeVsaFromCanon`/`decisionFromCanon` are not
   understood at all: a pre-rename policy is schema 1 and the version
   gate refuses it as a version mismatch before strict decoding runs
@@ -304,6 +311,21 @@ version mismatch, never as an unknown-field error.
   one flaky unrelated workflow would excuse a genuinely missing
   verdict, and the burned category must never become a mute button.
   Declare them.
+- `publish` — the release workflow, declared (stele#448): which file
+  a release is published through, never a name this engine assumes.
+  The names mean what `continuous` gives them. `stubPath` is the
+  caller's publish workflow, read at the release tag; `stubUses` is
+  the `owner/repo/` prefix (and any path prefix after it) of the
+  shared workflow that stub must call — the machinery. `selfStubPath`,
+  optional, is the caller stub of a repository whose `stubPath` file
+  is itself the reusable workflow: the machinery repository's own
+  releases, which call it locally. A release's signing pins are
+  derived from this declaration ([Verification depth](#verification-depth)),
+  and the workflow contract adapter reads the same stubs for releases
+  that predate the evidence manifest. Absent, neither can run: a
+  release's pins are refused by name unless the verify policy's
+  signer identity is templated (the self-attesting case needs no
+  stub), and the adapter speaks for no release.
 
 ## `population`
 
@@ -1370,12 +1392,23 @@ same walk, not a second one: every covered release is handed to the
 verify engine — provenance bundles, certificates, the decision, and
 the store-resident verdict — under `--verify-policy`, the trust
 authority. Pins are derived per release from the trees a stranger
-reads: the caller's publish workflow at the tag carries the
-machinery pin, the machinery repository's publish workflow at that
-pin carries the signer pin, and the machinery repository's own
-releases run at the tag commit — a tag resolved to its commit through
-`git`, by the same resolution the tag walk reads every tag through,
-one fetch of each repository's tags at depth one. Refusals
+reads, through the one workflow reader and the declared `publish`
+stub, never a file name in code: the stub at the tag makes exactly
+one job-level call under `stubUses`, at one full commit — the
+machinery pin — and the workflow that call names, read in the
+machinery repository at that commit, calls the verify policy's
+signer workflow at one commit — the signer pin, derived as `stele
+derive signer-digest` derives it. A comment, a step's `uses:` or a
+`run:` string is never a call. No stub at the tag, no call, a call
+at a moving ref, two commits, two workflows, or a machinery workflow
+naming no signer pin each refuse by name. The machinery repository's
+own releases run at the tag commit: their `selfStubPath` stub calls
+the machinery locally, and that workflow at the tag commit carries
+the signer pin — a tag resolved to its commit through `git`, by the
+same resolution the tag walk reads every tag through, one fetch of
+each repository's tags at depth one. The same derivation serves
+`stele verify` for a published release (stele#447), which reads
+`publish` from the publisher's `--assert-policy`. Refusals
 land in the walk's own taxonomy: verdict refusals carry a
 `vsa:`-prefixed assertion (so burn derivation and debt lines apply
 exactly as at presence depth, and the deep verdict check yields

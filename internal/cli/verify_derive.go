@@ -151,6 +151,13 @@ func (va *verifyArgs) derivePins(forge gh.Forge, out *latch) error {
 		return err
 	}
 
+	// The release workflow is the publisher's declaration
+	// (stele#448): read from --assert-policy where one is given, and
+	// refused by name at resolution where it is needed and absent.
+	if va.evidence != nil {
+		roots.Publish = va.evidence.Publish
+	}
+
 	pins, err := roots.Resolve(forge, va.coords.Owner, va.coords.Repo, va.tag)
 	if err != nil {
 		return err
