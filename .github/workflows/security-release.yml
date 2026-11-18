@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   security-release:
-    uses: monumental-archive/.github/.github/workflows/security-release.yml@c2cd9d9dd4167b6ac3f6727cc077e247a8c0b47c # v1.70.0
+    uses: monumental-archive/.github/.github/workflows/security-release.yml@6deae011983b931e9a9b20c931a9557a7b98c6b3 # v1.70.1
     permissions:
       # Stated, not inherited: a `uses:` job takes the workflow-level
       # default above, never an ambient grant.
