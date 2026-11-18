@@ -27,14 +27,14 @@ const (
 func enrichPolicy(t *testing.T) *policy.Policy {
 	t.Helper()
 
-	const declared = `"denySelfHostedRunners": true,
+	const declared = `"runnerEnvironments": ["github-hosted"],
     "enrichment": {
       "predicateType": "` + enrichType + `",
       "required": ["toolbelt-lock"],
       "permitted": ["Cargo.lock", "base-images"]
     }`
 
-	spliced := strings.Replace(policyJSON, `"denySelfHostedRunners": true`, declared, 1)
+	spliced := strings.Replace(policyJSON, `"runnerEnvironments": ["github-hosted"]`, declared, 1)
 
 	p, err := policy.Load(strings.NewReader(spliced))
 	if err != nil {

@@ -105,12 +105,16 @@ type DecisionTrust struct {
 // Build carries the build-track expectations — all four of
 // verifying-artifacts' comparisons are named here or in Trust.
 type Build struct {
-	BuildTypes            map[string]BuildType `json:"buildTypes"`
-	ResourceURI           *string              `json:"resourceUri"`
-	SourceRepository      *string              `json:"sourceRepository"`
-	TargetLevel           *string              `json:"targetLevel"`
-	DenySelfHostedRunners *bool                `json:"denySelfHostedRunners"`
-	Enrichment            *Enrichment          `json:"enrichment"`
+	BuildTypes       map[string]BuildType `json:"buildTypes"`
+	ResourceURI      *string              `json:"resourceUri"`
+	SourceRepository *string              `json:"sourceRepository"`
+	TargetLevel      *string              `json:"targetLevel"`
+	// RunnerEnvironments are the runner environments a release's
+	// provenance may carry, compared exactly as the certificate writes
+	// them and never judged (stele#463): which values mean "hosted" is
+	// the forge's vocabulary, so it is declared, not held in code.
+	RunnerEnvironments []string    `json:"runnerEnvironments"`
+	Enrichment         *Enrichment `json:"enrichment"`
 }
 
 // Enrichment is the OPTIONAL build-enrichment obligation: which
@@ -563,11 +567,34 @@ func (p *Policy) validateBuild() error {
 		return err
 	}
 
-	if p.Build.DenySelfHostedRunners == nil {
-		return errors.New("build.denySelfHostedRunners is absent — the stance is declared, never defaulted")
+	if err := runnerEnvironments(p.Build.RunnerEnvironments); err != nil {
+		return err
 	}
 
 	return p.validateEnrichment()
+}
+
+// runnerEnvironments validates the declared runner stance: present, and
+// naming at least one environment, none of them empty. Absent and
+// empty are different mistakes and are refused apart; an empty entry
+// would admit a certificate that states no runner environment at all.
+func runnerEnvironments(envs []string) error {
+	switch {
+	case envs == nil:
+		return errors.New("build.runnerEnvironments is absent — the runner stance is declared, never defaulted")
+	case len(envs) == 0:
+		return errors.New("build.runnerEnvironments is empty — a policy admitting no runner environment" +
+			" admits no release")
+	}
+
+	for i, env := range envs {
+		if env == "" {
+			return fmt.Errorf("build.runnerEnvironments[%d] is empty — a certificate stating no runner"+
+				" environment is not one this list can name", i)
+		}
+	}
+
+	return nil
 }
 
 // validateEnrichment validates the OPTIONAL enrichment section.
