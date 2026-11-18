@@ -182,3 +182,54 @@ func TestClassifyIsEpochFree(t *testing.T) {
 		t.Fatalf("Classify = %q, want %q", got, evidence.TypeEvidence)
 	}
 }
+
+// sourceVerdictPolicyJSON is the classify fixture with the source
+// verdict declared (stele#471): the epoch, the asset name, and the tag
+// obligation the epoch needs.
+const sourceVerdictPolicyJSON = `{
+  "schema": 9,
+  "issuer": "https://token.example.com",
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "sourceVerdictFromVersion": "9.9.9",
+    "sourceVerdictBundle": "source-verdict.json",
+    "classes": {"rust-binary": {"bundles": ["attestations-binaries.intoto.jsonl"]}}
+  },
+  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
+    "identityPattern": "^https://github\\.com/acme/", "proofFloor": {"floor": "certificate-transparency"},
+    "notesRef": "refs/notes/commits", "epochs": {"widget": "v0.1.0"}}
+}`
+
+// TestClassifyTheSourceVerdict (stele#471): the declared source-verdict
+// asset is a document, read from the policy and never spelled here;
+// undeclared, the same name is whatever the rest of the vocabulary says
+// — a build subject. Epoch-free: the fixture's epoch (9.9.9) is past
+// any machinery, and the asset is still evidence.
+func TestClassifyTheSourceVerdict(t *testing.T) {
+	t.Parallel()
+
+	declared, err := assert.LoadPolicy(strings.NewReader(sourceVerdictPolicyJSON))
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		pol  *assert.EvidencePolicy
+		want string
+	}{
+		{"declared, the source verdict is evidence", declared.Evidence, evidence.TypeEvidence},
+		{"undeclared, the same name is a build subject", classifyPolicy(t), evidence.TypeBuildSubject},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.pol.Classify("source-verdict.json"); got != tt.want {
+				t.Fatalf("Classify(source-verdict.json) = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

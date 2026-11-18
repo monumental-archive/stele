@@ -523,3 +523,36 @@ func TestEmitManifestRegistrySubjectRefusals(t *testing.T) {
 		})
 	}
 }
+
+// TestEmitManifestTypesTheSourceVerdictEvidence (stele#471): a release
+// directory holding the declared source-verdict asset writes its
+// manifest with that asset typed evidence and claimed by no leg — the
+// envelope is a document about the release, not something it built.
+func TestEmitManifestTypesTheSourceVerdictEvidence(t *testing.T) {
+	t.Parallel()
+
+	r := newRelease(t, map[string]string{
+		widget:                   widgetBody,
+		"widget-1.0.0.spdx.json": "sbom\n",
+		"source-verdict.json":    "envelope\n",
+	}, map[string]string{goBundle: "bundle\n"})
+
+	declared := strings.Replace(manifestPolicyJSON, `"storeVsaFromVersion": "1.13.0",`,
+		`"storeVsaFromVersion": "1.13.0", "sourceVerdictFromVersion": "1.40.0", `+
+			`"sourceVerdictBundle": "source-verdict.json",`, 1)
+	declared = strings.Replace(declared, `"schema": 9,`, `"schema": 9, "issuer": "https://token.example.com",
+  "tags": {"tagPattern": "^v[0-9]", "taggerName": "mint[bot]",
+    "identityPattern": "^https://github\\.com/acme/", "proofFloor": {"floor": "certificate-transparency"},
+    "notesRef": "refs/notes/commits", "epochs": {"widget": "v0.1.0"}},`, 1)
+
+	if err := os.WriteFile(r.policy, []byte(declared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := emitWants(t, r.args("go-binary,oci-image", "--leg-lines", goBinaryLines(t)), exitOK)
+
+	want := `{"name":"source-verdict.json","sha256":"` + sumOf("envelope\n") + `","type":"evidence"}`
+	if !strings.Contains(out, want) {
+		t.Fatalf("manifest lacks %s:\n%s", want, out)
+	}
+}

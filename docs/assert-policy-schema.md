@@ -1119,7 +1119,9 @@ stale from the day it was written.
 
 The type is stamped by `stele emit manifest`, from the vocabulary
 this policy already declares — `checksums`, `manifestAsset`,
-`umbrellaBundle`, `sbomSuffix`, `evidenceSuffixes`, and each class's
+`umbrellaBundle`, `sourceVerdictBundle` (when declared; epoch-free,
+since a shipped source verdict is a document whether or not that
+release owed one), `sbomSuffix`, `evidenceSuffixes`, and each class's
 `bundles`, `legacyVsaBundles` and `assetPrefixes`. That is the ONE
 definition of the question (`internal/assert`'s `Classify`), and
 emission is the one moment the knowledge exists natively. Every walk
