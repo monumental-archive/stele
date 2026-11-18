@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/monumental-archive/stele/internal/derive"
 	"github.com/monumental-archive/stele/internal/manifest"
 )
@@ -19,17 +21,55 @@ const deriveBump = "bump"
 
 // bumpArgs is everything `derive bump` reads beyond the version flags.
 type bumpArgs struct {
-	check bool
-	date  string
+	check       bool
+	date        string
+	expect      string
+	manifestDir string
+}
+
+// refusal is the flags' own contradictions, or "" when they stand.
+func (b *bumpArgs) refusal() string {
+	switch {
+	case (b.expect != "" || b.manifestDir != "") && !b.check:
+		return "--expect and --manifest-dir judge, so they need --check; a rewrite takes its version from history"
+	case b.expect != "":
+		// Strict: a mirror carries 1.2.3, never v1.2.3, so a stated
+		// version spelled with the tag's prefix could never agree.
+		if _, err := semver.StrictNewVersion(b.expect); err != nil {
+			return fmt.Sprintf("--expect %q is not a version (MAJOR.MINOR.PATCH, no prefix): %v", b.expect, err)
+		}
+	}
+
+	return ""
 }
 
 // runDeriveBump derives the release and either rewrites the tree's
 // version mirrors to it, or — in check mode — holds them against the
 // version already released.
 func runDeriveBump(da *deriveArgs, bump *bumpArgs, out *latch) error {
+	// A stated version needs no history: it is the whole question, so
+	// the tree is read and git is not.
+	if bump.check && bump.expect != "" {
+		set, err := judgedMirrors(da.gitDir, bump.manifestDir, out)
+		if err != nil {
+			return err
+		}
+
+		return runBumpExpect(bump.expect, set, out)
+	}
+
 	d, err := deriveRelease(da, out)
 	if err != nil {
 		return err
+	}
+
+	if bump.check {
+		set, jerr := judgedMirrors(da.gitDir, bump.manifestDir, out)
+		if jerr != nil {
+			return jerr
+		}
+
+		return runBumpCheck(d, set, out)
 	}
 
 	set, err := manifest.Detect(da.gitDir)
@@ -38,10 +78,6 @@ func runDeriveBump(da *deriveArgs, bump *bumpArgs, out *latch) error {
 	}
 
 	out.logf("kind=%s", set.Kind)
-
-	if bump.check {
-		return runBumpCheck(d, set, out)
-	}
 
 	next, releases := d.decision.Next()
 	if !releases {
@@ -91,6 +127,56 @@ func runDeriveBump(da *deriveArgs, bump *bumpArgs, out *latch) error {
 	out.logf("version=%s", next)
 	out.logf("tag=%s", derive.Tag(da.prefix, next))
 	out.logf("files=%s", strings.Join(files, " "))
+
+	return nil
+}
+
+// judgedMirrors is the set a check holds against a version: the tree's
+// mirrors, or — with a manifest directory — that package's version
+// alone, the root's mirrors held only to agree with each other.
+func judgedMirrors(root, manifestDir string, out *latch) (*manifest.Set, error) {
+	set, err := manifest.Detect(root)
+	if err != nil {
+		return nil, err
+	}
+
+	out.logf("kind=%s", set.Kind)
+
+	if manifestDir == "" {
+		return set, nil
+	}
+
+	if len(set.Sites) > 0 {
+		if _, verr := set.Version(); verr != nil {
+			return nil, verr
+		}
+	}
+
+	member, err := manifest.MemberVersion(root, manifestDir)
+	if err != nil {
+		return nil, err
+	}
+
+	out.logf("judging %s %s = %q", member.Path, member.Field, member.Value)
+
+	return &manifest.Set{Kind: set.Kind, Sites: []manifest.Site{member}}, nil
+}
+
+// runBumpExpect holds the judged mirrors against a stated version. An
+// expectation with nothing in the tree to hold it against is refused:
+// passing it would be the silent green this check exists to end.
+func runBumpExpect(expect string, set *manifest.Set, out *latch) error {
+	if len(set.Sites) == 0 {
+		return fmt.Errorf("derive bump: --expect %s, but nothing in this tree states a version to hold it against",
+			expect)
+	}
+
+	if err := set.Check(expect); err != nil {
+		return err
+	}
+
+	out.logf("check=ok")
+	out.logf("every judged mirror carries %s", expect)
 
 	return nil
 }

@@ -227,9 +227,11 @@ type verifyArgs struct {
 	inventoryList []verify.Subject
 	bv            verify.BundleVerifier
 	// source-vsa: the assert policy names the asset the verdict is
-	// published as.
+	// published as. release and vsa: its evidence section says where a
+	// release states what it shipped, read when that is derived.
 	assertPolicy string
 	sourceAsset  string
+	evidence     *assert.EvidencePolicy
 }
 
 // verifyCmd dispatches `stele verify <mode>`.
@@ -359,8 +361,10 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&rebuilt, "rebuilt", "", "sha256sum manifest of the REBUILT artifacts (required)")
 	fs.StringVar(&policyPath, "assert-policy", "",
 		"assert policy whose evidence vocabulary types an UNTYPED released manifest; unused, and not "+
-			"read, when the manifest carries its own typing. Named for the document it takes: --policy "+
-			"is the VERIFY policy everywhere else under this verb, and this comparison verifies nothing")
+			"read, when the manifest carries its own typing. In the pre-release form (--classes) it is "+
+			"required: each class's subject shape is declared in its evidence.classes. Named for the "+
+			"document it takes: --policy is the VERIFY policy everywhere else under this verb, and this "+
+			"comparison verifies nothing")
 	fs.StringVar(&class, "class", "",
 		"the evidence class this rebuild covers — the population narrows to the artifacts the released "+
 			"manifest says that class built. Omit when the rebuild covers the whole release. A manifest "+
@@ -374,6 +378,18 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
+	pa := &preReleaseArgs{}
+	fs.StringVar(&pa.classes, "classes", "",
+		"the PRE-RELEASE form (stele#401): the classes requested of both builds, comma-separated. Each is"+
+			" compared from --first and --rebuild; every requested class must have subjects in both")
+	fs.Var(&pa.first, "first",
+		"pre-release: one class's output from the FIRST build, as <class>=<path> — a sha256sum manifest, or"+
+			" for a registry class the directory of digest files its legs wrote; repeatable once per class")
+	fs.Var(&pa.rebuild, "rebuild",
+		"pre-release: the same class's output from the REBUILD, in the same shape as --first")
+	fs.BoolVar(&pa.rehearsal, "rehearsal", false,
+		"pre-release: the run pushed no image, so registry classes are reported as not compared")
+
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -384,6 +400,42 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		}
 
 		return exitUsage
+	}
+
+	if code, chosen := reproForm(fs, fail); chosen {
+		return code
+	}
+
+	if named(fs, "classes") {
+		switch {
+		case repo == "" || !strings.Contains(repo, "/"):
+			return fail("--repo must be owner/repo")
+		case tag == "":
+			return fail("--tag is required")
+		}
+
+		if policyPath == "" {
+			return fail("--assert-policy is required with --classes: each class's subject shape is declared" +
+				" there, never assumed")
+		}
+
+		pa.repo, pa.tag, pa.jsonOut, pa.policy = repo, tag, jsonOut, policyPath
+
+		return runPreReleaseRepro(pa, stdout, stderr)
+	}
+
+	// A --targets that was GIVEN and is empty is refused, never read as
+	// "every target" (.github#637, stele#223): omitting the flag is the
+	// claim that the rebuild covered the whole scope, and a matrix that
+	// rendered nothing into it would make that claim by accident.
+	if named(fs, "targets") && strings.TrimSpace(targets) == "" {
+		who := class
+		if who == "" {
+			who = "the rebuild"
+		}
+
+		return fail(who + " declares no rebuild target — an undeclared population judges every target the class" +
+			" published")
 	}
 
 	switch {
@@ -454,6 +506,46 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		j, report.NoCanary(), report.NoJudgedSet(), pop.facts(len(built))...)
 
 	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// reproForm refuses a run that mixes the two forms' flags; chosen is
+// true when it refused. A run is one form: the post-release form's
+// flags under --classes, or the pre-release form's without it, would
+// be read by nobody, which is a silent answer to a question the
+// caller thought it asked.
+func reproForm(fs *flag.FlagSet, fail func(string) int) (int, bool) {
+	pre := named(fs, "classes")
+
+	postReleaseOnly := []string{"released", "rebuilt", "class", "targets"}
+	preReleaseOnly := []string{"first", "rebuild", "rehearsal"}
+
+	for _, name := range postReleaseOnly {
+		if pre && named(fs, name) {
+			return fail("--" + name + " belongs to the post-release form; --classes is the pre-release form"), true
+		}
+	}
+
+	for _, name := range preReleaseOnly {
+		if !pre && named(fs, name) {
+			return fail("--" + name + " belongs to the pre-release form, which --classes names"), true
+		}
+	}
+
+	return 0, false
+}
+
+// named reports whether a flag was given on the command line at all —
+// the one way to tell an empty value from an absent one.
+func named(fs *flag.FlagSet, name string) bool {
+	given := false
+
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+
+	return given
 }
 
 // declaredTargets splits the --targets declaration WITHOUT dropping
@@ -911,13 +1003,21 @@ func parseVerifyArgs(mode string, args []string, stderr io.Writer) (*verifyArgs,
 	switch mode {
 	case modeRelease, modeVSA:
 		fs.StringVar(&va.tag, "tag", "", "release tag (required)")
-		fs.StringVar(&va.subjects, "subjects", "", "sha256sum manifest of release subjects (required)")
+		fs.StringVar(&va.subjects, "subjects", "",
+			"sha256sum manifest of release subjects; absent, derived from the release's own evidence"+
+				" (needs --assert-policy)")
 		fs.StringVar(&va.sboms, "sboms", "",
-			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode, required)")
-		fs.StringVar(&va.inventories, "inventories", "", inventoriesUsage+" (release mode)")
-		fs.StringVar(&va.signerPin, "signer-digest", "", "commit digest the signer identity is pinned at (required)")
+			"sha256sum manifest of the release's SBOM assets — the decision candidates (release mode);"+
+				" absent, derived from the release's own evidence (needs --assert-policy)")
+		fs.StringVar(&va.inventories, "inventories", "", inventoriesUsage+
+			" (release mode; absent with --sboms absent, derived with them)")
+		fs.StringVar(&va.assertPolicy, "assert-policy", "",
+			"the publisher's assert policy: its evidence section names where a release states what it"+
+				" shipped (read only when --subjects or --sboms is derived)")
+		fs.StringVar(&va.signerPin, "signer-digest", "",
+			"commit digest the signer identity is pinned at; absent, derived from the trees at the tag")
 		fs.StringVar(&va.machineryPin, "machinery-digest", "",
-			"commit digest the verifier/decision identities are pinned at (required)")
+			"commit digest the verifier/decision identities are pinned at; absent, derived from the trees at the tag")
 	case modeSourceVSA:
 		registerSourceVSAFlags(fs, va)
 	case modeChain:
@@ -978,6 +1078,12 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 		return fail(err)
 	}
 
+	if (va.mode == modeRelease || va.mode == modeVSA) && va.assertPolicy != "" {
+		if aerr := va.loadEvidencePolicy(); aerr != nil {
+			return fail(aerr)
+		}
+	}
+
 	if va.mode == modeRelease || va.mode == modeVSA {
 		if serr := va.loadSubjects(); serr != nil {
 			return fail(serr)
@@ -1007,7 +1113,12 @@ func (va *verifyArgs) load(stderr io.Writer) int {
 // release claims, which every provenance check is held against.
 func (va *verifyArgs) loadSubjects() error {
 	if va.subjects == "" {
-		return errors.New("--subjects is required")
+		if va.evidence == nil {
+			return errors.New("--subjects is required unless --assert-policy names the publisher's assert" +
+				" policy, which says where the release states its subjects")
+		}
+
+		return nil
 	}
 
 	manifest, err := os.ReadFile(va.subjects)
@@ -1024,23 +1135,26 @@ func (va *verifyArgs) loadSubjects() error {
 // declares one, its inventory plan — the decision's denominator.
 func (va *verifyArgs) loadSBOMs() error {
 	if va.sboms == "" {
-		return errors.New("--sboms is required")
-	}
+		if va.evidence == nil {
+			return errors.New("--sboms is required unless --assert-policy names the publisher's assert" +
+				" policy, which says where the release states its SBOM assets")
+		}
+	} else {
+		manifest, err := os.ReadFile(va.sboms)
+		if err != nil {
+			return fmt.Errorf("reading the SBOM manifest: %w", err)
+		}
 
-	manifest, err := os.ReadFile(va.sboms)
-	if err != nil {
-		return fmt.Errorf("reading the SBOM manifest: %w", err)
-	}
-
-	if va.sbomList, err = parseManifest(string(manifest)); err != nil {
-		return err
+		if va.sbomList, err = parseManifest(string(manifest)); err != nil {
+			return err
+		}
 	}
 
 	if va.inventories == "" {
 		return nil
 	}
 
-	manifest, err = os.ReadFile(va.inventories)
+	manifest, err := os.ReadFile(va.inventories)
 	if err != nil {
 		return fmt.Errorf("reading the inventory plan: %w", err)
 	}
@@ -1100,6 +1214,12 @@ func parseManifest(text string) ([]verify.Subject, error) {
 // runVerify runs the selected mode against real dependencies and
 // reports what it proved.
 func runVerify(va *verifyArgs, out *latch) (*verifyOutcome, error) {
+	if va.mode == modeRelease || va.mode == modeVSA {
+		if err := va.derive(out); err != nil {
+			return nil, err
+		}
+	}
+
 	pins := verify.Pins{Signer: va.signerPin, Machinery: va.machineryPin}
 
 	switch va.mode {

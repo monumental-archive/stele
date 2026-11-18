@@ -103,7 +103,9 @@ usage:
     repro     the reproducibility rebuild: the release's checksum
               manifest against the rebuild's, over the class and
               targets the rebuild declares it covered, one typed
-              finding per artifact that failed to reproduce
+              finding per artifact that failed to reproduce; with
+              --classes, the pre-release form: the first build
+              against the rebuild, class by class
     base      every base a build is about to instantiate, under the
               one declaration in the assert policy that claims it: a
               first-party base's provenance at the ref its tag
@@ -173,6 +175,10 @@ usage:
               by name; exit 1 when roster and listing disagree, 4
               when the listing cannot be read. With --repo and
               --tracks: is it a member, and do the tracks match
+    classes   the evidence classes a release request declares: each
+              requested class validated against the assert policy's
+              evidence.classes and expanded as its declares say,
+              printed as classes=<list> and each declared output
 
   stele assert <target>  compare published evidence to a declaration;
                          exit 0 pass, 1 fail, 4 could-not-judge. Every
@@ -303,12 +309,14 @@ derive vex-subjects takes --policy --decision... --org|--repo
 --workflows|--workflow [--repo]; derive subjects takes --policy
 --class --expected --dir [--subjects-out --leg-subjects-out
 --registry-subjects-out]; derive population takes --policy
---org|--repo [--tracks --out]; the other
+--org|--repo [--tracks --out]; derive classes takes --policy --classes
+[--given name=value...]; the other
 derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
---date --changelog]; bump adds [--check --date]; release-plan takes the
+--date --changelog]; bump adds [--check --date --expect
+--manifest-dir]; release-plan takes the
 notes flags plus [--branch --staging --subject --also --prepare --out].
 
 exit codes: 0 success; 1 refused — a judgment that found divergence,
@@ -322,14 +330,21 @@ offline document, or [--tuf-root --tuf-mirror] for a private Sigstore
 instance; naming none resolves one through TUF from the anchor pinned
 in this binary.
 
-verify flags: --policy --repo; release/vsa add
---tag --subjects --signer-digest --machinery-digest; chain adds
+verify flags: --policy --repo; release/vsa add --tag [--subjects
+--signer-digest --machinery-digest --assert-policy], and release adds
+[--sboms --inventories]. An absent digest is derived from the trees
+at the tag, the walk's own resolution; absent --subjects, --sboms and
+their plan are read from the release's own evidence, which the
+publisher's --assert-policy locates — one of --subjects or
+--assert-policy is required. Every derived value is printed; a flag
+that is given is used as given. chain adds
 --git-dir [--ref]; source-vsa adds --tag --git-dir --assert-policy
 --machinery-digest; repro takes --repo --tag --released --rebuilt
 [--class --targets --assert-policy --json] and no trust material — a
 digest comparison signs nothing; --assert-policy types an UNTYPED
 released manifest, --class and --targets scope the judged population
-to what the rebuild covered.
+to what the rebuild covered. Its pre-release form takes --repo --tag
+--classes --first --rebuild [--rehearsal --json].
 verify policy takes exactly one of --assert-policy or --verify-policy,
 naming the document to load, and nothing else.
 level takes --repo|--org [--ref --notes-ref --tag --json
