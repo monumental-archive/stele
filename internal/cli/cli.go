@@ -388,7 +388,9 @@ verifies, appends and pushes those links holding no signing identity;
 emit vsa adds --tag --subjects --sboms --signer-digest
 [--out --assert-policy --git-dir --source-verdict --machinery-version];
 emit source-vsa takes --tag --assert-policy --git-dir --out
---machinery-version; emit manifest takes --classes --store-vsa
+--machinery-version; both vsa modes take --policy-ref --policy-repo
+--policy-tree in place of --machinery-digest --policy-uri, the ref
+resolved to its commit through one implementation; emit manifest takes --classes --store-vsa
 --machinery-tree --assets-dir --bundles-dir --assert-policy
 [--leg-lines --registry-lines --rehearsal --out]
 and none of the above; emit decision takes --policy --classes --proof

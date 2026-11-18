@@ -182,6 +182,10 @@ func (ea *emitArgs) loadSourceVSA(fail func(error) int) int {
 		return fail(errors.New("the verify policy declares no source section — a source verdict names its resource"))
 	}
 
+	if err := ea.pin.load(ea); err != nil {
+		return fail(err)
+	}
+
 	ap, err := loadAssertPolicy(ea.assertPolicy)
 	if err != nil {
 		return fail(fmt.Errorf("assert policy: %w", err))

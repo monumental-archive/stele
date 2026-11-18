@@ -171,6 +171,7 @@ type emitArgs struct {
 	signerPin   string
 	out         string
 	vsaIn       vsaInputs
+	pin         policyPin
 
 	// vsa and source-vsa: the source verdict (stele#391, stele#468),
 	// owed when the assert policy declares it
@@ -295,8 +296,10 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.out, "out", "", "write the predicate here instead of stdout")
 		registerSourceVerdictFlags(fs, ea)
 		ea.vsaIn.register(fs)
+		ea.pin.register(fs)
 	case emitSourceVSA:
 		registerEmitSourceVSAFlags(fs, ea)
+		ea.pin.register(fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -508,6 +511,10 @@ func runEmit(ea *emitArgs, out *latch) error {
 	case emitChainAppend:
 		return runEmitChainAppend(ea, out)
 	case emitSourceVSA:
+		if err := ea.pin.resolve(ea, out.logf); err != nil {
+			return err
+		}
+
 		return runEmitSourceVSA(ea, out)
 	default:
 		if err := ea.vsaIn.resolve(ea, out.logf); err != nil {
