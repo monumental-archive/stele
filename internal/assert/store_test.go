@@ -518,10 +518,11 @@ func TestProvenanceVerifiedScope(t *testing.T) {
 			t.Fatalf("candidates = %+v, want the identity expanded from the pin (%s)", att.candidates, wantIdentity)
 		}
 
-		// The publishing repository is read off the reference path
-		// after the prefix — the one derivation this mechanism keeps.
-		if len(att.asked) != 1 || att.asked[0] != "acme/edtf-postgres" {
-			t.Fatalf("asked = %v, want the publisher derived from the reference", att.asked)
+		// The owner's store is asked, never a repository guessed from
+		// the image path: a package's name is not its repository's
+		// (stele#458), and the identity says which repository signed.
+		if len(att.asked) != 1 || att.asked[0] != "acme/" {
+			t.Fatalf("asked = %v, want the owner's store", att.asked)
 		}
 	})
 

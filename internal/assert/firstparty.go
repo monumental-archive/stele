@@ -66,8 +66,10 @@ func (s *BaseImageScope) JudgeBase(ref string, att Attestor, diverge func(string
 // judgeProvenance proves a base carries provenance from the identity
 // its own pin implies. Nothing here is a literal: the expected
 // identity is expanded out of the reference, so the identity demanded
-// travels with the pin that names it. The publishing repository is
-// read off the reference path after the prefix.
+// travels with the pin that names it. The attestations are read from
+// the owner's store: a package's name is not its repository's, and
+// which repository signed is the identity's to say, not where the
+// attestation was found (stele#458).
 func (s *BaseImageScope) judgeProvenance(ref string, att Attestor, diverge func(string)) (Approval, error) {
 	// Compiled here rather than assumed: policy load already refused
 	// an unparsable pattern, and a walk that PANICS on one instead of
@@ -96,8 +98,7 @@ func (s *BaseImageScope) judgeProvenance(ref string, att Attestor, diverge func(
 	}
 
 	if verr := att.Verify(
-		publisherOwner(*s.RegistryPrefix), publisherRepo(ref, *s.RegistryPrefix), refDigest(ref),
-		[]Candidate{{Identity: identity}}, *s.PredicateType,
+		publisherOwner(*s.RegistryPrefix), "", refDigest(ref), []Candidate{{Identity: identity}}, *s.PredicateType,
 	); verr != nil {
 		if unseen(verr) {
 			return Approval{}, blind(scopeAssertion(s), ref, "provenance attestations", verr)
