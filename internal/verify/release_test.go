@@ -7,6 +7,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
+	"github.com/monumental-archive/stele/internal/policy"
 	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vsa"
 )
@@ -180,6 +181,36 @@ func TestRelease(t *testing.T) {
 	}
 }
 
+// TestReleaseRunnerEnvironmentIsDeclared: which runner environments a
+// release's provenance may carry is the policy's list, compared as the
+// certificate writes it (stele#463). A forge spelling its hosted
+// runner another way verifies under a policy naming that spelling, and
+// is refused under one that does not.
+func TestReleaseRunnerEnvironmentIsDeclared(t *testing.T) {
+	t.Parallel()
+
+	const forgeHosted = "forge-hosted"
+
+	declared, err := policy.Load(strings.NewReader(strings.Replace(policyJSON,
+		`"runnerEnvironments": ["github-hosted"]`, `"runnerEnvironments": ["`+forgeHosted+`"]`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := newReleaseWorld()
+	w.provExt.RunnerEnvironment = forgeHosted
+	w.build(t)
+
+	if _, err := verify.Release(declared, coords, w.subjects, w.plan(), pins, w.store, fakeBV{}, discardLog); err != nil {
+		t.Fatalf("Release = %v — a runner environment the policy lists must verify", err)
+	}
+
+	if _, err := w.run(t); err == nil || !strings.Contains(err.Error(),
+		`runner environment "forge-hosted" is not one the policy admits (github-hosted)`) {
+		t.Fatalf("Release = %v — a runner environment the policy does not list must refuse, naming both", err)
+	}
+}
+
 // TestReleaseWithoutDecisionPolicy pins the optional obligation: a
 // policy declaring no trust.decision gets the provenance half whole
 // from Release itself — nothing invented beyond what the policy asks.
@@ -252,9 +283,9 @@ func TestReleaseRefusals(t *testing.T) {
 			"provenance signed at",
 		},
 		{
-			"self-hosted runner against the deny stance",
+			"a runner environment the policy does not list",
 			func(w *releaseWorld) { w.provExt.RunnerEnvironment = "self-hosted" },
-			"not github-hosted",
+			`runner environment "self-hosted" is not one the policy admits (github-hosted)`,
 		},
 		{
 			"certificate names a fork as source",

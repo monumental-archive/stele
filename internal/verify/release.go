@@ -10,6 +10,7 @@ package verify
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -419,8 +420,9 @@ func (pp *provenancePass) checkCertificate(s Subject, verified *trust.Verified) 
 		return fmt.Errorf("verify: %s: provenance signed at %q, pin is %q", s.Name, ext.BuildSignerDigest, pp.pins.Signer)
 	}
 
-	if *pp.p.Build.DenySelfHostedRunners && ext.RunnerEnvironment != "github-hosted" {
-		return fmt.Errorf("verify: %s: runner environment %q is not github-hosted", s.Name, ext.RunnerEnvironment)
+	if !slices.Contains(pp.p.Build.RunnerEnvironments, ext.RunnerEnvironment) {
+		return fmt.Errorf("verify: %s: runner environment %q is not one the policy admits (%s)",
+			s.Name, ext.RunnerEnvironment, strings.Join(pp.p.Build.RunnerEnvironments, ", "))
 	}
 
 	if ext.SourceRepositoryURI != pp.srcRepo {

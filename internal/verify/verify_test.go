@@ -63,7 +63,7 @@ const policyJSON = `{
     "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
     "sourceRepository": "https://github.com/{owner}/{repo}",
     "targetLevel": "SLSA_BUILD_LEVEL_3",
-    "denySelfHostedRunners": true
+    "runnerEnvironments": ["github-hosted"]
   },
   "source": {
     "identity": "https://github.com/{owner}/{repo}/.github/workflows/source-attest.yml@refs/heads/main",

@@ -77,7 +77,7 @@ loader's error message rather than against the doc.
     "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
     "sourceRepository": "https://github.com/{owner}/{repo}",
     "targetLevel": "SLSA_BUILD_LEVEL_3",
-    "denySelfHostedRunners": true,
+    "runnerEnvironments": ["github-hosted"],
     "enrichment": {
       "predicateType": "https://monumental-archive.github.io/attestations/build-enrichment/v2",
       "required": ["toolbelt-lock"],
@@ -395,11 +395,25 @@ policy is unsatisfiable by construction — every run would cap below
 the demand — so the disagreement is in the file, not in the
 evidence, and it is refused once rather than reported nightly.
 
-### `build.denySelfHostedRunners`
+### `build.runnerEnvironments`
 
-The org runs verification with self-hosted runners refused. A named
-knob because it is a real policy choice in the Sigstore/GitHub
-verification model, and a universal tool cannot hardcode it.
+The runner environments a release's provenance may carry: a
+non-empty list of strings, each compared exactly as the signing
+certificate writes its runner-environment extension and never
+interpreted (stele#463). Which value a forge writes for a hosted
+runner is that forge's vocabulary, so it is declared here, never
+held in code: a GitHub-hosted build carries `github-hosted`, and a
+policy that admits only hosted runners lists exactly that. A
+certificate whose value is not in the list is refused, naming the
+value and the list.
+
+The stance is declared, never defaulted: the key is required
+wherever `build` is declared. Absent, empty, or carrying an empty
+entry each refuse at load — an empty entry would admit a
+certificate that states no runner environment at all. It replaces
+the boolean `denySelfHostedRunners`, which is now an unknown key: a
+yes/no over a value held in code could not say which runner it
+meant.
 
 ### `build.enrichment` (optional)
 
