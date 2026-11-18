@@ -1673,16 +1673,16 @@ otherwise, seals CANNOT_JUDGE and never a finding about the subject.
 ### The source verdict for a release tag
 
 A release verdict speaks for the artifacts; the source verdict is
-the second verdict beside it, speaking for the tag (stele#391). It
-is emitted by the same command, `stele emit vsa`, when that command
-is given this policy (`--assert-policy`) and the policy declares
-both this section and `evidence.sourceVerdictFromVersion`; otherwise
-`emit vsa` is unchanged. It is emitted only when every check passes,
-and all-or-nothing with the release verdict — a refusal writes
-neither:
+the second verdict beside it, speaking for the tag (stele#391). Its
+one producer is `stele emit source-vsa` (stele#468). The mode reads
+no release, no store and no registry, so it runs before a release
+exists. That is the only time a publisher that seals its releases at
+publish can still attach it. The mode refuses, by name, a policy
+that declares no tags section or no
+`evidence.sourceVerdictFromVersion`: a caller asking for a verdict
+nobody owes is told so. It writes the envelope (`--out`) only when
+every check passes:
 
-- the release verifies (the release verdict's own checks), folding
-  its provenance to one source revision;
 - the release tag, read from the clone (`--git-dir`, with the
   protected branches, the notes ref and the tag fetched), is
   annotated, made by `taggerName`, in a repository whose `epochs`
@@ -1690,8 +1690,7 @@ neither:
   tags, so no tag of it can vouch for a verdict), signed, and its
   signature verifies under `identityPattern` and the issuer at the
   floor `proofFloor` owes that tag;
-- the tag points at the release's source revision;
-- that commit carries a chain link verified in the walk of a branch
+- the tag's own target carries a chain link verified in the walk of a branch
   the verify policy declares in `source.protectedBranches` (a link is
   one note per commit, so any declared branch whose walk holds it
   gives the same facts).
@@ -1711,10 +1710,19 @@ half of a chain note — built from the verify policy's declared
 resource, never a host written in code. It is
 signed by the verdict identity (the ambient signer, over DSSE's PAE of
 the statement), proved with a stranger's inputs by the same read a
-consumer runs, and written (`--source-out`) in the chain format's
-half envelope: `payloadType`, the base64 statement, and the bundle.
-The publishing workflow attaches that file to the release as
+consumer runs, and written in the chain format's half envelope:
+`payloadType`, the base64 statement, and the bundle. The publishing
+workflow attaches that file to the release as
 `evidence.sourceVerdictBundle`.
+
+`stele emit vsa` no longer writes one. Given this policy
+(`--assert-policy`) where it owes a source verdict, it requires the
+envelope the release published (`--source-verdict`), reads it with
+the same read `verify source-vsa` runs, and refuses unless the commit
+it binds is the one the release's own provenance names. Only the
+release-verdict leg knows that commit, so that comparison lives
+there, and a refusal writes no release predicate. Where none is
+owed, `emit vsa` is byte for byte what it was.
 
 `stele verify source-vsa` is the read: it fetches that asset from the
 release `--repo`/`--tag` names, resolves the tag to its commit in a

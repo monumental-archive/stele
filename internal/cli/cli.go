@@ -290,8 +290,11 @@ usage:
               rejected push refuses (re-run the signing job)
     vsa       run release verification in full and render the
               build-track VSA predicate the workflow signs; when the
-              assert policy owes one, also sign the tag's source
-              verdict — both written, or neither
+              assert policy owes a source verdict, the published one
+              must bind the commit the release was built from
+    source-vsa  the release tag's source verdict: the tag proven, the
+              link at its target, signed and self-proved — reading no
+              release, so it runs before one exists
     manifest  the release evidence manifest — the declared contract a
               stranger reads at the tag; every value a stated fact and
               every published asset pinned and typed, read back
@@ -383,7 +386,8 @@ chain-append takes --policy --repo --git-dir|--clone --links [--ref
 --remote --committer] and no --machinery-digest or --policy-uri, and
 verifies, appends and pushes those links holding no signing identity;
 emit vsa adds --tag --subjects --sboms --signer-digest
-[--out --assert-policy --git-dir --source-out]; emit manifest takes --classes --store-vsa
+[--out --assert-policy --git-dir --source-verdict]; emit source-vsa
+takes --tag --assert-policy --git-dir --out; emit manifest takes --classes --store-vsa
 --machinery-tree --assets-dir --bundles-dir --assert-policy
 [--leg-lines --registry-lines --rehearsal --out]
 and none of the above; emit decision takes --policy --classes --proof
