@@ -1677,11 +1677,20 @@ the second verdict beside it, speaking for the tag (stele#391). Its
 one producer is `stele emit source-vsa` (stele#468). The mode reads
 no release, no store and no registry, so it runs before a release
 exists. That is the only time a publisher that seals its releases at
-publish can still attach it. The mode refuses, by name, a policy
-that declares no tags section or no
-`evidence.sourceVerdictFromVersion`: a caller asking for a verdict
-nobody owes is told so. It writes the envelope (`--out`) only when
-every check passes:
+publish can still attach it.
+
+Whether a release tag owes one is a single predicate, shared by the
+evidence walk and both emit modes. The epoch is read against the
+release machinery's version (`--machinery-version`; the
+`sourceVerdictFromVersion` bullet above defines it), never against
+the tag's own version. That result is joined with the `tags`
+section's answer to whether this repository signs this tag. Both
+modes require `--machinery-version` when the policy declares the
+epoch. `emit source-vsa` refuses, by name, a policy that declares no
+tags section or no `evidence.sourceVerdictFromVersion`, and a tag
+that owes no verdict: a caller asking for a verdict nobody owes is
+told so. It writes the envelope (`--out`) only when every check
+passes:
 
 - the release tag, read from the clone (`--git-dir`, with the
   protected branches, the notes ref and the tag fetched), is
@@ -1716,10 +1725,11 @@ workflow attaches that file to the release as
 `evidence.sourceVerdictBundle`.
 
 `stele emit vsa` no longer writes one. Given this policy
-(`--assert-policy`) where it owes a source verdict, it requires the
-envelope the release published (`--source-verdict`), reads it with
-the same read `verify source-vsa` runs, and refuses unless the commit
-it binds is the one the release's own provenance names. Only the
+(`--assert-policy`), when the release owes a source verdict it
+requires the envelope the release published (`--source-verdict`),
+reads it with the same read `verify source-vsa` runs, and refuses
+unless the commit it binds is the one the release's own provenance
+names. Only the
 release-verdict leg knows that commit, so that comparison lives
 there, and a refusal writes no release predicate. Where none is
 owed, `emit vsa` is byte for byte what it was.

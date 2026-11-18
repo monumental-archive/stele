@@ -90,6 +90,15 @@ func registerSourceVerdictFlags(fs *flag.FlagSet, ea *emitArgs) {
 			"verdict is owed)")
 	fs.StringVar(&ea.sourceVerdictIn, "source-verdict", "",
 		"the source verdict envelope the release published, from `emit source-vsa` (required when one is owed)")
+	registerMachineryVersion(fs, ea)
+}
+
+// registerMachineryVersion is the one spelling of the input "owed" is
+// read against, on both modes.
+func registerMachineryVersion(fs *flag.FlagSet, ea *emitArgs) {
+	fs.StringVar(&ea.machineryVersion, "machinery-version", "",
+		"the version of the release machinery this release runs — what evidence.sourceVerdictFromVersion is "+
+			"read against (required when the assert policy declares it)")
 }
 
 // registerEmitSourceVSAFlags is `emit source-vsa`'s surface: the tag, the
@@ -101,6 +110,7 @@ func registerEmitSourceVSAFlags(fs *flag.FlagSet, ea *emitArgs) {
 	fs.StringVar(&ea.gitDir, "git-dir", "",
 		"local clone with the protected branches, the notes ref and the tag fetched (required)")
 	fs.StringVar(&ea.out, "out", "", "write the signed source verdict envelope here (required)")
+	registerMachineryVersion(fs, ea)
 }
 
 // loadSourceVerdict reads the assert policy for `emit vsa` and decides
@@ -122,9 +132,14 @@ func (ea *emitArgs) loadSourceVerdict(fail func(error) int) int {
 		return fail(fmt.Errorf("assert policy: %w", err))
 	}
 
-	if !sourceVerdictOwed(ap) {
+	owed, why, err := ea.sourceVerdictOwed(ap)
+	if err != nil {
+		return fail(err)
+	}
+
+	if !owed {
 		if ea.sourceVerdictIn != "" {
-			return fail(errors.New("--source-verdict was given, but the assert policy owes no source verdict"))
+			return fail(fmt.Errorf("--source-verdict was given, but this release owes no source verdict: %s", why))
 		}
 
 		return exitOK
@@ -181,16 +196,37 @@ func (ea *emitArgs) loadSourceVSA(fail func(error) int) int {
 			"nobody owes a source verdict"))
 	}
 
+	owed, why, err := ea.sourceVerdictOwed(ap)
+	if err != nil {
+		return fail(err)
+	}
+
+	if !owed {
+		return fail(fmt.Errorf("%s@%s owes no source verdict: %s", ea.coords.Slug(), ea.tag, why))
+	}
+
 	ea.tags = ap.Tags
 	ea.issuer = *ap.Issuer
 
 	return exitOK
 }
 
-// sourceVerdictOwed is whether the assert policy owes a source verdict
-// at all: the tag obligation it binds, and the epoch that declares it.
-func sourceVerdictOwed(ap *assert.Policy) bool {
-	return ap.Tags != nil && ap.Evidence.SourceVerdictFromVersion != nil
+// sourceVerdictOwed asks the one predicate the evidence walk asks
+// (assert.SourceVerdictOwed) for this release's tag. A policy that
+// declares the epoch cannot be answered without the machinery version
+// it is read against, so its absence is refused by name; one that
+// declares none owes nothing and needs no version.
+//
+//nolint:gocritic // unnamedResult: owed, why, and the refusal
+func (ea *emitArgs) sourceVerdictOwed(ap *assert.Policy) (bool, string, error) {
+	if ap.Evidence.SourceVerdictFromVersion != nil && ea.machineryVersion == "" {
+		return false, "", errors.New("--machinery-version is required: the assert policy declares " +
+			"evidence.sourceVerdictFromVersion, which is read against the release machinery's version")
+	}
+
+	owed, why := assert.SourceVerdictOwed(ap.Evidence, ap.Tags, ea.coords.Repo, ea.coords.Tag, ea.machineryVersion)
+
+	return owed, why, nil
 }
 
 // runEmitSourceVSA produces the source verdict for one tag and writes
@@ -292,21 +328,12 @@ func (ea *emitArgs) releaseTag(g sourceGit) (string, *trust.TagVerdict, error) {
 		return "", nil, fmt.Errorf("emit: %w", err)
 	}
 
-	switch epoch, declared := ea.tags.Epochs[ea.coords.Repo]; {
+	switch {
 	case obj == nil:
 		return "", nil, fmt.Errorf("emit: source verdict: tag %s is lightweight — no tagger and no signature to verify", tag)
 	case obj.Tagger != *ea.tags.TaggerName:
 		return "", nil, fmt.Errorf("emit: source verdict: tag %s was made by tagger %q, not the minting identity %q",
 			tag, obj.Tagger, *ea.tags.TaggerName)
-	case !declared:
-		return "", nil, fmt.Errorf("emit: source verdict: the tags policy declares no signing epoch for %s",
-			ea.coords.Repo)
-	case epoch == assert.EpochPending:
-		return "", nil, fmt.Errorf("emit: source verdict: the tags policy declares %s unsigned (pending) — "+
-			"a tag that owes no signature cannot vouch for a verdict", ea.coords.Repo)
-	case !ea.tags.SignsTag(ea.coords.Repo, tag):
-		return "", nil, fmt.Errorf("emit: source verdict: tag %s predates %s's signing epoch %s — "+
-			"a tag that owes no signature cannot vouch for a verdict", tag, ea.coords.Repo, epoch)
 	case len(obj.Signature) == 0:
 		return "", nil, fmt.Errorf("emit: source verdict: tag %s is unsigned", tag)
 	}

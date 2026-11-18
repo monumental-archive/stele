@@ -174,12 +174,13 @@ type emitArgs struct {
 
 	// vsa and source-vsa: the source verdict (stele#391, stele#468),
 	// owed when the assert policy declares it
-	assertPolicy    string
-	sourceVerdictIn string
-	sourceEnvelope  []byte
-	tags            *assert.TagsPolicy
-	issuer          string
-	rootJSON        []byte
+	assertPolicy     string
+	machineryVersion string
+	sourceVerdictIn  string
+	sourceEnvelope   []byte
+	tags             *assert.TagsPolicy
+	issuer           string
+	rootJSON         []byte
 
 	p             *policy.Policy
 	coords        verify.Coords

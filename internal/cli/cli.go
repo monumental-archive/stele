@@ -386,8 +386,9 @@ chain-append takes --policy --repo --git-dir|--clone --links [--ref
 --remote --committer] and no --machinery-digest or --policy-uri, and
 verifies, appends and pushes those links holding no signing identity;
 emit vsa adds --tag --subjects --sboms --signer-digest
-[--out --assert-policy --git-dir --source-verdict]; emit source-vsa
-takes --tag --assert-policy --git-dir --out; emit manifest takes --classes --store-vsa
+[--out --assert-policy --git-dir --source-verdict --machinery-version];
+emit source-vsa takes --tag --assert-policy --git-dir --out
+--machinery-version; emit manifest takes --classes --store-vsa
 --machinery-tree --assets-dir --bundles-dir --assert-policy
 [--leg-lines --registry-lines --rehearsal --out]
 and none of the above; emit decision takes --policy --classes --proof

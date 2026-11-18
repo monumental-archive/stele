@@ -226,6 +226,10 @@ func sourceAssertPolicy(t *testing.T, owed bool, epochs string) string {
 
 const signingEpochs = `{"widget": "v0.1.0"}`
 
+// srcMachinery is the release machinery the world's release runs: at
+// the policy's source-verdict epoch (1.70.0), so the verdict is owed.
+const srcMachinery = "1.70.0"
+
 // sourceRun is one emit invocation with its outputs.
 type sourceRun struct {
 	code           int
@@ -258,6 +262,7 @@ func (w *sourceWorld) emitSource(t *testing.T, assertPolicy string, extra ...str
 		"--machinery-digest", strings.Repeat("b", 40),
 		"--policy-uri", "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
 		"--assert-policy", assertPolicy, "--git-dir", w.repo.Dir, "--out", run.source,
+		"--machinery-version", srcMachinery,
 	}
 
 	return runCLI(append(args, extra...), run)
@@ -282,7 +287,8 @@ func (w *sourceWorld) emitVSA(t *testing.T, assertPolicy, sourceVerdict string, 
 		"--out", run.predicate,
 	}
 	if assertPolicy != "" {
-		args = append(args, "--assert-policy", assertPolicy, "--git-dir", w.repo.Dir)
+		args = append(args, "--assert-policy", assertPolicy, "--git-dir", w.repo.Dir,
+			"--machinery-version", srcMachinery)
 	}
 
 	if sourceVerdict != "" {
@@ -412,16 +418,26 @@ func TestEmitSourceVSARefusals(t *testing.T) {
 		},
 		{name: "the tag is not fetched", tagger: "-", code: exitRefused, want: "tag " + relTag + " is not in the clone"},
 		{
-			name: "no signing epoch for the repository", epochs: `{"gadget": "v0.1.0"}`, code: exitRefused,
-			want: "declares no signing epoch for widget",
+			name: "no signing epoch for the repository", epochs: `{"gadget": "v0.1.0"}`, code: exitUsage,
+			want: "acme/widget@" + relTag + " owes no source verdict: the tags section owes no signature on widget@" +
+				relTag,
 		},
 		{
-			name: "a repository declared unsigned", epochs: `{"widget": "pending"}`, code: exitRefused,
-			want: "unsigned (pending)",
+			name: "a repository declared unsigned", epochs: `{"widget": "pending"}`, code: exitUsage,
+			want: "owes no source verdict: the tags section owes no signature on widget@" + relTag,
 		},
 		{
-			name: "a tag before its repository's signing epoch", epochs: `{"widget": "v2.0.0"}`, code: exitRefused,
-			want: "tag " + relTag + " predates widget's signing epoch v2.0.0",
+			name: "a tag before its repository's signing epoch", epochs: `{"widget": "v2.0.0"}`, code: exitUsage,
+			want: "owes no source verdict: the tags section owes no signature on widget@" + relTag,
+		},
+		{
+			name: "machinery before the source-verdict epoch", extra: []string{"--machinery-version", "1.69.9"},
+			code: exitUsage,
+			want: "owes no source verdict: machinery 1.69.9 predates evidence.sourceVerdictFromVersion 1.70.0",
+		},
+		{
+			name: "no machinery version", extra: []string{"--machinery-version", ""}, code: exitUsage,
+			want: "--machinery-version is required: the assert policy declares evidence.sourceVerdictFromVersion",
 		},
 		{name: "an unsigned tag", unsigned: true, code: exitRefused, want: "tag " + relTag + " is unsigned"},
 		{
@@ -628,8 +644,20 @@ func notOwedIsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, assertPol := range []string{"", sourceAssertPolicy(t, false, signingEpochs)} {
-		run := w.emitVSA(t, assertPol, "")
+	cases := []struct {
+		assertPol string
+		extra     []string
+	}{
+		{assertPol: ""},
+		{assertPol: sourceAssertPolicy(t, false, signingEpochs)},
+		// Declared, but this release's machinery predates the epoch.
+		{assertPol: sourceAssertPolicy(t, true, signingEpochs), extra: []string{"--machinery-version", "1.0.0"}},
+	}
+
+	for _, c := range cases {
+		assertPol := c.assertPol
+
+		run := w.emitVSA(t, assertPol, "", c.extra...)
 		if run.code != exitOK {
 			t.Fatalf("Run = %d, stderr %q", run.code, run.stderr)
 		}
@@ -674,7 +702,19 @@ func TestEmitVSASourceVerdictRefusals(t *testing.T) {
 	}{
 		{
 			"an envelope nobody owes", notOwed, garbage, nil, exitUsage,
-			"--source-verdict was given, but the assert policy owes no source verdict",
+			"--source-verdict was given, but this release owes no source verdict: the assert policy declares no " +
+				"evidence.sourceVerdictFromVersion",
+		},
+		{
+			"an envelope for machinery before the epoch", owed, garbage,
+			[]string{"--machinery-version", "1.0.0"},
+			exitUsage, "this release owes no source verdict: machinery 1.0.0 predates",
+		},
+		{
+			"owed without a machinery version", owed, garbage,
+			[]string{"--machinery-version", ""},
+			exitUsage,
+			"--machinery-version is required",
 		},
 		{
 			"an envelope with no assert policy", nil, garbage, nil, exitUsage,
