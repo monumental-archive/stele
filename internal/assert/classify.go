@@ -33,9 +33,10 @@ import (
 
 // Classify reports whether a released asset is an artifact OF the
 // build or a document ABOUT it, from the policy alone: the checksum
-// manifest, the contract manifest, the umbrella bundle, each class's
-// bundles and legacy VSA bundles, the SBOM suffix, any declared
-// evidence suffixes, and each class's prefixed assets.
+// manifest, the contract manifest, the umbrella bundle, the source
+// verdict's asset (stele#471), each class's bundles and legacy VSA
+// bundles, the SBOM suffix, any declared evidence suffixes, and each
+// class's prefixed assets.
 //
 // The answer is total by construction — an asset the vocabulary does
 // not name is an artifact — because the vocabulary describes the
@@ -45,6 +46,13 @@ import (
 // unclassified.
 func (e *EvidencePolicy) Classify(name string) string {
 	if name == *e.Checksums || name == *e.UmbrellaBundle || name == *e.ManifestAsset {
+		return evidence.TypeEvidence
+	}
+
+	// Epoch-free, like the asset prefixes below: whether a source
+	// verdict is OWED is a per-release question (SourceVerdictOwed),
+	// but a shipped source verdict is a document.
+	if e.SourceVerdictBundle != nil && name == *e.SourceVerdictBundle {
 		return evidence.TypeEvidence
 	}
 
