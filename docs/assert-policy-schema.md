@@ -147,6 +147,43 @@ version mismatch, never as an unknown-field error.
   the engine, which refuses the RUN (never the release) when the two
   documents have drifted
   ([policy-schema.md](policy-schema.md#buildenrichment-optional)).
+- `classes.<name>.inventory` (optional) — what a release of this class
+  owes as inventory (stele#396): an engine-owned `kind` and exactly
+  that kind's parameters, flat on the declaration. The kinds are code,
+  each a judgment the derive leg computes; the parameters are the
+  adopter's. An unknown kind, a missing parameter, and a parameter the
+  kind does not read are each refused at load, by name, as the
+  `baseImages` mechanisms are.
+
+  | kind | the release's inventory | parameters |
+  | --- | --- | --- |
+  | `binaries` | read out of the class's shipped binaries | none |
+  | `none` | the class adds none of its own | none |
+  | `planned` | derived from the plan the class's build leg emits | none |
+  | `crates` | planned; stele writes the plan from the leg's packaged crates | `artifactSuffix` |
+  | `variants` | planned; stele writes the plan for one crate built once per variant | `artifact`, `features`, `noDefaultFeatures` |
+
+  A `binaries` or `none` class declaring planned prefixes is refused
+  (it owes no plan). A `crates` or `variants` class must declare
+  exactly one planned prefix: its documents are named under it.
+  `artifactSuffix` names a source crate's artifact apart from a
+  binary built out of it (`<crate><artifactSuffix>`). The `artifact`
+  template names `{package}` and `{variant}`; each `features` entry
+  may name `{variant}`; `noDefaultFeatures` is declared, never
+  defaulted. For example:
+
+  ```json
+  "inventory": {
+    "kind": "variants",
+    "artifact": "{package}-pg{variant}",
+    "features": ["pg{variant}"],
+    "noDefaultFeatures": true
+  }
+  ```
+
+  Absent, the class declares no inventory role, and `derive
+  inventories` or `derive inventory-plan` refuses the class by name
+  when it runs.
 - `classes.<name>.subjects` — what one planned build leg of this
   class leaves behind: the shape `stele derive subjects` judges
   ([subjects.md](subjects.md), stele#442). Optional; a class without
@@ -1276,6 +1313,31 @@ affected tag, and (with `publishWorkflows` declared) only when the
 failure was a PUBLISHING run. The asymmetry is the point: what a human may assert
 and what only evidence may assert are different types.
 
+## Inventory admissibility
+
+One rule for every inventory stele reads or writes (stele#396),
+whoever produced it: a document carrying no PURL, or any PURL without
+a version, is refused. The PURL is what every advisory scanner matches
+on, so a package without a versioned one is invisible to all of them,
+and an inventory carrying none gates on nothing. A version is what
+follows `@` in the PURL's last path segment, before any qualifiers or
+subpath.
+
+The rule needs no policy and has no exceptions. It applies to what a
+run writes or is handed, not to walks over published history: the
+inventory walks (`assert blast-radius`, `derive vex-subjects`, `level`)
+read documents already published, which cannot be re-emitted, and
+nothing here changes what those walks judge. It is applied where an
+inventory crosses into or out of the tool: every document
+`derive sbom` writes, every document it folds into a release view,
+and every subject inventory `derive vex` scans. A document another
+tool produced and stele does not otherwise read (an image scanner's
+SPDX) is judged by `stele assert inventory [--json] <document>...`:
+PASS when every document admits; FAIL naming the document and each
+versionless PURL (`versioned-purl`) or the absence of any
+(`inventory-purls`); CANNOT_JUDGE, with the document named
+(`inventory-readable`), when one will not read or parse as SPDX JSON.
+
 ## The inventory plan
 
 The pre-publish half of the planned obligations (.github#544). A
@@ -1322,6 +1384,26 @@ version skew, refused):
   canonicalises the object for comparison, and only the downstream
   leg that derives the document reads the content.
 
+`stele derive inventory-plan --class <class> --policy <assert-policy>`
+writes a plan for a class whose declared inventory kind is one stele
+produces (stele#396), and names every document under the class's ONE
+planned prefix. The producer and the judgment therefore read one
+declaration: a rename on the policy side is followed, not refused,
+and a class the policy does not declare, or declares with no kind
+stele produces, is refused at the producer. The two kinds:
+
+- `crates` (`--dir <packaged crates> --version <v>`): one entry per
+  `<name>-<v>.crate`, `doc` `<prefix><name><artifactSuffix>`,
+  `artifact` `<name><artifactSuffix>`, `params.cargoPackage` `<name>`.
+  A crate not named for the version, or none at all, is refused;
+- `variants` (`--crate-dir <crate> --variant <v>`): one entry for the
+  cell, `artifact` the declared template rendered for the crate's
+  `package.name` and the variant, `doc` `<prefix><artifact>`, `params`
+  `{cargoPackage, features, noDefaultFeatures}` from the declaration.
+
+The output is laid out as `jq` lays it out (two-space indent), so it
+replaces a build leg's jq line byte for byte.
+
 Every value is charset-guarded before it can reach a command line,
 because plans originate on build legs that execute caller code.
 Entries restating one identical mapping collapse by canonical
@@ -1352,6 +1434,41 @@ deliberately ask two different questions (stele#143):
   outside the judgment, not refused by it; a plan naming a class the
   release does not declare is drift (a leg ran for an undeclared
   class).
+
+### Deriving a release's inventories
+
+`stele derive inventories --policy <assert-policy> --classes <ran>
+--repo <owner/repo> --version <v> --created <instant> --out-dir <dir>
+[--evidence-classes --machinery-version] [--name --tree --binaries-dir
+--expect-revision --variants] [<plan files...>]` writes every
+inventory a release ships and prints, as one JSON array on stdout, the
+documents the release decision covers (stele#396). What each class
+owes is its declared `inventory` kind; a class the policy does not
+declare, or declares with no inventory, is refused by name. The
+sequence:
+
+- a `binaries` class beside a planning class is refused
+  (.github#784): the plan path has no plan for the binaries, and the
+  release would publish an inventory omitting them;
+- with `--binaries-dir` and no planning class, the binaries speak for
+  the release: a plan beside them is refused (#775), an empty
+  directory is refused, and the one document is read out of the
+  shipped bytes (`--expect-revision` checks every stamp). The list is
+  `[""]`: the release decides as one;
+- with plans, the plans are judged exactly as `assert plans` judges
+  them, and nothing derives from plans that did not pass. One
+  document per judged entry (`<doc>-<version><sbomSuffix>`), every
+  `--variants` value covered for every `variants` class the release
+  ran (by the class's own artifact template), and the view
+  (`<name>-<version><sbomSuffix>`) folded from the documents. The list
+  names the per-artifact documents; the view bears no decision;
+- with neither, a tree whose index tracks a `Cargo.lock` or `go.mod`
+  is refused (#492, #537), and otherwise the forge's dependency-graph
+  export is the view. The list is `[""]`.
+
+Every document written passes the admissibility rule above, the
+dependency graph included. `--name` defaults to the repository's name;
+a leading dot is stripped, because release-asset globs skip dotfiles.
 
 ### The judged set is what consumers iterate
 

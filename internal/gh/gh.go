@@ -776,6 +776,43 @@ func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error
 	return out, nil
 }
 
+// dependencyGraphResponse is the forge's SBOM export envelope: the
+// SPDX document rides under one key.
+type dependencyGraphResponse struct {
+	SBOM jsonx.Raw `json:"sbom"`
+}
+
+// DependencyGraphSBOM reads the forge's own dependency-graph export of
+// a repository, as SPDX JSON (stele#396). It is the inventory a
+// repository with no manifest and no binaries has: the forge's reading
+// of what it depends on. An absent graph is refused rather than read
+// as an empty inventory, because an inventory of nothing gates on
+// nothing.
+func (c *Client) DependencyGraphSBOM(owner, repo string) ([]byte, error) {
+	body, _, found, err := c.get(
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/dependency-graph/sbom",
+		"application/vnd.github+json",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		return nil, fmt.Errorf("gh: %s/%s has no dependency graph to export", owner, repo)
+	}
+
+	decoded, err := jsonx.DecodeForeign[dependencyGraphResponse](body)
+	if err != nil {
+		return nil, fmt.Errorf("gh: dependency graph of %s/%s: %w", owner, repo, err)
+	}
+
+	if len(decoded.SBOM) == 0 || string(decoded.SBOM) == "null" {
+		return nil, fmt.Errorf("gh: dependency graph of %s/%s carries no sbom", owner, repo)
+	}
+
+	return decoded.SBOM, nil
+}
+
 // AttestationPages reads EVERY page of an attestation listing at path
 // (stele#439): the endpoint answers an object holding an
 // `attestations` array, one page at a time, and a subject past one

@@ -161,6 +161,31 @@ func Derive(bins []Binary, tool string) (*Document, error) {
 	return render(facts, tool, inv), nil
 }
 
+// RequireRevision refuses every binary whose stamped revision is not
+// the released commit (stele#396, the canon's go-binary stamp check).
+// The embedded module list is an inventory of the RELEASE only when
+// the bytes were built from the released commit: a binary stamped
+// with another revision, or with none, describes some other tree.
+// The modified-tree and missing-module-list halves of that check are
+// Derive's own refusals; this is the half that needs the caller's
+// knowledge of which commit is being released.
+func RequireRevision(bins []Binary, released string) error {
+	for _, b := range bins {
+		stamped := setting(b.Info, settingRevision)
+		if stamped == released {
+			continue
+		}
+
+		if stamped == "" {
+			stamped = "<none>"
+		}
+
+		return fmt.Errorf("sbom: %s: stamped revision %s is not the released commit %s", b.Name, stamped, released)
+	}
+
+	return nil
+}
+
 // facts are what every leg must agree on: one release, one commit.
 type facts struct {
 	mainPath    string

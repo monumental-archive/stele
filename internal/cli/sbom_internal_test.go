@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,6 +135,20 @@ func TestDeriveSBOMRefusals(t *testing.T) {
 	devel := releaseInfo("linux", "amd64")
 	devel.Main.Version = "(devel)"
 
+	// The canon's go-binary stamp check, its three refusals
+	// (stele#396): another revision or none, a modified tree, and no
+	// module stamp — the last being the MAIN module's `mod` line.
+	unstamped := releaseInfo("linux", "amd64")
+	unstamped.Settings = slices.DeleteFunc(slices.Clone(unstamped.Settings),
+		func(s debug.BuildSetting) bool { return s.Key == "vcs.revision" })
+
+	modified := releaseInfo("linux", "amd64")
+	modified.Settings = slices.Clone(modified.Settings)
+	modified.Settings[len(modified.Settings)-1].Value = "true"
+
+	moduleless := releaseInfo("linux", "amd64")
+	moduleless.Main = debug.Module{}
+
 	for _, tc := range []struct {
 		name  string
 		args  []string
@@ -156,6 +171,37 @@ func TestDeriveSBOMRefusals(t *testing.T) {
 			args:  []string{"sbom", "--expect-version", "0.9.9", "bin"},
 			infos: map[string]*debug.BuildInfo{"bin": releaseInfo("linux", "amd64")},
 			match: "did not check out the tag",
+		},
+		{
+			name:  "a binary stamped with another revision",
+			args:  []string{"sbom", "--expect-revision", strings.Repeat("9", 40), "bin"},
+			infos: map[string]*debug.BuildInfo{"bin": releaseInfo("linux", "amd64")},
+			match: "sbom: bin: stamped revision aaaabbbbccccddddeeeeffff0000111122223333 is not" +
+				" the released commit " + strings.Repeat("9", 40),
+		},
+		{
+			name:  "a binary with no revision stamp",
+			args:  []string{"sbom", "--expect-revision", strings.Repeat("9", 40), "bin"},
+			infos: map[string]*debug.BuildInfo{"bin": unstamped},
+			match: "sbom: bin: stamped revision <none> is not the released commit " + strings.Repeat("9", 40),
+		},
+		{
+			name:  "an expected revision that is not a commit",
+			args:  []string{"sbom", "--expect-revision", "HEAD", "bin"},
+			infos: map[string]*debug.BuildInfo{"bin": releaseInfo("linux", "amd64")},
+			match: `derive sbom: --expect-revision "HEAD" is not a full commit identifier`,
+		},
+		{
+			name:  "a binary built from a modified tree",
+			args:  []string{"sbom", "bin"},
+			infos: map[string]*debug.BuildInfo{"bin": modified},
+			match: "was built from a modified tree (vcs.modified=true)",
+		},
+		{
+			name:  "a binary with no module stamp",
+			args:  []string{"sbom", "bin"},
+			infos: map[string]*debug.BuildInfo{"bin": moduleless},
+			match: "carries no main module path",
 		},
 		{
 			name:  "unwritable out file",
@@ -184,6 +230,17 @@ func TestDeriveSBOMRefusals(t *testing.T) {
 // same tag, and neither is what the document reports — that stays the
 // artifact's own stamp.
 func TestDeriveSBOMExpectVersionForms(t *testing.T) {
+	t.Run("the released commit", func(t *testing.T) {
+		withBinaries(t, map[string]*debug.BuildInfo{"bin": releaseInfo("linux", "amd64")}, nil)
+
+		var stdout, stderr bytes.Buffer
+
+		args := []string{"sbom", "--expect-revision", "aaaabbbbccccddddeeeeffff0000111122223333", "bin"}
+		if got := deriveCmd(args, &stdout, &stderr); got != exitOK {
+			t.Fatalf("deriveCmd = %d (stderr: %s)", got, stderr.String())
+		}
+	})
+
 	for _, expect := range []string{"0.3.0", "v0.3.0"} {
 		t.Run(expect, func(t *testing.T) {
 			withBinaries(t, map[string]*debug.BuildInfo{"bin": releaseInfo("linux", "amd64")}, nil)
@@ -308,13 +365,17 @@ func TestDeriveSBOMUnionAggregates(t *testing.T) {
 	}
 
 	a := write("a.spdx.json", `{"SPDXID": "SPDXRef-DOCUMENT", "packages": [
-	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-cli"},
-	  {"SPDXID": "SPDXRef-Package-1", "name": "shared", "versionInfo": "1.0.0"}],
+	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-cli", "externalRefs": [{"referenceType": "purl",
+	    "referenceLocator": "pkg:cargo/widget-cli@1.0.0"}]},
+	  {"SPDXID": "SPDXRef-Package-1", "name": "shared", "versionInfo": "1.0.0", "externalRefs": [
+	    {"referenceType": "purl", "referenceLocator": "pkg:cargo/shared@1.0.0"}]}],
 	 "relationships": [{"spdxElementId": "SPDXRef-DOCUMENT",
 	  "relatedSpdxElement": "SPDXRef-Package-0", "relationshipType": "DESCRIBES"}]}`)
 	b := write("b.spdx.json", `{"SPDXID": "SPDXRef-DOCUMENT", "packages": [
-	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-npm"},
-	  {"SPDXID": "SPDXRef-Package-1", "name": "only-npm", "versionInfo": "3.0.0"}],
+	  {"SPDXID": "SPDXRef-Package-0", "name": "widget-npm", "externalRefs": [{"referenceType": "purl",
+	    "referenceLocator": "pkg:npm/widget-npm@1.0.0"}]},
+	  {"SPDXID": "SPDXRef-Package-1", "name": "only-npm", "versionInfo": "3.0.0", "externalRefs": [
+	    {"referenceType": "purl", "referenceLocator": "pkg:npm/only-npm@3.0.0"}]}],
 	 "relationships": [{"spdxElementId": "SPDXRef-DOCUMENT",
 	  "relatedSpdxElement": "SPDXRef-Package-0", "relationshipType": "DESCRIBES"}]}`)
 

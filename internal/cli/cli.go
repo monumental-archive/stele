@@ -136,7 +136,8 @@ usage:
               follows — safe to compute twice, and --prepare writes
               the tree it names
     sbom      an artifact's inventory (SPDX 2.3), from one of three
-              sources: the shipped binaries' embedded module lists,
+              sources: the shipped binaries' embedded module lists
+              (stamped with the released commit, --expect-revision),
               a Cargo package's own resolved closure scoped to the
               target it was built for, or an aggregation of
               per-artifact documents into the release view — which is
@@ -170,6 +171,16 @@ usage:
               the class's planned legs must produce, present exactly
               once and nothing unplanned, as sha256 lines flat and
               grouped by leg — or a registry class's image digests
+    inventories  a release's every inventory in one call: the plans
+              judged as assert plans judges them, one document per
+              judged entry and the release view folded from them, or
+              the shipped binaries' own, or the forge's dependency
+              graph for a tree tracking no manifest — and the list of
+              documents the release decision covers on stdout
+    inventory-plan  a build leg's inventory plan, the document
+              assert plans judges, by the kind the class declares in
+              the assert policy: one entry per packaged crate, or one
+              per variant cell, named under the class's planned prefix
     population  the population every assert target walks, printed:
               each member's resolved tracks and the reconciliation
               by name; exit 1 when roster and listing disagree, 4
@@ -224,6 +235,10 @@ usage:
                  advisory applies excuses it — one that admits,
                  withholds or claims a fix is reported on the finding
                  (--scan --vex --subject [--json])
+    inventory    each handed inventory document (an image
+                 scanner's SPDX, for one) carries PURLs and every one
+                 versioned; one that will not read or parse is
+                 CANNOT_JUDGE ([--json] <document>...)
     signer-certificates  every certificate a transparency log holds
                  for a declared signing workflow reconciles against
                  a signing the population performed; read in chunks
@@ -295,7 +310,7 @@ usage:
               hashed into subject lines, read back through the
               verifier's decision reader before it is written
 
-derive sbom flags: [--out --expect-version] <binary>..., or
+derive sbom flags: [--out --expect-version --expect-revision] <binary>..., or
 --cargo-package --tree --created [--target --features
 --no-default-features --all-features], or --union --union-name
 --created; derive claims
@@ -308,7 +323,11 @@ derive vex-subjects takes --policy --decision... --org|--repo
 [--snapshot --out --unsigned-only --store]; derive signer-digest takes --policy
 --workflows|--workflow [--repo]; derive subjects takes --policy
 --class --expected --dir [--subjects-out --leg-subjects-out
---registry-subjects-out]; derive population takes --policy
+--registry-subjects-out]; derive inventory-plan takes --class --policy
+[--dir --version | --crate-dir --variant] [--out]; derive inventories
+takes --policy --classes --repo --version --created --out-dir
+[--evidence-classes --machinery-version --name --tree --binaries-dir
+--expect-revision --variants] [<plan>...]; derive population takes --policy
 --org|--repo [--tracks --out]; derive classes takes --policy --classes
 [--given name=value...]; the other
 derive modes take --git-dir [--ref

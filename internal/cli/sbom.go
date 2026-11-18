@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/monumental-archive/stele/internal/cargo"
-	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/npm"
 	"github.com/monumental-archive/stele/internal/sbom"
 )
@@ -36,6 +36,9 @@ type sbomArgs struct {
 	binaries      []string
 	out           string
 	expectVersion string
+	// expectRevision is the released commit every binary must be
+	// stamped with (stele#396).
+	expectRevision string
 
 	// The Cargo path: an artifact's own closure, scoped to the package
 	// that ships it (.github#492).
@@ -66,6 +69,9 @@ func parseSBOMArgs(args []string, stderr io.Writer) (*sbomArgs, int) {
 	fs.StringVar(&sa.expectVersion, "expect-version", "",
 		"version the pipeline believes it is releasing; refused unless the binaries agree. "+
 			"A bare number is read as its v-prefixed tag")
+	fs.StringVar(&sa.expectRevision, "expect-revision", "",
+		"the commit being released (full hex); refused unless every binary is stamped with it — "+
+			"a binary built from another tree carries another tree's inventory")
 	fs.StringVar(&sa.cargoRoot, "cargo-package", "",
 		"derive from this Cargo package's own resolved closure rather than from binaries — "+
 			"the inventory of one artifact, not of the workspace that built it")
@@ -151,23 +157,71 @@ func runDeriveSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 	return runDeriveBinarySBOM(sa, doc, out)
 }
 
+// writeInventory admits an inventory this tool derived before a byte
+// of it is written (stele#396): the one rule holds on the way out as
+// on the way in, so nothing this tool writes needs checking after.
+func writeInventory(path string, document *sbom.Document, stream io.Writer, out *latch) error {
+	// The engine's refusals already speak as `sbom:`, as Derive's do.
+	if err := sbom.Admit(document); err != nil {
+		return err
+	}
+
+	return writeJSONDoc(path, document, stream, out)
+}
+
+// releasedCommitRE is a full git object identifier: SHA-1 or SHA-256.
+var releasedCommitRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
 // runDeriveBinarySBOM reads every leg, unions the platform legs, and
 // writes the document where asked.
 func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
+	document, legs, err := binaryDocument(sa)
+	if err != nil {
+		return err
+	}
+
+	root := document.Packages[0]
+
+	if err := writeInventory(sa.out, document, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(document.Packages), legs)
+
+	return nil
+}
+
+// binaryDocument reads every leg's embedded module list into one
+// document, checking the stamp against the released commit and the
+// version against the release's belief when the caller states them —
+// the one derivation `derive sbom` and `derive inventories` both run
+// over shipped binaries. It returns the document and how many legs
+// it read.
+func binaryDocument(sa *sbomArgs) (*sbom.Document, int, error) {
 	bins := make([]sbom.Binary, 0, len(sa.binaries))
 
 	for _, path := range sa.binaries {
 		info, err := readBinary(path)
 		if err != nil {
-			return fmt.Errorf("derive sbom: %s: %w", path, err)
+			return nil, 0, fmt.Errorf("derive sbom: %s: %w", path, err)
 		}
 
 		bins = append(bins, sbom.Binary{Name: path, Info: info})
 	}
 
+	if sa.expectRevision != "" {
+		if !releasedCommitRE.MatchString(sa.expectRevision) {
+			return nil, 0, fmt.Errorf("derive sbom: --expect-revision %q is not a full commit identifier", sa.expectRevision)
+		}
+
+		if err := sbom.RequireRevision(bins, sa.expectRevision); err != nil {
+			return nil, 0, err
+		}
+	}
+
 	document, err := sbom.Derive(bins, "stele-"+selfVersion())
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 
 	root := document.Packages[0]
@@ -182,18 +236,12 @@ func runDeriveBinarySBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 		}
 
 		if root.VersionInfo != want {
-			return fmt.Errorf("derive sbom: the binaries are %s@%s but the release believes it is cutting %s — "+
+			return nil, 0, fmt.Errorf("derive sbom: the binaries are %s@%s but the release believes it is cutting %s — "+
 				"the build did not check out the tag it is publishing", root.Name, root.VersionInfo, want)
 		}
 	}
 
-	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
-		return err
-	}
-
-	out.logf("%s@%s: %d packages, %d platform(s)", root.Name, root.VersionInfo, len(document.Packages), len(bins))
-
-	return nil
+	return document, len(bins), nil
 }
 
 // selfVersion names this binary in the document's creator field, read
@@ -225,19 +273,37 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 			" artifact, never by the run that described it")
 	}
 
-	selection, err := cargo.Select(sa.target, splitTypes(sa.features), sa.noDefaultFeatures, sa.allFeatures)
+	document, err := cargoDocument(sa)
 	if err != nil {
 		return err
+	}
+
+	if err := writeInventory(sa.out, document, doc, out); err != nil {
+		return err
+	}
+
+	out.logf("%s: %d packages", document.Name, len(document.Packages))
+
+	return nil
+}
+
+// cargoDocument derives one Cargo artifact's inventory from its own
+// resolved closure: the one derivation `derive sbom --cargo-package`
+// and `derive inventories` both run per artifact.
+func cargoDocument(sa *sbomArgs) (*sbom.Document, error) {
+	selection, err := cargo.Select(sa.target, splitTypes(sa.features), sa.noDefaultFeatures, sa.allFeatures)
+	if err != nil {
+		return nil, err
 	}
 
 	metadata, err := newCargoResolver().Metadata(sa.tree, selection)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	root, closure, err := cargo.Closure(metadata, sa.cargoRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	deps := make([]sbom.Package, 0, len(closure))
@@ -245,19 +311,8 @@ func runDeriveCargoSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 		deps = append(deps, sbom.CargoPackage(pkg.Name, pkg.Version))
 	}
 
-	document, err := sbom.FromPackages(sa.created, "stele-"+selfVersion(),
+	return sbom.FromPackages(sa.created, "stele-"+selfVersion(),
 		displayAs(sbom.CargoPackage(root.Name, root.Version), sa.artifact), deps)
-	if err != nil {
-		return err
-	}
-
-	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
-		return err
-	}
-
-	out.logf("%s: %d packages", document.Name, len(document.Packages))
-
-	return nil
 }
 
 // The npm resolver seam, swapped only by tests, for the reason the
@@ -299,7 +354,7 @@ func runDeriveNpmSBOM(sa *sbomArgs, doc io.Writer, out *latch) error {
 		return err
 	}
 
-	if err := writeJSONDoc(sa.out, document, doc, out); err != nil {
+	if err := writeInventory(sa.out, document, doc, out); err != nil {
 		return err
 	}
 
@@ -350,7 +405,9 @@ func runDeriveUnion(sa *sbomArgs, doc io.Writer, out *latch) error {
 			return fmt.Errorf("derive sbom: %w", err)
 		}
 
-		parsed, err := jsonx.DecodeForeign[sbom.Document](body)
+		// A per-artifact document is admitted on the way in, whoever
+		// wrote it: the view must not fold in what a scanner cannot see.
+		parsed, err := sbom.AdmitBytes(body)
 		if err != nil {
 			return fmt.Errorf("derive sbom: %s: %w", path, err)
 		}
@@ -363,7 +420,7 @@ func runDeriveUnion(sa *sbomArgs, doc io.Writer, out *latch) error {
 		return err
 	}
 
-	if err := writeJSONDoc(sa.out, view, doc, out); err != nil {
+	if err := writeInventory(sa.out, view, doc, out); err != nil {
 		return err
 	}
 

@@ -1,0 +1,12 @@
+[
+  {
+    "class": "pgrx-extension",
+    "doc": "sbom-pgrx-pg_edtf-pg16",
+    "artifact": "pg_edtf-pg16",
+    "params": {
+      "cargoPackage": "pg_edtf",
+      "features": ["pg16"],
+      "noDefaultFeatures": true
+    }
+  }
+]

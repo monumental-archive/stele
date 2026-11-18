@@ -1,0 +1,4 @@
+[
+  { "flags": "", "file": "default.json" },
+  { "flags": "--features pg16 --no-default-features", "file": "pg16.json" }
+]

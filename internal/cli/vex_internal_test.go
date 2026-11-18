@@ -32,7 +32,16 @@ func (f fakeScanner) Scan(inventory []byte) ([]byte, error) {
 		return nil, f.err
 	}
 
-	if report, ok := f.byInventory[strings.TrimSpace(string(inventory))]; ok {
+	// The fixture inventories are admissible SPDX documents whose NAME
+	// keys the scripted report.
+	label := strings.TrimSpace(string(inventory))
+	if doc, err := jsonx.DecodeForeign[struct {
+		Name string `json:"name"`
+	}](inventory); err == nil {
+		label = doc.Name
+	}
+
+	if report, ok := f.byInventory[label]; ok {
 		return []byte(report), nil
 	}
 
@@ -85,6 +94,11 @@ const vexPolicy = `{"schema": 9,
     "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
     "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}},
   "blastRadius": {"osEcosystems": ["debian", "alpine"], "vexAuthor": "acme"}}`
+
+// labelled is an admissible SPDX document named for the label the
+// fake scanner keys on: every inventory derive vex reads is admitted
+// first (stele#396), so a fixture carries one versioned PURL.
+func labelled(label string) string { return spdx(label) }
 
 func inventory(t *testing.T, dir, name, body string) string {
 	t.Helper()
@@ -148,8 +162,8 @@ func TestDeriveVEXUsage(t *testing.T) {
 func TestDeriveVEXIsPerArtifact(t *testing.T) {
 	dir := vexFixture(t, decidedLeftPad+"\n")
 
-	binary := inventory(t, dir, "binary.spdx.json", "BINARY")
-	pkgInv := inventory(t, dir, "npm.spdx.json", "NPM")
+	binary := inventory(t, dir, "binary.spdx.json", labelled("BINARY"))
+	pkgInv := inventory(t, dir, "npm.spdx.json", labelled("NPM"))
 
 	withScanner(t, fakeScanner{byInventory: map[string]string{
 		"BINARY": `{"results": []}`,
@@ -200,7 +214,7 @@ func coveredRelease(t *testing.T) (string, string) {
 	t.Helper()
 
 	dir := vexFixture(t, decidedLeftPad+"\n")
-	inv := inventory(t, dir, "npm.spdx.json", "NPM")
+	inv := inventory(t, dir, "npm.spdx.json", labelled("NPM"))
 
 	withScanner(t, fakeScanner{byInventory: map[string]string{
 		"NPM": finding("CVE-1", "left-pad", "1.0.0", "npm"),
@@ -282,7 +296,7 @@ func TestDeriveVEXWriteFailure(t *testing.T) {
 // coverage document for an untriaged release would be a false claim.
 func TestDeriveVEXRefusesUndecided(t *testing.T) {
 	dir := vexFixture(t, "")
-	inv := inventory(t, dir, "a.spdx.json", "A")
+	inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 
 	withScanner(t, fakeScanner{byInventory: map[string]string{"A": finding("CVE-9", "x", "1", "npm")}})
 
@@ -306,7 +320,7 @@ func TestDeriveVEXRefusesUndecided(t *testing.T) {
 // nothing.
 func TestDeriveVEXReportsTheRebuildCadence(t *testing.T) {
 	dir := vexFixture(t, "")
-	inv := inventory(t, dir, "a.spdx.json", "A")
+	inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 
 	withScanner(t, fakeScanner{byInventory: map[string]string{"A": finding("CVE-9", "libc", "1", "Debian:12")}})
 
@@ -349,6 +363,19 @@ func TestDeriveVEXRefusals(t *testing.T) {
 			want:    "parsed to zero packages",
 		},
 		{
+			name:    "an inventory carrying a versionless PURL",
+			subject: "versionless",
+			scanner: fakeScanner{},
+			want: "derive vex: p: sbom: img has 1 PURLs, 1 versionless (pkg:deb/debian/libc6) — a versionless PURL" +
+				" is invisible to every scanner",
+		},
+		{
+			name:    "an inventory that is not SPDX",
+			subject: "notspdx",
+			scanner: fakeScanner{},
+			want:    "derive vex: p: sbom: not an SPDX JSON document",
+		},
+		{
 			name:    "a scanner that died",
 			scanner: fakeScanner{err: errors.New("scanner exploded")},
 			want:    "scanner exploded",
@@ -380,12 +407,26 @@ func TestDeriveVEXRefusals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := vexFixture(t, "")
-			inv := inventory(t, dir, "a.spdx.json", "A")
+			inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 			withScanner(t, tt.scanner)
 
 			subject := tt.subject
-			if subject == "" {
+			switch subject {
+			case "":
 				subject = "p=" + inv
+			case "versionless", "notspdx":
+				body := `{"name": "img", "packages": [{"name": "libc6", "externalRefs": [` +
+					`{"referenceType": "purl", "referenceLocator": "pkg:deb/debian/libc6"}]}]}`
+				if subject == "notspdx" {
+					body = "A"
+				}
+
+				path := filepath.Join(dir, subject+".spdx.json")
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+
+				subject = "p=" + path
 			}
 
 			var stdout, stderr bytes.Buffer
@@ -406,7 +447,7 @@ func TestDeriveVEXRefusals(t *testing.T) {
 // clock.
 func TestDeriveVEXRefusesABadInstant(t *testing.T) {
 	dir := vexFixture(t, "")
-	inv := inventory(t, dir, "a.spdx.json", "A")
+	inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 	withScanner(t, fakeScanner{})
 
 	args := vexArgsFor(dir, "p="+inv)
@@ -498,7 +539,7 @@ func TestDeriveVEXReadsThePolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := vexFixture(t, "")
-			inv := inventory(t, dir, "a.spdx.json", "A")
+			inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 			withScanner(t, fakeScanner{byInventory: map[string]string{"A": base}})
 
 			args := withPolicy(vexArgsFor(dir, "p="+inv), vexPolicyWith(t, dir, tt.blastRadius))
@@ -516,7 +557,7 @@ func TestDeriveVEXReadsThePolicy(t *testing.T) {
 // policy's author.
 func TestDeriveVEXNamesThePolicyAuthor(t *testing.T) {
 	dir := vexFixture(t, decidedLeftPad+"\n")
-	inv := inventory(t, dir, "a.spdx.json", "A")
+	inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 	withScanner(t, fakeScanner{byInventory: map[string]string{"A": finding("CVE-1", "left-pad", "1.0.0", "npm")}})
 
 	args := withPolicy(vexArgsFor(dir, "p="+inv), vexPolicyWith(t, dir,
@@ -540,7 +581,7 @@ func TestDeriveVEXRemovedFlags(t *testing.T) {
 	for _, flag := range []string{"--base-ecosystems", "--author"} {
 		t.Run(flag, func(t *testing.T) {
 			dir := vexFixture(t, "")
-			inv := inventory(t, dir, "a.spdx.json", "A")
+			inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 
 			var stdout, stderr bytes.Buffer
 
@@ -568,7 +609,12 @@ func inventoriesArgs(dir, inventories string) []string {
 }
 
 // spdx renders a minimal inventory document carrying a name.
-func spdx(name string) string { return `{"spdxVersion": "SPDX-2.3", "name": "` + name + `"}` }
+// spdx is an inventory document named name, carrying one versioned
+// PURL so it passes the admissibility rule (stele#396).
+func spdx(name string) string {
+	return `{"spdxVersion": "SPDX-2.3", "name": "` + name + `", "packages": [{"name": "x", "externalRefs": [` +
+		`{"referenceType": "purl", "referenceLocator": "pkg:generic/x@1.0.0"}]}]}`
+}
 
 // TestDeriveVEXDiscoversInventories (stele#397): every file carrying
 // the policy's SBOM suffix is a subject, in name order, under its own
@@ -706,7 +752,7 @@ func TestDeriveVEXSubjectSourceUsage(t *testing.T) {
 // the assert loader, whose refusal is the run's.
 func TestDeriveVEXRefusesAnUnreadablePolicy(t *testing.T) {
 	dir := vexFixture(t, "")
-	inv := inventory(t, dir, "a.spdx.json", "A")
+	inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 
 	var stdout, stderr bytes.Buffer
 
@@ -746,7 +792,7 @@ func derivedDocument(t *testing.T, blastRadius string, extra ...string) derivati
 	t.Helper()
 
 	dir := vexFixture(t, decidedLeftPad+"\n")
-	inv := inventory(t, dir, "a.spdx.json", "A")
+	inv := inventory(t, dir, "a.spdx.json", labelled("A"))
 	withScanner(t, fakeScanner{byInventory: map[string]string{"A": finding("CVE-1", "left-pad", "1.0.0", "npm")}})
 
 	args := withPolicy(vexArgsFor(dir, "p="+inv), vexPolicyWith(t, dir, blastRadius))

@@ -32,6 +32,7 @@ import (
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/osv"
 	"github.com/monumental-archive/stele/internal/policy"
+	"github.com/monumental-archive/stele/internal/sbom"
 	"github.com/monumental-archive/stele/internal/triage"
 	"github.com/monumental-archive/stele/internal/verify"
 	"github.com/monumental-archive/stele/internal/vex"
@@ -424,6 +425,14 @@ func scanSubject(
 	inventory, err := os.ReadFile(s.inventory)
 	if err != nil {
 		return triage.Split{}, fmt.Errorf("derive vex: %s: %w", s.product, err)
+	}
+
+	// The inventory is another tool's document as often as this one's
+	// (an image scanner's, the forge's dependency graph): admitted
+	// before it is scanned, because a versionless PURL is a package
+	// the scan cannot see and the coverage below would not cover.
+	if _, aerr := sbom.AdmitBytes(inventory); aerr != nil {
+		return triage.Split{}, fmt.Errorf("derive vex: %s: %w", s.product, aerr)
 	}
 
 	report, err := scanner.Scan(inventory)

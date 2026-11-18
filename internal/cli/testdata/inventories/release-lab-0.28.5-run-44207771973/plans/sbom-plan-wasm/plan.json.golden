@@ -1,0 +1,9 @@
+[
+  {
+    "class": "wasm-npm",
+    "doc": "sbom-npm-lab-wasm",
+    "params": {
+      "cargoPackage": "lab-wasm"
+    }
+  }
+]

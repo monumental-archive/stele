@@ -1334,6 +1334,11 @@ type ClassPolicy struct {
 	// refuses a demand that steps outside it, because this file
 	// cannot see the other document.
 	Enrichment []string `json:"enrichment,omitempty"`
+	// Inventory declares what a release of this class owes as
+	// inventory (stele#396): an engine-owned kind and that kind's
+	// parameters. Absent, the class declares no inventory role, and a
+	// derivation that needs one refuses by name.
+	Inventory *InventoryPolicy `json:"inventory,omitempty"`
 	// Subjects declares what one planned build leg of this class
 	// leaves behind — the shape `stele derive subjects` judges
 	// (stele#442). The kinds are the engine's and their parameters
@@ -1406,16 +1411,33 @@ func validateClasses(classes map[string]ClassPolicy) error {
 			seen[n] = true
 		}
 
-		// Compiled at load, so a shape the derive leg could not run is
-		// refused with the rest of the policy, never mid-release.
-		if c.Subjects != nil {
-			if _, err := c.Subjects.Compile(name); err != nil {
-				return err
-			}
+		if err := validateClassShapes(name, &c); err != nil {
+			return err
 		}
 	}
 
 	return validateExpansions(classes)
+}
+
+// validateClassShapes holds a class's two optional derive-leg
+// declarations: the subject shape (stele#442) and the inventory kind
+// (stele#396). Both are checked at load, so a declaration the derive
+// leg could not run is refused with the rest of the policy, never
+// mid-release.
+func validateClassShapes(name string, c *ClassPolicy) error {
+	if c.Subjects != nil {
+		if _, err := c.Subjects.Compile(name); err != nil {
+			return err
+		}
+	}
+
+	if c.Inventory != nil {
+		if err := c.Inventory.validate(name, c); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // LoadPolicy reads and validates the committed assert policy. The

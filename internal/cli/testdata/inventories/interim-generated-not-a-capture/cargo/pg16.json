@@ -1,0 +1,27 @@
+{
+  "packages": [
+    {
+      "id": "pg_edtf 0.4.2 (path+file:///w/pg)",
+      "name": "pg_edtf",
+      "version": "0.4.2",
+      "source": ""
+    },
+    {
+      "id": "pgrx 0.16.1 (registry+x)",
+      "name": "pgrx",
+      "version": "0.16.1",
+      "source": "registry+x"
+    }
+  ],
+  "resolve": {
+    "nodes": [
+      {
+        "id": "pg_edtf 0.4.2 (path+file:///w/pg)",
+        "deps": [
+          { "pkg": "pgrx 0.16.1 (registry+x)", "dep_kinds": [{ "kind": "" }] }
+        ]
+      },
+      { "id": "pgrx 0.16.1 (registry+x)", "deps": [] }
+    ]
+  }
+}

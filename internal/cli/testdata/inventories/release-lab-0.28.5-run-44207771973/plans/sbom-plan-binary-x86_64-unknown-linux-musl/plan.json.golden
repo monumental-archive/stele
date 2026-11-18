@@ -1,0 +1,9 @@
+[
+  {
+    "class": "rust-binary",
+    "doc": "sbom-cargo-lab-cli",
+    "params": {
+      "cargoPackage": "lab-cli"
+    }
+  }
+]

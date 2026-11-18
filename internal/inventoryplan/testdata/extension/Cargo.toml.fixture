@@ -1,0 +1,9 @@
+[package]
+name = "pg_edtf"
+version = "0.4.2"
+edition = "2021"
+
+[features]
+default = ["pg17"]
+pg16 = []
+pg17 = []

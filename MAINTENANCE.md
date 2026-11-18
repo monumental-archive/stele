@@ -46,11 +46,14 @@ the same statement as this one and tested against it.
 | `stele derive claims` | the control claims for one branch, matched by rule content against the forge's live enforcement state |
 | `stele derive vex-subjects` | the signing plan for one or more VEX decisions: per decision, the releases it reaches and the subjects a claim about it is signed over, or why it is refused; `--unsigned-only` omits what the attestation store already holds |
 | `stele derive signer-digest` | the one commit a workflow tree pins its trusted signer at, from the `uses:` lines the platform runs |
+| `stele derive inventories` | a release's every inventory in one call — per-artifact documents from the judged plans and the view folded from them, the shipped binaries' own, or the forge's dependency graph — and the decision's inventory list |
+| `stele derive inventory-plan` | a build leg's inventory plan, by the inventory kind its class declares in the assert policy: one entry per packaged crate, or one per variant cell, named under the class's planned prefix |
 | `stele derive population` | the population every assert target enumerates, printed per member with its resolved tracks and the reconciliation by name; with `--repo --tracks`, one repository's membership and track agreement |
 | `stele derive classes` | the evidence classes a release request declares, each validated against the assert policy's declared `evidence.classes` and expanded as its `declares` say |
 | `stele derive subjects` | the digests a build's provenance names, against the legs its matrix planned: flat and grouped by leg, or a registry class's image digests |
 | `stele assert` | evidence against a declaration |
 | `stele assert image-facts` | a published image's annotations and labels equal the resolved facts map |
+| `stele assert inventory` | each handed inventory document carries PURLs, every one versioned — the one admissibility rule `derive sbom` and `derive vex` also apply |
 | `stele assert evidence` | every release's declared evidence contract met, every covered subject carrying a store-resident verdict |
 | `stele assert blast-radius` | every advisory finding over every published SBOM, joined against the committed VEX decisions |
 | `stele assert tags` | every release tag: mint role, signature from the epoch on, a source-chain link on the target |
@@ -97,6 +100,9 @@ humans go to stderr precisely so they are not part of this promise.
 - `key=value` lines from the derive modes — `release=`, `version=`,
   `tag=`, `bump=`, `declared=`, `kind=`, `files=`, `check=` — which the
   canon's release scripts read with `awk -F=`.
+- The decision's inventory list from `derive inventories`: one JSON
+  array on stdout, the names of the per-artifact documents the release
+  decision covers, or `[""]` for a release that decides as one.
 - The subject lines from `derive subjects` — `sha256sum`'s
   `<hex>  <name>`, the same prefixed with the leg's label, and a
   registry class's `<label> <hex>  <image>` — which the canon's
@@ -137,6 +143,7 @@ breaking change costs the most.
 | the release evidence manifest | [docs/assert-policy-schema.md](docs/assert-policy-schema.md) |
 | the report document (`--json`) | [docs/report-schema.md](docs/report-schema.md) |
 | the judged plan set (`assert plans --out`) | [docs/assert-policy-schema.md](docs/assert-policy-schema.md#the-inventory-plan) |
+| the inventory plan (`derive inventory-plan`) | [docs/assert-policy-schema.md](docs/assert-policy-schema.md#the-inventory-plan) |
 | the release plan (`derive release-plan`) | [docs/release-plan.md](docs/release-plan.md) |
 | the subject lines (`derive subjects`) | [docs/subjects.md](docs/subjects.md) |
 | the shields.io endpoint document (`level --shield`) | [docs/level.md](docs/level.md) |
