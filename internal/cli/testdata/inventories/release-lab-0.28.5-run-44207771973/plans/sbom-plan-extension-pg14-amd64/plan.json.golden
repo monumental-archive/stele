@@ -1,0 +1,14 @@
+[
+  {
+    "class": "pgrx-extension",
+    "doc": "sbom-pgrx-lab-pg-pg14",
+    "artifact": "lab-pg-pg14",
+    "params": {
+      "cargoPackage": "lab-pg",
+      "features": [
+        "pg14"
+      ],
+      "noDefaultFeatures": true
+    }
+  }
+]

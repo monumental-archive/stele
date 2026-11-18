@@ -33,6 +33,9 @@ mkdir -p "${set_dir}/plans" "${set_dir}/shipped" "${set_dir}/cargo"
 
 # The plans, as the publish job downloaded them.
 gh run download "${run}" -R "${repo}" -p 'sbom-plan-*' -D "${set_dir}/plans"
+for f in "${set_dir}"/plans/*/plan.json; do
+  mv "${f}" "${f}.golden"
+done
 
 # The shipped per-artifact inventories and the release view, kept
 # byte for byte.
@@ -71,22 +74,33 @@ gh api "repos/monumental-archive/.github/contents/slsa/assert-policy.json?ref=${
 
 # Cargo metadata for every distinct closure selection, resolved in the
 # released tree exactly as stele's resolver asks for it.
+# A cargo that is not a version manager's shim: a shim reads the
+# clone's own config, which this script does not trust. CARGO_BIN
+# overrides; otherwise rustup's own proxy.
+cargo_bin=${CARGO_BIN:-${CARGO_HOME:-${HOME}/.cargo}/bin/cargo}
+[[ -x ${cargo_bin} ]] || {
+  echo "capture: no cargo at ${cargo_bin}; set CARGO_BIN" >&2
+  exit 1
+}
 git clone -q --filter=blob:none "https://github.com/${repo}.git" "${work}/tree"
 git -C "${work}/tree" checkout -q "${sha}"
 selections=$(jq -rs '[.[][] | .params | [
     (if (.features // []) | length > 0 then "--features " + ((.features) | join(",")) else empty end),
     (if .noDefaultFeatures then "--no-default-features" else empty end)
-  ] | join(" ")] | unique | .[]' "${set_dir}"/plans/*/plan.json)
+  ] | join(" ")] | unique | .[]' "${set_dir}"/plans/*/plan.json.golden)
 index="[]"
 n=0
 while IFS= read -r flags; do
   n=$((n + 1))
-  file="selection-${n}.json"
+  file="selection-${n}.json.golden"
   # shellcheck disable=SC2086 # the flags are cargo's own words, split on purpose
-  (cd "${work}/tree" && cargo metadata --format-version 1 --locked ${flags}) > "${set_dir}/cargo/${file}"
+  (cd "${work}/tree" && "${cargo_bin}" metadata --format-version 1 --locked ${flags}) > "${set_dir}/cargo/${file}"
   index=$(jq --arg flags "${flags}" --arg file "${file}" '. + [{flags: $flags, file: $file}]' <<< "${index}")
 done <<< "${selections}"
 jq . <<< "${index}" > "${set_dir}/cargo/index.json"
+# The two files built here, not recorded, take the org's JSON layout.
+jq . "${set_dir}/assert-policy.json" > "${work}/policy.json"
+mv "${work}/policy.json" "${set_dir}/assert-policy.json"
 
 echo "capture: ${set_dir#"${here}"/} from ${url}"
 org_done=1

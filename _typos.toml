@@ -11,11 +11,16 @@ intoto = "intoto"
 # spellchecker would falsify the evidence. The signer-certificates
 # capture is the same kind of record: the CT log's answers and the
 # forge's file contents a reconciliation read, moved here byte-for-byte
-# from the canon's rekor-monitor testdata (stele#387).
+# from the canon's rekor-monitor testdata (stele#387). The inventory
+# golden captures are the same kind of record: a release's plans,
+# shipped inventories and `cargo metadata` output, kept byte for byte as
+# `.golden` — crate names and registry descriptions are other people's
+# text, and the golden test compares the bytes (stele#396).
 extend-exclude = [
   "go.sum",
   "internal/*/testdata/*-seed.*",
   "internal/assert/testdata/signer-certificates/",
+  "internal/cli/testdata/inventories/*/**/*.golden",
 ]
 
 [default]

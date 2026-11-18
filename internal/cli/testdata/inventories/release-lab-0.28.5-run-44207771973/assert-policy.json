@@ -1,0 +1,251 @@
+{
+  "schema": 9,
+  "issuer": "https://token.actions.githubusercontent.com",
+  "debtFile": "security/attestation-debt.txt",
+  "signerCertificates": {
+    "log": "https://ctfe.sigstore.dev/2022",
+    "signers": [
+      {
+        "workflow": "monumental-archive/signer/.github/workflows/sign.yml",
+        "callers": ["monumental-archive/.github"]
+      }
+    ]
+  },
+  "population": {
+    "repositories": [
+      {
+        "repo": ".github"
+      },
+      {
+        "repo": "release-lab",
+        "reason": "publishes on both archetypes: its tagged releases, and a continuous digest stream of its CLI image on every push to main through the canon's continuous.yml, so the level walk measures both publish paths and neither stands in for the other (#1329, stele#355). The stream surface's identity is the db's: the org signer's sign.yml signs the index provenance and continuous.yml's commit point attests each per-architecture digest's inventory and decisions",
+        "surfaces": [
+          {
+            "kind": "release"
+          },
+          {
+            "kind": "continuous-digest",
+            "registry": "ghcr.io/monumental-archive/release-lab",
+            "tag": "latest",
+            "identity": "^https://github\\.com/monumental-archive/(signer/\\.github/workflows/sign\\.yml|\\.github/\\.github/workflows/continuous\\.yml)@"
+          }
+        ]
+      },
+      {
+        "repo": "stele"
+      },
+      {
+        "repo": "iiif-server"
+      },
+      {
+        "repo": "edtf"
+      },
+      {
+        "repo": "signer",
+        "tracks": ["source"],
+        "reason": "publishes no releases; it is the signing workflow repository"
+      },
+      {
+        "repo": "monumental-archive",
+        "tracks": [],
+        "reason": "excluded, not excepted: the private application the organisation exists to serve publishes nothing and consumes the org's artifacts, so no SLSA track applies, it owes no evidence and it bears no board cell — it is accounted for by name here so the reconciliation against the org listing does not read it as an unlisted repository, and so the roster-reading walks that ask no track question (assert permissions) still cover it (#672)"
+      },
+      {
+        "repo": "monumental-archive-db",
+        "tracks": ["source", "build", "dependency"],
+        "reason": "the first continuous member: it publishes a digest stream and no releases at all, so the evidence walk reads it through evidence.continuous rather than through a release contract, and tags.epochs carries no line for it because it has no tags to epoch. Its surface's identity names two workflows because the pattern only says whose bundles the level walk reads: the org signer's sign.yml signs the index provenance, and continuous.yml's commit point attests each per-architecture digest's inventory and OpenVEX decisions (#1279); who may sign provenance is a separate field and is not widened by it",
+        "surfaces": [
+          {
+            "kind": "continuous-digest",
+            "registry": "ghcr.io/monumental-archive/monumental-archive-db",
+            "tag": "latest",
+            "identity": "^https://github\\.com/monumental-archive/(signer/\\.github/workflows/sign\\.yml|\\.github/\\.github/workflows/continuous\\.yml)@"
+          }
+        ]
+      },
+      {
+        "repo": "monumental-archive-ledger",
+        "tracks": ["source"],
+        "reason": "publishes no releases; it is the public anchor for the archive's ledger checkpoint chain, and its own source chain is founded and extended on every push, so the source track applies and the chain-coverage walk reads it (#1264)"
+      }
+    ]
+  },
+  "evidence": {
+    "sbomSuffix": ".spdx.json",
+    "checksums": "checksums.txt",
+    "umbrellaBundle": "attestations.intoto.jsonl",
+    "manifestAsset": "evidence-manifest.json",
+    "storeVsaFromVersion": "1.13.0",
+    "decisionFromVersion": "1.23.1",
+    "evidenceSuffixes": [".openvex.json"],
+    "publishWorkflows": ["publish", "self-publish"],
+    "classes": {
+      "rust-crate": {
+        "bundles": ["attestations-crates.intoto.jsonl"],
+        "legacyVsaBundles": ["attestations-vsa-crates.intoto.jsonl"],
+        "assetPrefixes": [
+          {
+            "prefix": "sbom-cargo-",
+            "owedFrom": "1.42.0",
+            "planned": true
+          }
+        ],
+        "inventory": {
+          "kind": "crates",
+          "artifactSuffix": "-crate"
+        }
+      },
+      "oci-image": {
+        "bundles": ["attestations-image.intoto.jsonl"],
+        "inventory": {
+          "kind": "none"
+        }
+      },
+      "oci-image-crate": {
+        "bundles": ["attestations-image.intoto.jsonl"],
+        "assetPrefixes": [
+          {
+            "prefix": "sbom-image-",
+            "owedFrom": "1.60.0",
+            "planned": true
+          }
+        ],
+        "inventory": {
+          "kind": "planned"
+        }
+      },
+      "rust-binary": {
+        "bundles": ["attestations-binaries.intoto.jsonl"],
+        "assetPrefixes": [
+          {
+            "prefix": "sbom-cargo-",
+            "owedFrom": "1.43.0",
+            "planned": true
+          }
+        ],
+        "inventory": {
+          "kind": "planned"
+        }
+      },
+      "go-binary": {
+        "bundles": ["attestations-go-binaries.intoto.jsonl"],
+        "inventory": {
+          "kind": "binaries"
+        }
+      },
+      "source-archive": {
+        "bundles": ["attestations-source.intoto.jsonl"],
+        "inventory": {
+          "kind": "planned"
+        }
+      },
+      "wasm-npm": {
+        "bundles": ["attestations-npm.intoto.jsonl"],
+        "legacyVsaBundles": ["attestations-vsa-npm.intoto.jsonl"],
+        "assetPrefixes": [
+          {
+            "prefix": "sbom-npm-",
+            "owedFrom": "1.42.0",
+            "planned": true
+          }
+        ],
+        "inventory": {
+          "kind": "planned"
+        }
+      },
+      "pgrx-extension": {
+        "bundles": ["attestations-extensions.intoto.jsonl"],
+        "assetPrefixes": [
+          {
+            "prefix": "attestations-extimg-pg"
+          },
+          {
+            "prefix": "sbom-pgrx-",
+            "owedFrom": "1.42.0",
+            "planned": true
+          }
+        ],
+        "enrichment": ["pgrx-base-images", "pgrx-base"],
+        "inventory": {
+          "kind": "variants",
+          "artifact": "{package}-pg{variant}",
+          "features": ["pg{variant}"],
+          "noDefaultFeatures": true
+        }
+      },
+      "pgrx-extension-image": {
+        "bundles": [],
+        "assetPrefixes": [
+          {
+            "prefix": "attestations-extimg-pg"
+          }
+        ],
+        "inventory": {
+          "kind": "planned"
+        }
+      }
+    },
+    "continuous": {
+      "stubPath": ".github/workflows/continuous.yml",
+      "stubUses": "monumental-archive/.github/",
+      "registry": "ghcr.io",
+      "tag": "latest",
+      "signerWorkflow": "monumental-archive/signer/.github/workflows/sign.yml",
+      "signerPinPattern": "monumental-archive/signer/.github/workflows/sign\\.yml@([0-9a-f]{40})"
+    },
+    "baseImages": {
+      "scopes": [
+        {
+          "name": "pgrx-bases",
+          "mechanism": "pin-file",
+          "pinFile": "docker/pgrx-base-images.toml",
+          "attestorRepo": ".github",
+          "attestorIdentity": "https://github.com/monumental-archive/.github/.github/workflows/base-attest.yml@refs/heads/main",
+          "predicateType": "https://monumental-archive.github.io/attestations/base-image-approval/v1"
+        }
+      ]
+    },
+    "enrichmentFromVersion": "1.41.0",
+    "manifestSchemaFromVersion": "1.65.0"
+  },
+  "tags": {
+    "tagPattern": "^v[0-9]",
+    "taggerName": "tag-mint[bot]",
+    "identityPattern": "^https://github\\.com/monumental-archive/",
+    "proofFloor": {
+      "floor": "observer-timestamp",
+      "from": {
+        ".github": "v1.46.0",
+        "release-lab": "v0.25.4"
+      },
+      "before": "certificate-transparency"
+    },
+    "notesRef": "refs/notes/commits",
+    "epochs": {
+      ".github": "v1.23.1",
+      "iiif-server": "v0.2.0",
+      "release-lab": "v0.24.2",
+      "stele": "v0.1.0",
+      "edtf": "v1.3.0"
+    }
+  },
+  "chains": {
+    "exceptions": []
+  },
+  "permissions": {
+    "reusable": {
+      "repo": "monumental-archive/.github",
+      "dir": ".github/workflows"
+    },
+    "callerDirs": [".github/workflows", "workflow-templates"]
+  },
+  "blastRadius": {
+    "osEcosystems": ["debian", "alpine", "ubuntu", "rocky", "redhat", "rpm"],
+    "supported": "latest-release",
+    "canary": {
+      "repo": "release-lab",
+      "tag": "v0.17.0",
+      "advisory": "RUSTSEC-2021-0127"
+    }
+  }
+}

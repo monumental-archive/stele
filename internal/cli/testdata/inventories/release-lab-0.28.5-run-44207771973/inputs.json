@@ -1,0 +1,11 @@
+{
+  "repo": "monumental-archive/release-lab",
+  "version": "0.28.5",
+  "created": "2026-11-18T00:22:52Z",
+  "name": "release-lab",
+  "classes": "rust-binary,oci-image,wasm-npm,pgrx-extension",
+  "evidenceClasses": "rust-binary,oci-image-crate,wasm-npm,pgrx-extension,pgrx-extension-image",
+  "machineryVersion": "1.69.1",
+  "variants": "14,15,16,17,18",
+  "run": "https://github.com/monumental-archive/release-lab/actions/runs/44207771973"
+}

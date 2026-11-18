@@ -108,7 +108,9 @@ func goldenSet(t *testing.T, dir string) {
 
 	withResolver(t, capturedResolver{t: t, dir: dir, index: *index})
 
-	plans, err := filepath.Glob(filepath.Join(dir, "plans", "*", "plan.json"))
+	// A capture keeps the plans byte for byte as plan.json.golden; the
+	// interim set's are plain plan.json.
+	plans, err := filepath.Glob(filepath.Join(dir, "plans", "*", "plan.json*"))
 	if err != nil || len(plans) == 0 {
 		t.Fatalf("no plans in %s (%v)", dir, err)
 	}

@@ -1,0 +1,10 @@
+[
+  {
+    "class": "oci-image-crate",
+    "doc": "sbom-image-lab-cli",
+    "params": {
+      "cargoPackage": "lab-cli"
+    },
+    "artifact": "lab-cli-image"
+  }
+]

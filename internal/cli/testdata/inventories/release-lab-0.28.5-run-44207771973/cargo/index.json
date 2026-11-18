@@ -1,0 +1,26 @@
+[
+  {
+    "flags": "",
+    "file": "selection-1.json.golden"
+  },
+  {
+    "flags": "--features pg14 --no-default-features",
+    "file": "selection-2.json.golden"
+  },
+  {
+    "flags": "--features pg15 --no-default-features",
+    "file": "selection-3.json.golden"
+  },
+  {
+    "flags": "--features pg16 --no-default-features",
+    "file": "selection-4.json.golden"
+  },
+  {
+    "flags": "--features pg17 --no-default-features",
+    "file": "selection-5.json.golden"
+  },
+  {
+    "flags": "--features pg18 --no-default-features",
+    "file": "selection-6.json.golden"
+  }
+]
