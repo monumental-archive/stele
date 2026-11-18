@@ -123,7 +123,7 @@ func TestReachabilitySkipsSectionsAPolicyDoesNotDeclare(t *testing.T) {
 	    "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
 	    "sourceRepository": "https://github.com/{owner}/{repo}",
 	    "targetLevel": "SLSA_BUILD_LEVEL_3",
-	    "denySelfHostedRunners": true
+	    "runnerEnvironments": ["github-hosted"]
 	  }
 	}`
 

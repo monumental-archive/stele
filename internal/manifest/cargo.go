@@ -23,6 +23,9 @@ import (
 // = true`.
 const workspaceTable = "workspace"
 
+// packageTable is a package's own table, [package].
+const packageTable = "package"
+
 // record is one key/value the walk saw: the full dotted key (table
 // prefix included) and the value node's location. Inline tables expand
 // into one record per member, so `edtf-core = { path = "...", version =
@@ -44,13 +47,13 @@ func cargoSites(data []byte) (string, []Site, error) {
 		return "", nil, err
 	}
 
-	if site, ok := versionSite(records, workspaceTable, "package"); ok {
+	if site, ok := versionSite(records, workspaceTable, packageTable); ok {
 		sites := append([]Site{site}, dependencySites(records)...)
 
 		return KindCargoWorkspace, sites, nil
 	}
 
-	if site, ok := versionSite(records, "package"); ok {
+	if site, ok := versionSite(records, packageTable); ok {
 		return KindCargoPackage, []Site{site}, nil
 	}
 
@@ -126,12 +129,24 @@ func dependencySites(records []record) []Site {
 
 // cargoRecords walks the document into flat records.
 func cargoRecords(data []byte) ([]record, error) {
+	records, _, err := cargoDocument(data)
+
+	return records, err
+}
+
+// cargoDocument walks the document into flat records and the table
+// headers it declares — a table can be declared with no keys at all
+// (`[workspace]` alone), and only its header says it exists.
+func cargoDocument(data []byte) ([]record, [][]string, error) {
 	parser := &unstable.Parser{}
 	parser.Reset(data)
 
 	var table []string
 
-	var records []record
+	var (
+		records []record
+		tables  [][]string
+	)
 
 	for parser.NextExpression() {
 		expr := parser.Expression()
@@ -142,6 +157,7 @@ func cargoRecords(data []byte) ([]record, error) {
 		switch expr.Kind { //nolint:exhaustive // value kinds cannot be expressions
 		case unstable.Table:
 			table = keyParts(expr.Key())
+			tables = append(tables, table)
 		case unstable.ArrayTable:
 			// Array tables ([[bin]], [[test]]) carry no version sites;
 			// their members must not be mistaken for the enclosing table's.
@@ -155,10 +171,10 @@ func cargoRecords(data []byte) ([]record, error) {
 	}
 
 	if err := parser.Error(); err != nil {
-		return nil, fmt.Errorf("manifest: parsing %s: %w", cargoFile, err)
+		return nil, nil, fmt.Errorf("manifest: parsing %s: %w", cargoFile, err)
 	}
 
-	return records, nil
+	return records, tables, nil
 }
 
 // valueRecords turns one value node into records, expanding an inline
@@ -233,7 +249,7 @@ func CargoPackageField(root, field string) (string, bool, error) {
 		return "", false, err
 	}
 
-	for _, table := range [][]string{{workspaceTable, "package"}, {"package"}} {
+	for _, table := range [][]string{{workspaceTable, packageTable}, {packageTable}} {
 		if value, ok := stringField(records, append(table, field)); ok {
 			return value, true, nil
 		}
@@ -251,4 +267,167 @@ func stringField(records []record, key []string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// MemberVersion resolves the version of the Cargo package at dir, a
+// directory inside the tree at root, by Cargo's own rule: the
+// package's `package.version`, or — when it says `version.workspace =
+// true` — the `workspace.package.version` of its workspace root. The
+// root is the directory its `package.workspace` names, or else the
+// nearest enclosing directory whose Cargo.toml declares a
+// `[workspace]`, searched no higher than root: a checkout's manifests
+// are the checkout's, and a workspace above it is not the release's.
+//
+// The site names the file the version was read from, so a refusal
+// points at the line that carries it.
+func MemberVersion(root, dir string) (Site, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return Site{}, fmt.Errorf("manifest: %w", err)
+	}
+
+	member := dir
+	if !filepath.IsAbs(member) {
+		member = filepath.Join(absRoot, member)
+	}
+
+	if rel, rerr := filepath.Rel(absRoot, member); rerr != nil || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return Site{}, fmt.Errorf("manifest: %s is outside the tree at %s — the package judged is the tree's", dir,
+			root)
+	}
+
+	path := filepath.Join(member, cargoFile)
+
+	data, err := os.ReadFile(path) //nolint:gosec // a directory inside the tree the operator named
+	if errors.Is(err, os.ErrNotExist) {
+		return Site{}, fmt.Errorf("manifest: no %s at %s — the package to judge is not there", cargoFile, dir)
+	}
+
+	if err != nil {
+		return Site{}, fmt.Errorf("manifest: reading %s: %w", path, err)
+	}
+
+	records, _, err := cargoDocument(data)
+	if err != nil {
+		return Site{}, fmt.Errorf("manifest: %s: %w", path, err)
+	}
+
+	shown := filepath.Join(dir, cargoFile)
+
+	if site, ok := versionSite(records, packageTable); ok {
+		site.Path = shown
+
+		return site, nil
+	}
+
+	if !inheritsVersion(records) {
+		return Site{}, fmt.Errorf("manifest: %s states neither package.version nor version.workspace = true",
+			shown)
+	}
+
+	return workspaceVersion(absRoot, member, records, shown)
+}
+
+// inheritsVersion reports `version.workspace = true` under [package].
+func inheritsVersion(records []record) bool {
+	for _, r := range records {
+		if slices.Equal(r.key, []string{packageTable, "version", workspaceTable}) && r.kind == unstable.Bool &&
+			r.value == "true" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// workspaceVersion finds the member's workspace root and reads the
+// version it gives its members.
+func workspaceVersion(root, member string, records []record, shown string) (Site, error) {
+	wsDir, err := workspaceRoot(root, member, records)
+	if err != nil {
+		return Site{}, fmt.Errorf("manifest: %s inherits its version: %w", shown, err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(wsDir, cargoFile)) //nolint:gosec // inside the tree, found above
+	if err != nil {
+		return Site{}, fmt.Errorf("manifest: %s inherits its version: %w", shown, err)
+	}
+
+	wsRecords, _, err := cargoDocument(data)
+	if err != nil {
+		return Site{}, fmt.Errorf("manifest: %s inherits its version: %w", shown, err)
+	}
+
+	site, ok := versionSite(wsRecords, workspaceTable, packageTable)
+	if !ok {
+		return Site{}, fmt.Errorf("manifest: %s inherits its version, but its workspace root %s carries no"+
+			" workspace.package.version", shown, relTo(root, filepath.Join(wsDir, cargoFile)))
+	}
+
+	site.Path = relTo(root, filepath.Join(wsDir, cargoFile))
+	site.Field += ", inherited by " + shown
+
+	return site, nil
+}
+
+// workspaceRoot is the directory a member's workspace lives in: the
+// one its package.workspace names, or the nearest directory — the
+// member's own first, as Cargo searches — whose Cargo.toml declares
+// [workspace], no higher than root.
+func workspaceRoot(root, member string, records []record) (string, error) {
+	if named, ok := stringField(records, []string{packageTable, workspaceTable}); ok {
+		return filepath.Join(member, named), nil
+	}
+
+	for dir := member; ; dir = filepath.Dir(dir) {
+		declares, err := declaresWorkspace(filepath.Join(dir, cargoFile))
+		if err != nil {
+			return "", err
+		}
+
+		if declares {
+			return dir, nil
+		}
+
+		if dir == root || dir == filepath.Dir(dir) {
+			return "", errors.New("no enclosing Cargo.toml in the tree declares [workspace]")
+		}
+	}
+}
+
+// declaresWorkspace reports whether a Cargo.toml declares a
+// [workspace] table; an absent file declares nothing.
+func declaresWorkspace(path string) (bool, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // a directory inside the tree, on the walk up
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	records, tables, err := cargoDocument(data)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+
+	for _, t := range tables {
+		if len(t) > 0 && t[0] == workspaceTable {
+			return true, nil
+		}
+	}
+
+	return slices.ContainsFunc(records, func(r record) bool { return r.key[0] == workspaceTable }), nil
+}
+
+// relTo renders path relative to root for a refusal, or as it is when
+// it is not under root.
+func relTo(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return rel
+	}
+
+	return path
 }

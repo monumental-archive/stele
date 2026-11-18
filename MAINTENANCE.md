@@ -32,7 +32,8 @@ the same statement as this one and tested against it.
 | `stele verify vsa` | the published verdict, as the spec's consumer procedure |
 | `stele verify source-vsa` | a release tag's source verdict, from the release asset the assert policy names, against the tag's commit and its chain link now |
 | `stele verify chain` | the source chain: coverage tip→genesis, and the ledger |
-| `stele verify repro` | the reproducibility rebuild's typed verdict, one finding per artifact that failed to reproduce |
+| `stele verify repro` | the reproducibility rebuild's typed verdict, one finding per artifact that failed to reproduce; `--classes` is its pre-release form, the first build against the rebuild |
+| `stele verify base` | every base a build is about to instantiate, judged under the one declaration in the assert policy that claims it — a first-party scope's provenance, or an upstream entry's declared source — and a reference nothing claims named as not judged |
 | `stele verify policy` | one committed policy document run through this engine's own loader, offline: exit 0 if it loads, else the loader's refusal verbatim |
 | `stele derive` | facts turned into claims |
 | `stele derive version` | the release a history's conventional commits call for, within one tag namespace; `--release-as` declares one instead, judged against the derived base and the names the namespace has taken |

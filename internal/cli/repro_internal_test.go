@@ -918,3 +918,42 @@ func TestVerifyReproUnmetClassSaysWhatTheTargetsBecame(t *testing.T) {
 		t.Fatalf("findings = %+v, want the unplaceable target named", doc.Findings)
 	}
 }
+
+// An empty --targets is refused by name rather than read as no
+// declaration (.github#637, moved out of repro-check.yml): omitting the
+// flag claims the rebuild covered every target, and a matrix that
+// rendered an empty string would make that claim by accident.
+func TestVerifyReproRefusesAnEmptyTargetDeclaration(t *testing.T) {
+	released := classedManifest([]string{"rust-binary"},
+		typedEntry("lab-x86_64-linux.tar.gz", digestA, "build-subject", "rust-binary", muslX86))
+
+	sub, reb := reproManifests(t, released, digestA+"  lab-x86_64-linux.tar.gz\n")
+
+	for _, tc := range []struct {
+		name, targets, class, want string
+	}{
+		{"empty", "", "rust-binary", "rust-binary declares no rebuild target — an undeclared population judges" +
+			" every target the class published"},
+		{"blank", "  \t", "rust-binary", "rust-binary declares no rebuild target"},
+		{"empty, no class", "", "", "the rebuild declares no rebuild target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{
+				"verify", "repro", "--repo", "acme/lab", "--tag", "v0.26.0",
+				"--released", sub, "--rebuilt", reb, "--targets", tc.targets,
+			}
+			if tc.class != "" {
+				args = append(args, "--class", tc.class)
+			}
+
+			var stdout, stderr bytes.Buffer
+			if code := Run(args, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("Run = %d, want %d\nstderr: %s", code, exitUsage, stderr.String())
+			}
+
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Errorf("stderr %q\nlacks %q", stderr.String(), tc.want)
+			}
+		})
+	}
+}

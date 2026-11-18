@@ -36,7 +36,7 @@ const valid = `{
     "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
     "sourceRepository": "https://github.com/{owner}/{repo}",
     "targetLevel": "SLSA_BUILD_LEVEL_3",
-    "denySelfHostedRunners": true
+    "runnerEnvironments": ["github-hosted"]
   },
   "source": {
     "identity": "https://github.com/{owner}/{repo}/.github/workflows/source-attest.yml@refs/heads/main",
@@ -326,8 +326,26 @@ func TestLoadRefusals(t *testing.T) {
 			`"targetLevel": "SLSA_BUILD_L3"`,
 			"build.targetLevel",
 		},
-		{"deny runners absent", `,
-    "denySelfHostedRunners": true`, ``, "denySelfHostedRunners is absent"},
+		{"runner environments absent", `,
+    "runnerEnvironments": ["github-hosted"]`, ``, "build.runnerEnvironments is absent"},
+		{
+			"runner environments empty",
+			`"runnerEnvironments": ["github-hosted"]`,
+			`"runnerEnvironments": []`,
+			"build.runnerEnvironments is empty",
+		},
+		{
+			"a runner environment entry empty",
+			`"runnerEnvironments": ["github-hosted"]`,
+			`"runnerEnvironments": ["github-hosted", ""]`,
+			"build.runnerEnvironments[1] is empty",
+		},
+		{
+			"the retired runner boolean is an unknown key",
+			`"runnerEnvironments": ["github-hosted"]`,
+			`"runnerEnvironments": ["github-hosted"], "denySelfHostedRunners": true`,
+			`unknown field "denySelfHostedRunners"`,
+		},
 		{
 			"source identity unknown placeholder",
 			`source-attest.yml@refs/heads/main"`,
@@ -546,8 +564,8 @@ func TestEnrichmentSection(t *testing.T) {
 	// declare splices one enrichment object into the valid document's
 	// build section — one source of policy truth, mutated per row.
 	declare := func(section string) string {
-		return strings.Replace(valid, `"denySelfHostedRunners": true`,
-			`"denySelfHostedRunners": true,
+		return strings.Replace(valid, `"runnerEnvironments": ["github-hosted"]`,
+			`"runnerEnvironments": ["github-hosted"],
     "enrichment": `+section, 1)
 	}
 

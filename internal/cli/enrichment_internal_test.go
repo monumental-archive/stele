@@ -37,7 +37,7 @@ func enrPolicy(build bool) string {
 	    "buildTypes": {"https://actions.github.io/buildtypes/workflow/v1": {"externalParameterKeys": ["workflow"]}},
 	    "resourceUri": "pkg:github/{owner}/{repo}@v{version}",
 	    "sourceRepository": "https://github.com/{owner}/{repo}",
-	    "targetLevel": "SLSA_BUILD_LEVEL_3", "denySelfHostedRunners": true,
+	    "targetLevel": "SLSA_BUILD_LEVEL_3", "runnerEnvironments": ["github-hosted"],
 	    "enrichment": {"predicateType": "https://acme.example/build-enrichment/v2",
 	      "required": ["toolbelt-lock"],
 	      "permitted": ["pgrx-base-images", "pgrx-base", "Cargo.lock", "package-lock.json", "mise.toml"]}}`

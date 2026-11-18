@@ -394,6 +394,12 @@ func parseDeriveArgs(
 				"not drift")
 		fs.StringVar(&bump.date, "date", "",
 			"release date for CITATION.cff's date-released; defaults to the committer date of --ref, never a wall clock")
+		fs.StringVar(&bump.expect, "expect", "",
+			"with --check: hold the mirrors against this stated version instead of the last release; history "+
+				"is not read, so --git-dir need only be the tree")
+		fs.StringVar(&bump.manifestDir, "manifest-dir", "",
+			"with --check: judge the Cargo package at this directory (relative to --git-dir), its version "+
+				"resolved by Cargo's inheritance rule; the root's mirrors are still held to agree")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -402,6 +408,14 @@ func parseDeriveArgs(
 
 	if da.gitDir == "" {
 		if _, err := fmt.Fprintf(stderr, "stele derive %s: --git-dir is required\n", mode); err != nil {
+			return da, na, bump, plan, exitIO
+		}
+
+		return da, na, bump, plan, exitUsage
+	}
+
+	if msg := bump.refusal(); msg != "" {
+		if _, err := fmt.Fprintf(stderr, "stele derive %s: %s\n", mode, msg); err != nil {
 			return da, na, bump, plan, exitIO
 		}
 

@@ -109,6 +109,25 @@ func (a trustAdapter) Attestation(bundleJSON []byte, id trust.Identity, sha256He
 	return v, nil
 }
 
+// AttestationFromWorkflow proves a DSSE bundle another run signed,
+// under a workflow identity: the path a published base is verified
+// on (stele#402), reached only through verify.WorkflowVerifier.
+func (a trustAdapter) AttestationFromWorkflow(
+	bundleJSON []byte, id *trust.WorkflowIdentity, sha256Hex string,
+) (*trust.Verified, error) {
+	b, err := trust.LoadBundle(bundleJSON)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: %w", err)
+	}
+
+	v, err := a.v.VerifyFromWorkflow(b, id, "sha256", sha256Hex)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: %w", err)
+	}
+
+	return v, nil
+}
+
 // LoggedAt is the transparency log's observed instant of a verified
 // signing — trust.Verified's own reading, unrepeated.
 func (trustAdapter) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }
@@ -219,7 +238,7 @@ type verifyArgs struct {
 func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele verify: a mode is required: release, vsa, source-vsa, chain, repro or policy"); err != nil {
+			"stele verify: a mode is required: release, vsa, source-vsa, chain, repro, base or policy"); err != nil {
 			return exitIO
 		}
 
@@ -233,6 +252,12 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 		// store — its argument surface shares nothing with the three
 		// cryptographic modes, so it parses its own.
 		return verifyRepro(args[1:], stdout, stderr)
+	case modeBase:
+		// The base gate judges against the ASSERT policy's declared
+		// scopes and upstream entries, and resolves trust material only
+		// for a first-party reference: none of the inputs the three
+		// cryptographic modes below share.
+		return verifyBase(args[1:], stdout, stderr)
 	case modePolicy:
 		// The load-check is offline and answers about the document
 		// itself, so it holds none of the inputs the modes above judge
@@ -242,7 +267,7 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	case modeRelease, modeVSA, modeSourceVSA, modeChain:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele verify: unknown mode %q (release, vsa, source-vsa, chain, repro, policy)\n", mode); err != nil {
+			"stele verify: unknown mode %q (release, vsa, source-vsa, chain, repro, base, policy)\n", mode); err != nil {
 			return exitIO
 		}
 
@@ -336,8 +361,10 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&rebuilt, "rebuilt", "", "sha256sum manifest of the REBUILT artifacts (required)")
 	fs.StringVar(&policyPath, "assert-policy", "",
 		"assert policy whose evidence vocabulary types an UNTYPED released manifest; unused, and not "+
-			"read, when the manifest carries its own typing. Named for the document it takes: --policy "+
-			"is the VERIFY policy everywhere else under this verb, and this comparison verifies nothing")
+			"read, when the manifest carries its own typing. In the pre-release form (--classes) it is "+
+			"required: each class's subject shape is declared in its evidence.classes. Named for the "+
+			"document it takes: --policy is the VERIFY policy everywhere else under this verb, and this "+
+			"comparison verifies nothing")
 	fs.StringVar(&class, "class", "",
 		"the evidence class this rebuild covers — the population narrows to the artifacts the released "+
 			"manifest says that class built. Omit when the rebuild covers the whole release. A manifest "+
@@ -351,6 +378,18 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
+	pa := &preReleaseArgs{}
+	fs.StringVar(&pa.classes, "classes", "",
+		"the PRE-RELEASE form (stele#401): the classes requested of both builds, comma-separated. Each is"+
+			" compared from --first and --rebuild; every requested class must have subjects in both")
+	fs.Var(&pa.first, "first",
+		"pre-release: one class's output from the FIRST build, as <class>=<path> — a sha256sum manifest, or"+
+			" for a registry class the directory of digest files its legs wrote; repeatable once per class")
+	fs.Var(&pa.rebuild, "rebuild",
+		"pre-release: the same class's output from the REBUILD, in the same shape as --first")
+	fs.BoolVar(&pa.rehearsal, "rehearsal", false,
+		"pre-release: the run pushed no image, so registry classes are reported as not compared")
+
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -361,6 +400,42 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		}
 
 		return exitUsage
+	}
+
+	if code, chosen := reproForm(fs, fail); chosen {
+		return code
+	}
+
+	if named(fs, "classes") {
+		switch {
+		case repo == "" || !strings.Contains(repo, "/"):
+			return fail("--repo must be owner/repo")
+		case tag == "":
+			return fail("--tag is required")
+		}
+
+		if policyPath == "" {
+			return fail("--assert-policy is required with --classes: each class's subject shape is declared" +
+				" there, never assumed")
+		}
+
+		pa.repo, pa.tag, pa.jsonOut, pa.policy = repo, tag, jsonOut, policyPath
+
+		return runPreReleaseRepro(pa, stdout, stderr)
+	}
+
+	// A --targets that was GIVEN and is empty is refused, never read as
+	// "every target" (.github#637, stele#223): omitting the flag is the
+	// claim that the rebuild covered the whole scope, and a matrix that
+	// rendered nothing into it would make that claim by accident.
+	if named(fs, "targets") && strings.TrimSpace(targets) == "" {
+		who := class
+		if who == "" {
+			who = "the rebuild"
+		}
+
+		return fail(who + " declares no rebuild target — an undeclared population judges every target the class" +
+			" published")
 	}
 
 	switch {
@@ -431,6 +506,46 @@ func verifyRepro(args []string, stdout, stderr io.Writer) int {
 		j, report.NoCanary(), report.NoJudgedSet(), pop.facts(len(built))...)
 
 	return emitReport(rep, jsonOut, stdout, stderr)
+}
+
+// reproForm refuses a run that mixes the two forms' flags; chosen is
+// true when it refused. A run is one form: the post-release form's
+// flags under --classes, or the pre-release form's without it, would
+// be read by nobody, which is a silent answer to a question the
+// caller thought it asked.
+func reproForm(fs *flag.FlagSet, fail func(string) int) (int, bool) {
+	pre := named(fs, "classes")
+
+	postReleaseOnly := []string{"released", "rebuilt", "class", "targets"}
+	preReleaseOnly := []string{"first", "rebuild", "rehearsal"}
+
+	for _, name := range postReleaseOnly {
+		if pre && named(fs, name) {
+			return fail("--" + name + " belongs to the post-release form; --classes is the pre-release form"), true
+		}
+	}
+
+	for _, name := range preReleaseOnly {
+		if !pre && named(fs, name) {
+			return fail("--" + name + " belongs to the pre-release form, which --classes names"), true
+		}
+	}
+
+	return 0, false
+}
+
+// named reports whether a flag was given on the command line at all —
+// the one way to tell an empty value from an absent one.
+func named(fs *flag.FlagSet, name string) bool {
+	given := false
+
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+
+	return given
 }
 
 // declaredTargets splits the --targets declaration WITHOUT dropping

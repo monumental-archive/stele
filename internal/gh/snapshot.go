@@ -170,7 +170,9 @@ func (s Snapshot) FileAt(owner, repo, path, ref string) ([]byte, bool, error) {
 	return b, true, nil
 }
 
-// Attestations implements Forge.
+// Attestations implements Forge. The owner's store (an empty repo)
+// lives at <owner>/attestations/, beside the repositories' directories:
+// a digest's file name can never be one of a repository's own entries.
 func (s Snapshot) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
 	p := filepath.Join(seg(owner), seg(repo), "attestations", sha256Hex+".json")
 	if _, err := os.Stat(filepath.Join(s.Dir, p)); errors.Is(err, fs.ErrNotExist) {

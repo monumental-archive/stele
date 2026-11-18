@@ -182,10 +182,10 @@ func (a storeAttestor) Verify(
 	var last error
 
 	for _, raw := range bundles {
-		for _, c := range candidates {
-			id := trust.Identity{SAN: c.Identity, Issuer: a.issuer}
+		for i := range candidates {
+			c := &candidates[i]
 
-			verified, verr := a.bv.Attestation(raw, id, hex)
+			verified, verr := a.prove(raw, c, hex)
 			if verr != nil {
 				last = verr
 
@@ -217,6 +217,34 @@ func (a storeAttestor) Verify(
 
 	return last
 }
+
+// prove verifies one bundle under one candidate: an exact identity
+// through the BundleVerifier, a published artifact's workflow identity
+// through the separate WorkflowVerifier — completed here with the
+// attestor's own issuer, exactly as an exact identity is.
+func (a storeAttestor) prove(raw jsonx.Raw, c *assert.Candidate, hex string) (*trust.Verified, error) {
+	if c.Workflow == nil {
+		return a.bv.Attestation(raw, trust.Identity{SAN: c.Identity, Issuer: a.issuer}, hex)
+	}
+
+	wv, ok := a.bv.(verify.WorkflowVerifier)
+	if !ok {
+		return nil, errNoWorkflowVerifier
+	}
+
+	w := c.Workflow
+
+	id, err := trust.NewWorkflowIdentity(w.Workflow, a.issuer, w.Owner, w.Ref, w.Runner)
+	if err != nil {
+		return nil, err
+	}
+
+	return wv.AttestationFromWorkflow(raw, &id, hex)
+}
+
+// errNoWorkflowVerifier refuses a published artifact's candidate when
+// the cryptographic boundary cannot prove one: refused, never passed.
+var errNoWorkflowVerifier = errors.New("this verifier cannot prove an artifact another run signed")
 
 // errNoAttestation names an empty store, so a caller can tell it from
 // a bundle that was present and refused.

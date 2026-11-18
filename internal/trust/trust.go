@@ -122,6 +122,14 @@ func (t *Verifier) Verify(entity verify.SignedEntity, id Identity, alg, digestHe
 		return nil, err
 	}
 
+	return attestation(entity, result, observed)
+}
+
+// attestation reads a verified DSSE entity's payload and certificate
+// facts — the envelope's own bytes, never a re-encoding.
+func attestation(
+	entity verify.SignedEntity, result *verify.VerificationResult, observed []ObservedInstant,
+) (*Verified, error) {
 	sig, err := entity.SignatureContent()
 	if err != nil {
 		return nil, fmt.Errorf("trust: signature content: %w", err)
@@ -286,9 +294,9 @@ func (t *Verifier) verifyEntity(
 		return nil, nil, errors.New("trust: identity must carry both SAN and issuer — a half identity matches half the world")
 	}
 
-	digest, err := hex.DecodeString(digestHex)
-	if err != nil || len(digest) == 0 {
-		return nil, nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
+	digest, err := hexDigest(digestHex)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ci, err := verify.NewShortCertificateIdentity(id.Issuer, "", id.SAN, "")
@@ -296,9 +304,29 @@ func (t *Verifier) verifyEntity(
 		return nil, nil, fmt.Errorf("trust: identity: %w", err)
 	}
 
+	return t.verifyAs(entity, &ci, alg, digest)
+}
+
+// hexDigest decodes an artifact digest, refusing one that is not hex.
+func hexDigest(digestHex string) ([]byte, error) {
+	digest, err := hex.DecodeString(digestHex)
+	if err != nil || len(digest) == 0 {
+		return nil, fmt.Errorf("trust: artifact digest is not hex: %q", digestHex)
+	}
+
+	return digest, nil
+}
+
+// verifyAs runs the stance against one certificate identity: the
+// signature chain, the log, the observer timestamp, the artifact
+// digest, and certificate transparency. Each identity type builds its
+// own sigstore identity; this is the one place any of them is applied.
+func (t *Verifier) verifyAs(
+	entity verify.SignedEntity, ci *verify.CertificateIdentity, alg string, digest []byte,
+) (*verify.VerificationResult, []ObservedInstant, error) {
 	result, err := t.v.Verify(entity, verify.NewPolicy(
 		verify.WithArtifactDigest(alg, digest),
-		verify.WithCertificateIdentity(ci),
+		verify.WithCertificateIdentity(*ci),
 	))
 	if err != nil {
 		return nil, nil, fmt.Errorf("trust: verify: %w", err)

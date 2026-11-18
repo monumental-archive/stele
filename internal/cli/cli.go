@@ -103,7 +103,15 @@ usage:
     repro     the reproducibility rebuild: the release's checksum
               manifest against the rebuild's, over the class and
               targets the rebuild declares it covered, one typed
-              finding per artifact that failed to reproduce
+              finding per artifact that failed to reproduce; with
+              --classes, the pre-release form: the first build
+              against the rebuild, class by class
+    base      every base a build is about to instantiate, under the
+              one declaration in the assert policy that claims it: a
+              first-party base's provenance at the ref its tag
+              implies, an official image's published provenance held
+              to its declared source; a reference nothing claims is
+              named, and a build with none to judge exits 0
     policy    one committed policy document against this engine's own
               loader, offline and reaching nothing: exit 0 if it
               loads, else the loader's refusal verbatim. The drift
@@ -326,7 +334,8 @@ derive modes take --git-dir [--ref
 --tag-prefix --paths --minor-types
 --silent-types --zero-major-bumps-minor --release-as]; notes adds [--groups
 --group-order --breaking-group --compare-url --release-url --pull-url
---date --changelog]; bump adds [--check --date]; release-plan takes the
+--date --changelog]; bump adds [--check --date --expect
+--manifest-dir]; release-plan takes the
 notes flags plus [--branch --staging --subject --also --prepare --out].
 
 exit codes: 0 success; 1 refused — a judgment that found divergence,
@@ -353,7 +362,8 @@ that is given is used as given. chain adds
 [--class --targets --assert-policy --json] and no trust material — a
 digest comparison signs nothing; --assert-policy types an UNTYPED
 released manifest, --class and --targets scope the judged population
-to what the rebuild covered.
+to what the rebuild covered. Its pre-release form takes --repo --tag
+--classes --first --rebuild [--rehearsal --json].
 verify policy takes exactly one of --assert-policy or --verify-policy,
 naming the document to load, and nothing else.
 level takes --repo|--org [--ref --notes-ref --tag --json

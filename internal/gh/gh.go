@@ -420,6 +420,16 @@ type Forge interface {
 	// walk judges history, not a just-published artifact), so no
 	// propagation ladder waits for one to appear. Transport failures
 	// are still retried, like every read here.
+	//
+	// An empty repo reads the OWNER's store instead: every attestation
+	// any of the owner's repositories holds for the digest. That is the
+	// read for an artifact whose publishing repository its name does
+	// not give — an image is not named after the repository that built
+	// it (measured: edtf-postgres is published by edtf, lab-pg by
+	// release-lab) — and the identity checked on what it returns
+	// anchors the owner and the source ref (stele#402). The owner may be
+	// an organisation or a user; an account of any other kind keeps no
+	// store, and is refused by name.
 	Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error)
 	// PackageVersionDigest returns the container digest carrying the
 	// given tag for one org package, or "" when the package has no
@@ -737,11 +747,19 @@ type Attestation struct {
 	Page   string
 }
 
-// Attestations implements Forge.
+// Attestations implements Forge. The repository's store and the
+// owner's are one walk past the path: the same envelope, read the same
+// way, page by page.
 func (c *Client) Attestations(owner, repo, sha256Hex string) ([]jsonx.Raw, error) {
-	listed, found, err := c.AttestationPages(
-		"/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/attestations/sha256:" + sha256Hex,
-	)
+	store := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
+	if repo == "" {
+		var err error
+		if store, err = c.ownerStore(owner); err != nil {
+			return nil, err
+		}
+	}
+
+	listed, found, err := c.AttestationPages(store + "/attestations/sha256:" + sha256Hex)
 	if err != nil {
 		return nil, err
 	}
@@ -1025,6 +1043,50 @@ func escapePath(path string) string {
 	}
 
 	return strings.Join(parts, "/")
+}
+
+// The two kinds of account the forge keeps an attestation store for,
+// as GET /users/{login} spells its `type`.
+const (
+	ownerOrganization = "Organization"
+	ownerUser         = "User"
+)
+
+// ownerStore is the path of an owner's attestation store, in the
+// documented form for its kind: an organisation's under /orgs, a
+// user's under /users. Measured 2026-11-17, each endpoint also answers
+// for the other kind (/orgs/jdx for a user, /users/monumental-archive
+// for an organisation), but that is not the contract, so the kind is
+// read rather than the overlap relied on. An absent owner, and an
+// account of any other kind, are refused by name: neither has a store
+// to be empty.
+func (c *Client) ownerStore(owner string) (string, error) {
+	body, _, ok, err := c.get("/users/"+url.PathEscape(owner), "application/vnd.github+json")
+	if err != nil {
+		return "", err
+	}
+
+	if !ok {
+		return "", fmt.Errorf("gh: owner %q does not exist", owner)
+	}
+
+	account, err := jsonx.DecodeForeign[struct {
+		Type *string `json:"type"`
+	}](body)
+	if err != nil {
+		return "", fmt.Errorf("gh: owner %s: %w", owner, err)
+	}
+
+	switch {
+	case account.Type == nil:
+		return "", fmt.Errorf("gh: owner %q: the forge states no account type", owner)
+	case *account.Type == ownerOrganization:
+		return "/orgs/" + url.PathEscape(owner), nil
+	case *account.Type == ownerUser:
+		return "/users/" + url.PathEscape(owner), nil
+	}
+
+	return "", fmt.Errorf("gh: owner %q is a %s account, which keeps no attestation store", owner, *account.Type)
 }
 
 func (c *Client) asset(owner, repo, tag, name string) ([]byte, error) {

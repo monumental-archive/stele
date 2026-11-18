@@ -22,8 +22,10 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
+	"maps"
 	"math/big"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -193,6 +195,10 @@ type leafSpec struct {
 	// sctAt overrides the countersigned issuance instant (defaults
 	// to notBefore).
 	sctAt time.Time
+	// exts are further Fulcio extensions, by the last arc of their
+	// 1.3.6.1.4.1.57264.1.<n> OID — the runner environment (11), the
+	// source ref (14), the source owner (16) — each a UTF8String.
+	exts map[int]string
 }
 
 // issueLeaf mints one Fulcio-shaped leaf: SAN URI, the issuer
@@ -227,6 +233,16 @@ func (w *world) issueLeaf(t *testing.T, spec *leafSpec) (*x509.Certificate, *ecd
 		ExtraExtensions: []pkix.Extension{
 			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuerDER},
 		},
+	}
+
+	for _, arc := range slices.Sorted(maps.Keys(spec.exts)) {
+		value, merr := asn1.MarshalWithParams(spec.exts[arc], "utf8")
+		if merr != nil {
+			t.Fatal(merr)
+		}
+
+		tmpl.ExtraExtensions = append(tmpl.ExtraExtensions,
+			pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, arc}, Value: value})
 	}
 
 	pre := w.signTemplate(t, tmpl, &key.PublicKey)
