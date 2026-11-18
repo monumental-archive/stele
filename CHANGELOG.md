@@ -10,6 +10,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.25.0](https://github.com/monumental-archive/stele/compare/v0.24.2...v0.25.0) - 2026-11-18
+
+### Breaking
+
+- change a chain's source signer once (#389) ([#427](https://github.com/monumental-archive/stele/pull/427))
+- sign and read a release tag's source verdict (#391) ([#432](https://github.com/monumental-archive/stele/pull/432))
+- derive vex from policy and an inventory dir (#397) ([#437](https://github.com/monumental-archive/stele/pull/437))
+- plan the signing of several vex decisions (#398) ([#438](https://github.com/monumental-archive/stele/pull/438))
+- take the run's raw inputs and place bundles (#400) ([#436](https://github.com/monumental-archive/stele/pull/436))
+
+### Added
+
+- derive the signer digest a tree pins (#392) ([#422](https://github.com/monumental-archive/stele/pull/422))
+- derive the subject manifest (#393) ([#429](https://github.com/monumental-archive/stele/pull/429))
+- report where a chain changed signer (#389) ([#431](https://github.com/monumental-archive/stele/pull/431))
+- port the verify-release shell into stele (#392) ([#435](https://github.com/monumental-archive/stele/pull/435))
+- split chain signing from the push (#390) ([#425](https://github.com/monumental-archive/stele/pull/425))
+- emit the release decision a commit point signs (#399) ([#434](https://github.com/monumental-archive/stele/pull/434))
+- print the population assert walks (#388) ([#445](https://github.com/monumental-archive/stele/pull/445))
+- compare the published board with the measured one (#418) ([#452](https://github.com/monumental-archive/stele/pull/452))
+- derive a release's pins and subjects when absent (#447) ([#456](https://github.com/monumental-archive/stele/pull/456))
+- declare a release's evidence classes by policy (#403) ([#457](https://github.com/monumental-archive/stele/pull/457))
+- check one crate's version against a stated one (#455) ([#460](https://github.com/monumental-archive/stele/pull/460))
+- add a pre-release form to verify repro (#401) ([#444](https://github.com/monumental-archive/stele/pull/444))
+- verify base images with stele's own verifier (#402) ([#459](https://github.com/monumental-archive/stele/pull/459))
+- derive a release's inventories in one call (#396) ([#443](https://github.com/monumental-archive/stele/pull/443))
+
+### Fixed
+
+- scrub every repository-local variable from env (#426) ([#428](https://github.com/monumental-archive/stele/pull/428))
+- update go.yaml.in/yaml/v3 to v4.0.0 ([#311](https://github.com/monumental-archive/stele/pull/311))
+- read every page of the attestation store (#439) ([#449](https://github.com/monumental-archive/stele/pull/449))
+- fetch tags shallow only where a tag exists (#446) ([#451](https://github.com/monumental-archive/stele/pull/451))
+- declare subject shapes in the assert policy (#442) ([#450](https://github.com/monumental-archive/stele/pull/450))
+- declare the runner environments a release may carry (#463) ([#465](https://github.com/monumental-archive/stele/pull/465))
+- look provenance-verified bases up by owner (#458) ([#461](https://github.com/monumental-archive/stele/pull/461))
+- declare the release workflow in the assert policy (#448) ([#462](https://github.com/monumental-archive/stele/pull/462))
+
+### Testing
+
+- say the golden's inputs are reconstructed (#400) ([#453](https://github.com/monumental-archive/stele/pull/453))
+
+### CI
+
+- adopt the canon's go mutation leg ([#466](https://github.com/monumental-archive/stele/pull/466))
+
 ## [0.24.2](https://github.com/monumental-archive/stele/compare/v0.24.1...v0.24.2) - 2026-11-17
 
 ### Fixed
