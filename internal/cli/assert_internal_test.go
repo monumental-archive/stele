@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -721,6 +722,123 @@ func TestStoreAttestor(t *testing.T) {
 	}
 }
 
+// workflowBV scripts the published-artifact path beside the exact
+// one, recording each identity it is asked to prove under.
+type workflowBV struct {
+	attestorBV
+
+	asked *[]string
+}
+
+func (b workflowBV) AttestationFromWorkflow(
+	raw []byte, id *trust.WorkflowIdentity, hex string,
+) (*trust.Verified, error) {
+	*b.asked = append(*b.asked, id.String())
+
+	return b.Attestation(raw, trust.Identity{}, hex)
+}
+
+// TestStoreAttestorWorkflow pins a published artifact's candidate
+// (stele#402): it is proven through the separate workflow path under
+// the attestor's own issuer, its anchors are refused before any proof
+// when malformed, its predicate is still required, and a boundary that
+// cannot prove one refuses rather than passing.
+func TestStoreAttestorWorkflow(t *testing.T) {
+	t.Parallel()
+
+	const signer = "https://github.com/acme/signer/.github/workflows/sign.yml"
+
+	one := []jsonx.Raw{jsonx.Raw(`{"bundle": 1}`)}
+	published := assert.WorkflowCandidate{
+		Workflow: signer, Owner: "acme", Ref: "refs/tags/v1.2.3", Runner: "github-hosted",
+	}
+
+	tests := []struct {
+		name      string
+		bv        func(asked *[]string) verify.BundleVerifier
+		issuer    string
+		edit      func(*assert.WorkflowCandidate)
+		predicate string
+		want      string // "" for verified
+	}{
+		{
+			name: "a published artifact verifies under its workflow identity",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			predicate: "https://acme.example/approval/v1",
+		},
+		{
+			name: "its predicate is still required",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			predicate: "https://acme.example/other/v1", want: "predicate type is not https://acme.example/other/v1",
+		},
+		{
+			name: "a refused signature surfaces",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{err: errors.New("cert not trusted"), asked: asked}
+			},
+			want: "cert not trusted",
+		},
+		{
+			name: "a ref that is not fully qualified refuses before any proof",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			edit: func(c *assert.WorkflowCandidate) { c.Ref = "v1.2.3" },
+			want: `trust: source ref "v1.2.3" is not a fully qualified ref`,
+		},
+		{
+			name: "the attestor's issuer completes the identity",
+			bv: func(asked *[]string) verify.BundleVerifier {
+				return workflowBV{payload: okStatement, asked: asked}
+			},
+			issuer: "-", want: `trust: issuer "" is not an https URL`,
+		},
+		{
+			name: "a boundary that cannot prove a published artifact refuses",
+			bv:   func(*[]string) verify.BundleVerifier { return attestorBV{payload: okStatement} },
+			want: "this verifier cannot prove an artifact another run signed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var asked []string
+
+			issuer := "https://issuer.example"
+			if tt.issuer == "-" {
+				issuer = ""
+			}
+
+			candidate := published
+			if tt.edit != nil {
+				tt.edit(&candidate)
+			}
+
+			a := storeAttestor{forge: &storeForge{bundles: one}, bv: tt.bv(&asked), issuer: issuer}
+
+			err := a.Verify("acme", "", "sha256:"+strings.Repeat("c", 64),
+				[]assert.Candidate{{Workflow: &candidate}}, tt.predicate)
+
+			switch {
+			case tt.want == "" && err != nil:
+				t.Fatalf("Verify = %v, want nil", err)
+			case tt.want == "" && !reflect.DeepEqual(asked, []string{
+				signer + "@* from https://github.com/acme at refs/tags/v1.2.3 on github-hosted",
+			}):
+				t.Fatalf("proven under %q", asked)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Fatalf("Verify = %v, want the refusal %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // storeSnapshot writes a snapshot plus a policy declaring the store
 // halves, so the CLI's trusted-root and pin-file guards are reachable.
 //
@@ -746,6 +864,41 @@ func storeSnapshot(t *testing.T) (string, string) {
 	}
 
 	return snap, policy
+}
+
+// TestStoreHalvesDeclared: a scope or the continuous leg owes the walk
+// a root; a section of upstream entries alone owes none, because the
+// walk never reads them and they judge unsigned provenance.
+func TestStoreHalvesDeclared(t *testing.T) {
+	t.Parallel()
+
+	load := func(evidence string) *assert.Policy {
+		pol, err := assert.LoadPolicy(strings.NewReader(`{"schema": 9,
+		  "evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt",
+		    "umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json",
+		    "classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}` + evidence + `}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return pol
+	}
+
+	if storeHalvesDeclared(load("")) {
+		t.Fatal("a policy with no store half owes a root")
+	}
+
+	upstream := load(`, "baseImages": {"upstream": [{"image": "docker.io/library/postgres",
+	  "tagPattern": "^(?P<major>[0-9]+)-(?P<suite>[a-z]+)$",
+	  "source": "https://github.com/docker-library/postgres.git", "path": "${major}/${suite}"}]}`)
+	if storeHalvesDeclared(upstream) {
+		t.Fatal("a section of upstream entries alone owes a root")
+	}
+
+	upstream.Evidence.BaseImages.Scopes = []assert.BaseImageScope{{}}
+	if !storeHalvesDeclared(upstream) {
+		t.Fatal("a declared scope owes no root")
+	}
 }
 
 // TestAssertEvidenceStoreGuards pins the CLI contract for the store

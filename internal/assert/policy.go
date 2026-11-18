@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	ociname "github.com/google/go-containerregistry/pkg/name"
 
 	"github.com/monumental-archive/stele/internal/jsonx"
 	"github.com/monumental-archive/stele/internal/population"
@@ -717,10 +718,41 @@ type ContinuousPolicy struct {
 // walk knows how to compute; how many scopes a policy declares, and
 // with which parameters, is policy and never code (stele#247).
 type BaseImagesPolicy struct {
-	// Scopes are the declared approval scopes: non-empty, because a
-	// base-approval section that scopes nothing approves nothing, and
-	// their names form a set.
-	Scopes []BaseImageScope `json:"scopes"`
+	// Scopes are the declared approval scopes; their names form a set.
+	// A section declaring neither a scope nor an upstream entry
+	// approves nothing, and is refused.
+	Scopes []BaseImageScope `json:"scopes,omitempty"`
+	// Upstream declares, per official image a build consumes, the
+	// source its published provenance must name (stele#402). A sibling
+	// of the scopes rather than a kind among them: a kind names a
+	// judgment the corpus walk computes, and the walk has no reference
+	// to enumerate here — the build that instantiates the image passes
+	// it to `stele verify base`, which alone reads this list.
+	Upstream []UpstreamBase `json:"upstream,omitempty"`
+}
+
+// UpstreamBase is one official image and the source its provenance
+// must name: the repository its BuildKit config source points at, and
+// the directory within it, expanded from the pinned tag.
+type UpstreamBase struct {
+	// Image is the untagged reference the entry covers.
+	Image *string `json:"image"`
+	// TagPattern reads the pinned tag; its named groups are what Path
+	// expands from, and what a caller may bind to cross-check.
+	TagPattern *string `json:"tagPattern"`
+	// Source is the repository URL the provenance's config source
+	// must name, as BuildKit spells it (the part before `#`).
+	Source *string `json:"source"`
+	// Path is the directory within Source, a template over the tag
+	// pattern's named groups (${major}/${suite}).
+	Path *string `json:"path"`
+}
+
+// RefRule is one tag-to-ref convention of a shared-signer scope: a
+// tag pattern, and the ref its named groups expand into.
+type RefRule struct {
+	Tag *string `json:"tag"`
+	Ref *string `json:"ref"`
 }
 
 // BaseImageMechanism names one base-approval mechanism this engine
@@ -742,6 +774,17 @@ const (
 	// the pinned reference itself implies — so the approval demanded
 	// cannot drift from the pin that names it.
 	MechanismProvenanceVerified BaseImageMechanism = "provenance-verified"
+	// MechanismSharedSigner approves the digest-pinned bases under a
+	// declared registry prefix against the provenance ONE declared
+	// signer workflow minted, at whatever signer commit, from the
+	// prefix's owner, at the source ref the pin's tag implies by a
+	// declared convention, on the runner environment the scope
+	// declares (stele#402). It is the shape of an owner
+	// whose repositories all sign through one shared signer, which a
+	// per-pin identity cannot say: the signer's commit is the
+	// publishing release's to pin, and an image's name is not its
+	// repository's.
+	MechanismSharedSigner BaseImageMechanism = "shared-signer"
 )
 
 // BaseImageScope is one approval scope: a name, the mechanism that
@@ -767,16 +810,17 @@ type BaseImageScope struct {
 	// FromFile is the build file read from every population
 	// repository at its default branch; the digest-pinned references
 	// it carries are this scope's candidate subjects
-	// (provenance-verified).
+	// (provenance-verified, shared-signer).
 	FromFile *string `json:"fromFile,omitempty"`
 	// RegistryPrefix selects which of those references this scope
-	// judges. It ends at the OWNER boundary (`<host>/<owner>/`)
-	// because the publishing repository is read off the path that
-	// follows it — the one derivation this mechanism keeps, whose
-	// precondition validate enforces rather than assumes. References
-	// outside the prefix are out of scope, not findings: whose bases
-	// those are is another mechanism's question
-	// (provenance-verified).
+	// judges. It ends at the OWNER boundary (`<host>/<owner>/`):
+	// provenance-verified reads the publishing repository off the
+	// path that follows it, and shared-signer reads the owner whose
+	// attestation store it asks off its last segment — derivations
+	// whose precondition validate enforces rather than assumes.
+	// References outside the prefix are out of scope, not findings:
+	// whose bases those are is another mechanism's question
+	// (provenance-verified, shared-signer).
 	RegistryPrefix *string `json:"registryPrefix,omitempty"`
 	// PinPattern parses the pinned reference and Identity is built
 	// from its capture groups, so the expected signer is DERIVED FROM
@@ -786,8 +830,23 @@ type BaseImageScope struct {
 	// pattern, which validate checks (provenance-verified).
 	PinPattern *string `json:"pinPattern,omitempty"`
 	Identity   *string `json:"identity,omitempty"`
+	// SignerWorkflow is the one workflow that signs every base's
+	// provenance, owner/repo/path. Its ref is free: a published base
+	// is signed at whatever signer commit its own release pinned
+	// (trust.WorkflowIdentity) (shared-signer).
+	SignerWorkflow *string `json:"signerWorkflow,omitempty"`
+	// Refs is the ordered tag-to-ref convention: the first rule whose
+	// tag pattern matches the pin's tag names the source ref the base
+	// was built at, which the provenance must carry. A tag no rule
+	// matches is refused by name (shared-signer).
+	Refs []RefRule `json:"refs,omitempty"`
+	// RunnerEnvironment is the runner environment the signing
+	// certificate must state, compared exactly as written: the value is
+	// the forge's own vocabulary, which this engine holds no copy of and
+	// never judges (shared-signer).
+	RunnerEnvironment *string `json:"runnerEnvironment,omitempty"`
 	// PredicateType is the predicate the approving attestation must
-	// carry. Both mechanisms declare one, because a predicate URI is
+	// carry. Every mechanism declares one, because a predicate URI is
 	// policy data and never a literal in this engine
 	// (docs/versioning.md).
 	PredicateType *string `json:"predicateType,omitempty"`
@@ -796,7 +855,7 @@ type BaseImageScope struct {
 func (c *ContinuousPolicy) validate() error {
 	for name, f := range map[string]*string{
 		"stubPath": c.StubPath, "stubUses": c.StubUses, "registry": c.Registry,
-		"tag": c.Tag, "signerWorkflow": c.SignerWorkflow, "signerPinPattern": c.SignerPinPattern,
+		"tag": c.Tag, paramSignerWorkflow: c.SignerWorkflow, "signerPinPattern": c.SignerPinPattern,
 	} {
 		if f == nil || *f == "" {
 			return fmt.Errorf("evidence.continuous.%s is absent or empty", name)
@@ -811,13 +870,16 @@ func (c *ContinuousPolicy) validate() error {
 }
 
 func (b *BaseImagesPolicy) validate() error {
-	if len(b.Scopes) == 0 {
-		return errors.New(
-			"evidence.baseImages.scopes is empty — a base-approval section that scopes nothing approves nothing",
-		)
+	if len(b.Scopes) == 0 && len(b.Upstream) == 0 {
+		return errors.New("evidence.baseImages declares no scope and no upstream entry — a base-approval" +
+			" section that approves nothing is not one")
 	}
 
-	names := map[string]bool{}
+	if err := b.validateUpstream(); err != nil {
+		return err
+	}
+
+	names, prefixes := map[string]bool{}, map[string]string{}
 
 	for i := range b.Scopes {
 		s := &b.Scopes[i]
@@ -834,14 +896,114 @@ func (b *BaseImagesPolicy) validate() error {
 		if err := s.validate(); err != nil {
 			return err
 		}
+
+		// A prefix ends at the owner boundary (ownerBoundary), so
+		// two prefixes overlap only by being equal.
+		if p := s.RegistryPrefix; p != nil {
+			if other, dup := prefixes[*p]; dup {
+				return fmt.Errorf("evidence.baseImages.scopes %s and %s both declare registryPrefix %q — one"+
+					" reference, one judgment", other, *s.Name, *p)
+			}
+
+			prefixes[*p] = *s.Name
+		}
 	}
 
 	return nil
 }
 
-// paramPredicateType is the one parameter BOTH mechanisms own: a
+// validateUpstream holds each upstream entry to its grammar: an
+// untagged image named once, an anchored tag pattern, an https source,
+// and a path that names only groups the pattern captures. An image
+// under a first-party prefix is refused: one reference, one judgment.
+func (b *BaseImagesPolicy) validateUpstream() error {
+	seen := map[string]bool{}
+
+	for i, u := range b.Upstream {
+		field := fmt.Sprintf("evidence.baseImages.upstream[%d]", i)
+
+		for name, v := range map[string]*string{
+			"image": u.Image, "tagPattern": u.TagPattern, "source": u.Source, "path": u.Path,
+		} {
+			if v == nil || *v == "" {
+				return fmt.Errorf("%s.%s is absent or empty", field, name)
+			}
+		}
+
+		repo, err := ociname.NewRepository(*u.Image)
+		if err != nil || strings.ContainsAny(*u.Image, ":@") {
+			return fmt.Errorf("%s.image %q is not an untagged image reference", field, *u.Image)
+		}
+
+		if seen[repo.Name()] {
+			return fmt.Errorf("%s.image %q is declared twice — one image, one expected source", field, *u.Image)
+		}
+
+		seen[repo.Name()] = true
+
+		if _, err := u.Pattern(); err != nil {
+			return fmt.Errorf("%s.%w", field, err)
+		}
+
+		if !strings.HasPrefix(*u.Source, "https://") || strings.Contains(*u.Source, "#") {
+			return fmt.Errorf("%s.source %q is not an https repository URL", field, *u.Source)
+		}
+
+		for j := range b.Scopes {
+			if p := b.Scopes[j].RegistryPrefix; p != nil && strings.HasPrefix(*u.Image, *p) {
+				return fmt.Errorf("%s.image %q is under scope %s's prefix — one reference, one judgment",
+					field, *u.Image, *b.Scopes[j].Name)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Pattern compiles the entry's tag pattern, refusing one that is not
+// anchored, and a path naming a group the pattern does not capture.
+func (u *UpstreamBase) Pattern() (*regexp.Regexp, error) {
+	if !strings.HasPrefix(*u.TagPattern, "^") || !strings.HasSuffix(*u.TagPattern, "$") {
+		return nil, fmt.Errorf("tagPattern %q is not anchored (^…$) — an unanchored pattern matches inside a"+
+			" tag it was never written for", *u.TagPattern)
+	}
+
+	re, err := regexp.Compile(*u.TagPattern)
+	if err != nil {
+		return nil, fmt.Errorf("tagPattern: %w", err)
+	}
+
+	if err := templateNamesGroups(*u.Path, re); err != nil {
+		return nil, fmt.Errorf("path %w", err)
+	}
+
+	return re, nil
+}
+
+// paramPredicateType is the one parameter every mechanism owns: a
 // predicate URI is policy data whichever way a base is approved.
 const paramPredicateType = "predicateType"
+
+// paramSignerWorkflow names the signer both the continuous leg and a
+// shared-signer scope declare.
+const paramSignerWorkflow = "signerWorkflow"
+
+// paramRunnerEnvironment names the runner environment a shared-signer
+// scope requires its signing certificate to state.
+const paramRunnerEnvironment = "runnerEnvironment"
+
+// paramFromFile and paramRegistryPrefix name the parameters both
+// prefix mechanisms — provenance-verified and shared-signer — own.
+const (
+	paramFromFile       = "fromFile"
+	paramRegistryPrefix = "registryPrefix"
+)
+
+// paramRefs is the one parameter that is a list rather than a string:
+// the ordered tag-to-ref rules. params cannot carry it, so validate
+// reads it beside the table — the same two questions, owned and
+// declared, asked of it.
+const paramRefs = "refs"
 
 // params is every parameter this engine knows how to read off a
 // scope, whichever mechanism owns it. One table, so "required by my
@@ -849,14 +1011,16 @@ const paramPredicateType = "predicateType"
 // cannot drift apart.
 func (s *BaseImageScope) params() map[string]*string {
 	return map[string]*string{
-		"pinFile":          s.PinFile,
-		"attestorRepo":     s.AttestorRepo,
-		"attestorIdentity": s.AttestorIdentity,
-		"fromFile":         s.FromFile,
-		"registryPrefix":   s.RegistryPrefix,
-		"pinPattern":       s.PinPattern,
-		"identity":         s.Identity,
-		paramPredicateType: s.PredicateType,
+		"pinFile":              s.PinFile,
+		"attestorRepo":         s.AttestorRepo,
+		"attestorIdentity":     s.AttestorIdentity,
+		paramFromFile:          s.FromFile,
+		paramRegistryPrefix:    s.RegistryPrefix,
+		"pinPattern":           s.PinPattern,
+		"identity":             s.Identity,
+		paramSignerWorkflow:    s.SignerWorkflow,
+		paramRunnerEnvironment: s.RunnerEnvironment,
+		paramPredicateType:     s.PredicateType,
 	}
 }
 
@@ -868,7 +1032,12 @@ func owns(m BaseImageMechanism) []string {
 	case MechanismPinFile:
 		return []string{"pinFile", "attestorRepo", "attestorIdentity", paramPredicateType}
 	case MechanismProvenanceVerified:
-		return []string{"fromFile", "registryPrefix", "pinPattern", "identity", paramPredicateType}
+		return []string{paramFromFile, paramRegistryPrefix, "pinPattern", "identity", paramPredicateType}
+	case MechanismSharedSigner:
+		return []string{
+			paramFromFile, paramRegistryPrefix, paramSignerWorkflow, paramRefs, paramRunnerEnvironment,
+			paramPredicateType,
+		}
 	default:
 		return nil
 	}
@@ -896,7 +1065,12 @@ func (s *BaseImageScope) validate() error {
 	declared := s.params()
 
 	for _, name := range owned {
-		if f := declared[name]; f == nil || *f == "" {
+		missing := name == paramRefs && len(s.Refs) == 0
+		if f, isString := declared[name]; isString && (f == nil || *f == "") {
+			missing = true
+		}
+
+		if missing {
 			return fmt.Errorf("%s.%s is absent or empty — the %s mechanism requires it",
 				where, name, *s.Mechanism)
 		}
@@ -909,8 +1083,16 @@ func (s *BaseImageScope) validate() error {
 		}
 	}
 
-	if *s.Mechanism == MechanismProvenanceVerified {
+	if len(s.Refs) > 0 && !slices.Contains(owned, paramRefs) {
+		return fmt.Errorf("%s.%s is declared but the %s mechanism does not read it", where, paramRefs, *s.Mechanism)
+	}
+
+	switch *s.Mechanism {
+	case MechanismProvenanceVerified:
 		return s.validateProvenance(where)
+	case MechanismSharedSigner:
+		return s.validateSharedSigner(where)
+	case MechanismPinFile:
 	}
 
 	return nil
@@ -926,8 +1108,7 @@ func (s *BaseImageScope) validateProvenance(where string) error {
 	// owner does. A prefix reaching further would swallow the
 	// repository segment and the derivation would address the wrong
 	// repository — silently, and in the direction of a pass.
-	trimmed, slashed := strings.CutSuffix(*s.RegistryPrefix, "/")
-	if !slashed || strings.Count(trimmed, "/") != 1 || strings.HasSuffix(trimmed, "/") {
+	if !ownerBoundary(*s.RegistryPrefix) {
 		return fmt.Errorf(
 			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
 				"because the publishing repository is derived from the reference path that follows it",
@@ -946,6 +1127,59 @@ func (s *BaseImageScope) validateProvenance(where string) error {
 				"%s.identity names the capture group %q, which pinPattern does not define — "+
 					"the expansion would silently drop that segment and demand the wrong identity", where, g,
 			)
+		}
+	}
+
+	return nil
+}
+
+// validateSharedSigner checks the preconditions the shared-signer
+// judgment would otherwise assume: that the prefix stops where the
+// owner does, that the signer is a workflow, and that every tag rule
+// reads and expands.
+func (s *BaseImageScope) validateSharedSigner(where string) error {
+	// The owner whose store is asked is the prefix's last segment, so
+	// the prefix must end there: one reaching into a repository would
+	// name a store nobody keeps.
+	if !ownerBoundary(*s.RegistryPrefix) {
+		return fmt.Errorf(
+			"%s.registryPrefix %q does not end at the owner boundary — it must spell <host>/<owner>/, "+
+				"because the owner whose attestation store is read is its last segment",
+			where, *s.RegistryPrefix,
+		)
+	}
+
+	if !signerWorkflowRE.MatchString(*s.SignerWorkflow) {
+		return fmt.Errorf("%s.signerWorkflow %q is not owner/repo/path-to-workflow", where, *s.SignerWorkflow)
+	}
+
+	_, err := s.RefRules()
+	if err != nil {
+		return fmt.Errorf("%s.%w", where, err)
+	}
+
+	return nil
+}
+
+// ownerBoundary reports whether a registry prefix spells exactly
+// `<host>/<owner>/`.
+func ownerBoundary(prefix string) bool {
+	trimmed, slashed := strings.CutSuffix(prefix, "/")
+
+	return slashed && strings.Count(trimmed, "/") == 1 && !strings.HasSuffix(trimmed, "/")
+}
+
+// signerWorkflowRE is a workflow named by its repository and path.
+var signerWorkflowRE = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.ya?ml$`)
+
+// templateNamesGroups refuses a template naming a capture group the
+// pattern does not define: the expansion would silently drop that
+// segment and demand the wrong value.
+func templateNamesGroups(template string, re *regexp.Regexp) error {
+	for _, g := range identityGroups(template) {
+		if !slices.Contains(re.SubexpNames(), g) {
+			return fmt.Errorf("names the capture group %q, which its pattern does not define — the expansion"+
+				" would silently drop that segment and demand the wrong value", g)
 		}
 	}
 
@@ -1167,8 +1401,11 @@ func (p *Policy) validate() error {
 		return err
 	}
 
-	if (e.Continuous != nil || e.BaseImages != nil) && (p.Issuer == nil || *p.Issuer == "") {
-		return errors.New("issuer is required when evidence.continuous or evidence.baseImages is declared")
+	// Only an attestation has an issuer: an upstream entry judges
+	// unsigned provenance, so a section declaring only those owes none.
+	if (e.Continuous != nil || e.BaseImages != nil && len(e.BaseImages.Scopes) > 0) &&
+		(p.Issuer == nil || *p.Issuer == "") {
+		return errors.New("issuer is required when evidence.continuous or an evidence.baseImages scope is declared")
 	}
 
 	if e.Continuous != nil {

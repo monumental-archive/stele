@@ -564,11 +564,12 @@ has declared no exceptions, and every finding stands.
 Two optional sections cover artifacts that have no release to hang
 evidence off, so the attestation store is the only durable record —
 and for both, presence is not enough: the bundle must VERIFY under a
-pinned identity, which is why declaring either requires a top-level
-`issuer` and TRUST MATERIAL for the run. The material is not one
-flag: `--trusted-root PATH` names the document, and absent the flag
-the run resolves it through TUF — a live fetch from the Sigstore
-public-good instance, anchored by the root pinned in this binary.
+pinned identity, which is why declaring `continuous` or any base-image
+scope requires a top-level `issuer` and TRUST MATERIAL for the run.
+The material is not one flag: `--trusted-root PATH` names the
+document, and absent the flag the run resolves it through TUF — a
+live fetch from the Sigstore public-good instance, anchored by the
+root pinned in this binary.
 Both are origins on the one ladder `trust.PlanRoot` decides from the
 invocation alone (`docs/trusted-root.md`, `internal/trust`); there is
 no third, and no fallback between them. What is refused is a run that
@@ -641,8 +642,10 @@ is unreadable at its pin or declares no signer pin (the identity
 cannot be derived, so the image cannot be vouched for), and an
 attestation that refuses.
 
-**baseImages** — a non-empty list of `scopes`, each a `name`, a
-`mechanism`, and that mechanism's parameters. There is more than one
+**baseImages** — a list of `scopes`, each a `name`, a `mechanism`,
+and that mechanism's parameters, and a list of `upstream` entries
+(below); a section declaring neither approves nothing and is refused.
+There is more than one
 way to approve a base image, and how many an org uses is the org's
 fact: declare one scope, several, or several of the same kind. Names
 form a set, because a finding names the scope that demanded it.
@@ -656,11 +659,11 @@ requires exactly its own parameters: one it needs and you omit is
 refused by name, and one it does not read is refused too, for the same
 reason.
 
-Scopes never reference another section. A `provenance-verified` scope
-declares its own signer fields even where `evidence.continuous`
-carries the same values — coupling the two would make base approval
-inexpressible for an adopter who verifies bases and publishes no
-rolling digests. Keeping one org's document free of internal
+Scopes never reference another section. A `provenance-verified` or
+`shared-signer` scope declares its own signer fields even where
+`evidence.continuous` carries the same values — coupling the two
+would make base approval inexpressible for an adopter who verifies
+bases and publishes no rolling digests. Keeping one org's document free of internal
 repetition is that org's authoring problem, never the schema's.
 
 **pin-file** — every digest-pinned base reference in `pinFile` must
@@ -695,8 +698,127 @@ unreadable pin is not an approved one), an identity template that
 expands to nothing, and an attestation that refuses. A repository
 whose `fromFile` is absent builds no image — an answer, not a gap.
 
+**shared-signer** — the bases under `registryPrefix` that a population
+repository's `fromFile` instantiates, or that a build hands
+`stele verify base`, must carry a `predicateType` attestation from ONE
+declared signer workflow. It is the shape of an owner whose
+repositories all sign through one shared signer, which
+`provenance-verified`'s per-pin identity cannot say: the signer's
+commit is whatever the publishing release pinned — a base is normally
+signed at an older signer commit than the tree that builds on it —
+and an image's name need not be its repository's.
+
+```json
+{
+  "name": "org-bases",
+  "mechanism": "shared-signer",
+  "fromFile": "Dockerfile",
+  "registryPrefix": "ghcr.io/acme/",
+  "signerWorkflow": "acme/signer/.github/workflows/sign.yml",
+  "refs": [
+    {"tag": "^latest$", "ref": "refs/heads/main"},
+    {
+      "tag": "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)(-.*)?$",
+      "ref": "refs/tags/v${version}"
+    }
+  ],
+  "runnerEnvironment": "github-hosted",
+  "predicateType": "https://slsa.dev/provenance/v1"
+}
+```
+
+The pin must carry a tag and a digest: the digest is what is
+verified, the tag is what the source ref is derived from. `refs` is
+the ordered tag-to-ref convention — the first rule whose anchored
+pattern matches the tag names the ref, its template expanded from the
+pattern's named groups — and a tag no rule matches is refused by name
+rather than guessed at. The attestation must verify with a
+certificate naming `signerWorkflow` at ANY ref (only the commit after
+`@` is free; host, owner, repository and path are exact), a source
+repository of the prefix's owner, the derived source ref, and the
+declared `runnerEnvironment`. That last is compared exactly as the
+certificate writes it: the value is the forge's own vocabulary
+(GitHub's certificates say `github-hosted` for its hosted runners),
+so the policy names it and this engine holds no copy of it. It is
+looked up in the OWNER's attestation store, an organisation's
+or a user's, never in a repository read off the image path; that is
+why `registryPrefix` must end at the owner boundary. Four things fail
+closed, each its own finding: a pin with no digest, a pin with no
+tag, a tag no rule decodes, and an attestation that refuses.
+
+Two scopes may not declare one `registryPrefix`, of either kind: a
+prefix ends at the owner boundary, so two that overlap are equal, and
+a reference both claimed would have two judgments.
+
+**upstream** — beside the scopes, the official images a build may
+instantiate and the source each one's published provenance must name.
+An entry is an untagged `image`, a `tagPattern` anchored at both ends
+whose named groups read the pinned tag, the `source` repository URL
+the provenance's BuildKit config source must name, and a `path`
+template over those groups for the directory within it:
+
+```json
+"upstream": [
+  {
+    "image": "docker.io/library/postgres",
+    "tagPattern": "^(?P<major>[0-9]+)-(?P<suite>[a-z]+)$",
+    "source": "https://github.com/docker-library/postgres.git",
+    "path": "${major}/${suite}"
+  }
+]
+```
+
+It is a list beside the scopes and not a kind among them: a kind
+names a judgment the corpus walk computes, and the walk has no
+reference to enumerate here. The build instantiating the image hands
+it to `stele verify base` (below), which alone reads this list. Every
+platform of the pinned index must carry SLSA v0.2 provenance whose
+config source is `<source>#<revision>:<path>`; a platform with none,
+or one naming anything else, refuses the image, and so does an index
+that publishes none at all. That provenance is unsigned, so a section
+of upstream entries alone owes no `issuer` and no trusted root. An
+image is declared once, an image under a scope's `registryPrefix` is
+refused at load (one reference, one judgment), and a `path` naming a
+group its pattern does not capture is refused rather than expanded
+into a directory missing a segment.
+
 An org that approves no base images at all says so by omitting the
 whole section.
+
+### The build-time gate: `stele verify base`
+
+The corpus walk judges what the population's default branches pin,
+after the fact. `stele verify base` judges what ONE build is about to
+instantiate, before it does. The build names its references — which
+images a build uses is the build's to say, so stele parses no build
+file — each as a repeatable `--ref`, and each distinct reference is
+judged under the one declaration that claims it:
+
+- under a scope whose `registryPrefix` covers it, by that scope's own
+  judgment — the same definition the corpus walk applies;
+- of an `upstream` entry's image, by that entry;
+- otherwise it is named (`not judged: <ref>`) and counted nowhere. A
+  `pin-file` scope claims no reference here: its population is its
+  pin file, which only the walk reads.
+
+A build with no claimed reference — a `FROM scratch` build passes
+none — exits 0 and says there is no base to judge, sealing no
+verdict: PASS over no subject would be a pass nothing earned, and
+CANNOT_JUDGE would contradict the exit such a build is owed. With
+`--json` it writes no document at all; the report package encodes
+nothing it did not seal. With at least one claimed reference the
+report seals as every judging verb's does (`docs/report-schema.md`),
+the population is the claimed references, and a read the run could
+not make is CANNOT_JUDGE. Trust material is resolved only when a
+reference falls under a scope.
+
+`--bind <group>=<value>` holds the caller's own reading of one tag
+group (a pin file's row key, say) to what the entry's pattern reads,
+and `--facts-out <path>` writes the verified facts — the deduplicated
+sources, the sorted platforms and the provenance type — that an
+approval of the image signs, only on PASS. Both describe one official
+image, so either is refused unless exactly one reference is under an
+upstream entry.
 
 ## The blastRadius section
 

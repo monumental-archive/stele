@@ -144,9 +144,13 @@ func loadFullDepth(
 // storeHalvesDeclared reports whether this policy gives the walk a
 // cryptographic half at all. One predicate, read by the caller that
 // resolves the trusted root and by the builder that consumes it, so
-// the two cannot disagree about whether this run owes a root.
+// the two cannot disagree about whether this run owes a root. An
+// upstream entry is no half: only `stele verify base` reads it, and it
+// judges unsigned provenance.
 func storeHalvesDeclared(pol *assert.Policy) bool {
-	return pol.Evidence.Continuous != nil || pol.Evidence.BaseImages != nil
+	b := pol.Evidence.BaseImages
+
+	return pol.Evidence.Continuous != nil || b != nil && len(b.Scopes) > 0
 }
 
 // basePins are the --base-pins overrides: one committed file per

@@ -109,6 +109,25 @@ func (a trustAdapter) Attestation(bundleJSON []byte, id trust.Identity, sha256He
 	return v, nil
 }
 
+// AttestationFromWorkflow proves a DSSE bundle another run signed,
+// under a workflow identity: the path a published base is verified
+// on (stele#402), reached only through verify.WorkflowVerifier.
+func (a trustAdapter) AttestationFromWorkflow(
+	bundleJSON []byte, id *trust.WorkflowIdentity, sha256Hex string,
+) (*trust.Verified, error) {
+	b, err := trust.LoadBundle(bundleJSON)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: %w", err)
+	}
+
+	v, err := a.v.VerifyFromWorkflow(b, id, "sha256", sha256Hex)
+	if err != nil {
+		return nil, fmt.Errorf("attestation: %w", err)
+	}
+
+	return v, nil
+}
+
 // LoggedAt is the transparency log's observed instant of a verified
 // signing — trust.Verified's own reading, unrepeated.
 func (trustAdapter) LoggedAt(v *trust.Verified) (time.Time, error) { return v.LoggedAt() }
@@ -219,7 +238,7 @@ type verifyArgs struct {
 func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(stderr,
-			"stele verify: a mode is required: release, vsa, source-vsa, chain, repro or policy"); err != nil {
+			"stele verify: a mode is required: release, vsa, source-vsa, chain, repro, base or policy"); err != nil {
 			return exitIO
 		}
 
@@ -233,6 +252,12 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 		// store — its argument surface shares nothing with the three
 		// cryptographic modes, so it parses its own.
 		return verifyRepro(args[1:], stdout, stderr)
+	case modeBase:
+		// The base gate judges against the ASSERT policy's declared
+		// scopes and upstream entries, and resolves trust material only
+		// for a first-party reference: none of the inputs the three
+		// cryptographic modes below share.
+		return verifyBase(args[1:], stdout, stderr)
 	case modePolicy:
 		// The load-check is offline and answers about the document
 		// itself, so it holds none of the inputs the modes above judge
@@ -242,7 +267,7 @@ func verifyCmd(args []string, stdout, stderr io.Writer) int {
 	case modeRelease, modeVSA, modeSourceVSA, modeChain:
 	default:
 		if _, err := fmt.Fprintf(stderr,
-			"stele verify: unknown mode %q (release, vsa, source-vsa, chain, repro, policy)\n", mode); err != nil {
+			"stele verify: unknown mode %q (release, vsa, source-vsa, chain, repro, base, policy)\n", mode); err != nil {
 			return exitIO
 		}
 

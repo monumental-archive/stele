@@ -36,6 +36,23 @@ import (
 type Candidate struct {
 	Identity  string
 	SignerPin string
+	// Workflow, when set, makes this a published artifact's candidate
+	// instead (stele#402): the signer named by its workflow at any ref,
+	// with the source anchored in full — trust.WorkflowIdentity, which
+	// the attestor builds with its own issuer exactly as it completes
+	// an exact Identity. Identity and SignerPin are empty beside it.
+	Workflow *WorkflowCandidate
+}
+
+// WorkflowCandidate is the expectation for an artifact another run
+// published: its signing workflow (https://<host>/<owner>/<repo>/<path>,
+// no ref), the source repository's owner, the source ref it was built
+// at, and the runner environment it must have run in.
+type WorkflowCandidate struct {
+	Workflow string
+	Owner    string
+	Ref      string
+	Runner   string
 }
 
 // Attestor proves one artifact digest carries a verifying attestation
@@ -352,16 +369,16 @@ func (w *evidenceWalk) baseImagesInCheckout(pinFiles map[string][]byte) error {
 	return nil
 }
 
-// baseImagesInRepo runs the provenance-verified scopes against one
-// population repository. This mechanism's subjects live in the
-// population rather than in the policy-owning checkout — the caller's
-// build file is where its bases are named — so it rides the repo loop
-// the population already drives.
+// baseImagesInRepo runs the prefix scopes — provenance-verified and
+// shared-signer — against one population repository. Their subjects
+// live in the population rather than in the policy-owning checkout —
+// the caller's build file is where its bases are named — so they ride
+// the repo loop the population already drives.
 func (w *evidenceWalk) baseImagesInRepo(repo string) error {
 	scopes := w.baseScopes()
 	for i := range scopes {
-		if s := &scopes[i]; *s.Mechanism == MechanismProvenanceVerified {
-			if err := w.provenanceScope(s, repo); err != nil {
+		if s := &scopes[i]; *s.Mechanism == MechanismProvenanceVerified || *s.Mechanism == MechanismSharedSigner {
+			if err := w.prefixScope(s, repo); err != nil {
 				return err
 			}
 		}
@@ -427,12 +444,11 @@ func (w *evidenceWalk) pinFileScope(s *BaseImageScope, content []byte) error {
 	return nil
 }
 
-// provenanceScope proves every base under the scope's registry prefix
-// that this repository's build file instantiates carries provenance
-// from the identity its own pin implies. Nothing here is a literal:
-// the expected identity is expanded out of the reference, so the
-// identity demanded travels with the pin that names it.
-func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
+// prefixScope proves every base under the scope's registry prefix
+// that this repository's build file instantiates, by the scope's own
+// judgment (JudgeBase) — the one definition `stele verify base`
+// applies too.
+func (w *evidenceWalk) prefixScope(s *BaseImageScope, repo string) error {
 	content, ok, err := w.forge.FileAt(w.org, repo, *s.FromFile, defaultRef)
 	if err != nil {
 		return fmt.Errorf("assert: build file of %s: %w", repo, err)
@@ -442,19 +458,11 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 		return nil // this repo builds no image — an answer, not a gap
 	}
 
-	// Compiled here rather than assumed: policy load already refused
-	// an unparsable pattern, and a walk that PANICS on one instead of
-	// refusing would be the wrong failure at the wrong altitude.
-	re, err := regexp.Compile(*s.PinPattern)
-	if err != nil {
-		return fmt.Errorf("assert: base scope %s pinPattern: %w", *s.Name, err)
-	}
-
-	owner, assertion := publisherOwner(*s.RegistryPrefix), scopeAssertion(s)
+	assertion := scopeAssertion(s)
 
 	for _, m := range fromRefRE.FindAllSubmatch(content, -1) {
 		ref := string(m[1])
-		if !strings.HasPrefix(ref, *s.RegistryPrefix) {
+		if !s.Covers(ref) {
 			// Somebody else's base. Whose bases those are is another
 			// mechanism's question, so this scope reports nothing —
 			// an exclusion produces no finding, no count, no cell.
@@ -465,35 +473,8 @@ func (w *evidenceWalk) provenanceScope(s *BaseImageScope, repo string) error {
 
 		pin := w.check(ref, assertion)
 
-		idx := re.FindStringSubmatchIndex(ref)
-		if idx == nil {
-			// The identity is derived from the pin, so a pin the
-			// pattern cannot read leaves nothing to demand. Fail
-			// closed: an unreadable pin is not an approved one.
-			pin.Diverged("the pinned reference does not match this scope's pinPattern," +
-				" so the identity that should have published it cannot be derived")
-
-			continue
-		}
-
-		identity := string(re.ExpandString(nil, *s.Identity, ref, idx))
-		if identity == "" {
-			pin.Diverged("this scope's identity template expands to nothing for the pinned reference")
-
-			continue
-		}
-
-		if verr := w.attestor.Verify(
-			owner, publisherRepo(ref, *s.RegistryPrefix), refDigest(ref),
-			[]Candidate{{Identity: identity}}, *s.PredicateType,
-		); verr != nil {
-			if unseen(verr) {
-				return blind(assertion, ref, "provenance attestations", verr)
-			}
-
-			pin.Diverged(fmt.Sprintf(
-				"no %s attestation verifies for this base under %s: %v", *s.PredicateType, identity, verr,
-			))
+		if _, err := s.JudgeBase(ref, w.attestor, pin.Diverged); err != nil {
+			return err
 		}
 
 		w.log("assert: evidence: %s base %s checked", repo, ref)

@@ -96,6 +96,15 @@ type BundleVerifier interface {
 	LoggedAt(v *trust.Verified) (time.Time, error)
 }
 
+// WorkflowVerifier proves a DSSE bundle another run signed, under a
+// trust.WorkflowIdentity: the signer named by its workflow at any ref,
+// every other anchor exact (stele#402). Separate from BundleVerifier
+// so a caller proving what its own run signed — where the signer
+// commit is known and Identity pins it — cannot reach it by accident.
+type WorkflowVerifier interface {
+	AttestationFromWorkflow(bundleJSON []byte, id *trust.WorkflowIdentity, sha256Hex string) (*trust.Verified, error)
+}
+
 // serverURL is the host every GitHub Actions identity URI lives
 // under — part of the buildType's semantics, so code, not policy.
 const serverURL = "https://github.com"

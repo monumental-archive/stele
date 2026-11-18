@@ -156,6 +156,42 @@ func TestTrustAdapterRefusals(t *testing.T) {
 	}
 }
 
+// TestTrustAdapterWorkflow drives the published-artifact path the
+// adapter serves only through verify.WorkflowVerifier: bytes that are
+// not a bundle refuse at parse, and a real DSSE bundle someone else
+// signed refuses under a workflow identity it does not carry. The
+// accepting path runs end to end over the org's recorded attestation
+// (verify base's own rows) and in trust's synthesized world.
+func TestTrustAdapterWorkflow(t *testing.T) {
+	t.Parallel()
+
+	bv, err := newBundleVerifier(upstreamRoot(t, "public-good.json"))
+	if err != nil {
+		t.Fatalf("newBundleVerifier = %v", err)
+	}
+
+	wv, ok := bv.(verify.WorkflowVerifier)
+	if !ok {
+		t.Fatalf("the adapter %T does not serve the published-artifact path", bv)
+	}
+
+	id, err := trust.NewWorkflowIdentity("https://github.com/acme/signer/.github/workflows/sign.yml",
+		"https://token.actions.githubusercontent.com", "acme", "refs/heads/main", "github-hosted")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := wv.AttestationFromWorkflow([]byte("not a bundle"), &id, othernameDigest); err == nil ||
+		!strings.Contains(err.Error(), "attestation: trust:") {
+		t.Errorf("AttestationFromWorkflow(junk) = %v, want the parse refusal", err)
+	}
+
+	if _, err := wv.AttestationFromWorkflow(upstreamBundle(t, "dsse.sigstore.json"), &id,
+		othernameDigest); err == nil || !strings.Contains(err.Error(), "attestation: trust:") {
+		t.Errorf("AttestationFromWorkflow(someone else's bundle) = %v, want the refusal", err)
+	}
+}
+
 // TestTrustAdapterMeasures is the measurement path over the same real
 // material the gating path uses, and the difference between them is
 // the whole point: Blob is TOLD an identity and checks the bundle
