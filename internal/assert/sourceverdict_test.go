@@ -235,3 +235,66 @@ func TestEvidenceSourceVerdictBlind(t *testing.T) {
 		})
 	}
 }
+
+// TestSourceVerdictOwed is the one predicate's table (stele#468): every
+// arm, with the reason a refusal carries. The machinery version is the
+// release machinery's, never the tag's — the last row is a 0.x tag on
+// machinery past the epoch, which owes.
+func TestSourceVerdictOwed(t *testing.T) {
+	t.Parallel()
+
+	signing := sourcePolicy(t, "1.70.0")
+	noEpoch, err := assert.LoadPolicy(strings.NewReader(testPolicyJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := assert.LoadPolicy(strings.NewReader(sourcePolicyJSON("1.70.0", `{"widget": "pending"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		pol       *assert.Policy
+		tag       string
+		machinery string
+		owed      bool
+		why       string
+	}{
+		{
+			"no epoch declared", noEpoch, "v1.0.0", "9.9.9", false,
+			"the assert policy declares no evidence.sourceVerdictFromVersion",
+		},
+		{
+			"machinery before the epoch", signing, "v1.0.0", "1.69.9", false,
+			"machinery 1.69.9 predates evidence.sourceVerdictFromVersion 1.70.0",
+		},
+		{
+			"a repository declared unsigned", pending, "v1.0.0", "1.70.0", false,
+			"the tags section owes no signature on widget@v1.0.0",
+		},
+		{"at the epoch on a signed tag", signing, "v1.0.0", "1.70.0", true, ""},
+		{"a 0.x tag on machinery past the epoch", signing, "v0.2.0", "1.71.0", true, ""},
+		{"an unparsable machinery version fails toward the obligation", signing, "v1.0.0", "main", true, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			owed, why := assert.SourceVerdictOwed(tt.pol.Evidence, tt.pol.Tags, "widget", tt.tag, tt.machinery)
+			if owed != tt.owed || why != tt.why {
+				t.Fatalf("SourceVerdictOwed = %v %q, want %v %q", owed, why, tt.owed, tt.why)
+			}
+		})
+	}
+
+	// A policy owing nothing because it declares no tags section is
+	// refused at load (the epoch needs the tag obligation), so the arm
+	// is reached only by passing no tags section at all.
+	if owed, why := assert.SourceVerdictOwed(signing.Evidence, nil, "widget", "v1.0.0", "1.70.0"); owed ||
+		why != "the assert policy declares no tags section" {
+		t.Fatalf("SourceVerdictOwed without tags = %v %q", owed, why)
+	}
+}

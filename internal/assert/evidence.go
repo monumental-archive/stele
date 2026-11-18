@@ -176,14 +176,12 @@ func (w *evidenceWalk) release(repo, tag string) error {
 // a verdict, so a repository declared unsigned, or a tag before its
 // repository's signing epoch, owes none.
 func (w *evidenceWalk) sourceVerdictPresent(repo, tag string, contract *Contract, have map[string]bool) bool {
-	if !contract.SourceVerdict {
-		return false
-	}
-
 	subject := repo + "@" + tag
 
-	if w.tags == nil || !w.tags.SignsTag(repo, tag) {
-		w.log("assert: evidence: %s owes no source verdict — the tags section owes no signature on it", subject)
+	if owed, why := SourceVerdictOwed(w.pol, w.tags, repo, tag, contract.MachineryVersion); !owed {
+		if w.pol.SourceVerdictFromVersion != nil {
+			w.log("assert: evidence: %s owes no source verdict — %s", subject, why)
+		}
 
 		return false
 	}

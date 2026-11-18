@@ -39,11 +39,6 @@ type Contract struct {
 	// claim — same epoch semantics as Decision (stele#109). Carried on
 	// the contract for the deep walk's verify leg (#86) to consume.
 	Enrichment bool
-	// SourceVerdict reports whether the release owes a source verdict
-	// for its tag (stele#391), by the machinery version alone; whether
-	// the tag's repository signs that tag at all is the tags section's
-	// answer, joined in the walk.
-	SourceVerdict bool
 	// MachineryVersion is the version every epoch above was judged
 	// against, carried so obligations that live per-class rather than
 	// top-level (assetPrefixes' owedFrom, stele#128) can be judged
@@ -436,7 +431,6 @@ func (m ManifestSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		StoreVSA:         *doc.StoreVSA,
 		Decision:         m.Policy.decision(*doc.MachineryVersion),
 		Enrichment:       m.Policy.enrichment(*doc.MachineryVersion),
-		SourceVerdict:    m.Policy.sourceVerdict(*doc.MachineryVersion),
 		MachineryVersion: *doc.MachineryVersion,
 		Attributed:       attributed,
 		ArtifactClasses:  artifactClasses,
@@ -536,7 +530,6 @@ func (w WorkflowSource) Contract(owner, repo, tag string) (*Contract, bool, erro
 		StoreVSA:         w.Policy.storeVSA(machineryVersion),
 		Decision:         w.Policy.decision(machineryVersion),
 		Enrichment:       w.Policy.enrichment(machineryVersion),
-		SourceVerdict:    w.Policy.sourceVerdict(machineryVersion),
 		MachineryVersion: machineryVersion,
 		Origin:           "publish workflow at " + tag,
 	}, true, nil

@@ -35,6 +35,7 @@ const (
 	emitChain       = "chain"
 	emitChainAppend = "chain-append"
 	emitVSA         = "vsa"
+	emitSourceVSA   = "source-vsa"
 )
 
 // ownerRW is the mode for files this process stages for itself.
@@ -171,13 +172,15 @@ type emitArgs struct {
 	out         string
 	vsaIn       vsaInputs
 
-	// vsa: the source verdict (stele#391), owed when the assert
-	// policy declares it
-	assertPolicy string
-	sourceOut    string
-	tags         *assert.TagsPolicy
-	issuer       string
-	rootJSON     []byte
+	// vsa and source-vsa: the source verdict (stele#391, stele#468),
+	// owed when the assert policy declares it
+	assertPolicy     string
+	machineryVersion string
+	sourceVerdictIn  string
+	sourceEnvelope   []byte
+	tags             *assert.TagsPolicy
+	issuer           string
+	rootJSON         []byte
 
 	p             *policy.Policy
 	coords        verify.Coords
@@ -191,7 +194,7 @@ type emitArgs struct {
 // emitCmd dispatches `stele emit <mode>`.
 func emitCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		const modes = "chain, chain-append, vsa, manifest, enrichment or decision"
+		const modes = "chain, chain-append, vsa, source-vsa, manifest, enrichment or decision"
 		if _, err := fmt.Fprintln(stderr, "stele emit: a mode is required: "+modes); err != nil {
 			return exitIO
 		}
@@ -201,7 +204,7 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 
 	mode := args[0]
 	switch mode {
-	case emitChain, emitChainAppend, emitVSA:
+	case emitChain, emitChainAppend, emitVSA, emitSourceVSA:
 	case emitManifest:
 		// Its own path: it shares none of the chain/vsa flag surface.
 		return emitManifestCmd(args[1:], stdout, stderr)
@@ -212,7 +215,7 @@ func emitCmd(args []string, stdout, stderr io.Writer) int {
 		// Its own path too: a decision needs no root, repository or pin.
 		return emitDecisionCmd(args[1:], stdout, stderr)
 	default:
-		const modes = "chain, chain-append, vsa, manifest, enrichment, decision"
+		const modes = "chain, chain-append, vsa, source-vsa, manifest, enrichment, decision"
 		if _, err := fmt.Fprintf(stderr, "stele emit: unknown mode %q (%s)\n", mode, modes); err != nil {
 			return exitIO
 		}
@@ -292,6 +295,8 @@ func parseEmitArgs(mode string, args []string, stderr io.Writer) (*emitArgs, int
 		fs.StringVar(&ea.out, "out", "", "write the predicate here instead of stdout")
 		registerSourceVerdictFlags(fs, ea)
 		ea.vsaIn.register(fs)
+	case emitSourceVSA:
+		registerEmitSourceVSAFlags(fs, ea)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -354,6 +359,8 @@ func (ea *emitArgs) load(stderr io.Writer) int {
 		return ea.loadChain(fail)
 	case emitChainAppend:
 		return ea.loadChainAppend(fail)
+	case emitSourceVSA:
+		return ea.loadSourceVSA(fail)
 	default:
 		return ea.loadVSA(fail)
 	}
@@ -500,6 +507,8 @@ func runEmit(ea *emitArgs, out *latch) error {
 		return runEmitChain(ea, out)
 	case emitChainAppend:
 		return runEmitChainAppend(ea, out)
+	case emitSourceVSA:
+		return runEmitSourceVSA(ea, out)
 	default:
 		if err := ea.vsaIn.resolve(ea, out.logf); err != nil {
 			return err
@@ -666,12 +675,10 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 		return err
 	}
 
-	source, err := ea.emitSourceVerdict(verdict.SourceRevision(), when, out)
-	if err != nil {
-		return err
-	}
-
-	if err := writeSourceVerdict(ea.sourceOut, source); err != nil {
+	// The published source verdict, where one is owed, must bind the
+	// commit this release was built from — checked before the predicate
+	// is written, so a mismatch leaves nothing behind.
+	if err := ea.checkPublishedSourceVerdict(verdict.SourceRevision(), out); err != nil {
 		return err
 	}
 
@@ -682,10 +689,6 @@ func runEmitVSA(ea *emitArgs, out *latch) error {
 	}
 
 	if err := os.WriteFile(ea.out, append(pred, '\n'), ownerRW); err != nil {
-		if source != nil {
-			_ = os.Remove(ea.sourceOut) //nolint:errcheck // best effort: the refusal below is the report
-		}
-
 		return fmt.Errorf("emit: writing the predicate: %w", err)
 	}
 

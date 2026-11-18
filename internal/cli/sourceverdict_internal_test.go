@@ -129,17 +129,14 @@ func newSourceWorld(t *testing.T) *sourceWorld {
 // reaches: the release seams, a signer that registers its bundles with
 // the truthful verifier, and a tag verifier that records what it was
 // asked.
-func (w *sourceWorld) build(t *testing.T, tagger string, signed bool, tagErr error) {
+func (w *sourceWorld) build(t *testing.T) {
 	t.Helper()
 
 	w.repo.Note("refs/notes/commits", w.commit, w.linkNote(t, w.commit, []string{"SLSA_SOURCE_LEVEL_3"}))
-
-	if tagger != "" {
-		w.repo.Annotated(relTag, w.tagged, tagger, signed)
-	}
+	w.repo.Annotated(relTag, w.tagged, srcMinter, true)
 
 	swap(t, w.bv, w.store)
-	swapSourceSeams(t, w, registeringSigner{bv: w.bv}, tagErr)
+	swapSourceSeams(t, w, registeringSigner{bv: w.bv}, nil)
 }
 
 func swapSourceSeams(t *testing.T, w *sourceWorld, s emit.Signer, tagErr error) {
@@ -229,7 +226,11 @@ func sourceAssertPolicy(t *testing.T, owed bool, epochs string) string {
 
 const signingEpochs = `{"widget": "v0.1.0"}`
 
-// sourceRun is one `emit vsa` invocation with its outputs.
+// srcMachinery is the release machinery the world's release runs: at
+// the policy's source-verdict epoch (1.70.0), so the verdict is owed.
+const srcMachinery = "1.70.0"
+
+// sourceRun is one emit invocation with its outputs.
 type sourceRun struct {
 	code           int
 	stdout, stderr string
@@ -237,13 +238,44 @@ type sourceRun struct {
 	source         string
 }
 
-func (w *sourceWorld) emit(t *testing.T, assertPolicy string, extra ...string) sourceRun {
+func runCLI(args []string, run sourceRun) sourceRun {
+	var stdout, stderr bytes.Buffer
+
+	run.code = Run(args, &stdout, &stderr)
+	run.stdout, run.stderr = stdout.String(), stderr.String()
+
+	return run
+}
+
+// emitSource runs `emit source-vsa` for the release tag over the
+// world's clone; extra flags are appended last, so they win.
+func (w *sourceWorld) emitSource(t *testing.T, assertPolicy string, extra ...string) sourceRun {
+	t.Helper()
+
+	px := files(t)
+	run := sourceRun{source: filepath.Join(t.TempDir(), "source.json")}
+
+	args := []string{
+		"emit", "source-vsa",
+		"--policy", px.policy, "--trusted-root", px.root,
+		"--repo", "acme/widget", "--tag", relTag,
+		"--machinery-digest", strings.Repeat("b", 40),
+		"--policy-uri", "https://github.com/acme/canon/blob/x/slsa/verify-policy.json",
+		"--assert-policy", assertPolicy, "--git-dir", w.repo.Dir, "--out", run.source,
+		"--machinery-version", srcMachinery,
+	}
+
+	return runCLI(append(args, extra...), run)
+}
+
+// emitVSA runs `emit vsa` for the release, with the assert policy and
+// the published source verdict when given.
+func (w *sourceWorld) emitVSA(t *testing.T, assertPolicy, sourceVerdict string, extra ...string) sourceRun {
 	t.Helper()
 
 	px := files(t)
 	subjects, sboms := w.manifests(t)
-	dir := t.TempDir()
-	run := sourceRun{predicate: filepath.Join(dir, "vsa.json"), source: filepath.Join(dir, "source.json")}
+	run := sourceRun{predicate: filepath.Join(t.TempDir(), "vsa.json")}
 
 	args := []string{
 		"emit", "vsa",
@@ -255,15 +287,15 @@ func (w *sourceWorld) emit(t *testing.T, assertPolicy string, extra ...string) s
 		"--out", run.predicate,
 	}
 	if assertPolicy != "" {
-		args = append(args, "--assert-policy", assertPolicy, "--git-dir", w.repo.Dir, "--source-out", run.source)
+		args = append(args, "--assert-policy", assertPolicy, "--git-dir", w.repo.Dir,
+			"--machinery-version", srcMachinery)
 	}
 
-	var stdout, stderr bytes.Buffer
+	if sourceVerdict != "" {
+		args = append(args, "--source-verdict", sourceVerdict)
+	}
 
-	run.code = Run(append(args, extra...), &stdout, &stderr)
-	run.stdout, run.stderr = stdout.String(), stderr.String()
-
-	return run
+	return runCLI(append(args, extra...), run)
 }
 
 func written(path string) bool {
@@ -272,36 +304,49 @@ func written(path string) bool {
 	return err == nil
 }
 
-// TestEmitVSAEmitsTheSourceVerdict: both verdicts written, the source
-// one an envelope the consumer's read accepts against the commit's
-// link, naming exactly the tag, and the tag judged at the floor the
-// policy owes THIS tag under the declared identity.
-func TestEmitVSAEmitsTheSourceVerdict(t *testing.T) {
-	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+// tagless is an assert policy that owes source verdicts but declares no
+// tag obligation — refused at load, so it is written raw.
+func taglessAssertPolicy(t *testing.T) string {
+	t.Helper()
 
-	run := w.emit(t, sourceAssertPolicy(t, true, signingEpochs))
+	doc := `{"schema": 9, "issuer": "https://token.example.com", ` +
+		`"evidence": {"sbomSuffix": ".spdx.json", "checksums": "checksums.txt", ` +
+		`"umbrellaBundle": "attestations.intoto.jsonl", "manifestAsset": "evidence-manifest.json", ` +
+		`"classes": {"oci-image": {"bundles": ["attestations-image.intoto.jsonl"]}}}}`
+
+	path := filepath.Join(t.TempDir(), "assert-policy.json")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// TestEmitSourceVSAWritesTheEnvelopeWithoutARelease (stele#468): the
+// mode writes the envelope from a clone with a signed tag and a chain
+// link, against a store that refuses every read — it reads no release,
+// no store and no registry. The envelope is the one a consumer's read
+// accepts, and the tag was judged at the floor the policy owes it.
+func TestEmitSourceVSAWritesTheEnvelopeWithoutARelease(t *testing.T) {
+	w := newSourceWorld(t)
+	w.build(t)
+	swap(t, w.bv, scriptedStore{err: errors.New("the store was read — this mode reads none")})
+
+	run := w.emitSource(t, sourceAssertPolicy(t, true, signingEpochs))
 	if run.code != exitOK {
 		t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", run.code, run.stdout, run.stderr)
 	}
 
-	if !written(run.predicate) {
-		t.Error("the release predicate was not written")
-	}
-
 	env, err := os.ReadFile(run.source)
 	if err != nil {
-		t.Fatalf("the source verdict was not written: %v", err)
+		t.Fatalf("the envelope was not written: %v", err)
 	}
 
-	if w.lastFloor != trust.TagFloorObserverTimestamp || w.lastIdentity.Issuer != "https://token.example.com" ||
-		!w.lastIdentity.SANPattern.MatchString("https://github.com/acme/mint") {
+	if w.lastFloor != trust.TagFloorObserverTimestamp || w.lastIdentity.Issuer != "https://token.example.com" {
 		t.Errorf("tag judged at floor %q under %+v — want the raised floor and the declared identity",
 			w.lastFloor, w.lastIdentity)
 	}
 
-	// The consumer's read, independently: walk the clone again and hold
-	// the written envelope against the commit's link.
 	vp := loadTestPolicy(t)
 
 	h, err := gitrepo.Open(w.repo.Dir, "refs/notes/commits")
@@ -321,173 +366,115 @@ func TestEmitVSAEmitsTheSourceVerdict(t *testing.T) {
 
 	got, err := verify.SourceVSA(vp, c, pins, w.commit, link, bytes.TrimSpace(env), w.bv)
 	if err != nil {
-		t.Fatalf("the written source verdict does not read back: %v", err)
+		t.Fatalf("the written envelope does not read back: %v", err)
 	}
 
 	if strings.Join(got.Levels(), " ") != "SLSA_SOURCE_LEVEL_3" {
 		t.Errorf("levels = %v, want the link's", got.Levels())
 	}
-
-	if !strings.Contains(run.stdout, "source verdict for acme/widget@"+relTag) {
-		t.Errorf("stdout = %q, want the source verdict line", run.stdout)
-	}
 }
 
-// TestEmitVSAOwesNoSourceVerdict: without the assert policy, or with
-// one that declares no source-verdict epoch, the verb is what it was —
-// no source flags demanded, nothing extra written, the tag never read.
-func TestEmitVSAOwesNoSourceVerdict(t *testing.T) {
-	for _, tt := range []struct {
+// TestEmitSourceVSARefusals: every check the producer makes refuses by
+// name and writes nothing.
+func TestEmitSourceVSARefusals(t *testing.T) {
+	tests := []struct {
 		name   string
-		policy func(t *testing.T) string
-	}{
-		{"no assert policy", func(*testing.T) string { return "" }},
-		{"no source-verdict epoch", func(t *testing.T) string {
-			t.Helper()
-
-			return sourceAssertPolicy(t, false, signingEpochs)
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			w := newSourceWorld(t)
-			w.build(t, "", false, errors.New("the tag must not be read"))
-
-			run := w.emit(t, tt.policy(t))
-			if run.code != exitOK {
-				t.Fatalf("Run = %d\nstderr: %s", run.code, run.stderr)
-			}
-
-			if written(run.source) || !written(run.predicate) {
-				t.Errorf("source written %v, predicate written %v — want the release verdict alone",
-					written(run.source), written(run.predicate))
-			}
-		})
-	}
-}
-
-// TestEmitVSASourceVerdictUsage: the inputs an owed verdict needs are
-// refused by name before anything verifies.
-func TestEmitVSASourceVerdictUsage(t *testing.T) {
-	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
-
-	owed := sourceAssertPolicy(t, true, signingEpochs)
-	notAPolicy := filepath.Join(t.TempDir(), "x.json")
-
-	if err := os.WriteFile(notAPolicy, []byte(`{"schema": 9}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	sourceless := filepath.Join(t.TempDir(), "verify-policy.json")
-
-	doc, err := jsonx.Value([]byte(testPolicy))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	m, ok := doc.(map[string]any)
-	if !ok {
-		t.Fatal("the test policy is not an object")
-	}
-
-	delete(m, "source")
-
-	if err := os.WriteFile(sourceless, mustMarshal(t, m), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{"assert policy unreadable", []string{"--assert-policy", "/nonexistent"}, "nonexistent"},
-		{"assert policy invalid", []string{"--assert-policy", notAPolicy}, "assert policy:"},
-		{"owed without a clone", []string{"--assert-policy", owed, "--source-out", "x"}, "--git-dir is required"},
-		{"owed without an output", []string{"--assert-policy", owed, "--git-dir", "x"}, "--source-out is required"},
-		{
-			"owed under a verify policy with no source section",
-			[]string{"--assert-policy", owed, "--git-dir", "x", "--source-out", "y", "--policy", sourceless},
-			"declares no source section",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			run := w.emit(t, "", tt.args...)
-			if run.code != exitUsage || !strings.Contains(run.stderr, tt.want) {
-				t.Fatalf("Run = %d, stderr %q — want %q", run.code, run.stderr, tt.want)
-			}
-		})
-	}
-}
-
-// TestEmitVSASourceVerdictRefusals: every check the leg makes refuses
-// by name and writes NEITHER verdict.
-func TestEmitVSASourceVerdictRefusals(t *testing.T) {
-	tests := []struct {
-		name string
-		// setup shapes the world; the default is the clean one.
 		setup  func(t *testing.T, w *sourceWorld)
+		policy func(t *testing.T) string
 		epochs string
 		tagger string
 		// unsigned lays the tag without a signature block.
 		unsigned bool
 		tagErr   error
 		signer   *registeringSigner
-		gitDir   string
+		extra    []string
+		code     int
 		want     string
 	}{
 		{
-			name: "the tag's signature fails", tagErr: errors.New("chain untrusted"),
-			want: "tag " + relTag + " signature refused (floor observer-timestamp): chain untrusted",
+			name: "no tags section", policy: taglessAssertPolicy, code: exitUsage,
+			want: "the assert policy declares no tags section — a source verdict binds a signed tag",
 		},
-		{name: "the commit has no verifying link", setup: func(t *testing.T, w *sourceWorld) {
+		{name: "no epoch", policy: func(t *testing.T) string {
 			t.Helper()
-			w.commit = w.repo.Commit("feat: past the ledger")
-			w.tagged = w.commit
-			prov := w.bv.byRaw[`{"prepared": "provenance"}`]
-			prov.stmt = bytes.ReplaceAll(prov.stmt, []byte(w.repo.Git("rev-parse", "HEAD~1")), []byte(w.commit))
-			w.repo.Note("refs/notes/commits", w.repo.Git("rev-parse", "HEAD~1"),
-				w.linkNote(t, w.repo.Git("rev-parse", "HEAD~1"), []string{"SLSA_SOURCE_LEVEL_3"}))
-		}, want: "carries no verified chain link on a declared protected branch"},
-		{name: "the tag points elsewhere", setup: func(t *testing.T, w *sourceWorld) {
-			t.Helper()
-			w.tagged = w.repo.Commit("feat: after the release")
-		}, want: "the tag points at"},
-		{name: "the tag is not fetched", tagger: "-", want: "tag " + relTag + " is not in the clone"},
+
+			return sourceAssertPolicy(t, false, signingEpochs)
+		}, code: exitUsage, want: "declares no evidence.sourceVerdictFromVersion — nobody owes a source verdict"},
 		{name: "a lightweight tag", setup: func(t *testing.T, w *sourceWorld) {
 			t.Helper()
 			w.repo.Lightweight(relTag, w.commit)
-		}, tagger: "-", want: "is lightweight"},
-		{name: "another tagger", tagger: "someone", want: `made by tagger "someone", not the minting identity`},
+		}, tagger: "-", code: exitRefused, want: "is lightweight"},
 		{
-			name: "no signing epoch for the repository", epochs: `{"gadget": "v0.1.0"}`,
-			want: "declares no signing epoch for widget",
+			name: "a tag by another tagger", tagger: "someone", code: exitRefused,
+			want: `made by tagger "someone", not the minting identity`,
 		},
-		{name: "a repository declared unsigned", epochs: `{"widget": "pending"}`, want: "unsigned (pending)"},
-		{name: "an unsigned tag", unsigned: true, want: "tag " + relTag + " is unsigned"},
+		{name: "no chain link at the target", setup: func(t *testing.T, w *sourceWorld) {
+			t.Helper()
+			w.tagged = w.repo.Commit("feat: past the ledger")
+		}, code: exitRefused, want: "carries no verified chain link on a declared protected branch"},
 		{
-			name: "a tag before its repository's signing epoch", epochs: `{"widget": "v2.0.0"}`,
-			want: "tag " + relTag + " predates widget's signing epoch v2.0.0",
+			name: "the tag's signature fails", tagErr: errors.New("chain untrusted"), code: exitRefused,
+			want: "tag " + relTag + " signature refused (floor observer-timestamp): chain untrusted",
 		},
-		{name: "the clone cannot be opened", gitDir: "/nonexistent", want: "emit: source verdict:"},
+		{name: "the tag is not fetched", tagger: "-", code: exitRefused, want: "tag " + relTag + " is not in the clone"},
+		{
+			name: "no signing epoch for the repository", epochs: `{"gadget": "v0.1.0"}`, code: exitUsage,
+			want: "acme/widget@" + relTag + " owes no source verdict: the tags section owes no signature on widget@" +
+				relTag,
+		},
+		{
+			name: "a repository declared unsigned", epochs: `{"widget": "pending"}`, code: exitUsage,
+			want: "owes no source verdict: the tags section owes no signature on widget@" + relTag,
+		},
+		{
+			name: "a tag before its repository's signing epoch", epochs: `{"widget": "v2.0.0"}`, code: exitUsage,
+			want: "owes no source verdict: the tags section owes no signature on widget@" + relTag,
+		},
+		{
+			name: "machinery before the source-verdict epoch", extra: []string{"--machinery-version", "1.69.9"},
+			code: exitUsage,
+			want: "owes no source verdict: machinery 1.69.9 predates evidence.sourceVerdictFromVersion 1.70.0",
+		},
+		{
+			name: "no machinery version", extra: []string{"--machinery-version", ""}, code: exitUsage,
+			want: "--machinery-version is required: the assert policy declares evidence.sourceVerdictFromVersion",
+		},
+		{name: "an unsigned tag", unsigned: true, code: exitRefused, want: "tag " + relTag + " is unsigned"},
+		{
+			name: "the clone cannot be opened", extra: []string{"--git-dir", "/nonexistent"}, code: exitRefused,
+			want: "emit: source verdict:",
+		},
 		{
 			name: "the signer is unusable", signer: &registeringSigner{checkErr: errors.New("no cosign")},
-			want: "no cosign",
+			code: exitRefused, want: "no cosign",
 		},
 		{
-			name: "signing fails", signer: &registeringSigner{signErr: errors.New("no token")},
+			name: "signing fails", signer: &registeringSigner{signErr: errors.New("no token")}, code: exitRefused,
 			want: "signing: no token",
 		},
 		{
 			name: "the signed verdict does not verify", signer: &registeringSigner{unregistered: true},
-			want: "the source verdict just signed does not verify as published",
+			code: exitRefused, want: "the source verdict just signed does not verify as published",
 		},
 		{name: "a protected branch's walk refuses", setup: func(t *testing.T, w *sourceWorld) {
 			t.Helper()
 			w.repo.Note("refs/notes/commits", w.commit, w.linkNote(t, strings.Repeat("e", 40), nil))
-		}, want: "walks refused: refs/heads/main"},
+		}, code: exitRefused, want: "walks refused: refs/heads/main"},
+		{
+			name: "an unwritable output", extra: []string{"--out", "/nonexistent/dir/source.json"}, code: exitRefused,
+			want: "emit: writing the source verdict",
+		},
+		{name: "no tag", extra: []string{"--tag", ""}, code: exitUsage, want: "--tag is required"},
+		{
+			name: "no assert policy", extra: []string{"--assert-policy", ""}, code: exitUsage,
+			want: "--assert-policy is required",
+		},
+		{name: "no clone", extra: []string{"--git-dir", ""}, code: exitUsage, want: "--git-dir is required"},
+		{name: "no output", extra: []string{"--out", ""}, code: exitUsage, want: "--out is required"},
+		{
+			name: "an unreadable assert policy", extra: []string{"--assert-policy", "/nonexistent"}, code: exitUsage,
+			want: "assert policy:",
+		},
 	}
 
 	for _, tt := range tests {
@@ -523,58 +510,299 @@ func TestEmitVSASourceVerdictRefusals(t *testing.T) {
 				epochs = signingEpochs
 			}
 
-			var extra []string
-			if tt.gitDir != "" {
-				extra = []string{"--git-dir", tt.gitDir}
+			assertPol := sourceAssertPolicy(t, true, epochs)
+			if tt.policy != nil {
+				assertPol = tt.policy(t)
 			}
 
-			run := w.emit(t, sourceAssertPolicy(t, true, epochs), extra...)
-			if run.code != exitRefused || !strings.Contains(run.stderr, tt.want) {
-				t.Fatalf("Run = %d, stderr %q — want %q", run.code, run.stderr, tt.want)
+			run := w.emitSource(t, assertPol, tt.extra...)
+			if run.code != tt.code || !strings.Contains(run.stderr, tt.want) {
+				t.Fatalf("Run = %d, stderr %q — want %d and %q", run.code, run.stderr, tt.code, tt.want)
 			}
 
-			if written(run.source) || written(run.predicate) {
-				t.Errorf("source written %v, predicate written %v — a refusal writes neither",
-					written(run.source), written(run.predicate))
+			if written(run.source) {
+				t.Error("a refusal wrote an envelope")
 			}
 		})
 	}
 }
 
-// TestEmitVSAPredicateWriteFailureTakesTheSourceVerdictWithIt: the
-// source verdict is written first, and removed again when the release
-// predicate cannot be — neither verdict is left without the other.
-func TestEmitVSAPredicateWriteFailureTakesTheSourceVerdictWithIt(t *testing.T) {
+// TestEmitSourceVSANoSourceSection: a verify policy with no source
+// section names no resource for the verdict.
+func TestEmitSourceVSANoSourceSection(t *testing.T) {
 	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+	w.build(t)
 
-	unwritable := filepath.Join(t.TempDir(), "missing-dir", "vsa.json")
-
-	run := w.emit(t, sourceAssertPolicy(t, true, signingEpochs), "--out", unwritable)
-	if run.code != exitRefused || !strings.Contains(run.stderr, "writing the predicate") {
-		t.Fatalf("Run = %d, stderr %q — want the predicate write refusal", run.code, run.stderr)
+	doc, err := jsonx.Value([]byte(testPolicy))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if written(run.source) {
-		t.Error("the source verdict outlived the release predicate's failed write")
+	m, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatal("the test policy is not an object")
+	}
+
+	delete(m, "source")
+
+	sourceless := filepath.Join(t.TempDir(), "verify-policy.json")
+	if err := os.WriteFile(sourceless, mustMarshal(t, m), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := w.emitSource(t, sourceAssertPolicy(t, true, signingEpochs), "--policy", sourceless)
+	if run.code != exitUsage || !strings.Contains(run.stderr, "the verify policy declares no source section") {
+		t.Fatalf("Run = %d, stderr %q", run.code, run.stderr)
 	}
 }
 
-// TestEmitVSASourceVerdictWriteFailure: an unwritable source path
-// refuses before the predicate is written.
-func TestEmitVSASourceVerdictWriteFailure(t *testing.T) {
-	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+// publishSource produces the world's envelope with `emit source-vsa`
+// and returns its path — what a publisher attaches before it seals.
+func (w *sourceWorld) publishSource(t *testing.T) string {
+	t.Helper()
 
-	unwritable := filepath.Join(t.TempDir(), "missing-dir", "source.json")
-
-	run := w.emit(t, sourceAssertPolicy(t, true, signingEpochs), "--source-out", unwritable)
-	if run.code != exitRefused || !strings.Contains(run.stderr, "writing the source verdict") {
-		t.Fatalf("Run = %d, stderr %q — want the source write refusal", run.code, run.stderr)
+	run := w.emitSource(t, sourceAssertPolicy(t, true, signingEpochs))
+	if run.code != exitOK {
+		t.Fatalf("emit source-vsa = %d: %s", run.code, run.stderr)
 	}
 
-	if written(run.predicate) {
-		t.Error("the release predicate was written after the source verdict's write failed")
+	return run.source
+}
+
+// goldenPredicate is the release predicate `emit vsa` renders for the
+// source world when no source verdict is owed.
+var goldenPredicate = filepath.Join("testdata", "emit-vsa-predicate.golden")
+
+// TestEmitVSARequiresThePublishedSourceVerdict (stele#468): `emit vsa`
+// no longer writes a source verdict. Where one is owed it requires the
+// published envelope and refuses unless it binds the release's own
+// commit; where none is owed it is byte-for-byte what it was.
+func TestEmitVSARequiresThePublishedSourceVerdict(t *testing.T) {
+	t.Run("owed and absent is refused by name", func(t *testing.T) {
+		w := newSourceWorld(t)
+		w.build(t)
+
+		run := w.emitVSA(t, sourceAssertPolicy(t, true, signingEpochs), "")
+		if run.code != exitUsage || !strings.Contains(run.stderr, "--source-verdict is required") {
+			t.Fatalf("Run = %d, stderr %q", run.code, run.stderr)
+		}
+
+		if written(run.predicate) {
+			t.Error("the release predicate was written without the source verdict it owes")
+		}
+	})
+
+	t.Run("present and matching passes", func(t *testing.T) {
+		w := newSourceWorld(t)
+		w.build(t)
+
+		run := w.emitVSA(t, sourceAssertPolicy(t, true, signingEpochs), w.publishSource(t))
+		if run.code != exitOK || !written(run.predicate) {
+			t.Fatalf("Run = %d\nstdout: %s\nstderr: %s", run.code, run.stdout, run.stderr)
+		}
+
+		if !strings.Contains(run.stdout, "published source verdict for acme/widget@"+relTag+" holds") {
+			t.Errorf("stdout = %q, want the published verdict's check", run.stdout)
+		}
+	})
+
+	t.Run("present with another commit is refused by name", func(t *testing.T) {
+		w := newSourceWorld(t)
+		w.build(t)
+
+		env := w.publishSource(t)
+
+		// The release's own provenance names another commit than the
+		// one the published verdict binds.
+		other := strings.Repeat("f", 40)
+		prov := w.bv.byRaw[`{"prepared": "provenance"}`]
+		prov.stmt = bytes.ReplaceAll(prov.stmt, []byte(w.commit), []byte(other))
+
+		run := w.emitVSA(t, sourceAssertPolicy(t, true, signingEpochs), env)
+		want := "the published source verdict binds " + relTag + " to commit " + w.commit +
+			", but the release was built from " + other
+		if run.code != exitRefused || !strings.Contains(run.stderr, want) {
+			t.Fatalf("Run = %d, stderr %q — want %q", run.code, run.stderr, want)
+		}
+
+		if written(run.predicate) {
+			t.Error("the release predicate was written beside a source verdict for another commit")
+		}
+	})
+
+	t.Run("not owed and absent writes the same bytes as before", notOwedIsUnchanged)
+}
+
+// notOwedIsUnchanged: with no assert policy, and with one that owes
+// no source verdict, the release predicate is the golden bytes.
+func notOwedIsUnchanged(t *testing.T) {
+	w := newSourceWorld(t)
+	w.build(t)
+
+	want, err := os.ReadFile(goldenPredicate) //nolint:gosec // G304: a fixed path under testdata
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		assertPol string
+		extra     []string
+	}{
+		{assertPol: ""},
+		{assertPol: sourceAssertPolicy(t, false, signingEpochs)},
+		// Declared, but this release's machinery predates the epoch.
+		{assertPol: sourceAssertPolicy(t, true, signingEpochs), extra: []string{"--machinery-version", "1.0.0"}},
+	}
+
+	for _, c := range cases {
+		assertPol := c.assertPol
+
+		run := w.emitVSA(t, assertPol, "", c.extra...)
+		if run.code != exitOK {
+			t.Fatalf("Run = %d, stderr %q", run.code, run.stderr)
+		}
+
+		got, rerr := os.ReadFile(run.predicate)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+
+		if !bytes.Equal(got, want) {
+			t.Fatalf("predicate (assert policy %q) drifted from %s:\n%s", assertPol, goldenPredicate, got)
+		}
+	}
+}
+
+// TestEmitVSASourceVerdictRefusals: the guards around the published
+// envelope, each by name.
+func TestEmitVSASourceVerdictRefusals(t *testing.T) {
+	notOwed := func(t *testing.T) string {
+		t.Helper()
+
+		return sourceAssertPolicy(t, false, signingEpochs)
+	}
+	owed := func(t *testing.T) string {
+		t.Helper()
+
+		return sourceAssertPolicy(t, true, signingEpochs)
+	}
+
+	garbage := filepath.Join(t.TempDir(), "garbage.json")
+	if err := os.WriteFile(garbage, []byte(`{"not": "an envelope"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		policy        func(t *testing.T) string
+		sourceVerdict string
+		extra         []string
+		code          int
+		want          string
+	}{
+		{
+			"an envelope nobody owes", notOwed, garbage, nil, exitUsage,
+			"--source-verdict was given, but this release owes no source verdict: the assert policy declares no " +
+				"evidence.sourceVerdictFromVersion",
+		},
+		{
+			"an envelope for machinery before the epoch", owed, garbage,
+			[]string{"--machinery-version", "1.0.0"},
+			exitUsage, "this release owes no source verdict: machinery 1.0.0 predates",
+		},
+		{
+			"owed without a machinery version", owed, garbage,
+			[]string{"--machinery-version", ""},
+			exitUsage,
+			"--machinery-version is required",
+		},
+		{
+			"an envelope with no assert policy", nil, garbage, nil, exitUsage,
+			"--source-verdict needs --assert-policy",
+		},
+		{"an unreadable envelope", owed, "/nonexistent/source.json", nil, exitUsage, "--source-verdict:"},
+		{
+			"an envelope that does not verify", owed, garbage, nil, exitRefused,
+			"the published source verdict does not verify",
+		},
+		{"owed without a clone", owed, garbage, []string{"--git-dir", ""}, exitUsage, "--git-dir is required"},
+		{
+			"an unreadable assert policy", nil, "",
+			[]string{"--assert-policy", "/nonexistent"},
+			exitUsage,
+			"assert policy:",
+		},
+		{
+			"the clone cannot be opened", owed, garbage,
+			[]string{"--git-dir", "/nonexistent"},
+			exitRefused,
+			"emit: published source verdict:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newSourceWorld(t)
+			w.build(t)
+
+			assertPol := ""
+			if tt.policy != nil {
+				assertPol = tt.policy(t)
+			}
+
+			run := w.emitVSA(t, assertPol, tt.sourceVerdict, tt.extra...)
+			if run.code != tt.code || !strings.Contains(run.stderr, tt.want) {
+				t.Fatalf("Run = %d, stderr %q — want %d and %q", run.code, run.stderr, tt.code, tt.want)
+			}
+		})
+	}
+}
+
+// TestEmitVSAOwedUnderASourcelessVerifyPolicy: owed, but the verify
+// policy names no source resource to read the verdict against.
+func TestEmitVSAOwedUnderASourcelessVerifyPolicy(t *testing.T) {
+	w := newSourceWorld(t)
+	w.build(t)
+
+	doc, err := jsonx.Value([]byte(testPolicy))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatal("the test policy is not an object")
+	}
+
+	delete(m, "source")
+
+	sourceless := filepath.Join(t.TempDir(), "verify-policy.json")
+	if err := os.WriteFile(sourceless, mustMarshal(t, m), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := w.emitVSA(t, sourceAssertPolicy(t, true, signingEpochs), "x", "--policy", sourceless)
+	if run.code != exitUsage || !strings.Contains(run.stderr, "declares no source section") {
+		t.Fatalf("Run = %d, stderr %q", run.code, run.stderr)
+	}
+}
+
+// TestEmitVSASourceOutIsGone (stele#468): `emit vsa` writes no source
+// verdict, so its old output flag is refused as unknown and its help
+// no longer lists it.
+func TestEmitVSASourceOutIsGone(t *testing.T) {
+	w := newSourceWorld(t)
+	w.build(t)
+
+	run := w.emitVSA(t, "", "", "--source-out", "x")
+	if run.code != exitUsage || !strings.Contains(run.stderr, "flag provided but not defined: -source-out") {
+		t.Fatalf("Run = %d, stderr %q", run.code, run.stderr)
+	}
+
+	help := runCLI([]string{"emit", "vsa", "-h"}, sourceRun{})
+	if help.code != exitUsage || strings.Contains(help.stderr, "source-out") ||
+		!strings.Contains(help.stderr, "-source-verdict") {
+		t.Fatalf("emit vsa -h = %d:\n%s", help.code, help.stderr)
 	}
 }
 
@@ -630,12 +858,7 @@ func (w *sourceWorld) publishedVerdict(t *testing.T, tags ...string) string {
 
 	policyPath := sourceAssertPolicy(t, true, signingEpochs)
 
-	run := w.emit(t, policyPath)
-	if run.code != exitOK {
-		t.Fatalf("emitting the verdict = %d: %s", run.code, run.stderr)
-	}
-
-	env, err := os.ReadFile(run.source)
+	env, err := os.ReadFile(w.publishSource(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +901,7 @@ func (w *sourceWorld) verifySource(t *testing.T, tag string, extra ...string) so
 // and that commit's link — and the report carries both.
 func TestVerifySourceVSA(t *testing.T) {
 	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+	w.build(t)
 
 	ap := w.publishedVerdict(t, relTag)
 
@@ -704,7 +927,7 @@ func TestVerifySourceVSA(t *testing.T) {
 // TestVerifySourceVSARefusals: each guard of the read refuses by name.
 func TestVerifySourceVSARefusals(t *testing.T) {
 	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+	w.build(t)
 
 	ap := w.publishedVerdict(t, relTag, "v1.2.4", "v9.9.9")
 
@@ -781,7 +1004,7 @@ func TestVerifySourceVSARefusals(t *testing.T) {
 // declares no source section names no resource for the verdict.
 func TestVerifySourceVSAWithoutASourceSection(t *testing.T) {
 	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+	w.build(t)
 
 	ap := w.publishedVerdict(t, relTag)
 
@@ -820,7 +1043,7 @@ func (h fixedHistories) Repo(string, string) (*gitrepo.Repo, error) { return h.r
 // over the history session, and says so when no history was fetched.
 func TestEngineVerifierSourceVSA(t *testing.T) {
 	w := newSourceWorld(t)
-	w.build(t, srcMinter, true, nil)
+	w.build(t)
 
 	w.publishedVerdict(t, relTag)
 

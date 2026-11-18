@@ -1663,13 +1663,32 @@ func (e *EvidencePolicy) enrichment(machineryVersion string) bool {
 	return owedFrom(e.EnrichmentFromVersion, machineryVersion)
 }
 
-// sourceVerdict reports whether a release under the given machinery
-// version owes a source verdict for its tag (stele#391). Through the
-// one owedFrom definition — with the one difference its declaration
-// carries: absent means never, because the verdict binds a signed tag
-// and an adopter who declares no epoch has said it emits none.
-func (e *EvidencePolicy) sourceVerdict(machineryVersion string) bool {
-	return e.SourceVerdictFromVersion != nil && owedFrom(e.SourceVerdictFromVersion, machineryVersion)
+// SourceVerdictOwed is THE answer to whether one release tag owes a
+// source verdict (stele#391, stele#468), shared by the evidence walk
+// and both emit modes so no caller reads "owed" twice. Owed exactly
+// when the epoch is declared and the release's machinery version is at
+// or past it (through owedFrom, as every epoch is), and the tags
+// section says this repository signs this tag — a verdict binds a
+// signed tag, so a tag nobody signs owes none. The machinery version is
+// the release machinery's, never the tag's own: for any repository but
+// the one carrying its own machinery the two differ. Not owed, the
+// second return says why, in words a refusal can carry.
+//
+//nolint:gocritic // unnamedResult: owed, and why not — named results are refused by nonamedreturns
+func SourceVerdictOwed(e *EvidencePolicy, tags *TagsPolicy, repo, tag, machineryVersion string) (bool, string) {
+	switch {
+	case e.SourceVerdictFromVersion == nil:
+		return false, "the assert policy declares no evidence.sourceVerdictFromVersion"
+	case !owedFrom(e.SourceVerdictFromVersion, machineryVersion):
+		return false, "machinery " + machineryVersion + " predates evidence.sourceVerdictFromVersion " +
+			*e.SourceVerdictFromVersion
+	case tags == nil:
+		return false, "the assert policy declares no tags section"
+	case !tags.SignsTag(repo, tag):
+		return false, "the tags section owes no signature on " + repo + "@" + tag
+	}
+
+	return true, ""
 }
 
 // manifestSchema reports whether a release under the given machinery
