@@ -51,6 +51,7 @@ jobs:
       # — not some ambient grant; without it the run dies as
       # startup_failure with no jobs and no log.
       contents: read # this repository's contents and releases, read-only
+      actions: read # the gate's coverage figures for the commit, read-only (#1622)
       id-token: write # gitsign's keyless signature on the release tag (#349 S4)
     secrets:
       app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}

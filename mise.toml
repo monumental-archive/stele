@@ -62,7 +62,7 @@ description = "go test, race detector on"
 # gate's first cloud run; darwin tolerates race without cgo, which is
 # why the local run stayed green (stele#1).
 env = { GOFLAGS = "-trimpath", CGO_ENABLED = "1" }
-run = "go test -race ./..."
+run = '"${ORG_BELT_DIR}/measured" go test -race ./...'
 
 [tasks.build]
 description = "Build every command"
