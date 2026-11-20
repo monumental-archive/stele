@@ -25,5 +25,5 @@ jobs:
   mutants:
     permissions:
       contents: read # this repository's contents, read-only
-    uses: monumental-archive/.github/.github/workflows/repo-mutants.yml@d6dc516e7e57ad2c9da9025bc5d65778ed479ecf # v1.70.2
+    uses: monumental-archive/.github/.github/workflows/repo-mutants.yml@c6cafd9a756b2125d99d3e331ae9488c3a10c0e3 # v1.70.3
 ...

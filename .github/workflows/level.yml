@@ -79,7 +79,7 @@ jobs:
       # lint:caller-permissions checks it against what the callee
       # asks).
       contents: write # pushes this repository's cells to its own levels branch
-    uses: monumental-archive/.github/.github/workflows/level.yml@d6dc516e7e57ad2c9da9025bc5d65778ed479ecf # v1.70.2
+    uses: monumental-archive/.github/.github/workflows/level.yml@c6cafd9a756b2125d99d3e331ae9488c3a10c0e3 # v1.70.3
     with:
       tracks: build source dependency
 ...
