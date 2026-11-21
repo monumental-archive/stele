@@ -13,6 +13,51 @@
 #
 # band: 2
 # measured: 96.7
-# derived: v0.28.0
+# derived: coverage:adopt
 # legs: go
 90
+#
+# go-branches: a floor of its own (#1359), measured off the gate and held by
+# the Monday audit, under the same band and the same law.
+# go-branches measured: 90.8
+go-branches 88.8
+#
+# fuzz-internal-assert-loadpolicy: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-assert-loadpolicy measured: 2.6
+fuzz-internal-assert-loadpolicy 0.6
+#
+# fuzz-internal-assert-subjectdigests: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-assert-subjectdigests measured: 1.2
+fuzz-internal-assert-subjectdigests 0
+#
+# fuzz-internal-convcommit-parse: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-convcommit-parse measured: 75.3
+fuzz-internal-convcommit-parse 73.3
+#
+# fuzz-internal-dsse-decodebase64: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-dsse-decodebase64 measured: 13.3
+fuzz-internal-dsse-decodebase64 11.3
+#
+# fuzz-internal-policy-load: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-policy-load measured: 15.6
+fuzz-internal-policy-load 13.6
+#
+# fuzz-internal-report-parsedebt: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-report-parsedebt measured: 9.2
+fuzz-internal-report-parsedebt 7.2
+#
+# fuzz-internal-trust-loadbundle: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-trust-loadbundle measured: 0.9
+fuzz-internal-trust-loadbundle 0
+#
+# fuzz-internal-trust-loadroot: a fuzz target's committed corpus, replayed once (#1896), a
+# floor of its own held by coverage:check, under the same band and law.
+# fuzz-internal-trust-loadroot measured: 0.9
+fuzz-internal-trust-loadroot 0
