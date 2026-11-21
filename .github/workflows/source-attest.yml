@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-26.04
     # The read token lives in this environment, not repo-wide: scoped to
     # the environment, only jobs that declare it are ever issued the
-    # secret (the audit.yml baseline-drift pattern, zizmor
+    # secret (the org-settings.yml baseline-drift pattern, zizmor
     # secrets-outside-env). Activation creates the environment and the
     # token — docs/source-track.md, activation checklist.
     environment: source-attest
