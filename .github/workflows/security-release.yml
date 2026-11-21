@@ -39,14 +39,15 @@ concurrency:
 
 jobs:
   security-release:
-    uses: monumental-archive/.github/.github/workflows/security-release.yml@6d6916fcdaa4e632bd12af51e8240af6b597d75e # v1.71.1
+    uses: monumental-archive/.github/.github/workflows/security-release.yml@3e15514956c601fe255b9ab5f4f1c0663cc3db1b # v1.72.0
     permissions:
       # Stated, not inherited: a `uses:` job takes the workflow-level
       # default above, never an ambient grant.
       contents: read # this repository's contents and releases, read-only
       attestations: read # this repository's attestations, read-only
       pull-requests: read # this repository's pull requests, read-only
-      issues: write # the "main does not remedy it" issue, the one outcome needing a maintainer
+      issues: write # this repository's issues, read and write
+      actions: read # the callee's report job: the run's job list and job logs (#1887)
     secrets:
       app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }}
 ...
