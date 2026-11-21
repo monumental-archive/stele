@@ -1,4 +1,3 @@
----
 # OpenSSF Scorecard, publishing to the public API (the badge).
 #
 # Deliberately NOT a reusable workflow, alone among this organisation's
@@ -8,9 +7,14 @@
 # self-contained and copied per repository, and drift is accepted as the
 # price of the badge. Keep it minimal so there is nothing to drift.
 #
+# Scorecard's restrictions bind the job that runs its action. The second
+# job, `report` (#1887), is outside them: it holds no signing grant, and
+# pins the canon action alone, never a reusable workflow.
+#
 # The publish job may hold `id-token: write` under the org's narrowed rule:
 # it is a standalone scheduled workflow that runs no caller-supplied code —
 # scorecard scans the repository; it does not build it.
+---
 name: scorecard
 
 "on":
@@ -22,7 +26,6 @@ name: scorecard
     branches:
       - main
   workflow_dispatch: {}
-
 permissions: {}
 
 # One analysis at a time; a fresher push supersedes a stale queued one.
@@ -56,4 +59,48 @@ jobs:
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: results.sarif
+
+  # Every scheduled workflow ends here (#1887): while a run on the
+  # default branch has a red job, one issue titled "<workflow> is red"
+  # and labelled red-check holds each red job and its log tail; the next
+  # green run closes it. mise/standing_issue.py has the outcomes. Only
+  # `needs:` names the jobs above, so it grows with them.
+  report:
+    name: Report red jobs
+    needs:
+      - analyze
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # the checkout
+      issues: write # the workflow's one red-check issue
+      actions: read # the run's job list and each red job's log
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The belt's Python as ORG_PYTHON and the canon tree at
+      # .org-canon (#1543). Pinned, not `$/`: in a copied stub `$/` is
+      # this repository. The one canon pin this file may carry, moved
+      # with every other stub pin (lint:template-pins).
+      - name: Resolve the canon tree and the belt's Python
+        uses: monumental-archive/.github/.github/actions/canon@3e15514956c601fe255b9ab5f4f1c0663cc3db1b # v1.72.0
+
+      # A cancelled run changes nothing: the job still runs (always()),
+      # this step does not.
+      - name: Keep the red-check issue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          "${ORG_PYTHON}" .org-canon/mise/standing_issue.py --workflow "${WORKFLOW}" \
+            --run-id "${RUN_ID}" --ref "${REF}" \
+            --default-branch "${DEFAULT_BRANCH}"
 ...

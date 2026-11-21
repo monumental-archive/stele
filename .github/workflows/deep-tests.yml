@@ -1,0 +1,29 @@
+# A repository's fuzz targets, coverage floors and random-seed
+# properties (#1858). This stub is the repository's whole obligation for
+# this subject: which legs run is repo-deep-tests.yml's business, so a
+# leg the canon adds later reaches this repository on its next pin bump
+# with nothing to edit here (#681). One workflow per subject, named for
+# what a red means: a red in this run is a test that found something.
+---
+name: deep-tests
+
+"on":
+  schedule:
+    # Mondays 06:00 UTC, beside the other subject stubs.
+    - cron: 0 6 * * 1
+  workflow_dispatch: {}
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  deep-tests:
+    permissions:
+      contents: read # this repository's contents, read-only
+      issues: write # the callee's report job: its workflow's red-check issue (#1887)
+      actions: read # the callee's report job: the run's job list and job logs (#1887)
+    uses: monumental-archive/.github/.github/workflows/repo-deep-tests.yml@3e15514956c601fe255b9ab5f4f1c0663cc3db1b # v1.72.0
+...

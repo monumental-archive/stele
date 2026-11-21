@@ -7,7 +7,7 @@
 # clean by name. Its own workflow, apart from the audit, so a survivor
 # reds this run and never the audit's.
 ---
-name: mutants
+name: mutation-tests
 
 "on":
   schedule:
@@ -25,5 +25,7 @@ jobs:
   mutants:
     permissions:
       contents: read # this repository's contents, read-only
-    uses: monumental-archive/.github/.github/workflows/repo-mutants.yml@6d6916fcdaa4e632bd12af51e8240af6b597d75e # v1.71.1
+      issues: write # the callee's report job: its workflow's red-check issue (#1887)
+      actions: read # the callee's report job: the run's job list and job logs (#1887)
+    uses: monumental-archive/.github/.github/workflows/repo-mutants.yml@3e15514956c601fe255b9ab5f4f1c0663cc3db1b # v1.72.0
 ...

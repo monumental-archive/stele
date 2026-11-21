@@ -14,7 +14,7 @@
 # cell off the board. The canon's declared population must agree, and
 # the canon's weekly sweep reds if the two disagree.
 ---
-name: level
+name: slsa-levels
 
 # zizmor's `dangerous-triggers` audit fires on the `workflow_run`
 # below, at high confidence, and it is right to by default: that
@@ -78,8 +78,10 @@ jobs:
       # startup_failure (lint:nested-permissions enforces the writing;
       # lint:caller-permissions checks it against what the callee
       # asks).
-      contents: write # pushes this repository's cells to its own levels branch
-    uses: monumental-archive/.github/.github/workflows/level.yml@6d6916fcdaa4e632bd12af51e8240af6b597d75e # v1.71.1
+      contents: write # this repository's contents, read and write
+      issues: write # the callee's report job: its workflow's red-check issue (#1887)
+      actions: read # the callee's report job: the run's job list and job logs (#1887)
+    uses: monumental-archive/.github/.github/workflows/level.yml@3e15514956c601fe255b9ab5f4f1c0663cc3db1b # v1.72.0
     with:
       tracks: build source dependency
 ...
