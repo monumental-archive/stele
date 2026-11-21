@@ -229,12 +229,16 @@ usage:
                  requires — one checkout's callers at a pin bump, or
                  the whole population on a schedule (--policy [--debt
                  --tree --callers | --org|--repo] [--snapshot|--capture])
-    advisories   one module's govulncheck scan joined against the
-                 committed VEX decisions: only a reachable (called)
-                 advisory gates, and only a decision DENYING that the
-                 advisory applies excuses it — one that admits,
-                 withholds or claims a fix is reported on the finding
-                 (--scan --vex --subject [--json])
+    advisories   one scan joined against the committed VEX
+                 decisions — a Go module's govulncheck stream, or a
+                 Cargo lock's cargo-deny advisories check (--scanner
+                 govulncheck|cargo-deny, default govulncheck): only a
+                 reachable (called) Go advisory or an error-severity
+                 cargo-deny diagnostic gates, and only a decision
+                 DENYING that the advisory applies excuses it — one
+                 that admits, withholds or claims a fix is reported on
+                 the finding (--scan --vex --subject [--scanner
+                 --json])
     inventory    each handed inventory document (an image
                  scanner's SPDX, for one) carries PURLs and every one
                  versioned; one that will not read or parse is
