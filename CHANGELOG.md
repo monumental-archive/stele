@@ -10,6 +10,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.28.1](https://github.com/monumental-archive/stele/compare/v0.28.0...v0.28.1) - 2026-11-21
+
+### Build
+
+- fix the v0.28.0 burn forward on canon v1.74.0 ([#518](https://github.com/monumental-archive/stele/pull/518))
+
 ## [0.28.0](https://github.com/monumental-archive/stele/compare/v0.27.0...v0.28.0) - 2026-11-21
 
 ### Added
