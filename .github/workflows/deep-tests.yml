@@ -26,7 +26,7 @@ jobs:
       contents: read # this repository's contents, read-only
       issues: write # the callee's report job: its workflow's red-check issue (#1887)
       actions: read # the callee's report job: the run's job list and job logs (#1887)
-    uses: monumental-archive/.github/.github/workflows/repo-deep-tests.yml@fc7e077dca7378fe88854de97cd9900617ab1f53 # v1.73.0
+    uses: monumental-archive/.github/.github/workflows/repo-deep-tests.yml@2cb782e3c9471c6cf53c6cc220b063ab5f96d60c # v1.74.0
     secrets:
       app-private-key: ${{ secrets.TAG_MINT_APP_PRIVATE_KEY }} # the propose job's token (#1897)
 ...
