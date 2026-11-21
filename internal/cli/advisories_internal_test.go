@@ -79,6 +79,13 @@ func TestAssertAdvisoriesUsage(t *testing.T) {
 			"--subject is required",
 		},
 		{
+			"an unknown scanner names both it knows",
+			[]string{
+				"assert", "advisories", "--scanner", "osv", "--scan", scanPath, "--vex", vexDir, "--subject", ".",
+			},
+			`--scanner is govulncheck or cargo-deny, not "osv"`,
+		},
+		{
 			"unreadable scan",
 			[]string{
 				"assert", "advisories", "--scan", filepath.Join(t.TempDir(), "absent.json"),

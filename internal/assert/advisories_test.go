@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/cargodeny"
 	"github.com/monumental-archive/stele/internal/govulncheck"
 	"github.com/monumental-archive/stele/internal/report"
 	"github.com/monumental-archive/stele/internal/vexjoin"
@@ -324,5 +325,33 @@ func TestANearMissIsScopedToThePackage(t *testing.T) {
 
 	if strings.Contains(findings[0].Detail, "other.openvex.json") {
 		t.Errorf("detail %q cites a decision about another package", findings[0].Detail)
+	}
+}
+
+// The severity facts: the four cargo-deny's summary names are always
+// stated, zero included, and a severity a newer cargo-deny writes is
+// counted after them under its own name — gating nothing.
+func TestCargoSeverityFactsNameEverySeverityRead(t *testing.T) {
+	t.Parallel()
+
+	rep := assert.CargoAdvisories("lock", &cargodeny.Scan{
+		Severities: cargodeny.Severities{"warning": 2, "fatal": 1, "critical": 3},
+	}, &vexjoin.Decisions{}, report.NewJournal(), func(string, ...any) {})
+
+	if rep.Verdict() != report.VerdictPass {
+		t.Fatalf("verdict = %s, want PASS: no error was read", rep.Verdict())
+	}
+
+	doc := encode(t, rep)
+
+	want := `{"name":"diagnostics.error","value":"0"},{"name":"diagnostics.warning","value":"2"},` +
+		`{"name":"diagnostics.note","value":"0"},{"name":"diagnostics.help","value":"0"},` +
+		`{"name":"diagnostics.critical","value":"3"},{"name":"diagnostics.fatal","value":"1"}`
+	if !strings.Contains(doc, want) {
+		t.Errorf("facts do not carry %s:\n%s", want, doc)
+	}
+
+	if strings.Contains(doc, `"db"`) {
+		t.Errorf("a db fact was reported, and cargo-deny's stream states none:\n%s", doc)
 	}
 }

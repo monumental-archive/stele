@@ -1,0 +1,23 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://openvex.dev/docs/public/vex-8bfcb3ca63adb24d3a47e5ba460517c04539ed70d9559a64ef2790bc70844767",
+  "author": "monumental-archive",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "RUSTSEC-2026-0542"
+      },
+      "products": [
+        {
+          "@id": "pkg:cargo/humantime@2.4.0"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "RUSTSEC-2026-0542 is an informational unmaintained-crate notice for humantime, not a vulnerability: there is no vulnerable code to be present. Recorded per the L2 contract (known, decided, written down); the migration away is ordinary maintenance, not a security action. humantime@2.4.0 reaches iiif-server only through object_store@0.14.2. The decision is a fact about humantime@2.4.0, so the product names the dependency: every release whose SBOM ships this exact package@version is covered by derivation, and a release that moves to another version is deliberately NOT covered — a changed version is a fresh judgment. Blast-radius query behind this decision: audit:blast-radius, canon audit run 44211194942, 2026-11-18.",
+      "timestamp": "2026-11-19T18:34:32.143789Z"
+    }
+  ],
+  "timestamp": "2026-11-19T18:34:32Z"
+}

@@ -211,6 +211,35 @@ that identity, and both ask `Decision.Excuses` the status question —
 blast-radius since stele#222, which is why the status set is written
 down in exactly one place and read from there by both.
 
+## The scanners `assert advisories` reads
+
+`stele assert advisories --scanner <name>` reads one scanner's
+stream; absent, the name is `govulncheck`. Each reader says what a
+finding IS and whether it gates, and nothing more: the decisions in
+scope, the excuse rule above and the report are one code path for
+every scanner (stele#515).
+
+| `--scanner` | stream | purl type | a finding is | it gates when |
+| --- | --- | --- | --- | --- |
+| `govulncheck` | `govulncheck -json` | `golang` | one advisory against one module version, at the deepest level reached | a vulnerable symbol is called; weaker levels are excused as derived |
+| `cargo-deny` | `cargo deny --format json check advisories` (stderr) | `cargo` | each `graphs` entry of an `error` diagnostic: `advisory.id` against that entry's `Krate.name` and `Krate.version` | always: cargo-deny has no reachability levels |
+
+Decisions are scoped by the scanner's purl type (rule 7 above): a
+`cargo` decision is out of a govulncheck run's world, and a `golang`
+one out of a cargo-deny run's. A `cargo` name is compared as written.
+
+For cargo-deny, a diagnostic of any severity other than `error`
+gates nothing; the count of each severity is a fact of the report.
+An `error` diagnostic with no `advisory` — a yanked crate — is
+asserted by its `code` and the crate's purl, and no decision can
+excuse it, because a decision is keyed by the advisory it decides.
+cargo-deny exits 1 for a finding and for a failure alike, so the
+stream is the only witness that the check finished: one with no
+`summary` carrying `advisories`, one whose `advisories.errors`
+differs from the number of `error` diagnostics read, or a line that
+is not JSON is `CANNOT_JUDGE`. The stream states no advisory
+database, so the report carries no `db` fact for it.
+
 **Every producer of an assertion that must meet a decision's exception
 builds that assertion from `Key.String()`** — the report layer matches
 exceptions to findings by string, so the invariant holds by sharing

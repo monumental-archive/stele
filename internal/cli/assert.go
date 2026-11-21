@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/monumental-archive/stele/internal/assert"
+	"github.com/monumental-archive/stele/internal/cargodeny"
 	"github.com/monumental-archive/stele/internal/gh"
 	"github.com/monumental-archive/stele/internal/gitfetch"
 	"github.com/monumental-archive/stele/internal/govulncheck"
@@ -698,9 +699,19 @@ func assertInventory(args []string, stdout, stderr io.Writer) int {
 	return emitReport(rep, jsonOut, stdout, stderr)
 }
 
-// assertAdvisories runs the advisories target: one module's
-// reachable-vulnerability scan, judged against the recorded triage
-// decisions through the one join (stele#221).
+// The scanners the advisories target reads, by the name --scanner
+// takes. Absent means govulncheck, so a caller from before the flag
+// existed is unchanged (stele#515).
+const (
+	scannerGovulncheck = "govulncheck"
+	scannerCargoDeny   = "cargo-deny"
+)
+
+// assertAdvisories runs the advisories target: one subject's
+// dependency scan, judged against the recorded triage decisions
+// through the one join (stele#221). --scanner says which reader the
+// scan goes through; the judgment after the reader is one code path
+// whichever it is (stele#515).
 //
 // The scan arrives as a FILE, not on stdin. The producer already
 // materialises it — a scan is captured to a temp file precisely so a
@@ -710,16 +721,18 @@ func assertInventory(args []string, stdout, stderr io.Writer) int {
 // than carried: that read stdin.
 func assertAdvisories(args []string, stdout, stderr io.Writer) int {
 	var (
-		scanPath, vexDir, subject string
-		jsonOut                   bool
+		scanPath, vexDir, subject, scanner string
+		jsonOut                            bool
 	)
 
 	flags := flag.NewFlagSet("stele assert advisories", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.StringVar(&scanPath, "scan", "", "path to govulncheck's JSON output (required)")
+	flags.StringVar(&scanPath, "scan", "", "path to the scanner's JSON output (required)")
+	flags.StringVar(&scanner, "scanner", scannerGovulncheck,
+		"the scanner that wrote --scan: "+scannerGovulncheck+" or "+scannerCargoDeny)
 	flags.StringVar(&vexDir, "vex", "", "directory of committed *.openvex.json decisions (required)")
 	flags.StringVar(&subject, "subject", "",
-		"the module this scan covers, named in the report (required)")
+		"what this scan covers, named in the report (required)")
 	flags.BoolVar(&jsonOut, "json", false,
 		"emit the verdict as one JSON report document on stdout (progress moves to stderr)")
 
@@ -742,6 +755,8 @@ func assertAdvisories(args []string, stdout, stderr io.Writer) int {
 		return usageFail("--vex is required")
 	case subject == "":
 		return usageFail("--subject is required: a report names what it judged")
+	case scanner != scannerGovulncheck && scanner != scannerCargoDeny:
+		return usageFail(fmt.Sprintf("--scanner is %s or %s, not %q", scannerGovulncheck, scannerCargoDeny, scanner))
 	}
 
 	decisions, code := loadVEX(vexDir, stderr)
@@ -755,13 +770,35 @@ func assertAdvisories(args []string, stdout, stderr io.Writer) int {
 	}
 	defer sf.Close() //nolint:errcheck // read-only close
 
-	scan, rerr := govulncheck.Read(sf)
+	out := &latch{w: stdout}
+	if jsonOut {
+		out = &latch{w: stderr}
+	}
+
+	var (
+		rep  *report.Report
+		rerr error
+	)
+
+	switch scanner {
+	case scannerCargoDeny:
+		var scan *cargodeny.Scan
+		if scan, rerr = cargodeny.Read(sf); rerr == nil {
+			rep = assert.CargoAdvisories(subject, scan, decisions, report.NewJournal(), out.logf)
+		}
+	default:
+		var scan *govulncheck.Scan
+		if scan, rerr = govulncheck.Read(sf); rerr == nil {
+			rep = assert.Advisories(subject, scan, decisions, report.NewJournal(), out.logf)
+		}
+	}
+
 	if rerr != nil {
 		// A scan that did not happen is CANNOT_JUDGE — never a pass
 		// over an empty finding set, which is exactly what a truncated
 		// or foreign stream would otherwise render as.
-		rep := refusal(targetAdvisories, subject, rerr.Error(),
-			report.PopulationFromEvidence(0, "no readable govulncheck scan"))
+		rep = refusal(targetAdvisories, subject, rerr.Error(),
+			report.PopulationFromEvidence(0, "no readable "+scanner+" scan"))
 
 		if _, werr := fmt.Fprintf(stderr, "%v\n", rerr); werr != nil {
 			return exitIO
@@ -770,12 +807,6 @@ func assertAdvisories(args []string, stdout, stderr io.Writer) int {
 		return emitReport(rep, jsonOut, stdout, stderr)
 	}
 
-	out := &latch{w: stdout}
-	if jsonOut {
-		out = &latch{w: stderr}
-	}
-
-	rep := assert.Advisories(subject, scan, decisions, report.NewJournal(), out.logf)
 	if out.err != nil {
 		return exitIO
 	}
