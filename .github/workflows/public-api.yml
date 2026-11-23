@@ -26,5 +26,5 @@ jobs:
       contents: read # this repository's contents, read-only
       issues: write # the callee's report job: its workflow's red-check issue (#1887)
       actions: read # the callee's report job: the run's job list and job logs (#1887)
-    uses: monumental-archive/.github/.github/workflows/repo-public-api.yml@047c7b3c6acd46a22f8526f09192152a7f95fcc3 # v1.76.0
+    uses: monumental-archive/.github/.github/workflows/repo-public-api.yml@8f12d0df29386e9f3eb5221dcf14168c98c34b36 # v1.77.0
 ...
