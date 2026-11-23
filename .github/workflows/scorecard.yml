@@ -87,7 +87,7 @@ jobs:
       # this repository. The one canon pin this file may carry, moved
       # with every other stub pin (lint:template-pins).
       - name: Resolve the canon tree and the belt's Python
-        uses: monumental-archive/.github/.github/actions/canon@7a91684d858593dad450fc8494207718943de2a6 # v1.75.0
+        uses: monumental-archive/.github/.github/actions/canon@047c7b3c6acd46a22f8526f09192152a7f95fcc3 # v1.76.0
 
       # A cancelled run changes nothing: the job still runs (always()),
       # this step does not.
