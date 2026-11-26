@@ -71,6 +71,7 @@ over whole, and only then does the next open. State and next step:
 1. **verify — DONE, authoritative** (#3, closed at .github#436):
    `audit:source-vsa` runs this binary; the bash walk is deleted; the
    org policy is canon `slsa/verify-policy.json`.
+
 2. **emit — DONE, authoritative** (#21, cut over at .github#437,
    closed at #24): the source-attest action and verify-release.yml
    call `stele emit`; chain.sh/emit.sh/lib.sh/append.sh,
@@ -86,11 +87,13 @@ over whole, and only then does the next open. State and next step:
    the org ledgers re-emit at the canon cutover (the #434 healing
    precedent), because pre-v1 nothing external consumes the old
    bytes and dual-version reading would be dead weight.
+
 3. **release wiring — DONE** (#7): the `go-binary` class shipped and
    stele self-releases N-1 (v0.1.0 onward); the belt installs the
    released, attested binary and the `go run @<sha>` pins are
    retired. **derive version + notes — DONE** (#31, pulled forward as
    release wiring's input; sequencing note on #25).
+
 4. **assert — DONE, authoritative** (#39 built it as #62/#63/#66,
    #69 landed the cutover): `audit:attestations`,
    `audit:blast-radius` and the image-facts pull-back checks each run
@@ -102,6 +105,7 @@ over whole, and only then does the next open. State and next step:
    emit residue moved into the engine: preflight and the
    reserved-identity guard, which refuses an absent workflow ref
    (#74).
+
 5. **derive, the remainder — MECHANISMS BUILT (#40), cutover
    pending**: claims, OCI facts, VEX and the per-artifact SBOM
    inventories all have engines and command surfaces; the clone prep
@@ -112,6 +116,7 @@ over whole, and only then does the next open. State and next step:
    measured to omit `bypass_actors`). Facts and VEX are not yet
    shadow-proven: both want a release to point at, so they batch with
    the cutover.
+
 6. **the final four — DONE (2026-08-19)**: `assert chains` (#94 at
    #137) retired the last evidence-audit bash's walk (cloneless then;
    since #384 git fetches the history, with no checkout), with
@@ -122,6 +127,7 @@ over whole, and only then does the next open. State and next step:
    (#131/#132 at #139) states both policy floors as fenced examples
    the test suite executes through `policy.Load`. The stele side of
    the port is COMPLETE; everything remaining is canon-side.
+
 7. **`assert permissions` — BUILT (#148), cutover pending**: the last
    judgment-shaped script in the canon
    (`security/workflow-permissions.py`) is ported whole. Its three
@@ -197,21 +203,25 @@ The canon speaks for the org; stele speaks for the mechanism.
   refused: say so plainly and leave the vocabulary open. Never
   editorialise in a spec document about what this org claims — the
   canon speaks for the org, stele speaks for the mechanism.
+
 - **A disabled rule needs a reason about the rule. If the reason is
   about reach, the layout is wrong.** "Wrong for this domain" is
   legitimate and permanent; "the tool cannot see this code" is a defect
   report against the layout — move the code, never write the extractor.
   `.golangci.yml` is the worked example; `nolintlint` enforces it at
   line granularity.
+
 - **Every guard branch gets a table test** (carried from .github#364's
   closure). Guards that fire only in degraded states are the least
   exercised code in the org, and a guard that skips when it should run
   looks exactly like success. The failing-writer tests in
   `internal/cli` are the pattern.
+
 - **`encoding/json` only inside `internal/jsonx`** (depguard-enforced).
   The stdlib decoder turns absent into zero silently; evidence code
   must distinguish them, so decode types use pointer fields and
   validation rejects nil explicitly.
+
 - **Pinned build**: `CGO_ENABLED=0`, `GOTOOLCHAIN=local`, `-trimpath`.
   Dependencies are pinned by `go.sum` (byte-identical modules or a
   failed build) and fetched through the checksummed proxy — the one
@@ -224,6 +234,7 @@ The canon speaks for the org; stele speaks for the mechanism.
   — by the disabled-rule law, a layout defect. What vendoring bought
   beyond go.sum was offline builds and upstream-deletion insurance;
   not worth that price.
+
 - **Pre-v1, correctness wins every tie.** Until stele cuts a v1,
   nothing external depends on it: formats, schemas and vocabulary
   change to the correct-by-construction shape without compatibility
@@ -231,6 +242,7 @@ The canon speaks for the org; stele speaks for the mechanism.
   stele breaks the canon, the canon conforms to the tool — never the
   tool to the org's accumulated shape. Bad history is recorded
   honestly (healed links, legacy categories), not designed around.
+
 - **Share the definition, never share the derivation.** Two rules the
   org has applied from opposite directions, stated as one. When two
   legs must agree on what a thing IS — the bytes a digest covers, where
@@ -242,6 +254,7 @@ The canon speaks for the org; stele speaks for the mechanism.
   its own inverse passes its own exam (`internal/manifest` re-reads the
   spliced bytes through the reader; it never trusts the splicer's
   bookkeeping).
+
 - **Derived state is refused when stale, never silently repaired.**
   Version mirrors, upgrade scripts, lockfile copies of the version: all
   derived, never typed, and one found already wrong is evidence of a
@@ -249,6 +262,7 @@ The canon speaks for the org; stele speaks for the mechanism.
   evidence (the pgrx `--next.sql` refusal, #374's fuzz-lockfile lint,
   `derive bump`'s drift refusal). Surface, refuse, let a human read the
   wreckage.
+
 - **The bash is a reference, not an oracle.** Ported logic runs beside
   it on identical inputs and divergence is investigated — but the bar
   is spec correctness (SLSA v1.2, in-toto/DSSE, git's actual storage
@@ -258,6 +272,7 @@ The canon speaks for the org; stele speaks for the mechanism.
   real oracles are the published releases and chain links. Record
   divergence as a finding; never contort output to match bash bytes.
   Nothing is left half-ported as a standing state.
+
 - **pgrx upgrade derivation ports last, or never** — a written
   sequencing decision (#392): `generate-pgrx-upgrade.sh` is proven SQL
   text derivation whose oracle a byte-diff cannot capture; it moves
@@ -265,20 +280,24 @@ The canon speaks for the org; stele speaks for the mechanism.
   as its proof. Not to be confused with the pgrx-extension SBOM
   closure, which #40 built: one derives upgrade SQL, the other an
   inventory, and they share only a word.
+
 - **Badge derivation stays canon — won't-do, recorded at #40.**
   `mise/derive-badges.sh` derives a RENDERING (a README block) whose
   oracle is a text diff; nothing attests it and no verifier consumes
   it. The correct split once `stele level` (#5) lands is that stele
   computes the honest level and the canon renders the badge.
+
 - Commits: conventional, imperative, lowercase, 72-column, DCO
   sign-off; scopes in `committed.toml`. PRs squash-merge through the
   org gate (`ci / ci`).
+
 - Issues: follow the org's mechanism template, which lives in the
   canon (`.github/ISSUE_TEMPLATE/mechanism.yml` there — this repo has
   no copy of its own) — Defect, Decided build, Canon consequence,
   Done when, Sequencing. GitHub applies it only in the web new-issue
   flow, so an issue filed through `gh` or the REST API arrives blank:
   write the five sections by hand.
+
 - Licence: Apache-2.0 (public Go infra convention — patent grant;
   0BSD stays canon-only). REUSE.toml declares; per-file headers are
   refused by design.

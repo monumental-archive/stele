@@ -935,6 +935,7 @@ every divergence is written down rather than smoothed.
    `controls[].evidence` programmatically — the emit and verify legs
    read `property` and require evidence to be non-empty — so this is a
    defect in what the ledger tells a reader, not in what it decided.
+
 5. **Belt-carried controls were detected by grep.**
    `grep -q '^\[tasks."lint:dco"\]'` reads one legal spelling of a
    TOML table. Any other — different quoting, a dotted or inline
@@ -942,11 +943,13 @@ every divergence is written down rather than smoothed.
    already holds the opposing rule elsewhere (`resolve-oci-facts.sh`
    reads Cargo.toml with a parser, "the only reader that gets every
    form right").
+
 6. **The blindness guard cited an org fact.** The bash refuses an
    empty tag read because *the org's* tag rulesets are known to
    exist. True, and unusable by anyone else. Declaring a property
    against a scope is the same statement in universal form, so the
    guard now derives from the policy and holds for every adopter.
+
 7. **Continuity offsets were arithmetic in jq.** `updated_at`
    arrives with arbitrary UTC offsets and jq's date built-ins are
    UTC-only, so the bash applies the offset by hand from captured
