@@ -27,9 +27,11 @@ laws it encodes, so a schema change is a reviewed edit here first.
    A divergence there is not a finding inside a walk but a refusal to
    start one, sealed `CANNOT_JUDGE` with the repositories named: a run
    that does not know its own population cannot judge one.
+
 2. **Canary**: a run that declares a known-positive and does not
    reproduce it cannot see, and reports `CANNOT_JUDGE` regardless of
    everything else it found.
+
 3. **Exceptions**: `declared` exceptions come only from a committed
    file a human edited under review; `derived` exceptions come only
    from engine logic and name their evidence. An exception matching no
@@ -37,6 +39,7 @@ laws it encodes, so a schema change is a reviewed edit here first.
    to whoever could act on it, which is why only `declared` exceptions
    reach the stale and unexercised buckets. A finding several
    exceptions answer credits every one of them (stele#220).
+
 4. **Coverage**: a walk records every check it PERFORMED, not only the
    checks that failed — through `Journal`, the one door a finding
    reaches a report by. That is what makes law 3's report honest: an
@@ -101,15 +104,22 @@ never null.
   is governed by [docs/versioning.md](versioning.md) — added at
   stele#107, before the second consumer arrived, because a format
   acquires the ability to break someone at exactly that moment.
+
 - `target` — the judging mode that produced the document.
+
 - `subject` — what was judged, as the mode names it.
+
 - `population.expected` — present only for `declared` populations.
+
 - `canary` — present only when a canary was declared.
+
 - `facts` — information beside the verdict (a computed level, a
   source revision, a link count), never part of the judgment.
+
 - `findings` — the unexcused divergences. Under `CANNOT_JUDGE`,
   findings gathered before sight was lost are still carried: partial
   sight is reported, never laundered into either verdict.
+
 - `excused` — every excused finding beside the exception that excused
   it; an excuse is visible, never a deletion. A finding several
   exceptions answer appears once **per exception**: excusing is not a
@@ -117,14 +127,17 @@ never null.
   excuse "really" applied. A declared line paired here beside a
   derivation over the same coordinate is the signal that the machinery
   has outgrown the line — read it and retire the line (stele#220).
+
 - `staleExceptions` — declared excuses whose check this run performed
   and found clean: retire them. `declared` only; nobody can retire
   engine logic, so a derived exception is never listed here.
+
 - `unexercisedExceptions` — declared excuses this run did not look for.
   Not a retirement candidate and not an error: a single-repository run
   answers only for that repository, and a check an epoch exempts was
   never asked. `declared` only, for the same reason: both buckets
   address the human holding the committed file.
+
 - `judged` — the collapsed, validated input set the run judged, in the
   mode's own shape, present only where a mode declares one. Where
   `population` says how many subjects a run covered and how the set

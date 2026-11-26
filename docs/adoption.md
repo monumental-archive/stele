@@ -161,11 +161,13 @@ Stated honestly rather than discovered:
   capability boundary lives above this tool. Free in CI with OIDC;
   outside CI it is an interactive browser flow, and your
   `source.identity` must then admit a human identity.
+
 - **`derive claims` reads GitHub's branch-protection rules API**, and
   `emit chain` requires `--claims`. On another forge you can
   hand-write the claims payload — the format is stele's, not
   GitHub's — but no deriver exists for you yet; that is an absent
   mechanism, not a refused one.
+
 - **`assert` needs a forge with releases** (GitHub or GHES via
   `--server-url`). It is the org-corpus verb: it walks a population
   and holds it to a declared completeness contract. A single-repo

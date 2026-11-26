@@ -87,6 +87,7 @@ version mismatch, never as an unknown-field error.
   the store-VSA epoch; `assetPrefixes` are non-bundle assets required
   by prefix match on the release's asset names. An empty class is a
   validation error: it would assert nothing.
+
 - `classes.<name>.assetPrefixes[].owedFrom` — the machinery version
   (inclusive) from which that one obligation holds, through the same
   shared epoch semantics as every top-level `*FromVersion` field
@@ -99,6 +100,7 @@ version mismatch, never as an unknown-field error.
   is measured at cutover: the first machinery version that publishes
   the asset. Prefixes within a class form a set; an empty prefix or
   an unparsable `owedFrom` refuses at load.
+
 - `classes.<name>.assetPrefixes[].planned` — declares that one
   obligation's fulfillment channel: the document is derived from a
   build-leg inventory plan, so `assert plans` demands, BEFORE
@@ -119,6 +121,7 @@ version mismatch, never as an unknown-field error.
   its machinery version planned nothing, and keeps the whole-release
   decision invariant it was published under
   ([policy-schema.md](policy-schema.md#trustdecision-optional)).
+
 - `classes.<name>.enrichment` — dependency names a release declaring
   this class owes its build-enrichment claim ON TOP of the verify
   policy's universal `required` set (stele#122): a `pgrx-extension`
@@ -147,6 +150,7 @@ version mismatch, never as an unknown-field error.
   the engine, which refuses the RUN (never the release) when the two
   documents have drifted
   ([policy-schema.md](policy-schema.md#buildenrichment-optional)).
+
 - `classes.<name>.inventory` (optional) — what a release of this class
   owes as inventory (stele#396): an engine-owned `kind` and exactly
   that kind's parameters, flat on the declaration. The kinds are code,
@@ -184,6 +188,7 @@ version mismatch, never as an unknown-field error.
   Absent, the class declares no inventory role, and `derive
   inventories` or `derive inventory-plan` refuses the class by name
   when it runs.
+
 - `classes.<name>.subjects` — what one planned build leg of this
   class leaves behind: the shape `stele derive subjects` judges
   ([subjects.md](subjects.md), stele#442). Optional; a class without
@@ -231,6 +236,7 @@ version mismatch, never as an unknown-field error.
   disagree with it. An unknown `kind` refuses at load by name, and a
   kind takes exactly its own parameters: one it needs and you omit,
   and one it does not read, each refuse.
+
 - `classes.<name>.declares` — what requesting this class declares
   beyond itself, as `stele derive classes` applies it (stele#403).
   Optional, a list, on the class that triggers it. A release requests
@@ -251,11 +257,14 @@ version mismatch, never as an unknown-field error.
   request gives must be some expansion's `when`, and at least one
   class declaring it must be requested, or it would build nothing.
   Two `instead` expansions of one class that both apply refuse.
+
 - `classes.<name>.requestable` — `false` for a class a release never
   names: only another class's expansion declares it, and requesting
   it refuses by name. Absent is requestable.
+
 - `umbrellaBundle` — when a release requires exactly one bundle, that
   bundle may truthfully take the umbrella name instead.
+
 - `storeVsaFromVersion` — the machinery version (inclusive) from
   which verdicts are store-resident. Absent means store-resident
   always. An unparsable pin on a release fails TOWARD the store
@@ -272,6 +281,7 @@ version mismatch, never as an unknown-field error.
   (stele#107; the rule is [docs/versioning.md](versioning.md)). One
   field, one name — no alias, no pointer, no shim (pre-v1,
   correctness wins every tie).
+
 - `decisionFromVersion` — the machinery version (inclusive) from
   which a release owes a VERIFIABLE release decision; the full-depth
   leg runs pre-epoch releases through the provenance half alone
@@ -279,6 +289,7 @@ version mismatch, never as an unknown-field error.
   `storeVsaFromVersion`: absent means always, an unparsable pin
   fails strict. Measured for the first conforming org at 1.23.1 —
   the boundary release below which no decision verifies, exactly.
+
 - `enrichmentFromVersion` — the machinery version (inclusive) from
   which a release owes a build-enrichment claim (stele#109). Same
   semantics as its two siblings — the three share one definition in
@@ -291,6 +302,7 @@ version mismatch, never as an unknown-field error.
   always; declare it before declaring `build.enrichment` in the
   verify policy, or the corpus walk turns red on every release that
   predates the mechanism.
+
 - `manifestSchemaFromVersion` — the machinery version (inclusive)
   from which a release owes an evidence manifest at the schema this
   build writes (stele#185). Same semantics again, one more time from
@@ -306,6 +318,7 @@ version mismatch, never as an unknown-field error.
   asset attested by digest at its tag, so it cannot be re-emitted the
   way a mutable note can; the epoch is how history stays readable
   without a dual-version reader.
+
 - `sourceVerdictFromVersion` — the machinery version (inclusive)
   from which a tagged release owes a **source verdict** for its tag
   (stele#391; the verdict is specified under
@@ -323,6 +336,7 @@ version mismatch, never as an unknown-field error.
   `tags` section says its repository signs that tag (a signing epoch,
   not `pending`, at or before the tag): a tag nobody signs cannot be
   bound, so a repository declared unsigned owes none.
+
 - `sourceVerdictBundle` — the release asset the source verdict is
   published as, a plain name like `checksums`. Declared with
   `sourceVerdictFromVersion` or not at all; either one alone, or an
@@ -335,6 +349,7 @@ version mismatch, never as an unknown-field error.
   decision: presence asks that it exists, full depth that it
   verifies (finding `<asset>:deep`). Attaching it is the publishing
   workflow's step, not this tool's.
+
 - `evidenceSuffixes` — extra asset-name suffixes marking a checksum
   entry as an evidence DOCUMENT rather than an artifact (an org's
   per-release VEX documents, for one). Documents are excluded from
@@ -343,11 +358,13 @@ version mismatch, never as an unknown-field error.
   itself. The policy-known documents (bundles, the umbrella, the
   contract manifest, prefixed assets) are always excluded; this field
   covers what only the org can name.
+
 - `publishWorkflows` — the workflows whose failure can burn a release.
   Absent means ANY failed run on the tag counts, which is too broad:
   one flaky unrelated workflow would excuse a genuinely missing
   verdict, and the burned category must never become a mute button.
   Declare them.
+
 - `publish` — the release workflow, declared (stele#448): which file
   a release is published through, never a name this engine assumes.
   The names mean what `continuous` gives them. `stubPath` is the
@@ -1567,11 +1584,14 @@ precondition. Declared means every field, validated strictly:
 ```
 
 - `tagPattern` — which tag refs are release tags.
+
 - `taggerName` — the minting role's tagger name; an identity from
   policy, never a literal in code.
+
 - `identityPattern` — the regular expression the signing
   certificate's SAN must match; the issuer is the policy's top-level
   `issuer`, required when this section is declared.
+
 - `proofFloor` — how much countersigned proof a tag signature owes,
   the ORG's declaration and never the tool's decision (stele#173),
   and from which tag it owes it (stele#186).
@@ -1632,7 +1652,9 @@ precondition. Declared means every field, validated strictly:
   `from` naming a tag nobody minted reads exactly like one that binds.
   Refused tags are absent from the counts by construction — a tag that
   did not verify proves no regime, and its finding says so.
+
 - `notesRef` — the source chain's notes ref, fully qualified.
+
 - `epochs` — each releasing repository's first signed tag, or
   `pending` for declared-unsigned. **This is the population**
   (stele#208): the walk judges every release tag from the epoch
@@ -2019,17 +2041,20 @@ the trusted-root flags every verifying verb takes.
   that does not extend the checkpoint's — a smaller tree, the same
   size with another root, a proof that does not verify — is refused
   by name and the checkpoint is left as it was.
+
 - Entries are read a page at a time, advancing by the number each
   answer actually carried, and the last index read is `tree_size - 1`.
   A log caps its answers and the cap is not the request
   (`ctfe.sigstore.dev` served at most a thousand, aligned to multiples
   of a thousand, on 2026-11-17). An answer with no entries before the
   end is an error, never a loop.
+
 - The range is judged in chunks of at most 10,000 entries. A chunk is
   done when every entry in it has been scanned and every match in it
   reconciled; then the checkpoint is rewritten whole and atomically,
   and only then are its findings recorded. Memory is bounded by one
   chunk, never by the range.
+
 - The checkpoint is stele's own document, carrying its own version
   ([versioning.md](versioning.md)):
 
@@ -2044,10 +2069,12 @@ the trusted-root flags every verifying verb takes.
   index not yet judged — everything below it was. Where the file is
   kept between runs, and who is told about a finding, are the
   caller's.
+
 - **No checkpoint and no `--start-at` is a refusal by name.**
   `--start-at` founds a new checkpoint at that tree size and is
   refused when the checkpoint file exists: starting is a decision a
   person makes, never one a missing file makes.
+
 - A 429 is the log's pace and never a judgment — classified by the
   one definition of a throttle every reader in stele shares, its
   evidence printed with the refusal. A 5xx is the log failing, retried

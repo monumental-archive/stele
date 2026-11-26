@@ -21,6 +21,7 @@ shipped.
   the producer goldens, its metadata is hand-written, and its
   `shipped/` documents were written by this code. It proves the
   harness runs and nothing more; it does not meet the Done-when row.
+
 - The captured set comes from the batch's proof-pass release-lab
   release, captured with one command inside the plan artifacts'
   one-day retention:
