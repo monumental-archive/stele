@@ -10,6 +10,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 over the surface named in [MAINTENANCE.md](MAINTENANCE.md).
 
+## [0.28.2](https://github.com/monumental-archive/stele/compare/v0.28.1...v0.28.2) - 2026-11-28
+
+### Fixed
+
+- update github.com/sigstore/rekor to v1.6.2 ([#531](https://github.com/monumental-archive/stele/pull/531))
+- update github.com/sigstore/rekor to v1.6.3 ([#538](https://github.com/monumental-archive/stele/pull/538))
+
+### Dependencies
+
+- update ossf/scorecard-action to v2.6.0 ([#533](https://github.com/monumental-archive/stele/pull/533))
+- update github/codeql-action to v4.39.4 ([#536](https://github.com/monumental-archive/stele/pull/536))
+
 ## [0.28.1](https://github.com/monumental-archive/stele/compare/v0.28.0...v0.28.1) - 2026-11-21
 
 ### Build

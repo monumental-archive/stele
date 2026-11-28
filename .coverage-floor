@@ -12,7 +12,7 @@
 # leg leaves it only through a line `dropped: <leg> <why>`.
 #
 # band: 2
-# derived: coverage:adopt
+# derived: v0.28.2
 # legs: go
 #
 # go measured: 96.7
