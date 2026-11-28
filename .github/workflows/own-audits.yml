@@ -25,5 +25,5 @@ jobs:
       contents: read # this repository's contents, read-only
       issues: write # the callee's report job: its workflow's red-check issue (#1887)
       actions: read # the callee's report job: the run's job list and job logs (#1887)
-    uses: monumental-archive/.github/.github/workflows/repo-own-audits.yml@b321a3359a64fa0cbc4e1f53d63de6eaa059f49f # v1.78.6
+    uses: monumental-archive/.github/.github/workflows/repo-own-audits.yml@38eb388e9fb67ee13216dff37a1d0757851f8f15 # v1.79.0
 ...
